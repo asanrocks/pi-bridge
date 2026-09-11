@@ -130,6 +130,8 @@ export type {
 	// Provider Registration
 	ProviderConfig,
 	ProviderModelConfig,
+	// Proxy
+	ProxyResolver,
 	ReadToolCallEvent,
 	ReadToolResultEvent,
 	// Commands
