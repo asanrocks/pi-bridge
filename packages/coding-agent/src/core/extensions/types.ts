@@ -1247,6 +1247,13 @@ export interface ResolvedCommand extends RegisteredCommand {
 export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContext) => Promise<R | void> | R | void;
 
 /**
+ * Proxy resolver hook. Returns a proxy URL for the given model, or null
+ * for a direct connection. Multiple resolvers chain: the first non-null
+ * value wins.
+ */
+export type ProxyResolver = (model: Model<Api>) => string | null;
+
+/**
  * ExtensionAPI passed to extension factory functions.
  */
 export interface ExtensionAPI {
@@ -1501,6 +1508,18 @@ export interface ExtensionAPI {
 	 */
 	unregisterProvider(name: string): void;
 
+	// =========================================================================
+	// Proxy Resolution
+	// =========================================================================
+
+	/**
+	 * Register a proxy resolver for provider HTTP requests.
+	 * The hook receives the target model and returns a proxy URL (e.g.
+	 * "socks5://localhost:1080") or null for a direct connection.
+	 * Multiple resolvers chain: the first non-null value wins.
+	 */
+	registerProxyResolver(handler: ProxyResolver): void;
+
 	/** Shared event bus for extension communication. */
 	events: EventBus;
 }
@@ -1678,6 +1697,8 @@ export interface ExtensionRuntimeState {
 	invalidate: (message?: string) => void;
 	/** Retain an event-bus subscription until this runtime is invalidated. */
 	trackEventBusSubscription: (unsubscribe: () => void) => () => void;
+	/** Proxy resolvers registered via ExtensionAPI.registerProxyResolver(). */
+	proxyResolvers: ProxyResolver[];
 	/**
 	 * Register or unregister a provider.
 	 *

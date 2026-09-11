@@ -206,6 +206,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		flagValues: new Map(),
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
+		proxyResolvers: [],
 		assertActive,
 		invalidate: (message) => {
 			if (state.staleMessage) return;
@@ -283,6 +284,11 @@ function createExtensionAPI(
 			const list = extension.handlers.get(event) ?? [];
 			list.push(handler);
 			extension.handlers.set(event, list);
+		},
+
+		registerProxyResolver(handler: import("./types.ts").ProxyResolver): void {
+			runtime.assertActive();
+			runtime.proxyResolvers.push(handler);
 		},
 
 		registerTool(tool: ToolDefinition): void {

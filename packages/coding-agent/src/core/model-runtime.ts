@@ -37,6 +37,7 @@ import {
 	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
+import { type Dispatcher, ProxyAgent, fetch as undiciFetch } from "undici";
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
@@ -150,6 +151,7 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
+	private proxyResolvers: ReadonlyArray<import("./extensions/types.ts").ProxyResolver> = [];
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -533,6 +535,10 @@ export class ModelRuntime implements Models {
 		}
 	}
 
+	setProxyResolvers(hooks: ReadonlyArray<import("./extensions/types.ts").ProxyResolver>): void {
+		this.proxyResolvers = hooks;
+	}
+
 	setRuntimeApiKey(providerId: string, apiKey: string, options: AuthOperationOptions = {}): Promise<void> {
 		const signal = operationSignal(options.signal);
 		return this.enqueueCredentialOperation(providerId, signal, async () => {
@@ -595,6 +601,22 @@ export class ModelRuntime implements Models {
 			resolution.env || providerOptions.env
 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
 				: undefined;
+
+		// Apply proxy resolvers from extensions.
+		let fetch = providerOptions.fetch;
+		for (const resolver of this.proxyResolvers) {
+			const proxyUrl = resolver(model);
+			if (proxyUrl) {
+				const dispatcher: Dispatcher = new ProxyAgent(proxyUrl);
+				fetch = (input: string | URL | globalThis.Request, init?: RequestInit) => {
+					// undici.fetch shares types with undici.ProxyAgent, avoiding the
+					// @types/node FormData mismatch that globalThis.fetch would hit.
+					return undiciFetch(input as string | URL, { ...init, dispatcher } as any) as Promise<Response>;
+				};
+				break;
+			}
+		}
+
 		return {
 			provider,
 			model: resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model,
@@ -603,6 +625,7 @@ export class ModelRuntime implements Models {
 				apiKey: providerOptions.apiKey ?? resolution.auth.apiKey,
 				headers,
 				env,
+				fetch,
 			} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions,
 		};
 	}
