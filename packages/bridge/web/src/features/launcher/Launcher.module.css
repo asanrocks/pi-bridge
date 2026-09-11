@@ -1,0 +1,375 @@
+/* Launcher — the home view (unattached). Fills the conversation column.
+   Down states center a full panel; the connected state lists instance rows
+   plus a create affordance. Reuses sidebar row language (gap + typography,
+   no hairlines) and the design tokens defined in app/index.css. */
+
+.launcher {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 16px 8px;
+	overflow-y: auto;
+}
+
+.header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 6px 6px;
+}
+
+.headerTitle {
+	flex: 1;
+	font-size: var(--fs-sm);
+	font-weight: bold;
+	text-transform: uppercase;
+	color: var(--color-muted-foreground);
+	letter-spacing: 0.04em;
+}
+
+/* Matched pair with .sidebarAddBtn / HistoryPane .closeBtn — the three
+   header action buttons (+/×) share one chrome. */
+.addBtn {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	font-size: var(--fs-md);
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	line-height: 1;
+}
+
+.addBtn:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
+/* Cwd popover (multi-cwd create) — mirrors the sidebar's. */
+.popoverOverlay {
+	position: fixed;
+	inset: 0;
+	background: transparent;
+	border: none;
+	padding: 0;
+	cursor: default;
+	z-index: 40;
+}
+
+.popover {
+	z-index: 41;
+	background: var(--color-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px;
+}
+
+.popoverItem {
+	text-align: left;
+	padding: 6px 10px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: var(--color-foreground);
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.popoverItem:hover {
+	background: var(--color-muted);
+}
+
+/* Empty state (0 instances, connected). */
+.empty {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	text-align: center;
+	padding: 32px;
+}
+
+.emptyTitle {
+	font-size: var(--fs-lg);
+	font-weight: 500;
+	color: var(--color-muted-foreground);
+}
+
+.emptyHint {
+	font-size: var(--fs-md);
+	color: var(--color-muted-foreground);
+}
+
+.createBtn {
+	margin-top: 12px;
+	padding: 8px 16px;
+	min-height: 36px;
+	font-size: var(--fs-md);
+	font-family: inherit;
+	font-weight: 600;
+	background: var(--color-accent);
+	color: var(--color-on-accent);
+	border: none;
+	border-radius: var(--radius-md);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.createBtn:hover {
+	background: var(--color-accent-hover);
+}
+
+.cwdChips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: center;
+	margin-top: 12px;
+	max-width: 100%;
+}
+
+.cwdChip {
+	padding: 6px 14px;
+	font-size: var(--fs-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	background: var(--color-muted);
+	color: var(--color-foreground);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+}
+
+.cwdChip:hover {
+	border-color: var(--color-accent);
+}
+
+/* Instance rows. */
+.rows {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+.row {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 6px;
+	border-left: 3px solid transparent;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+}
+
+.row:hover,
+.row:focus-within {
+	background: var(--color-muted);
+}
+
+.row:hover .xBtn,
+.row:focus-within .xBtn {
+	opacity: 1;
+}
+
+.dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--color-success);
+	flex-shrink: 0;
+	margin-top: 7px;
+}
+
+.dotStreaming {
+	background: var(--color-streaming);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.dotStreaming {
+		animation: launcherDotPulse 1.5s infinite;
+	}
+}
+
+@keyframes launcherDotPulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}
+
+.rowMain {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	/* button reset */
+	background: none;
+	border: none;
+	padding: 0;
+	text-align: left;
+	cursor: pointer;
+	color: inherit;
+	font-family: inherit;
+}
+
+.rowLine1 {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+
+.rowName {
+	font-size: var(--fs-md);
+	font-weight: 500;
+	color: var(--color-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex-shrink: 1;
+	min-width: 0;
+}
+
+.rowCwd {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex-shrink: 1;
+	min-width: 0;
+	/* Head-truncate on overflow: keep the path tail (the discriminative end —
+	   project dir) visible and clip from the left. direction: rtl moves the
+	   ellipsis to the left edge; text-align: left keeps fitting text at the
+	   row's left flow; <bdi> isolates the LTR path so neutrals (/, ~, .) at
+	   the edges don't attach to the RTL paragraph direction. */
+	direction: rtl;
+	text-align: left;
+}
+
+.streaming {
+	font-size: var(--fs-xs);
+	color: var(--color-streaming);
+	font-weight: 500;
+	flex-shrink: 0;
+}
+
+.rowTime {
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	margin-left: auto;
+}
+
+.rowPreview {
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.xBtn {
+	background: none;
+	border: none;
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	padding: 0;
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.xBtn:hover {
+	color: var(--color-error);
+	background: var(--color-muted);
+}
+
+/* Touch devices have no hover — always show × so any instance is killable. */
+@media (hover: none) {
+	.xBtn {
+		opacity: 1;
+	}
+}
+
+/* ── Down states (connecting / reconnecting / unreachable / init_failed) ─ */
+
+.state {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 32px;
+	text-align: center;
+}
+
+.stateWarn {
+	font-size: 32px;
+	line-height: 1;
+}
+
+.stateTitle {
+	font-size: var(--fs-lg);
+	font-weight: 500;
+	color: var(--color-foreground);
+}
+
+.stateSub {
+	font-size: var(--fs-md);
+	color: var(--color-muted-foreground);
+	max-width: 32rem;
+}
+
+.stateHint {
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	margin-top: 4px;
+}
+
+.stateBtn {
+	margin-top: 8px;
+	padding: 8px 16px;
+	min-height: 36px;
+	font-size: var(--fs-md);
+	font-family: inherit;
+	font-weight: 600;
+	background: var(--color-accent);
+	color: var(--color-on-accent);
+	border: none;
+	border-radius: var(--radius-md);
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.stateBtn:hover {
+	background: var(--color-accent-hover);
+}
