@@ -1,0 +1,1497 @@
+// ============================================================================
+// ViewModel — pure projection from Document + store state to display-ready
+// ViewModel (ADR 07: flatten + structure pipeline).
+//
+//   Document.entries
+//     → flatten (entry → block descriptors, tool result joins)
+//     → structure (leaf-path walk, cross-entry merge, siblings) → ViewModel
+//     → render (consecutive-action detection → visual spine, renderer-owned)
+//
+// Browser-safe: no node:* imports, no DOM. Pure functions only.
+// ============================================================================
+
+import type { PullRequestItem } from "../core/client.ts";
+import type {
+	BashExecutionEntry,
+	Content,
+	Document,
+	Entry,
+	ImageContent,
+	JsonValue,
+	MessageEntry,
+	ModelInfo,
+	ModelRef,
+	SessionInfo,
+	ToolCallBlock,
+	ToolResultEntry,
+	Usage,
+} from "../core/types.ts";
+
+// ---------------------------------------------------------------------------
+// ViewModel types (ADR 07 §ViewModel types)
+// ---------------------------------------------------------------------------
+
+export interface ViewModel {
+	turns: TurnVM[];
+	leafEntryId: string | null;
+	/** Structural identity of the leaf path (entry ids + provisional content
+	 * counts). Stable when the path is unchanged. The renderer's auto-scroll
+	 * reads this instead of re-walking the document during render. */
+	pathKey: string;
+	/** Content-delta identity of the leaf entry: per-block `text`/`thinking`
+	 * field lengths. Captures intra-block streaming growth (text_delta /
+	 * thinking_delta) that `pathKey` (block counts only) misses. Excludes
+	 * lazy tool arguments/results so expand/pull toggles don't fire it. The
+	 * renderer gates auto-scroll on this with `isStreaming` so completed-turn
+	 * lazy pulls (also text/thinking-length changes) stay excluded. */
+	streamingKey: string;
+}
+
+export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn;
+
+export interface UserTurn {
+	kind: "user";
+	entryId: string;
+	index: number;
+	/** Concatenated text content (wire-eager). */
+	text: string;
+	/** Image attachments in the user message (wire-eager, in order). */
+	images: ImageContent[];
+	/** Entries with same parentId (for variant pager). */
+	siblings?: string[];
+	currentSiblingIndex?: number;
+	timestamp: string;
+	/** Wall-clock ms from the most recent assistant completion (across ALL
+	 * branches, not just the leaf path) to this send — the user's "thought
+	 * for" interval. Anchoring on the previous assistant message, not the
+	 * leaf-path predecessor, fixes re-edits: editing history message A into
+	 * A0 forks a branch with no on-path predecessor, yet the deliberation
+	 * interval runs from the old branch's leaf assistant. Omitted when no
+	 * assistant has completed before this send (the first turn). */
+	thoughtForMs?: number;
+}
+
+export interface UserBashTurn {
+	kind: "userBash";
+	entryId: string;
+	index: number;
+	timestamp: string;
+	command: string;
+	output: string;
+	exitCode: number | null;
+	cancelled: boolean;
+	truncated: boolean;
+	fullOutputPath: string | null;
+	excludeFromContext: boolean;
+}
+
+export interface AssistantTurn {
+	kind: "assistant";
+	/** First entry of the merged run. */
+	entryId: string;
+	index: number;
+	blocks: AssistantBlockVM[];
+	/** From last entry in merged run. */
+	model?: string;
+	/** From last entry in merged run. */
+	provider?: string;
+	/** From last entry in merged run. */
+	usage?: Usage;
+	/** The turn's stop reason — "stop", "toolUse", "end_turn", "error", "aborted", "length". */
+	stopReason?: string;
+	/** Unique turn identity. For a turn starting at block 0 of its first
+	 * entry this equals `entryId`; for a turn starting mid-entry it is
+	 * `${entryId}:b${blockIndex}`. With run merging a turn always starts at
+	 * block 0, so `turnKey === entryId` in practice — but React keys and the
+	 * previous-VM reuse map key on this, never `entryId`, so a future split
+	 * rule cannot silently break identity. */
+	turnKey: string;
+	/** Error/abort message when stopReason is abnormal. */
+	errorMessage?: string;
+	/** Parsed provider error when `errorMessage` follows the
+	 * `"<status>: {json}"` shape: first-class `status`/`message` plus the
+	 * remaining JSON fields as loose KV. Falls back to `{ message: raw }` for
+	 * any string that does not parse (plain message, truncated JSON, trailing
+	 * metadata). */
+	parsedError?: ParsedProviderError;
+	timestamp: string;
+	/** ISO seal anchoring this turn's timing: the seal of the path entry
+	 * preceding the turn's first block (usually the user message that opened
+	 * the run). The renderer uses it for the live "working for Xs" tick while
+	 * the turn streams; the viewmodel also uses it as the total-duration base. */
+	turnStartedAt?: string;
+	/** Total wall-clock ms from turnStartedAt to the turn's window end (the
+	 * last seal, extended past the closing entry to the latest tool result
+	 * the turn's tool calls issued). Undefined while the turn is streaming. */
+	totalMs?: number;
+	/** Time in tool execution (total minus Σ assistant-generation windows).
+	 * Parallel tools are handled via a per-batch max (the wall-clock span to
+	 * the last parallel result), not a per-tool sum. Undefined while streaming. */
+	toolMs?: number;
+	/** Context-window occupancy when the turn's last entry was generated,
+	 * as a percentage of the model's contextWindow. Fed-context basis
+	 * (input + cacheRead + cacheWrite — what the model saw), matching pi's
+	 * compaction skip rule: aborted/error stops and all-zero usage are
+	 * untrustworthy and yield undefined. Reported on the turn whose first
+	 * ref is block 0 of its entry (the run's first entry) — one reading per
+	 * turn, no duplicates. */
+	contextPercent?: number;
+	/** Change in context occupancy vs. the previous valid reading on the
+	 * path, in percentage points. Undefined when there is no prior reading
+	 * (first turn), after a model switch (different contextWindow makes the
+	 * readings incomparable), or below the 1% display threshold — except a
+	 * negative delta (compaction drop), which always renders. */
+	contextDeltaPercent?: number;
+}
+
+export type SystemTurnType = "compaction" | "branch_summary" | "model_switch";
+
+export interface SystemTurn {
+	kind: "system";
+	type: SystemTurnType;
+	entryId: string;
+	index: number;
+	/** Markdown, for compaction/branch_summary (wire-eager). */
+	summary?: string;
+	/** Final state of a merged run of consecutive model_change /
+	 * thinking_level_change entries. pi appends these back-to-back on a
+	 * model switch (setModel → appendModelChange, then the thinking re-clamp
+	 * → appendThinkingLevelChange), so the run collapses into one turn.
+	 * provider/modelId are empty for a thinking-only run; thinkingLevel is
+	 * undefined when the run didn't change the level. */
+	switchTo?: { provider: string; modelId: string; thinkingLevel?: string };
+}
+
+export type AssistantBlockVM = TextBlockVM | ToolActionStepVM | ThinkActionStepVM;
+
+/** A tool or thinking action step — the per-action unit inside an ActionGroup. */
+export type ActionStepVM = ToolActionStepVM | ThinkActionStepVM;
+
+export interface TextBlockVM {
+	blockType: "text";
+	entryId: string;
+	blockIndex: number;
+	/** Always populated — wire-eager. May be stale mid-stream; the renderer
+	 * subscribes to its own content slice for live text. */
+	text: string;
+	isProvisional: boolean;
+}
+
+export interface ToolActionStepVM {
+	blockType: "tool";
+	entryId: string;
+	blockIndex: number;
+	toolName: string;
+	toolCallId: string;
+	/** null until lazy pull. Partial object during streaming. */
+	arguments: JsonValue | null;
+	result: ToolResultSnapshot | null;
+	/** e.g. "read: src/main.ts" */
+	summary: string;
+	status: "pending" | "running" | "done" | "error";
+}
+
+export interface ThinkActionStepVM {
+	blockType: "thinking";
+	entryId: string;
+	blockIndex: number;
+	/** null until lazy pull. */
+	thinking: string | null;
+	isProvisional: boolean;
+	redacted: boolean;
+}
+
+export interface ToolResultSnapshot {
+	/** ToolResultEntry id (for lazy pull paths). */
+	entryId: string;
+	isError: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Store projection input — minimal slice needed by computeViewModel
+// ---------------------------------------------------------------------------
+
+export interface ViewModelInput {
+	document: Document;
+	sessions: SessionInfo[];
+	models: ModelInfo[];
+}
+
+// ---------------------------------------------------------------------------
+// computeViewModel
+// ---------------------------------------------------------------------------
+
+/**
+ * Project a Document into a display-ready ViewModel.
+ *
+ * 1. Leaf-path projection — walk from status.leafId up via parentId, reverse.
+ * 2. Structure — collapse the path into turns. Consecutive assistant
+ *    entries merge into one run; the run closes at a user message, a
+ *    system turn (compaction, branch_summary, model switch), a user bash
+ *    execution, or the end of the path. Text blocks do NOT split the run:
+ *    the per-message split experiment (8386faacf) multiplied turns ~5x on
+ *    real sessions (54 → 271 on before-compaction.jsonl) for a cosmetic
+ *    gain — segmentBlocks already renders interleaved text/action groups
+ *    in order within a turn. tool_result and other invisible entries
+ *    neither render nor break the run accumulation.
+ * 3. Flatten — each assistant entry's content becomes block descriptors;
+ *    tool calls join their ToolResultEntry by toolCallId.
+ * 4. Siblings — user messages get variant-pager info by parentId.
+ *
+ * Identity preservation (ADR 07 invariant 3c): when the underlying data is
+ * unchanged, TurnVM and block VM references from `previousVM` are reused so
+ * React.memo stays effective across recomputations.
+ */
+export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel): ViewModel {
+	const { document: doc } = input;
+	const path = projectLeafPath(doc);
+	const toolResultMap = buildToolResultMap(doc.entries);
+
+	const prevTurns = new Map<string, TurnVM>();
+	const prevBlocks = new Map<string, AssistantBlockVM>();
+	if (previousVM) {
+		for (const t of previousVM.turns) {
+			prevTurns.set(`${t.kind}:${t.entryId}`, t);
+			if (t.kind === "assistant") {
+				for (const b of t.blocks) prevBlocks.set(`${b.entryId}:${b.blockIndex}`, b);
+			}
+		}
+	}
+
+	const turns: TurnVM[] = [];
+	// Turn accumulator: (entry, blockIndex) refs for the assistant blocks of
+	// the current run. Refs — not entries — are the accumulation unit, so a
+	// future mid-entry split rule would not need a rewrite.
+	let pending: BlockRef[] = [];
+	// Accumulator for a run of consecutive model_change/thinking_level_change
+	// entries (see SystemTurn.switchTo). Flushed when any other turn-producing
+	// entry appears or at the end of the path.
+	let switchRun: { firstId: string; provider: string; modelId: string; thinkingLevel: string } | null = null;
+	const flushSwitchRun = () => {
+		if (switchRun === null) return;
+		turns.push(buildSwitchTurn(switchRun, turns.length, prevTurns));
+		switchRun = null;
+	};
+	// Timing anchor: the seal of the last timestamped path entry seen before
+	// the turn's first block (usually the user message that opened the run).
+	// User turns anchor on the wall-clock previous ASSISTANT completion
+	// across all branches (see buildUserTurn), so they need no leaf-path
+	// predecessor.
+	let prevSealTs = "";
+	let pendingAnchor = "";
+
+	// Context-usage tracking along the leaf path. Each assistant entry's
+	// usage measures the context the model saw at that generation (fed
+	// context: input + cacheRead + cacheWrite — cumulative by construction,
+	// no summation needed). prevReading carries the last valid reading
+	// (percent + the model it was taken under); a model switch invalidates
+	// the delta comparison (different contextWindow) but not the absolute
+	// percent chain: the new model's turns still get their own percent, the
+	// first one just carries no delta.
+	let prevReading: { percent: number; model: string } | null = null;
+	const modelList = input.models;
+	const contextWindowOf = (provider: string | undefined, model: string | undefined): number | undefined => {
+		if (!model) return undefined;
+		const m = modelList.find((x) => x.id === model && (provider ? x.provider === provider : true));
+		return m?.contextWindow && m.contextWindow > 0 ? m.contextWindow : undefined;
+	};
+
+	// Sorted ascending seal timestamps of assistant messages across ALL
+	// branches (not just the leaf path). A user turn's "thought for" anchors
+	// on the most recent assistant completion in wall-clock — so re-editing
+	// history message A into A0 (a fork whose leaf-path predecessor is
+	// absent) still anchors on the old branch's leaf assistant, not nothing.
+	const asstSeals: string[] = [];
+	for (const id in doc.entries) {
+		const e = doc.entries[id];
+		if (e.kind === "message" && e.role === "assistant" && e.timestamp) asstSeals.push(e.timestamp);
+	}
+	asstSeals.sort();
+
+	const flushPending = () => {
+		if (pending.length === 0) return;
+		// Context usage: report the entry's usage reading on the turn that
+		// STARTS at block 0 of the entry — the run's first entry — one reading
+		// per turn. The entry's usage is "what the model saw when generating
+		// that response". Invalid usage (aborted/error stop, all-zero) is
+		// skipped, matching pi's compaction skip rule.
+		const firstRef = pending[0];
+		const reportsUsage = firstRef.blockIndex === 0;
+		let contextPercent: number | undefined;
+		let contextDeltaPercent: number | undefined;
+		if (reportsUsage) {
+			const e = firstRef.entry;
+			const usage = validUsage(e);
+			const window = usage ? contextWindowOf(e.provider, e.model) : undefined;
+			if (usage && window) {
+				contextPercent = ((usage.input + usage.cacheRead + usage.cacheWrite) / window) * 100;
+				const prev = prevReading;
+				const sameModel = prev !== null && e.model !== undefined && prev.model === e.model;
+				const delta = contextPercent - (sameModel && prev ? prev.percent : contextPercent);
+				// Display threshold: |delta| < 1pp is noise; a negative delta
+				// (compaction drop) always renders — it marks the boundary.
+				if (delta <= -0.5 || delta >= 0.95) contextDeltaPercent = delta;
+				prevReading = { percent: contextPercent, model: e.model ?? "" };
+			} else {
+				prevReading = null; // unknown window / invalid usage breaks the delta chain
+			}
+		}
+		const t = buildAssistantTurn(pending, turns.length, toolResultMap, prevTurns, prevBlocks, pendingAnchor, {
+			contextPercent,
+			contextDeltaPercent,
+		});
+		turns.push(t);
+		pending = [];
+	};
+
+	for (const entry of path) {
+		switch (entry.kind) {
+			case "message":
+				if (entry.role === "assistant") {
+					flushSwitchRun();
+					// All blocks accumulate into the pending run — text does not
+					// split. Turn evolution stays append-only by construction: a
+					// turn is keyed by its first block and only ever grows until
+					// a non-assistant entry flushes it. stopReason/errorMessage
+					// ride the run-closing turn (its last ref is the entry's last
+					// block), so an error line renders once per run.
+					for (let i = 0; i < entry.content.length; i++) {
+						if (pending.length === 0) {
+							pendingAnchor = i > 0 ? entry.timestamp : prevSealTs;
+						}
+						pending.push({ entry, blockIndex: i });
+					}
+					// Entry with no content blocks but an error/abort stop reason:
+					// produce a block carrying the error message even though there
+					// is nothing to render in the block stream. It merges into the
+					// pending run like any other entry; the next flush (user turn,
+					// system turn, or run end) emits it.
+					if (entry.content.length === 0 && (entry.stopReason === "error" || entry.stopReason === "aborted")) {
+						const synthetic: MessageEntry = { ...entry, content: [{ type: "text", text: "" }] };
+						if (pending.length === 0) pendingAnchor = prevSealTs;
+						pending.push({ entry: synthetic, blockIndex: 0 });
+					}
+				} else {
+					flushSwitchRun();
+					flushPending();
+					const t = buildUserTurn(entry, turns.length, doc.entries, prevTurns, asstSeals);
+					turns.push(t);
+					// (prevSealTs is updated uniformly at the end of the loop body.)
+				}
+				break;
+			case "compaction":
+				flushSwitchRun();
+				flushPending();
+				turns.push(buildSystemTurn(entry, turns.length, "compaction", entry.summary, prevTurns));
+				break;
+			case "branch_summary":
+				flushSwitchRun();
+				flushPending();
+				turns.push(buildSystemTurn(entry, turns.length, "branch_summary", entry.summary, prevTurns));
+				break;
+			case "bash_execution":
+				// A user-initiated shell run (! command) — its own turn between
+				// user/assistant turns, chronologically where it ran.
+				flushSwitchRun();
+				flushPending();
+				turns.push(buildUserBashTurn(entry, turns.length));
+				break;
+			case "model_change":
+			case "thinking_level_change":
+				flushPending();
+				if (switchRun === null) {
+					switchRun = { firstId: entry.id, provider: "", modelId: "", thinkingLevel: "" };
+				}
+				if (entry.kind === "model_change") {
+					switchRun.provider = entry.provider;
+					switchRun.modelId = entry.modelId;
+				} else {
+					switchRun.thinkingLevel = entry.thinkingLevel;
+				}
+				break;
+			default:
+				// tool_result (joined into ToolActionStepVM), label, session_info,
+				// custom, custom_message — invisible; do not break the merge.
+				break;
+		}
+		if (entry.timestamp) prevSealTs = entry.timestamp;
+	}
+	flushPending();
+	flushSwitchRun();
+
+	return { turns, leafEntryId: doc.status.leafId, pathKey: leafPathKey(doc), streamingKey: leafStreamingKey(doc) };
+}
+
+// ============================================================================
+// Leaf-path projection
+// ============================================================================
+
+function projectLeafPath(doc: Document): Entry[] {
+	const path: Entry[] = [];
+	let cursor: string | null = doc.status.leafId;
+	while (cursor) {
+		const entry = doc.entries[cursor];
+		if (!entry) break;
+		path.push(entry);
+		cursor = entry.parentId;
+	}
+	path.reverse();
+	return path;
+}
+
+// ============================================================================
+// Leaf-path identity — single source of truth for the path-structure string.
+// App uses it for the path portion of its VM cache key (pre-compute, to skip
+// computeViewModel when nothing structural moved); ConversationArea reads the
+// same value post-compute via vm.pathKey, avoiding a render-time getStore()
+// reach-in and a second walk of the path.
+// ============================================================================
+
+/**
+ * Structural identity of the leaf path: `pathIds::provCounts`.
+ * - `pathIds` are leaf->root entry ids, matching the pre-existing App cache
+ *   and ConversationArea auto-scroll walks, so equality holds across
+ *   recomputations of the ViewModel.
+ * - `provCounts` are content-block counts for `pending:` entries on the path;
+ *   they change as streaming assistant messages append blocks.
+ */
+export function leafPathKey(doc: Document): string {
+	const entries = doc.entries;
+	const pathIds: string[] = [];
+	let cursor: string | null = doc.status.leafId;
+	while (cursor) {
+		const entry = entries[cursor];
+		if (!entry) break;
+		pathIds.push(cursor);
+		cursor = entry.parentId;
+	}
+	const provCounts = pathIds
+		.filter((id) => id.startsWith("pending:"))
+		.map((id) => {
+			const e = entries[id];
+			return e && "content" in e && Array.isArray(e.content) ? e.content.length : 0;
+		})
+		.join(",");
+	return `${pathIds.join("|")}::${provCounts}`;
+}
+
+/**
+ * Content-delta identity of the leaf entry: per-block text/thinking field
+ * lengths. Complements `leafPathKey` (block counts) by capturing intra-block
+ * streaming growth — `text_delta` and `thinking_delta` patch a field within
+ * an existing block, so the block count (and thus `pathKey`) is unchanged
+ * even though content is actively streaming. `text` is wire-eager; `thinking`
+ * is lazy but live-subscribed on in-flight entries. Tool arguments/results are
+ * excluded so lazy pulls and expand toggles don't trip the auto-scroll.
+ * The renderer gates this with `isStreaming` so completed-turn lazy pulls of
+ * `thinking` (which also change this key) stay excluded.
+ */
+export function leafStreamingKey(doc: Document): string {
+	const leafId = doc.status.leafId;
+	if (!leafId) return "";
+	const entry = doc.entries[leafId];
+	if (!entry || entry.kind !== "message") return "";
+	return entry.content
+		.map((b) => {
+			if (b.type === "text") return `t${b.text.length}`;
+			if (b.type === "thinking") return `k${(b.thinking ?? "").length}`;
+			return "x"; // tool call — args stream via deltas but are lazy; height stays put
+		})
+		.join("|");
+}
+
+// ============================================================================
+// Structure step — turn builders (with identity preservation)
+// ============================================================================
+
+/** Element-wise image comparison for VM reuse (data/mimeType are the only fields). */
+function sameImages(a: ImageContent[], b: ImageContent[]): boolean {
+	if (a.length !== b.length) return false;
+	return a.every((img, i) => img.data === b[i].data && img.mimeType === b[i].mimeType);
+}
+
+function buildUserTurn(
+	entry: MessageEntry,
+	index: number,
+	entries: Record<string, Entry>,
+	prevTurns: Map<string, TurnVM>,
+	asstSeals: string[],
+): UserTurn {
+	const text = entry.content
+		.filter((c) => c.type === "text")
+		.map((c) => c.text)
+		.join("\n");
+	const images = entry.content.filter((c): c is ImageContent => c.type === "image");
+	const siblings = computeSiblings(entry, entries);
+
+	// "Thought for" = wall-clock from the most recent ASSISTANT completion
+	// (across all branches) to this send. Anchoring on the previous assistant
+	// message — not the leaf-path predecessor — fixes re-edits: editing
+	// history message A into A0 forks a branch whose leaf-path predecessor
+	// is absent, yet the user's deliberation interval runs from the last
+	// assistant reply they saw (the old branch's leaf, e.g. D), so the anchor
+	// is A0 − D, not "nothing". Omitted when no assistant has completed
+	// before this send (the first turn).
+	let thoughtForMs: number | undefined;
+	const i = lowerBound(asstSeals, entry.timestamp);
+	if (i > 0) {
+		const d = diffMs(entry.timestamp, asstSeals[i - 1]);
+		if (d >= 0) thoughtForMs = d;
+	}
+
+	const turn: UserTurn = {
+		kind: "user",
+		entryId: entry.id,
+		index,
+		text,
+		images,
+		siblings: siblings.ids,
+		currentSiblingIndex: siblings.currentIndex,
+		timestamp: entry.timestamp,
+		thoughtForMs,
+	};
+
+	const prev = prevTurns.get(`user:${entry.id}`);
+	if (prev?.kind === "user" && sameImages(prev.images, images)) {
+		// Reuse the previous array so VM object identity is stable across recomputes.
+		turn.images = prev.images;
+	}
+	if (
+		prev &&
+		prev.kind === "user" &&
+		prev.index === turn.index &&
+		prev.text === turn.text &&
+		prev.images === turn.images &&
+		prev.timestamp === turn.timestamp &&
+		prev.currentSiblingIndex === turn.currentSiblingIndex &&
+		prev.thoughtForMs === turn.thoughtForMs &&
+		sameStringArray(prev.siblings, turn.siblings)
+	) {
+		return prev;
+	}
+	return turn;
+}
+
+/** One accumulated assistant content block: its owning entry and index.
+ *  A turn is a list of these. */
+interface BlockRef {
+	entry: MessageEntry;
+	blockIndex: number;
+}
+
+/** Usage valid for context accounting. Mirrors pi's compaction skip rule
+ *  (compaction.ts): aborted/error stops and all-zero usage are untrustworthy. */
+function validUsage(e: MessageEntry): Usage | null {
+	if (e.stopReason === "aborted" || e.stopReason === "error") return null;
+	const u = e.usage;
+	if (!u) return null;
+	if (u.input === 0 && u.output === 0 && u.cacheRead === 0 && u.cacheWrite === 0) return null;
+	return u;
+}
+
+// ============================================================================
+// Provider error parsing — recover a structured error from the
+// `"<status>: {json}"` string pi-ai composes from provider HTTP errors.
+// ============================================================================
+
+export interface ParsedProviderError {
+	/** HTTP status when the string carried a `<status>:` prefix (e.g. 400). */
+	status?: number;
+	/** Human-readable error text — the raw `errorMessage` when parsing fails. */
+	message: string;
+	/** Remaining JSON fields (code, param, type, ...) as loose KV. */
+	attrs: Record<string, string>;
+}
+
+/**
+ * Parse an error string shaped `"<status>: {json}"` (with optional provider
+ * prefix, `"<prefix> (<status>): {json}"`). `json.message` becomes the
+ * semantic `message`; every other JSON field lands in `attrs`. Any string that
+ * does not parse (plain message, truncated JSON, trailing non-JSON lines)
+ * yields `{ message: raw, attrs: {} }` — the raw string is the final fallback.
+ */
+export function parseProviderError(errorMessage: string): ParsedProviderError {
+	const fallback: ParsedProviderError = { message: errorMessage, attrs: {} };
+	const match = /^(?:.*?\((\d{3})\)|(\d{3})):\s*(\{)/.exec(errorMessage);
+	if (!match) return fallback;
+	const openBrace = match.index + match[0].length - 1;
+	const json = scanJsonObject(errorMessage, openBrace);
+	if (json === null) return fallback;
+	try {
+		const parsed: unknown = JSON.parse(json);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return fallback;
+		const record = parsed as Record<string, unknown>;
+		// OpenAI-standard errors nest the payload under `error`; Volcengine-style
+		// gateways return it flat. Unwrap the nested shape so both parse.
+		const payload =
+			typeof record.error === "object" &&
+			record.error !== null &&
+			!Array.isArray(record.error) &&
+			typeof (record.error as Record<string, unknown>).message === "string"
+				? (record.error as Record<string, unknown>)
+				: record;
+		const message = typeof payload.message === "string" ? payload.message.trim() : "";
+		if (message.length === 0) return fallback;
+		const attrs: Record<string, string> = {};
+		for (const [key, value] of Object.entries(payload)) {
+			if (key === "message" || value === undefined) continue;
+			attrs[key] = typeof value === "string" ? value : JSON.stringify(value);
+		}
+		return { status: Number(match[1] ?? match[2]), message, attrs };
+	} catch {
+		return fallback;
+	}
+}
+
+/**
+ * Scan for the JSON object starting at `start` (the first `{`), tracking
+ * string literals (escapes included) so braces inside values do not end the
+ * object early. Returns the object text or null when no matching `}` exists.
+ */
+function scanJsonObject(text: string, start: number): string | null {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let i = start; i < text.length; i++) {
+		const ch = text[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (ch === "\\") escaped = true;
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') inString = true;
+		else if (ch === "{") depth++;
+		else if (ch === "}") {
+			depth--;
+			if (depth === 0) return text.slice(start, i + 1);
+		}
+	}
+	return null;
+}
+
+function buildAssistantTurn(
+	refs: BlockRef[],
+	index: number,
+	toolResultMap: Map<string, ToolResultEntry>,
+	prevTurns: Map<string, TurnVM>,
+	prevBlocks: Map<string, AssistantBlockVM>,
+	turnStartedAt: string,
+	context: { contextPercent?: number; contextDeltaPercent?: number },
+): AssistantTurn {
+	// Flatten step: one descriptor per accumulated block ref, in order.
+	const blocks: AssistantBlockVM[] = [];
+	for (const { entry, blockIndex } of refs) {
+		const isProvisional = entry.id.startsWith("pending:");
+		const vm = buildBlockVM(entry.id, blockIndex, entry.content[blockIndex], isProvisional, toolResultMap);
+		if (vm) blocks.push(reuseBlock(prevBlocks, vm));
+	}
+
+	const last = refs[refs.length - 1].entry;
+	// Display timestamp: the last *sealed* entry among the refs. A turn's
+	// refs are contiguous, and entries seal in order, so the newest sealed
+	// entry is the last ref's entry with a timestamp; using it directly
+	// would toggle the header time off while a provisional entry streams
+	// last (the MsgTime flicker during streaming).
+	let displayTimestamp = "";
+	for (let i = refs.length - 1; i >= 0; i--) {
+		if (refs[i].entry.timestamp) {
+			displayTimestamp = refs[i].entry.timestamp;
+			break;
+		}
+	}
+	// The turn is sealed iff its last ref's entry carries a real seal
+	// timestamp — entries seal in order, so a provisional last entry means
+	// the turn is still streaming. Until then the renderer shows a live
+	// Date.now()-based total; totalMs/toolMs resolve only at seal.
+	const sealed = !!last.timestamp;
+	// Turn window end: a turn's tool calls execute AFTER their entry seals, so
+	// the window extends to the latest sealed tool result — the per-turn
+	// windows then partition the whole run (the next turn anchors on this
+	// turn's last tool seal, so tool time is counted once, in the turn that
+	// issued the calls). A tool call with no sealed result yet (running, or
+	// arguments still streaming) keeps the totals undefined.
+	let endTs = last.timestamp;
+	let toolsPending = false;
+	for (const { entry, blockIndex } of refs) {
+		const block = entry.content[blockIndex];
+		if (block.type === "toolCall") {
+			const tr = toolResultMap.get(block.id);
+			if (!tr || !tr.timestamp) toolsPending = true;
+			else if (tr.timestamp > endTs) endTs = tr.timestamp;
+		}
+	}
+	const resolved = sealed && !toolsPending;
+	let totalMs: number | undefined;
+	let toolMs: number | undefined;
+	if (resolved && turnStartedAt) {
+		const t = diffMs(endTs, turnStartedAt);
+		if (t >= 0) totalMs = t;
+		toolMs = computeToolMs(refs, toolResultMap, turnStartedAt, endTs);
+	}
+
+	const first = refs[0];
+	const turn: AssistantTurn = {
+		kind: "assistant",
+		// entryId = the first entry of the turn — App.tsx lookups
+		// (focus/navigation) match the FIRST turn of an entry.
+		entryId: first.entry.id,
+		turnKey: first.blockIndex === 0 ? first.entry.id : `${first.entry.id}:b${first.blockIndex}`,
+		index,
+		blocks,
+		model: last.model,
+		provider: last.provider,
+		usage: last.usage,
+		// stopReason/errorMessage only when the turn's last ref is its entry's
+		// last block (always true for run-merged turns): an error/abort line
+		// renders once per run, never per sub-turn.
+		stopReason: refs[refs.length - 1].blockIndex === last.content.length - 1 ? last.stopReason : undefined,
+		errorMessage:
+			refs[refs.length - 1].blockIndex === last.content.length - 1 ? (last.errorMessage ?? undefined) : undefined,
+		parsedError:
+			refs[refs.length - 1].blockIndex === last.content.length - 1 && last.errorMessage
+				? parseProviderError(last.errorMessage)
+				: undefined,
+		timestamp: displayTimestamp,
+		turnStartedAt: turnStartedAt || undefined,
+		totalMs,
+		toolMs,
+		contextPercent: context.contextPercent,
+		contextDeltaPercent: context.contextDeltaPercent,
+	};
+
+	const prev = prevTurns.get(`assistant:${turn.turnKey}`);
+	if (
+		prev &&
+		prev.kind === "assistant" &&
+		prev.index === turn.index &&
+		prev.model === turn.model &&
+		prev.provider === turn.provider &&
+		prev.usage === turn.usage &&
+		prev.stopReason === turn.stopReason &&
+		prev.errorMessage === turn.errorMessage &&
+		prev.timestamp === turn.timestamp &&
+		prev.turnStartedAt === turn.turnStartedAt &&
+		prev.totalMs === turn.totalMs &&
+		prev.toolMs === turn.toolMs &&
+		prev.contextPercent === turn.contextPercent &&
+		prev.contextDeltaPercent === turn.contextDeltaPercent &&
+		prev.blocks.length === turn.blocks.length &&
+		prev.blocks.every((b, i) => b === turn.blocks[i])
+	) {
+		return prev;
+	}
+	return turn;
+}
+
+function buildUserBashTurn(entry: BashExecutionEntry, index: number): UserBashTurn {
+	return {
+		kind: "userBash",
+		entryId: entry.id,
+		index,
+		timestamp: entry.timestamp,
+		command: entry.command,
+		output: entry.output,
+		exitCode: entry.exitCode,
+		cancelled: entry.cancelled,
+		truncated: entry.truncated,
+		fullOutputPath: entry.fullOutputPath,
+		excludeFromContext: entry.excludeFromContext,
+	};
+}
+
+function buildSystemTurn(
+	entry: Entry,
+	index: number,
+	type: "compaction" | "branch_summary",
+	summary: string | undefined,
+	prevTurns: Map<string, TurnVM>,
+): SystemTurn {
+	const turn: SystemTurn = { kind: "system", type, entryId: entry.id, index, summary };
+	const prev = prevTurns.get(`system:${entry.id}`);
+	if (
+		prev &&
+		prev.kind === "system" &&
+		prev.type === turn.type &&
+		prev.index === turn.index &&
+		prev.summary === turn.summary
+	) {
+		return prev;
+	}
+	return turn;
+}
+
+function buildSwitchTurn(
+	run: { firstId: string; provider: string; modelId: string; thinkingLevel: string },
+	index: number,
+	prevTurns: Map<string, TurnVM>,
+): SystemTurn {
+	const switchTo = {
+		provider: run.provider,
+		modelId: run.modelId,
+		thinkingLevel: run.thinkingLevel !== "" ? run.thinkingLevel : undefined,
+	};
+	const turn: SystemTurn = { kind: "system", type: "model_switch", entryId: run.firstId, index, switchTo };
+	// Keyed by the run's first entry id: when the run extends (a new entry
+	// appended to the doc), the key is stable but switchTo differs, so the
+	// dedup still yields a fresh turn.
+	const prev = prevTurns.get(`system:${run.firstId}`);
+	if (prev?.kind === "system" && prev.type === "model_switch" && prev.index === turn.index && prev.switchTo) {
+		const p = prev.switchTo;
+		if (
+			p.provider === switchTo.provider &&
+			p.modelId === switchTo.modelId &&
+			p.thinkingLevel === switchTo.thinkingLevel
+		) {
+			return prev;
+		}
+	}
+	return turn;
+}
+
+// ============================================================================
+// Flatten step — block VM construction
+// ============================================================================
+
+function buildBlockVM(
+	entryId: string,
+	blockIndex: number,
+	block: Content,
+	isProvisional: boolean,
+	toolResultMap: Map<string, ToolResultEntry>,
+): AssistantBlockVM | null {
+	switch (block.type) {
+		case "text":
+			return { blockType: "text", entryId, blockIndex, text: block.text, isProvisional };
+		case "thinking":
+			return {
+				blockType: "thinking",
+				entryId,
+				blockIndex,
+				thinking: block.thinking,
+				isProvisional,
+				redacted: block.redacted === true,
+			};
+		case "toolCall": {
+			const resultEntry = toolResultMap.get(block.id) ?? null;
+			const result: ToolResultSnapshot | null = resultEntry
+				? { entryId: resultEntry.id, isError: resultEntry.isError }
+				: null;
+			let status: ToolActionStepVM["status"];
+			if (resultEntry) {
+				// A provisional result entry (pending: prefix) is created at
+				// tool_execution_start and lives until tool_execution_end seals
+				// it to a durable id — so provisional means the tool is running,
+				// not done.
+				if (resultEntry.id.startsWith("pending:")) {
+					status = "running";
+				} else {
+					status = resultEntry.isError ? "error" : "done";
+				}
+			} else {
+				// "running" = arguments present (tool dispatched) but no result yet.
+				status = block.arguments !== null ? "running" : "pending";
+			}
+			return {
+				blockType: "tool",
+				entryId,
+				blockIndex,
+				toolName: block.name,
+				toolCallId: block.id,
+				arguments: block.arguments,
+				result,
+				summary: buildActionSummary(block),
+				status,
+			};
+		}
+		default:
+			// image — not rendered in v1
+			return null;
+	}
+}
+
+/** Reuse the previous block VM object when all derived fields are unchanged. */
+function reuseBlock(prevBlocks: Map<string, AssistantBlockVM>, vm: AssistantBlockVM): AssistantBlockVM {
+	const prev = prevBlocks.get(`${vm.entryId}:${vm.blockIndex}`);
+	if (!prev || prev.blockType !== vm.blockType) return vm;
+	switch (vm.blockType) {
+		case "text": {
+			const p = prev as TextBlockVM;
+			return p.text === vm.text && p.isProvisional === vm.isProvisional ? p : vm;
+		}
+		case "thinking": {
+			const p = prev as ThinkActionStepVM;
+			return p.thinking === vm.thinking && p.isProvisional === vm.isProvisional && p.redacted === vm.redacted
+				? p
+				: vm;
+		}
+		case "tool": {
+			const p = prev as ToolActionStepVM;
+			const sameResult =
+				p.result === vm.result ||
+				(p.result !== null &&
+					vm.result !== null &&
+					p.result.entryId === vm.result.entryId &&
+					p.result.isError === vm.result.isError);
+			return p.toolName === vm.toolName &&
+				p.toolCallId === vm.toolCallId &&
+				p.arguments === vm.arguments &&
+				p.summary === vm.summary &&
+				p.status === vm.status &&
+				sameResult
+				? p
+				: vm;
+		}
+	}
+}
+
+// ============================================================================
+// Tool result map
+// ============================================================================
+
+function buildToolResultMap(entries: Record<string, Entry>): Map<string, ToolResultEntry> {
+	const map = new Map<string, ToolResultEntry>();
+	for (const entry of Object.values(entries)) {
+		if (entry.kind === "tool_result") {
+			map.set(entry.toolCallId, entry);
+		}
+	}
+	return map;
+}
+
+// ============================================================================
+// Action summaries
+// ============================================================================
+
+/** Abnormal stop reasons that break assistant-turn merging and get rendered as errors. */
+/**
+ * Build a human-readable summary for a tool call, given its name and arguments.
+ * Exported so the web UI can use it with live (store-direct) argument data
+ * instead of relying on the (possibly stale) ViewModel snapshot.
+ */
+export function displayPath(rawPath: string, cwd: string | null): string {
+	if (cwd && rawPath.startsWith(cwd)) {
+		const relative = rawPath.slice(cwd.length);
+		return relative.startsWith("/") ? relative.slice(1) : relative;
+	}
+	return rawPath;
+}
+
+/** Resource files that get a compact "read resource" summary (TUI parity). */
+const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
+
+interface CompactReadClass {
+	kind: "skill" | "resource";
+	label: string;
+}
+
+/**
+ * Compact classification for reads (TUI parity): SKILL.md files summarize as
+ * their skill folder; agent-resource files (AGENTS.md, CLAUDE.md, …) as
+ * "read resource <path>". The TUI's pi-docs classification (README.md/
+ * docs/* under pi's own package root) needs daemon-side knowledge of the
+ * installation path and is deferred until that rides the wire.
+ */
+function classifyReadPath(rawPath: string, cwd: string): CompactReadClass | null {
+	const abs = rawPath.startsWith("/") ? rawPath : `${cwd.replace(/\/$/, "")}/${rawPath}`;
+	const parts = abs.split("/");
+	const fileName = parts[parts.length - 1] || rawPath;
+	if (fileName === "SKILL.md") {
+		return { kind: "skill", label: parts[parts.length - 2] || fileName };
+	}
+	if (COMPACT_RESOURCE_FILE_NAMES.has(fileName)) {
+		return { kind: "resource", label: displayPath(abs, cwd) };
+	}
+	return null;
+}
+
+/**
+ * Build a human-readable summary for a tool call, given its name and arguments.
+ * Exported so the web UI can use it with live (store-direct) argument data
+ * instead of relying on the (possibly stale) ViewModel snapshot.
+ * @param cwd - optional instance cwd to produce project-relative paths
+ */
+export function makeActionSummary(name: string, args: JsonValue | null, cwd?: string | null): string {
+	const recArgs: Record<string, unknown> | null =
+		args !== null && typeof args === "object" ? (args as Record<string, unknown>) : null;
+
+	switch (name) {
+		case "read": {
+			const path = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string)) : null;
+			const display = path && cwd ? path.split("/").pop() || path : path;
+			const offset = recArgs ? (recArgs.offset as number | undefined) : undefined;
+			const limit = recArgs ? (recArgs.limit as number | undefined) : undefined;
+			const lineRange =
+				offset !== undefined ? ` L${offset}${limit !== undefined ? `-${offset + limit - 1}` : ""}` : "";
+			if (path && cwd) {
+				const cls = classifyReadPath(path, cwd);
+				if (cls) {
+					return cls.kind === "skill"
+						? `[skill] ${cls.label}${lineRange}`
+						: `read ${cls.kind} ${cls.label}${lineRange}`;
+				}
+			}
+			return display ? `${name}: ${display}${lineRange}` : name;
+		}
+		case "edit":
+		case "write": {
+			const path = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string)) : null;
+			const display = path && cwd ? path.split("/").pop() || path : path;
+			return display ? `${name}: ${display}` : name;
+		}
+		case "bash":
+		case "powershell": {
+			const cmd = recArgs ? (recArgs.command as string) : null;
+			return cmd ? `${name}: ${cmd}` : name;
+		}
+		case "glob": {
+			const pattern = recArgs ? (recArgs.pattern as string) : null;
+			return pattern ? `glob: ${pattern}` : "glob";
+		}
+		case "grep": {
+			const query = recArgs ? ((recArgs.query as string) ?? (recArgs.pattern as string)) : null;
+			return query ? `grep: ${query}` : "grep";
+		}
+		default: {
+			// First argument value, truncated
+			if (recArgs) {
+				const firstVal = Object.values(recArgs)[0];
+				if (typeof firstVal === "string") {
+					return firstVal.length > 60 ? `${name} ${firstVal.slice(0, 57)}...` : `${name} ${firstVal}`;
+				}
+			}
+			return name;
+		}
+	}
+}
+
+function buildActionSummary(block: ToolCallBlock): string {
+	return makeActionSummary(block.name, block.arguments);
+}
+
+/**
+ * The full-form identifier for a tool call — the counterpart of
+ * makeActionSummary. The collapsed band abbreviates for scannability
+ * (basename, single line); the expanded card restores the full truth:
+ * cwd-relative full paths (with the read line range), the entire bash
+ * command (all lines). Not length-capped. Returns null while the
+ * identifier argument has not streamed yet.
+ */
+export function makeActionIdentity(name: string, args: JsonValue | null, cwd?: string | null): string | null {
+	const recArgs: Record<string, unknown> | null =
+		args !== null && typeof args === "object" ? (args as Record<string, unknown>) : null;
+
+	switch (name) {
+		case "read": {
+			const path = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string)) : null;
+			if (!path) return null;
+			const offset = recArgs ? (recArgs.offset as number | undefined) : undefined;
+			const limit = recArgs ? (recArgs.limit as number | undefined) : undefined;
+			const range = offset !== undefined ? `:${offset}${limit !== undefined ? `-${offset + limit - 1}` : ""}` : "";
+			return `${displayPath(path, cwd ?? null)}${range}`;
+		}
+		case "edit":
+		case "write": {
+			const path = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string)) : null;
+			return path ? displayPath(path, cwd ?? null) : null;
+		}
+		case "bash":
+		case "powershell": {
+			const cmd = recArgs ? (recArgs.command as string) : null;
+			return cmd ? cmd : null;
+		}
+		case "grep": {
+			const pattern = recArgs ? ((recArgs.pattern as string) ?? (recArgs.query as string)) : null;
+			if (pattern === null || pattern === undefined) return null;
+			const path = recArgs ? (recArgs.path as string | undefined) : undefined;
+			const glob = recArgs ? (recArgs.glob as string | undefined) : undefined;
+			const limit = recArgs ? (recArgs.limit as number | undefined) : undefined;
+			let text = `/${pattern}/ in ${path ? displayPath(path, cwd ?? null) : "."}`;
+			if (glob) text += ` (${glob})`;
+			if (limit !== undefined) text += ` limit ${limit}`;
+			return text;
+		}
+		case "find": {
+			const pattern = recArgs ? (recArgs.pattern as string | undefined) : undefined;
+			if (pattern === undefined || pattern === null) return null;
+			const path = recArgs ? (recArgs.path as string | undefined) : undefined;
+			const limit = recArgs ? (recArgs.limit as number | undefined) : undefined;
+			let text = `${pattern} in ${path ? displayPath(path, cwd ?? null) : "."}`;
+			if (limit !== undefined) text += ` limit ${limit}`;
+			return text;
+		}
+		case "ls": {
+			const path = recArgs ? (recArgs.path as string | undefined) : undefined;
+			const limit = recArgs ? (recArgs.limit as number | undefined) : undefined;
+			let text = `ls ${path ? displayPath(path, cwd ?? null) : "."}`;
+			if (limit !== undefined) text += ` limit ${limit}`;
+			return text;
+		}
+		default: {
+			if (recArgs) {
+				const firstVal = Object.values(recArgs)[0];
+				if (typeof firstVal === "string" && firstVal) return firstVal;
+			}
+			return null;
+		}
+	}
+}
+
+// ============================================================================
+// Sibling pager (user messages only)
+// ============================================================================
+
+function computeSiblings(entry: MessageEntry, entries: Record<string, Entry>): { ids: string[]; currentIndex: number } {
+	const parentId = entry.parentId;
+	const siblings: MessageEntry[] = [];
+
+	for (const e of Object.values(entries)) {
+		if (e.kind === "message" && e.role === "user" && e.parentId === parentId) {
+			siblings.push(e);
+		}
+	}
+
+	// Sort by timestamp
+	siblings.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? ""));
+
+	const ids = siblings.map((e) => e.id);
+	const currentIndex = ids.indexOf(entry.id);
+	return { ids, currentIndex: currentIndex >= 0 ? currentIndex : 0 };
+}
+
+function sameStringArray(a: string[] | undefined, b: string[] | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every((v, i) => v === b[i]);
+}
+
+// ============================================================================
+// Turn timing — pure helpers
+// ============================================================================
+
+/** Wall-clock ms between two ISO timestamps (end − start). NaN if either is
+ * empty/invalid; the callers gate on that to omit the field. */
+function diffMs(endIso: string, startIso: string): number {
+	if (!endIso || !startIso) return Number.NaN;
+	const end = new Date(endIso).getTime();
+	const start = new Date(startIso).getTime();
+	if (Number.isNaN(end) || Number.isNaN(start)) return Number.NaN;
+	return end - start;
+}
+
+/** Index of the first element >= `x` in a sorted-ascending array (a standard
+ * lower_bound). Returns `arr.length` if all elements are < x. ISO strings
+ * with the fixed `…Z` toISOString format sort lexicographically =
+ * chronologically, so this yields the wall-clock ordering. Used to find the
+ * most recent assistant seal strictly before a user send: `arr[i-1]`. */
+function lowerBound(arr: string[], x: string): number {
+	let lo = 0;
+	let hi = arr.length;
+	while (lo < hi) {
+		const mid = (lo + hi) >>> 1;
+		if (arr[mid] < x) lo = mid + 1;
+		else hi = mid;
+	}
+	return lo;
+}
+
+/** Time in tool execution across a sealed assistant run.
+ *
+ * Computed as total − Σ(assistant-generation windows), so parallel tools are
+ * handled correctly: each batch's tool window is the wall-clock span from the
+ * calling assistant message's seal to the LAST parallel result's seal (the
+ * max), not a per-tool sum. The generation windows telescope into the total
+ * minus the inter-batch gaps, which are exactly the tool-execution spans.
+ *
+ * `trigger_1 = turnStartedAt` (the user send); `trigger_{k>1} = max toolResult
+ * seal of batch k-1`. `gen_k = asst_k_seal − trigger_k`. A provisional entry
+ * (no seal) aborts the walk and returns undefined — the turn is still
+ * streaming, so the split can't resolve. */
+function computeToolMs(
+	refs: BlockRef[],
+	toolResultMap: Map<string, ToolResultEntry>,
+	turnStartedAt: string,
+	endTs: string,
+): number | undefined {
+	if (!endTs) return undefined;
+	const total = diffMs(endTs, turnStartedAt);
+	if (Number.isNaN(total)) return undefined;
+
+	// Group refs by entry (consecutive refs share an entry) and walk the
+	// generation/tool chain: each entry's generation runs from the previous
+	// chain point to its seal; the next chain point is the latest parallel
+	// tool-result seal of that entry's tool calls in this turn.
+	let triggerTs = turnStartedAt;
+	let totalGen = 0;
+	let i = 0;
+	while (i < refs.length) {
+		const entry = refs[i].entry;
+		if (!entry.timestamp) return undefined; // provisional — can't resolve
+		// Collect this entry's contiguous refs (may be a mid-entry slice).
+		let j = i;
+		let maxTool = "";
+		while (j < refs.length && refs[j].entry === entry) {
+			const block = entry.content[refs[j].blockIndex];
+			if (block.type === "toolCall") {
+				const tr = toolResultMap.get(block.id);
+				if (tr?.timestamp && tr.timestamp > maxTool) maxTool = tr.timestamp;
+			}
+			j++;
+		}
+		const gen = diffMs(entry.timestamp, triggerTs);
+		if (!Number.isNaN(gen) && gen > 0) totalGen += gen;
+		// Next batch's trigger = the latest parallel result in THIS batch.
+		// No tools → generation chains directly to the next entry's seal.
+		triggerTs = maxTool || entry.timestamp;
+		i = j;
+	}
+	const toolMs = total - totalGen;
+	return toolMs >= 0 ? toolMs : undefined;
+}
+
+// ============================================================================
+// Turn key — unique identity of a turn for focus/navigation/React keys.
+// Assistant turns use turnKey (entryId — or entryId:b<index> if a turn ever
+// starts mid-entry); user/system turns are one-per-entry, so their entryId
+// is the key.
+// ============================================================================
+
+export function turnKeyOf(t: TurnVM): string {
+	return t.kind === "assistant" ? t.turnKey : t.entryId;
+}
+
+// ============================================================================
+// Newest-leaf walk — for variant pager navigation targets
+// ============================================================================
+
+/**
+ * Given a user message entry id, find the newest leaf in its subtree.
+ * DFS max-timestamp (string localeCompare), max-id tiebreak.
+ */
+export function newestLeafInSubtree(entryId: string, entries: Record<string, Entry>): string {
+	const subtree = new Set<string>();
+	const queue = [entryId];
+
+	// BFS to collect all entries in the subtree
+	while (queue.length > 0) {
+		const id = queue.shift()!;
+		if (subtree.has(id)) continue;
+		subtree.add(id);
+
+		for (const e of Object.values(entries)) {
+			if (e.parentId === id && !subtree.has(e.id)) {
+				queue.push(e.id);
+			}
+		}
+	}
+
+	// Find the leaf with the newest timestamp
+	let newest: { id: string; timestamp: string } = { id: entryId, timestamp: "" };
+	for (const id of subtree) {
+		const e = entries[id];
+		if (!e) continue;
+		const ts = e.timestamp ?? "";
+		if (ts > newest.timestamp || (ts === newest.timestamp && id > newest.id)) {
+			newest = { id, timestamp: ts };
+		}
+	}
+
+	return newest.id;
+}
+
+// ============================================================================
+// Renderer-side grouping helper — consecutive-action group detection.
+//
+// Grouping is renderer-owned (ADR 07): the ViewModel has no group entity.
+// This pure helper is shared by the renderer (spine sections) and the
+// reconnect re-pull (resolving expanded group keys back to steps), so
+// both derive identical group keys.
+// ============================================================================
+
+export type TurnSegment = { kind: "text"; block: TextBlockVM } | { kind: "group"; key: string; steps: ActionStepVM[] };
+
+/**
+ * Split an AssistantTurn's flat block list into text blocks and maximal
+ * groups of consecutive action steps. The group key is the first step's
+ * `${entryId}:${blockIndex}` — stable under seal (block indices are
+ * append-only; entry-id renames go through migrateExpandKeys).
+ */
+export function segmentBlocks(blocks: AssistantBlockVM[]): TurnSegment[] {
+	const segments: TurnSegment[] = [];
+	let i = 0;
+	while (i < blocks.length) {
+		const block = blocks[i];
+		if (block.blockType === "text") {
+			segments.push({ kind: "text", block });
+			i++;
+			continue;
+		}
+		const steps: ActionStepVM[] = [];
+		while (i < blocks.length && blocks[i].blockType !== "text") {
+			steps.push(blocks[i] as ActionStepVM);
+			i++;
+		}
+		segments.push({
+			kind: "group",
+			key: `${steps[0].entryId}:${steps[0].blockIndex}`,
+			steps,
+		});
+	}
+	return segments;
+}
+
+// ============================================================================
+// Lazy pull wants — single source of truth for step → lazy-field mapping.
+// Components call stepWants during render and append to the wants outbox
+// (ADR 09); the pull loop is the sole fetcher.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Session accounting re-export (see accounting.ts).
+// ---------------------------------------------------------------------------
+export type { ModelCostRow, SessionAccounting } from "./accounting.ts";
+export { sessionAccounting } from "./accounting.ts";
+
+// ---------------------------------------------------------------------------
+// Tree viewmodel re-exports (Pass 1 + Pass 2 — see tree.ts).
+// ---------------------------------------------------------------------------
+export type {
+	Fork,
+	HistoryNode,
+	HistoryTree,
+	LaneLayout,
+	Lineage,
+	PlacedNode,
+} from "./tree.ts";
+export {
+	collapseDrafts,
+	computeActiveUserPath,
+	computeHistoryTree,
+	computeLaneLayout,
+} from "./tree.ts";
+
+/**
+ * Wants for one rendered action step (ADR 09: components declare wants
+ * during render). A visible think step always wants `thinking` (the inline
+ * one-line rendering needs it even collapsed); a visible tool step always
+ * wants `arguments` (the summary needs it); an expanded tool step
+ * additionally wants its linked result content/details.
+ */
+export function stepWants(step: ActionStepVM, expanded: boolean): PullRequestItem[] {
+	if (step.blockType === "thinking") {
+		if (step.redacted) return [];
+		return [
+			{
+				entryId: step.entryId,
+				fieldPath: `/entries/${step.entryId}/content/${step.blockIndex}/thinking`,
+			},
+		];
+	}
+	const wants: PullRequestItem[] = [
+		{
+			entryId: step.entryId,
+			fieldPath: `/entries/${step.entryId}/content/${step.blockIndex}/arguments`,
+		},
+	];
+	if (expanded && step.result) {
+		wants.push(...resultPullPaths(step.result.entryId));
+	}
+	return wants;
+}
+
+/** Tool result lazy field paths. */
+export function resultPullPaths(resultId: string): PullRequestItem[] {
+	return [
+		{ entryId: resultId, fieldPath: `/entries/${resultId}/content` },
+		{ entryId: resultId, fieldPath: `/entries/${resultId}/details` },
+	];
+}
+
+// ---------------------------------------------------------------------------
+// Action kind — pure mapping from tool name to the visual kind used by the
+// renderer to tint the action's band. The band's hue carries the kind;
+// status is not surfaced as color (the agent self-corrects, and the
+// turn-header timing already signals in-flight work). Read-like tools
+// (grep/find/ls/glob) share the bland read hue so they recede; unknown
+// tools also default to read so nothing un-elevated pops.
+// ---------------------------------------------------------------------------
+
+export type ActionKind = "read" | "bash" | "write" | "edit" | "think";
+
+/** Color family — the visual tier a kind maps to. edit + write share the
+ * mutate family (file mutation); the label/details still distinguish them,
+ * only the band hue merges. This is the single source of truth for the
+ * band strip/tint and the group legend dots. */
+export type ActionFamily = "mutate" | "bash" | "think" | "read";
+
+export function kindForTool(name: string): ActionKind {
+	switch (name) {
+		case "bash":
+		case "powershell":
+			return "bash";
+		case "write":
+			return "write";
+		case "edit":
+			return "edit";
+		case "read":
+		case "grep":
+		case "find":
+		case "ls":
+		case "glob":
+			return "read";
+		default:
+			return "read";
+	}
+}
+
+/** Map a kind to its color family. edit/write → mutate. */
+export function kindFamily(kind: ActionKind): ActionFamily {
+	switch (kind) {
+		case "edit":
+		case "write":
+			return "mutate";
+		case "bash":
+			return "bash";
+		case "think":
+			return "think";
+		case "read":
+			return "read";
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Model cycling — pure, browser-safe. Keys on the full (provider, modelId)
+// pair so same-id models offered by multiple providers cycle from the
+// correct slot instead of the first id match.
+// ---------------------------------------------------------------------------
+
+/** A catalog entry (ModelInfo / ScopedModelInfo) — both carry provider + id. */
+export interface ModelRefLike {
+	provider: string;
+	id: string;
+}
+
+/**
+ * Return the next/previous catalog entry relative to `current`. Matches on the
+ * full (provider, modelId) pair so same-id models offered by multiple
+ * providers cycle from the correct slot instead of the first id match.
+ */
+export function findNextModel(
+	models: readonly ModelRefLike[],
+	current: ModelRef,
+	direction: "forward" | "backward",
+): ModelRefLike | undefined {
+	if (models.length === 0) return undefined;
+	const idx = models.findIndex((m) => m.provider === current.provider && m.id === current.modelId);
+	const len = models.length;
+	return direction === "forward" ? models[(idx + 1) % len] : models[(idx - 1 + len) % len];
+}
+
+/**
+ * Whether a catalog entry is the active model. Keys on the full
+ * (provider, modelId) pair so two same-id models from different providers
+ * don't both match (the pre-fix bug highlighted every colliding row).
+ */
+export function isModelSelected(m: ModelRefLike, ref: ModelRef): boolean {
+	return m.provider === ref.provider && m.id === ref.modelId;
+}
