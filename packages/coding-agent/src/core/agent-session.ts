@@ -3063,7 +3063,18 @@ export class AgentSession {
 			this.agent.state.messages.push(bashMessage);
 
 			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
+			this._appendBashMessage(bashMessage);
+		}
+	}
+
+	/** Append a bash execution message to the session and notify listeners
+	 * (entry_appended) — live viewers (e.g. pi-bridge) render user bash runs
+	 * without waiting for the next turn to settle. */
+	private _appendBashMessage(bashMessage: BashExecutionMessage): void {
+		const entryId = this.sessionManager.appendMessage(bashMessage);
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) {
+			this._emit({ type: "entry_appended", entry });
 		}
 	}
 
@@ -3097,8 +3108,8 @@ export class AgentSession {
 			// Add to agent state
 			this.agent.state.messages.push(bashMessage);
 
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
+			// Save to session (notifies listeners — see _appendBashMessage)
+			this._appendBashMessage(bashMessage);
 		}
 
 		this._pendingBashMessages = [];
