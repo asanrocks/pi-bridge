@@ -1,0 +1,65 @@
+.tray {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 80;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	padding: 6px 12px 0;
+	pointer-events: none; /* allow clicks to pass through the tray area */
+}
+
+.toast {
+	pointer-events: auto; /* the toast itself is clickable */
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 12px;
+	background: var(--color-error);
+	border: none;
+	border-radius: var(--radius-sm);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	font-size: var(--fs-lg);
+	color: var(--color-on-accent);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.toast {
+		animation: toastIn 0.2s ease-out;
+	}
+}
+
+.toast:hover {
+	background: var(--color-error-hover);
+}
+
+.toastText {
+	flex: 1;
+}
+
+.toastClose {
+	opacity: 0.7;
+	font-size: var(--fs-sm);
+	line-height: 1;
+}
+
+.toast:hover .toastClose {
+	opacity: 1;
+}
+
+@keyframes toastIn {
+	from {
+		opacity: 0;
+		transform: translateY(-8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
