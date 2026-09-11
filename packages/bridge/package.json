@@ -1,0 +1,81 @@
+{
+	"name": "@earendil-works/pi-bridge",
+	"version": "0.85.1",
+	"description": "Browser-based coding agent session protocol — monitor, steer, and explore agent work from a browser",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js"
+		},
+		"./cli": {
+			"types": "./dist/cli.d.ts",
+			"import": "./dist/cli.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"bin": {
+		"pi-bridge": "./dist/cli.js"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"build:web": "vite build --config web/vite.config.ts web",
+		"build:web:dev": "NODE_ENV=development vite build --mode development --config web/vite.config.ts web",
+		"dev": "npm run build && npm run build:web:dev && node ./dist/cli.js --port 33339",
+		"build:binary": "npm run build && npm run build:web && node scripts/bundle-single.mjs",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "^0.85.1",
+		"shiki": "4.3.1",
+		"diff": "8.0.4",
+		"streamdown": "2.5.0",
+		"ws": "8.21.0",
+		"zustand": "5.0.14"
+	},
+	"devDependencies": {
+		"@shikijs/langs": "4.3.1",
+		"@tailwindcss/vite": "4.3.3",
+		"@types/node": "24.12.4",
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"@types/ws": "8.18.1",
+		"@vitejs/plugin-react": "6.0.3",
+		"react": "19.2.7",
+		"react-dom": "19.2.7",
+		"shx": "0.4.0",
+		"tailwindcss": "4.3.3",
+		"typescript": "5.9.3",
+		"vite": "8.0.16",
+		"vitest": "4.1.9"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"bridge",
+		"browser",
+		"websocket"
+	],
+	"author": "",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/earendil-works/pi.git",
+		"directory": "packages/bridge"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}
