@@ -3511,8 +3511,19 @@ export class AgentSession {
 			// Queue for later - will be flushed on agent_end
 			this._pendingBashMessages.push(bashMessage);
 		} else {
-			this.sessionManager.appendMessage(bashMessage);
+			this._appendBashMessage(bashMessage);
 			this._refreshFinalizedContext();
+		}
+	}
+
+	/** Append a bash execution message to the session and notify listeners
+	 * (entry_appended) — live viewers (e.g. pi-bridge) render user bash runs
+	 * without waiting for the next turn to settle. */
+	private _appendBashMessage(bashMessage: BashExecutionMessage): void {
+		const entryId = this.sessionManager.appendMessage(bashMessage);
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) {
+			this._emit({ type: "entry_appended", entry });
 		}
 	}
 
@@ -3543,7 +3554,7 @@ export class AgentSession {
 		if (this._pendingBashMessages.length === 0) return;
 
 		for (const bashMessage of this._pendingBashMessages) {
-			this.sessionManager.appendMessage(bashMessage);
+			this._appendBashMessage(bashMessage);
 		}
 		this._pendingBashMessages = [];
 		this._refreshFinalizedContext();
