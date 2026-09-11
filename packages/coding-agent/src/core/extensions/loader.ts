@@ -21,7 +21,7 @@ import { createJiti } from "jiti/static";
 import * as _bundledTypebox from "typebox";
 import * as _bundledTypeboxCompile from "typebox/compile";
 import * as _bundledTypeboxValue from "typebox/value";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode } from "../../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode, isBundledRuntime } from "../../config.ts";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
 // avoiding a circular dependency. Extensions can import from @earendil-works/pi-coding-agent.
 import * as _bundledPiCodingAgent from "../../index.ts";
@@ -81,8 +81,9 @@ const isNodeSeaBinary =
 const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
 
 /**
- * Get aliases for jiti (used in built Node.js mode).
- * In compiled binary mode, virtualModules is used instead.
+ * Get filesystem aliases for jiti (used in built Node.js mode on-disk).
+ * In Bun binary and bundled binary mode (Bun compiled or esbuild bundled),
+ * virtualModules is used instead.
  */
 let _aliases: Record<string, string> | null = null;
 
@@ -500,14 +501,19 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
-		// Compiled binaries and the bundled Node distribution use embedded modules.
-		// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
-		// Node builds use dist aliases.
+		// Bun and SEA compiled binaries use modules embedded in the executable.
+		// The bundled Node distribution (PI_BUNDLED_NODE) and esbuild-bundled
+		// binaries also embed the pi packages, so they must use virtualModules
+		// when the executable is moved or the workspace tree is absent. Source
+		// TypeScript reuses the host-resolved modules and root tsconfig paths.
+		// Built Node uses dist aliases.
 		...(isBunBinary || isNodeSeaBinary || isBundledNode
 			? { virtualModules: VIRTUAL_MODULES, tryNative: false }
 			: isTypeScriptSourceRuntime
 				? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }
-				: { alias: getAliases() }),
+				: isBundledRuntime()
+					? { virtualModules: VIRTUAL_MODULES, tryNative: false }
+					: { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
