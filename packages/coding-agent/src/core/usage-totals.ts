@@ -33,15 +33,45 @@ export interface UsageCostBreakdownEntry {
 	tokens: number;
 }
 
+/**
+ * Minimal model-catalog lookup, satisfied by ModelRuntime. Existence check
+ * only — used to decide whether a response-reported model id is a real
+ * catalog entry.
+ */
+export interface ModelCatalogSource {
+	getModel(provider: string, modelId: string): unknown;
+}
+
+/**
+ * Billing identity of an assistant message. Prefers the response-reported
+ * model when it resolves in the catalog (router providers like OpenRouter
+ * `auto` resolve to a concrete catalog entry); falls back to the requested
+ * model otherwise, so gateways that report unstable snapshot aliases for one
+ * model (e.g. `glm-5-3-260814` for `glm-5.3`) don't split the ledger.
+ * Without a catalog, the reported id is trusted (previous behavior).
+ */
+export function billingModelId(
+	message: { provider: string; model: string; responseModel?: string },
+	models?: ModelCatalogSource,
+): string {
+	const reported = message.responseModel;
+	if (reported && reported !== message.model) {
+		if (!models || models.getModel(message.provider, reported) !== undefined) {
+			return reported;
+		}
+	}
+	return message.model;
+}
+
 /** Group attributable assistant usage by model and all other usage into a separate bucket. */
-export function getUsageCostBreakdown(entries: SessionEntry[]): UsageCostBreakdownEntry[] {
+export function getUsageCostBreakdown(entries: SessionEntry[], models?: ModelCatalogSource): UsageCostBreakdownEntry[] {
 	const totalsByKey = new Map<string, UsageTotals>();
 
 	for (const entry of entries) {
 		let key: string | undefined;
 		let usage: Usage | undefined;
 		if (entry.type === "message" && entry.message.role === "assistant") {
-			key = `${entry.message.provider}/${entry.message.responseModel ?? entry.message.model}`;
+			key = `${entry.message.provider}/${billingModelId(entry.message, models)}`;
 			usage = entry.message.usage;
 		} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 			key = "Tools/summaries";

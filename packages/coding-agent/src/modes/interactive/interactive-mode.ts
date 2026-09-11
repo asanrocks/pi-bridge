@@ -6221,9 +6221,11 @@ export class InteractiveMode {
 		const cacheWaste = computeCacheWaste(entries, this.session.modelRuntime);
 
 		// Cost/token totals per provider/model actually used (e.g. OpenRouter `auto`
-		// resolves to a concrete responseModel). Usage without model attribution is
-		// grouped separately so the breakdown reconciles with the session total.
-		const usageBreakdown = getUsageCostBreakdown(entries);
+		// resolves to a concrete responseModel). Reported ids that aren't catalog
+		// entries (gateway snapshot aliases) fall back to the requested model.
+		// Usage without model attribution is grouped separately so the breakdown
+		// reconciles with the session total.
+		const usageBreakdown = getUsageCostBreakdown(entries, this.session.modelRuntime);
 
 		let info = `${theme.bold("Session Info")}\n\n`;
 		if (sessionName) {
