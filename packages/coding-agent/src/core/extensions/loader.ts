@@ -196,6 +196,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingNativeProviderRegistrations: [],
 		mcpServers: new McpServerRegistry(),
 		pendingVirtualModelRegistrations: [],
+		proxyResolvers: [],
 		createContext: notInitialized,
 		assertActive,
 		invalidate: (message) => {
@@ -294,6 +295,11 @@ function createExtensionAPI(
 				handlers.splice(handlerIndex, 1);
 				if (handlers.length === 0) extension.handlers.delete(event);
 			};
+		},
+
+		registerProxyResolver(handler: import("./types.ts").ProxyResolver): void {
+			runtime.assertActive();
+			runtime.proxyResolvers.push(handler);
 		},
 
 		registerTool(tool: ToolDefinition): void {
