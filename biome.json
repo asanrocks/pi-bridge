@@ -26,9 +26,12 @@
 	"files": {
 		"includes": [
 			"packages/*/src/**/*.ts",
+			"packages/*/src/**/*.tsx",
 			"packages/*/test/**/*.ts",
 			"packages/session-backends/*/src/**/*.ts",
 			"packages/session-backends/*/test/**/*.ts",
+			"packages/*/web/**/*.tsx",
+			"packages/*/web/**/*.ts",
 			"packages/coding-agent/examples/**/*.ts",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
