@@ -27,6 +27,30 @@ export const isBunRuntime = !!process.versions.bun;
 declare const PI_BUNDLED_NODE: boolean;
 export const isBundledNode = typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE;
 
+/**
+ * Detect if we're running in a bundled binary (Bun compiled or esbuild bundied Node.js).
+ *
+ * In a bundled binary, the pi packages are built into the executable, so jiti cannot
+ * resolve them from node_modules or from the monorepo workspace tree. Instead, it must
+ * use virtualModules (the same static-import approach used for Bun binaries).
+ *
+ * Detection: check whether the workspace structure that getAliases() expects actually
+ * exists around the bundle file. If not, we're running from a moved/bundled binary.
+ *
+ * Returns false when running from source (monorepo dev, npm install in a project).
+ */
+export function isBundledRuntime(): boolean {
+	if (isBunBinary) return true;
+	// The aliases in loader.ts compute __dirname from import.meta.url, then go 4 levels
+	// up (../../../../) to reach the monorepo root. If packages/coding-agent isn't there,
+	// the binary was moved or this isn't a workspace install.
+	const __dirname = dirname(fileURLToPath(import.meta.url));
+	const packagesRoot = resolve(__dirname, "../../../../");
+	// Use two separate calls to avoid creating a closure that captures both paths.
+	const codingAgentPath = join(packagesRoot, "packages", "coding-agent");
+	return !existsSync(codingAgentPath);
+}
+
 // =============================================================================
 // Install Method Detection
 // =============================================================================
