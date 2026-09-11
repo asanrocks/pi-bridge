@@ -1,0 +1,844 @@
+/* ==========================================================================
+   Composer — fixed bar at viewport bottom. Two visual modes: collapsed
+   (36px bar: dot + placeholder) and expanded (textarea + control row).
+   The card is always rendered — collapsed swaps the body for a bar
+   button. Streaming and editing are behavioral overlays on expanded
+   (auto-expand; streaming swaps Send for Stop and auto-collapses on
+   turn end if empty).
+
+   Also holds the model-picker portal styles (portal*) used by
+   ModelPickerPortal.tsx, and the path-completion + thinking-level styles.
+   One module per feature: the composer's sub-components share it.
+   ========================================================================== */
+
+.composer {
+	position: fixed;
+	left: var(--sidebar-w, 0px);
+	right: var(--history-w, 0px);
+	bottom: var(--vv-keyboard, 0px);
+	z-index: 40;
+	/* The card's bottom gap + home-indicator safe area live in the wrapper's
+	   own padding so offsetHeight (published as --composer-h) reliably
+	   includes them — margin would be ambiguous under margin-collapse.
+	   z-index above the TopBar so the model-picker portal (a child here)
+	   renders above the fixed top bar when it opens upward. */
+	padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
+}
+
+/* Drop-target highlight while image files are dragged over the composer. */
+.composer[data-dragover] .composerCard {
+	outline: 2px dashed var(--color-accent);
+	outline-offset: -2px;
+}
+
+/* Hidden file input backing the attach button (kept in the DOM so the
+   click() focus chain stays inside the composer for blur handling). */
+.attachInput {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+/* ── Card (always rendered, shared by collapsed and expanded) ─────────── */
+
+.composerCard {
+	/* desktop: center within the measure, aligned to messages. */
+	margin: 0 auto;
+	max-width: 48rem;
+	border: none;
+	border-radius: var(--radius-xl);
+	overflow: hidden;
+	background: var(--color-surface-raised);
+	/* Claude-style layered elevation (surface kept raised, per PRD): a soft
+	   symmetric drop (0 4px 20px) + a 0.5px hairline ring. Two independent
+	   axes — hover firms the ring, focus-within deepens the drop — so focus
+	   reads as "elevated more", not just hovered. Alphas are scaled up from
+	   Claude's (drop 3.5/7.5%, ring 0.15/0.3) for prominence on the warm page;
+	   bottom-anchored, but the low-alpha drop's visible upper spread still
+	   reads as lift. */
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.20);
+	transition: box-shadow 0.2s ease;
+}
+
+.composerCard:hover {
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+}
+
+.composerCard:focus-within {
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 48rem) {
+	.composerCard {
+		/* mobile: own gutter so the rounded card floats above the
+		   full-bleed reading surface. The conversation gutter is zeroed
+		   on mobile; without this the card's radius + shadow clip at
+		   the viewport edge. */
+		margin: 0 8px;
+	}
+}
+
+/* ── Collapsed bar — 36px bar inside the card, always present ─────────── */
+
+.composerBar {
+	height: 44px;
+	display: flex;
+	align-items: center;
+	padding: 0 16px;
+	cursor: pointer;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xl);
+	font-family: inherit;
+	background: transparent;
+	border: none;
+	border-bottom: 1px solid transparent;
+	width: 100%;
+	user-select: none;
+}
+
+.composerBar:hover {
+	color: var(--color-secondary);
+}
+
+/* ── Status dot (shared between collapsed and expanded) ───────────────── */
+
+.composerDot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	margin-right: 8px;
+	flex-shrink: 0;
+}
+
+.composerDotGreen {
+	background: var(--color-success);
+}
+
+.composerDotOrange {
+	background: var(--color-streaming);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.composerDotOrange {
+		animation: dotPulse 1.5s infinite;
+	}
+}
+
+.composerDotRed {
+	background: var(--color-error);
+}
+
+@keyframes dotPulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
+}
+
+/* ── Body (textarea + control row) — shown only when expanded ────────── */
+
+.composerBody {
+}
+
+/* ── Edit header — visible while editing, makes the mode legible at the
+   input. Matches the target message's accent marker. Cancel mirrors
+   Escape (clearDraft + collapse). ── */
+.editHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 16px 0;
+	color: var(--color-accent);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.editHeaderLabel {
+}
+
+.editCancelBtn {
+	background: transparent;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-secondary);
+	font-size: var(--fs-xs);
+	font-family: inherit;
+	padding: 2px 8px;
+	cursor: pointer;
+	text-transform: none;
+	letter-spacing: 0;
+	font-weight: 400;
+}
+
+.editCancelBtn:hover {
+	background: var(--color-muted);
+	color: var(--color-foreground);
+}
+
+/* ── Pending-steer draft chips (shown above the textarea while queued) ── */
+
+.steerChips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	padding: 8px 12px 0;
+}
+
+.steerChip {
+	max-width: 22rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	padding: 3px 8px;
+	border-radius: var(--radius-sm);
+	background: var(--color-muted);
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-sm);
+	font-family: inherit;
+	/* Distinguish queued drafts from committed user messages. */
+	font-style: italic;
+}
+
+.steerClearBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	margin-left: 2px;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-md);
+	line-height: 1;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.steerClearBtn:hover {
+	background: var(--color-muted);
+	color: var(--color-foreground);
+}
+
+/* ── Textarea ─────────────────────────────────────────────────────────── */
+
+.composerTextarea {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 14px 16px;
+	font-size: var(--fs-xl);
+	font-family: inherit;
+	line-height: 1.5;
+	color: var(--color-foreground);
+	background: transparent;
+	border: none;
+	resize: none;
+	min-height: 56px;
+	max-height: 40vh;
+	field-sizing: content;
+}
+
+.composerTextarea:focus-visible {
+	outline: none;
+}
+
+/* ── Image attachments ─────────────────────────────────────────────────── */
+
+.attachChips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 10px 16px 0;
+}
+
+.attachChip {
+	position: relative;
+	display: inline-block;
+}
+
+.attachThumb {
+	display: block;
+	width: 48px;
+	height: 48px;
+	object-fit: cover;
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--color-border);
+}
+
+.attachRemove {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border-radius: var(--radius-sm);
+	background: var(--color-muted);
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-sm);
+	line-height: 1;
+	cursor: pointer;
+}
+
+.attachRemove:hover {
+	background: var(--color-border);
+}
+
+.attachBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	border: none;
+	font-size: var(--fs-md);
+	line-height: 1;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.attachBtn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.attachBtn:hover:not(:disabled) {
+	background: var(--color-muted);
+}
+
+.composerTextarea:disabled {
+	color: var(--color-muted-foreground);
+	cursor: not-allowed;
+}
+
+/* ── Control row ──────────────────────────────────────────────────────── */
+
+.composerControlRow {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 16px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	font-family: inherit;
+	user-select: none;
+	flex-wrap: wrap;
+	row-gap: 4px;
+}
+
+/* Narrow: compact control row, hide non-essential metrics. Mobile and
+   desktop keep the same element order (pct, bar, cost | model, send) —
+   only the presentation changes: bar hidden, model name swapped for the
+   fixed "Models" label. */
+@media (max-width: 640px) {
+	.composerContextBar {
+		display: none;
+	}
+
+	.composerModelBtn {
+		font-size: var(--fs-xs);
+		padding: 4px 8px;
+		min-height: 32px;
+	}
+
+	.composerModelName {
+		display: none;
+	}
+
+	.composerModelMobileLabel {
+		display: inline;
+	}
+
+	/* Primary CTAs keep their 36px tap target on mobile; only the
+	   secondary model button shrinks for density. */
+}
+
+.composerControlLeft {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+}
+
+.composerControlRight {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+/* ── Cost button (token-breakdown popover) ──────────────────────────────── */
+
+.composerCostBtn {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	background: transparent;
+	color: inherit;
+	border: none;
+	font: inherit;
+	padding: 4px 6px;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background-color 0.15s ease;
+}
+
+.composerCostBtn:hover {
+	background: var(--color-muted);
+}
+
+.composerCostChevron {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	line-height: 1;
+}
+
+.costPopover {
+	z-index: 101;
+	background: var(--color-portal-bg);
+	border: 1px solid var(--color-portal-border);
+	border-radius: var(--radius-md);
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+	padding: 8px 12px;
+	font-size: var(--fs-xs);
+	color: var(--color-secondary);
+	white-space: nowrap;
+	line-height: 1.6;
+}
+
+.costPopoverHeader {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.costPopoverLabel {
+	color: var(--color-muted-foreground);
+}
+
+.costPopoverTotal {
+	color: var(--color-primary);
+	font-weight: 600;
+}
+
+.costPopoverModels {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--color-muted);
+	display: flex;
+	flex-direction: column;
+}
+
+.costPopoverModelRow {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.costPopoverModelKey {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.costPopoverModelCost {
+	color: var(--color-muted-foreground);
+}
+
+.costPopoverTokens {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--color-muted);
+	color: var(--color-muted-foreground);
+}
+
+/* ── Context bar ──────────────────────────────────────────────────────── */
+
+.composerContextBar {
+	width: 60px;
+	height: 6px;
+	background: var(--color-muted);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	flex-shrink: 0;
+}
+
+.composerContextBarFill {
+	height: 100%;
+	background: var(--color-accent);
+	border-radius: var(--radius-sm);
+	transition: width 0.3s ease;
+}
+
+.composerContextPct {
+	min-width: 24px;
+	/* Leading position in the control row (before the bar): right-aligned
+	   so the fixed-width pct does not shift the bar when the tens digit
+	   appears. */
+	text-align: right;
+}
+
+/* ── Model picker button ──────────────────────────────────────────────── */
+
+.composerModelBtn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	/* Ghost: transparent by default, faint muted hover — the chevron +
+	   label carry the affordance, no boxed chip (Claude-style). */
+	background: transparent;
+	color: var(--color-foreground);
+	border: none;
+	font-size: var(--fs-sm);
+	font-family: inherit;
+	padding: 6px 10px;
+	min-height: 32px;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background-color 0.15s ease;
+}
+
+.composerModelBtn:hover {
+	background: var(--color-muted);
+}
+
+.composerModelBtn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.composerModelMuted {
+	color: var(--color-muted-foreground);
+}
+
+.composerModelName {
+	white-space: nowrap;
+}
+
+/* Mobile label for the model button. The full model name is unusable on a
+   narrow row (no useful truncation point; mid-word ellipsis carries no
+   information) and mobile use is read/monitor, so the button swaps to this
+   fixed, self-describing label. Both spans always render; the media query
+   toggles which is visible — no JS breakpoint plumbing. */
+.composerModelMobileLabel {
+	display: none;
+}
+
+.composerModelChevron {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	line-height: 1;
+}
+
+/* ── Send / Stop ─────────────────────────────────────────────────────── */
+
+.composerSendBtn,
+.composerStopBtn {
+	padding: 8px 16px;
+	min-height: 36px;
+	border-radius: var(--radius-md);
+	font-family: inherit;
+	font-size: var(--fs-md);
+	font-weight: 600;
+	cursor: pointer;
+	border: none;
+	flex-shrink: 0;
+}
+
+.composerSendBtn {
+	background: var(--color-accent);
+	color: var(--color-on-accent);
+}
+
+.composerSendBtn:hover {
+	background: var(--color-accent-hover);
+}
+
+.composerSendBtn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.composerStopBtn {
+	background: var(--color-error);
+	color: var(--color-on-accent);
+}
+
+.composerStopBtn:hover {
+	background: var(--color-error-hover);
+}
+
+/* ── Path completion dropdown ─────────────────────────────────────────── */
+
+.completionDropdown {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
+	margin-bottom: 4px;
+	background: var(--color-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	max-height: 180px;
+	overflow-y: auto;
+	box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+	z-index: 50;
+}
+
+.completionItem {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	padding: 4px 10px;
+	border: none;
+	background: transparent;
+	color: var(--color-foreground);
+	font-size: var(--fs-lg);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	cursor: pointer;
+}
+
+.completionItemSelected {
+	background: var(--color-muted);
+}
+
+.completionIcon {
+	font-size: var(--fs-md);
+	flex-shrink: 0;
+}
+
+.completionLabel {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ── ThinkingLevelRow — pill toggle inside the model picker portal ──── */
+.thinkingLevelRow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--color-border);
+	font-size: var(--fs-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: var(--color-muted-foreground);
+}
+
+.thinkingLevelLabel {
+	flex: 0 0 auto;
+}
+
+.thinkingLevelValue {
+	flex: 0 0 58px;
+	overflow: hidden;
+	color: var(--color-foreground);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.thinkingLevelControl {
+	position: relative;
+	flex: 1 1 auto;
+	min-width: 0;
+	height: 24px;
+}
+
+.thinkingLevelTrack {
+	display: flex;
+	position: absolute;
+	top: 9px;
+	left: 0;
+	right: 0;
+	height: 6px;
+	gap: 2px;
+	overflow: hidden;
+	border-radius: 999px;
+}
+
+.thinkingLevelSegment {
+	position: relative;
+	display: block;
+	flex: 1 1 0;
+	height: 100%;
+	min-width: 0;
+	border-radius: 999px;
+}
+
+.thinkingLevelOff { color: var(--color-thinking-off); }
+.thinkingLevelMinimal { color: var(--color-thinking-minimal); }
+.thinkingLevelLow { color: var(--color-thinking-low); }
+.thinkingLevelMedium { color: var(--color-thinking-medium); }
+.thinkingLevelHigh { color: var(--color-thinking-high); }
+.thinkingLevelXhigh { color: var(--color-thinking-xhigh); }
+.thinkingLevelMax { color: var(--color-thinking-max); }
+
+.thinkingLevelSegment.thinkingLevelOff { background: var(--color-thinking-off); }
+.thinkingLevelSegment.thinkingLevelMinimal { background: var(--color-thinking-minimal); }
+.thinkingLevelSegment.thinkingLevelLow { background: var(--color-thinking-low); }
+.thinkingLevelSegment.thinkingLevelMedium { background: var(--color-thinking-medium); }
+.thinkingLevelSegment.thinkingLevelHigh { background: var(--color-thinking-high); }
+.thinkingLevelSegment.thinkingLevelXhigh { background: var(--color-thinking-xhigh); }
+.thinkingLevelSegment.thinkingLevelMax { background: var(--color-thinking-max); }
+
+.thinkingLevelSlider {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	width: 100%;
+	margin: 0;
+	background: transparent;
+	appearance: none;
+	cursor: pointer;
+}
+
+.thinkingLevelSlider::-webkit-slider-runnable-track {
+	height: 4px;
+	background: transparent;
+}
+
+.thinkingLevelSlider::-moz-range-track {
+	height: 4px;
+	background: transparent;
+}
+
+.thinkingLevelSlider::-webkit-slider-thumb {
+	width: 14px;
+	height: 14px;
+	margin-top: -5px;
+	border: 2px solid var(--color-background);
+	border-radius: 50%;
+	background: currentColor;
+	appearance: none;
+}
+
+.thinkingLevelSlider::-moz-range-thumb {
+	width: 10px;
+	height: 10px;
+	border: 2px solid var(--color-background);
+	border-radius: 50%;
+	background: currentColor;
+}
+
+
+/* ── Model picker portal (floating, searchable, grouped by provider) ──
+   Moved from App.module.css — the model picker is the only consumer and
+   it lives in this feature. portalOverlay is also duplicated in the
+   sidebar module (cwd-picker backdrop). */
+.portalOverlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	background: transparent;
+	border: none;
+	padding: 0;
+	margin: 0;
+}
+
+.portal {
+	position: fixed;
+	z-index: 101;
+	width: 320px;
+	max-height: 360px;
+	background: var(--color-portal-bg);
+	border: 1px solid var(--color-portal-border);
+	border-radius: var(--radius-md);
+	box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.portalSearch {
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--color-border);
+	flex-shrink: 0;
+}
+
+.portalSearchInput {
+	width: 100%;
+	background: var(--color-muted);
+	color: var(--color-foreground);
+	border: 1px solid var(--color-border);
+	font-size: var(--fs-md);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	padding: 4px 8px;
+	border-radius: var(--radius-sm);
+}
+
+.portalSearchInput:focus {
+	border-color: var(--color-accent);
+}
+
+.portalList {
+	overflow-y: auto;
+	flex: 1;
+}
+
+.portalGroup {
+	border-bottom: 1px solid var(--color-border);
+}
+
+.portalGroup:last-child {
+	border-bottom: none;
+}
+
+.portalGroupHeader {
+	padding: 4px 10px;
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	color: var(--color-muted-foreground);
+	background: var(--color-sidebar);
+}
+
+.portalItem {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 4px 10px 4px 16px;
+	font-size: var(--fs-md);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: var(--color-foreground);
+	background: none;
+	border: none;
+	cursor: pointer;
+	border-left: 2px solid transparent;
+}
+
+.portalItem:hover {
+	background: var(--color-sidebar);
+}
+
+.portalItemSelected {
+	border-left-color: var(--color-accent);
+	background: var(--color-muted);
+}
+
+/* Keyboard-focus highlight for non-selected items (selected already gets this bg). */
+.portalItemFocused {
+	background: var(--color-muted);
+}
+
+.portalNoMatch {
+	padding: 12px 10px;
+	font-size: var(--fs-md);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: var(--color-muted-foreground);
+	text-align: center;
+}
