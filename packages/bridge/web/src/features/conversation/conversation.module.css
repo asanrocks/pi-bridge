@@ -1,0 +1,1245 @@
+/* Scroll container (ConversationArea wraps content for auto-scroll) */
+.scrollContainer {
+	flex: 1;
+	position: relative;
+	/* Reserve the fixed composer's footprint + a small gap so the last
+	   message isn't hidden behind the floating card. --composer-h is
+	   published by the Composer's ResizeObserver. */
+	padding-bottom: calc(var(--composer-h, 64px) + 8px);
+	width: 100%;
+	max-width: 48rem;
+	margin-inline: auto;
+}
+
+/* Jump to bottom — floating affordance while the viewport is away from the
+   live end (the user scrolled up to read, or an anchor/focus scroll landed
+   mid-document). Fixed positioning: the scroll container is the document
+   itself (App.module.css). Offsets clear the live composer footprint
+   (--composer-h) and the history pane's right gutter (--history-w, 0 on
+   mobile where the pane is an overlay drawer). The accent dot marks content
+   that arrived while the reader was away — set by the auto-scroll effect's
+   skip branch, cleared whenever the live end is reached.
+   Always mounted; data-visible toggles the fade/slide so appear/disappear
+   animate instead of hard mount/unmount. Hidden state is fully inert:
+   visibility (delayed to the end of the fade-out), pointer-events, and the
+   component sets tabIndex=-1 + aria-hidden so it stays out of the tab order. */
+.jumpToBottom {
+	position: fixed;
+	right: calc(var(--history-w, 0px) + 20px);
+	bottom: calc(var(--composer-h, 64px) + 16px);
+	z-index: 35;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--color-surface-raised);
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+	cursor: pointer;
+	opacity: 0;
+	visibility: hidden;
+	transform: translateY(8px);
+	pointer-events: none;
+	transition:
+		opacity 0.18s ease,
+		transform 0.18s ease,
+		visibility 0s linear 0.18s;
+}
+
+.jumpToBottom[data-visible="true"] {
+	opacity: 1;
+	visibility: visible;
+	transform: translateY(0);
+	pointer-events: auto;
+	transition:
+		opacity 0.18s ease,
+		transform 0.18s ease,
+		visibility 0s;
+}
+
+/* Hover scoped to hover-capable inputs so the tint doesn't stick after a
+   tap on touch. */
+@media (hover: hover) {
+	.jumpToBottom:hover {
+		color: var(--color-foreground);
+		border-color: var(--color-secondary);
+		background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+	}
+}
+
+/* Coarse pointers get a larger tap target, mirroring .toolbarBtn. */
+@media (pointer: coarse) {
+	.jumpToBottom {
+		width: 44px;
+		height: 44px;
+	}
+}
+
+/* New-content dot — top-right badge on the jump button. Ring in the
+   button's own surface color so the dot reads as a satellite, not a
+   clipped quarter-circle. Pops in/out via data-new on the button. */
+.jumpDot {
+	position: absolute;
+	top: -2px;
+	right: -2px;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--color-accent);
+	border: 2px solid var(--color-surface-raised);
+	opacity: 0;
+	transform: scale(0.4);
+	transition:
+		opacity 0.15s ease,
+		transform 0.15s ease;
+}
+
+.jumpToBottom[data-new="true"] .jumpDot {
+	opacity: 1;
+	transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.jumpToBottom,
+	.jumpDot {
+		transition: none;
+	}
+}
+
+/* Turn header — top line per turn. Left: timestamp then role (You /
+   provider/model for the assistant), always visible. Right: toolbar (Copy /
+   pager / Edit), hover-revealed so it stays put when branch content height
+   changes (cycling branches no longer chases a bottom bar). No turn numbers
+   — they were clutter. */
+.msgHeader {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	margin-bottom: 6px;
+}
+
+/* Scroll-margin so scrollIntoView (keyboard j/k/g/G) keeps the focused turn
+   clear of the fixed TopBar above and the fixed Composer below. Set on both
+   turn surfaces; the value tracks --composer-h at runtime. */
+.userMsg,
+.asstMsg {
+	scroll-margin-top: calc(var(--topbar-h) + 12px);
+	scroll-margin-bottom: calc(var(--composer-h, 64px) + 16px);
+}
+
+/* Keyboard focus chrome (j/k/g/G). A 2px accent frame inside the turn's
+   box — not a background fill. A full tint (the prior approach) drowned the
+   message in blue and was indistinguishable from the user band; a frame
+   marks the selection without recoloring the content surface, so the
+   user-vs-assistant band distinction stays legible. box-shadow (not
+   border) so it doesn't shift layout. */
+.userMsg.focused,
+.asstMsg.focused {
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+
+/* Editing marker — a thicker left accent bar on the message being edited,
+   distinct from the keyboard-focus ring (which frames all four sides).
+   box-shadow so it doesn't shift layout; ordered after .focused so the
+   editing bar wins when both apply. */
+.userMsgEditing {
+	box-shadow: inset 4px 0 0 var(--color-accent);
+}
+
+/* "Editing" pill in the message header — the primary, obvious signal
+   that this message is the edit target (the dimming of later turns alone
+   was too subtle). */
+.editingBadge {
+	background: var(--color-accent);
+	color: var(--color-on-accent);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	padding: 1px 6px;
+	border-radius: var(--radius-sm);
+	text-transform: uppercase;
+}
+
+
+.msgHeaderLeft {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.msgRole {
+	color: var(--color-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.msgTime {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+/* Turn timing ("thought for" / "worked for" / "tools …"). Sits after the
+   role label, dimmed to muted so the timestamp+role remain the primary
+   signal. A leading "·" separates it from the role; the timing string itself
+   joins total/tool with "·". nowrap so the header stays one line. */
+.msgTiming {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.msgTiming::before {
+	content: "· ";
+	margin: 0 2px;
+}
+
+/* User turn — full-width tinted band (a distinct part of the document,
+   not a bubble). Hairline top/bottom borders separate it from the flat
+   assistant turns. Header line + text use the same 16px padding the
+   assistant uses, so the two align. */
+.userMsg {
+	background: var(--color-user-bg);
+	border-top: 1px solid var(--color-user-border);
+	border-bottom: 1px solid var(--color-user-border);
+	padding: 10px 16px;
+	margin: 4px 0;
+}
+
+/* Shared markdown content styles — used by user messages, assistant text, and thinking blocks */
+.markdownContent p {
+	margin: 0 0 4px 0;
+}
+
+.markdownContent p:last-child {
+	margin-bottom: 0;
+}
+
+.markdownContent ul,
+.markdownContent ol {
+	margin: 0 0 4px 0;
+	padding-left: 22px;
+}
+
+.markdownContent li {
+	margin: 0;
+}
+
+.markdownContent code {
+	background: var(--color-code-bg);
+	padding: 1px 4px;
+	border-radius: var(--radius-sm);
+	/* Relative, not absolute: an inline <code> must scale with its parent
+	   so code inside an h1/h2 isn't stuck at body-text size. 0.8125em
+	   preserves the prior 13px-on-16px-body ratio for inline prose while
+	   letting headings grow it proportionally. Block code is reset below. */
+	font-size: 0.8125em;
+	/* Long unbreakable tokens (paths, URLs, flags) must wrap inside the chip
+	   instead of overflowing the column — on mobile the overflow runs past
+	   the viewport edge and is unreachable (Firefox Android notably, which
+	   doesn't zoom-to-fit wide content). Same value as .userMsgText's
+	   word-break so inline code and surrounding prose wrap identically. */
+	overflow-wrap: break-word;
+}
+
+/* Block code (Streamdown's <pre><code>) must not pick up the inline-code
+   bg/padding/radius above — an inline <code> wrapping block line-spans
+   renders its box as stray rectangles at the start and end of the block.
+   Reset it so the code-block card owns the surface. */
+.markdownContent pre code {
+	background: none;
+	padding: 0;
+	border-radius: 0;
+	font-size: inherit;
+}
+
+/* Streamdown owns table cell styling (divide-y row separators + thead
+   bg-muted/80). The legacy full-grid cell borders stacked a second grid on
+   top of Streamdown's wrappers — removed. */
+.markdownContent table {
+	border-collapse: collapse;
+}
+
+.userMsgText {
+	word-break: break-word;
+}
+
+/* Turn toolbar — the hover-revealed right half of the header line. Holds
+   Copy / variant pager / Edit. Opacity (not display) toggles so layout is
+   stable across hover and content-height changes. On inputs that cannot
+   hover (touch), the toolbar stays visible — hover is not usable there. */
+.turnToolbar {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.userMsg:hover .turnToolbar,
+.userMsg:focus-within .turnToolbar,
+.asstMsg:hover .turnToolbar,
+.asstMsg:focus-within .turnToolbar,
+.userMsg.focused .turnToolbar,
+.asstMsg.focused .turnToolbar {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.turnToolbar {
+		opacity: 1;
+	}
+}
+
+.userMsgPager {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: var(--fs-xs);
+	color: var(--color-secondary);
+}
+
+/* Toolbar buttons — bordered chips with clear affordance (Copy / Edit /
+   pager arrows share one style). Tap targets grow on coarse pointers. */
+.toolbarBtn,
+.userMsgPager button {
+	background: transparent;
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-xs);
+	padding: 2px 10px;
+	min-height: 30px;
+	border-radius: var(--radius-sm);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+
+/* Hover scoped to hover-capable inputs so the background doesn't stick
+   after a tap on touch. */
+@media (hover: hover) {
+	.toolbarBtn:hover,
+	.userMsgPager button:hover:not(:disabled) {
+		background: var(--color-muted);
+		color: var(--color-foreground);
+		border-color: var(--color-secondary);
+	}
+
+	/* On the tinted user band, a gray hover reads off-hue — blue-tinted. */
+	.userMsg .toolbarBtn:hover,
+	.userMsg .userMsgPager button:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-user-border) 50%, transparent);
+		border-color: var(--color-user-border);
+	}
+}
+
+.toolbarBtn:disabled,
+.userMsgPager button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+	.toolbarBtn,
+	.userMsgPager button {
+		min-height: 40px;
+		padding: 6px 14px;
+	}
+}
+
+/* Dimmed messages in edit mode */
+.msgDimmed {
+	opacity: 0.4;
+	transition: opacity 0.15s ease;
+}
+
+/* Assistant message — flat (no band). Same 16px horizontal padding as the
+   user band so the two turns' headers and text share a left edge. */
+.asstMsg {
+	padding: 10px 16px;
+}
+
+/* Text segment */
+.errorLine {
+	margin-top: 6px;
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	border-left: 2px solid var(--color-error);
+	border-radius: var(--radius-sm);
+}
+
+.errorAttrs {
+	margin: 0 0 0 10px;
+	padding: 3px 10px;
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: color-mix(in srgb, var(--color-fg) 60%, transparent);
+	border-left: 2px solid color-mix(in srgb, var(--color-error) 40%, transparent);
+}
+
+.errorAttr {
+	line-height: 1.5;
+}
+
+.errorAttrKey {
+	font-weight: 600;
+}
+
+.textSegment {
+	position: relative;
+	margin-bottom: 6px;
+}
+
+/* Floating placement for the per-message copy chip on assistant text
+   segments: the .toolbarBtn visual spec (identical to the user-message
+   Copy chip) anchored at the segment's top-right, offset into the gap
+   above. Only placement and reveal live here — size, border, hover, and
+   tap-target growth are owned by .toolbarBtn. Solid-bg override: the chip
+   floats over markdown, and .toolbarBtn's transparent bg would let text
+   show through (this rule sits after .toolbarBtn in the file, so the
+   override holds). */
+.msgCopyBtn {
+	position: absolute;
+	top: -8px;
+	right: 0;
+	background: var(--color-surface-raised);
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.textSegment:hover .msgCopyBtn,
+.textSegment:focus-within .msgCopyBtn,
+.msgCopyBtn:focus-visible {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.msgCopyBtn {
+		opacity: 1;
+	}
+}
+
+/* Code blocks are Streamdown-rendered (code-block card + body). The legacy
+   pre border/bg stacked a third border on Streamdown's double box — removed;
+   see the Streamdown overrides in index.css. */
+
+/* Blinking cursor at end of streaming text */
+.streamingCursor {
+	display: inline-block;
+	color: var(--color-accent);
+	font-weight: bold;
+	margin-left: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.streamingCursor {
+		animation: blink 0.8s step-end infinite;
+	}
+}
+
+@keyframes blink {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0; }
+}
+
+
+
+/* Empty conversation placeholder */
+.empty {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-lg);
+}
+
+/* ==========================================================================
+   Action steps (step-as-backstage)
+   Each action renders as a full-width tinted band whose hue marks its
+   color family: mutate (edit+write, rose), bash (amber), think (neutral
+   slate), read (dimmed gray). Four families, three tiers — the family
+   color's saturation/value carries the tier (stand-out / neutral /
+   dimmed); one --action-tint strength for all. The tint is the visual
+   landmark separating "backstage" actions from the prose; the per-step
+   status dot is retired — the agent self-corrects, and the turn-header
+   timing already signals in-flight work.
+
+   Left-edge indicators differ by level:
+     - L2 group header: dots (one per family present) — a multi-family
+       legend, always visible, docked left of the summary.
+     - L3 step band:    a 3px left strip (single hue) on the container.
+   Different shapes for different levels — dots legend the container,
+   the strip marks the single step.
+
+   Fold affordances, two controls at the press point (step header):
+     - group header: triangle at the start, then dots, then summary
+     - step header:  triangle at the start (folds the whole details); the
+                     cap toggle ("show all") and the copy/wrap/md controls
+                     live in the hover top bar of the expanded card
+   ========================================================================== */
+
+/* ── Group — a meta-group of consecutive steps. Neutral (no kind hue). ── */
+.actionGroup {
+	margin: 6px 0;
+}
+
+/* Group header — a label row above the kinded steps. The group itself is
+   neutral (no band tint), but carries a left-edge dot legend (one dot per
+   family present) so the group reads as a colored summary at a glance.
+   Triangle (fold) then dots then summary; a light wash on hover keeps it
+   visibly interactive. */
+.actionGroupHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 4px 8px 4px 2px;
+	background: transparent;
+	cursor: pointer;
+	font-size: var(--fs-sm);
+	font-family: inherit;
+	color: var(--color-secondary);
+	border: none;
+	border-radius: var(--radius-sm);
+	user-select: none;
+	text-align: left;
+}
+
+.actionGroupHeader:hover {
+	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+}
+
+/* Fold triangle — shared by group and step headers. Sits at the start. */
+.foldTri {
+	width: 12px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	text-align: center;
+}
+
+.actionGroupSummary {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Family dots — the group's left-edge legend, always visible (stable
+   landmark; the bands below are the expanded detail, the dots are the
+   summary). One dot per color family present, colored by the same
+   --kind-* tokens as the band strips/tints so the legend and the bands
+   read as one vocabulary. */
+.groupSwatches {
+	display: inline-flex;
+	gap: 3px;
+	flex-shrink: 0;
+}
+.groupSwatches > span {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+}
+.groupSwatches > span[data-family="mutate"] { background: var(--kind-mutate); }
+.groupSwatches > span[data-family="bash"]   { background: var(--kind-bash); }
+.groupSwatches > span[data-family="think"]  { background: var(--kind-think); }
+.groupSwatches > span[data-family="read"]   { background: var(--kind-read); }
+
+/* Vertical list of steps under a group — no tree branching, no indent
+   (the step's own left accent border is the nesting cue). */
+.spine {
+	padding: 2px 0;
+}
+
+/* ── Step — the tinted backstage region. hue = family. ─────────────── */
+/* Unified anatomy: every band has a 3px left strip + a uniform-strength
+   tint, both from its family color. No per-kind special-cases — the
+   family color's saturation/value does the tiering (stand-out mutate/bash
+   pop; neutral think recedes; dimmed read recedes furthest). edit + write
+   both map to the mutate family. */
+.actionStep {
+	--step-hue: var(--kind-read);
+	background: color-mix(in srgb, var(--step-hue) var(--action-tint), transparent);
+	border-left: 3px solid color-mix(in srgb, var(--step-hue) 55%, transparent);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	margin: 2px 0;
+}
+
+.actionStep[data-kind="read"]  { --step-hue: var(--kind-read); }
+.actionStep[data-kind="bash"]  { --step-hue: var(--kind-bash); }
+.actionStep[data-kind="write"] { --step-hue: var(--kind-mutate); }
+.actionStep[data-kind="edit"]  { --step-hue: var(--kind-mutate); }
+.actionStep[data-kind="think"] { --step-hue: var(--kind-think); }
+
+/* Step header row — a div holding the fold button (triangle + summary).
+   No dot (the tint is the marker); no cap chip (it lives in the hover
+   card top bar). */
+.stepHead {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: 100%;
+	padding: 0 4px 0 0;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+	border-radius: 0 var(--radius-sm) 0 0;
+}
+
+/* Fold button — triangle + summary. flex:1 fills the header so the cap
+   chip docks right. Owns the step's hover wash. */
+.stepFold {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+	width: 100%;
+	padding: 5px 10px 5px 5px;
+	background: none;
+	border: none;
+	font: inherit;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+	cursor: pointer;
+	user-select: none;
+	text-align: left;
+	border-radius: 0 var(--radius-sm) 0 0;
+}
+
+.stepFold:hover {
+	background: color-mix(in srgb, var(--step-hue) 14%, transparent);
+}
+
+/* Non-interactive step header (redacted/empty think). */
+.stepHeadStatic .stepFold {
+	cursor: default;
+}
+.stepHeadStatic .stepFold:hover {
+	background: none;
+}
+/* Static think labels ("think", "(redacted)") sit muted. */
+.stepHeadStatic .stepSummary {
+	color: var(--color-muted-foreground);
+}
+
+.stepSummary {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--color-foreground);
+}
+
+/* Think preview is plain escaped text (not Markdown) so nowrap holds and a
+   long single line stays clipped — Streamdown's root wrapper applies
+   whitespace-normal, which defeated .stepSummary's nowrap when the preview
+   was a Markdown render and let the step grow vertically. Tool summaries
+   are plain strings too. Think steps reuse .stepSummary for their folded
+   first-line preview (see .stepFold in ThinkActionStepView); the rule is
+   kept for the tool-step summary. */
+
+/* Inline code inside the think body shares the warm code-bg chip so it
+   matches body prose (0.917em preserves the 11px-on-12px de-emphasis). */
+.thinkBody code {
+	background: var(--color-code-bg);
+	padding: 1px 4px;
+	border-radius: var(--radius-sm);
+	font-size: 0.917em;
+	/* Long unbreakable tokens wrap inside the chip (see .markdownContent code). */
+	overflow-wrap: break-word;
+}
+
+/* Content region of the details card — sits below the upper chrome, separated
+   by a hairline divider (the border-top). It is the only scrollable zone: the
+   height cap bounds the rendered cost of expanded content while the card
+   frame (status, identity, error) stays pinned above it. The persistent
+   bottom fade (on the wrapper) signals clipping so content never disappears
+   silently; the "show all" control lives in the hover controls. */
+.stepDetailsWrap {
+	position: relative;
+	border-top: 1px solid var(--color-border);
+}
+
+.stepDetails {
+	margin: 0;
+	padding: 6px 8px;
+	font-size: var(--fs-sm);
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+/* Clipped-indicator fade — passive signal that the capped details have
+   more content below. Hidden once the scroll window sits at the content
+   tail (JS-driven, see ToolActionStepView) and never intercepts pointer
+   events. Sits at the bottom of the content region, above the card's
+   bottom padding. */
+.stepDetailsFade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 24px;
+	background: linear-gradient(transparent, var(--color-background) 85%);
+	pointer-events: none;
+}
+
+/* ── Think — a foldable inline document on the think tint. ─────────── */
+/* Thinking is prose. Folded, it renders as a full-width fold row — the
+   same .stepFold triangle + one-line plain-text summary a tool step
+   header uses — so it is uniform with tool steps, fully clickable, and
+   streaming-optimized (the selector subscribes to the first line only).
+   Expanded, the full Markdown prose flows inline (a document, not a
+   details card-with-heading); the triangle rides the first line, so the
+   first line is never repeated in a header. */
+.thinkRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 5px 10px 5px 5px;
+	min-width: 0;
+}
+/* The expanded fold control — a real button holding the same triangle
+   glyph as the tool step headers, docked at the start of the first line. */
+.thinkFold {
+	display: flex;
+	align-items: center;
+	background: none;
+	border: none;
+	padding: 2px 8px 2px 0;
+	margin: 0;
+	font: inherit;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+.thinkFold:hover .foldTri {
+	color: var(--color-secondary);
+}
+.thinkBody {
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-secondary);
+	overflow-x: auto;
+}
+.thinkBody p {
+	margin: 0 0 4px 0;
+}
+.thinkBody p:last-child {
+	margin-bottom: 0;
+}
+.thinkBody pre code {
+	background: none;
+	padding: 0;
+	border-radius: 0;
+	font-size: inherit;
+}
+
+/* Expanded prose fills the row beside the fold button. */
+.thinkRow .thinkBody {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+}
+
+/* Redacted / empty — a static muted one-liner; no fold, no triangle. */
+.thinkStatic {
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+}
+
+/* Action details body — semantic argument rendering */
+.detailsBody {
+	padding: 0;
+}
+
+/* Card body — content area inside the details panel */
+.cardBody {
+	padding: 0 0 2px 0;
+}
+
+
+.cardBody :global(pre) {
+	background: transparent;
+	padding: 0;
+	margin: 0;
+	border: none;
+	/* Deterministic tab width (the TUI replaces tabs with spaces; the web
+	   keeps raw tabs — copy fidelity — and controls width here). */
+	tab-size: 4;
+}
+
+.cardBody :global(pre code) {
+	background: transparent;
+	padding: 0;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+}
+
+/* Edit card — unified diff lines (GitHub -/+ style) */
+.editDiff {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+}
+
+.editDiffLine {
+	padding: 0 4px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.editDiffContext {
+	color: var(--color-muted-foreground);
+}
+
+.editDiffOld {
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.editDiffNew {
+	color: var(--color-success);
+	background: color-mix(in srgb, var(--color-success) 6%, transparent);
+}
+
+.editDiffInlineChanged {
+	background: color-mix(in srgb, currentColor 25%, transparent);
+	border-radius: 2px;
+}
+
+.editDiffHunkSep {
+	color: var(--color-muted-foreground);
+	text-align: center;
+	padding: 4px 0;
+	font-size: var(--fs-xs);
+	user-select: none;
+}
+
+/* User bash turn — a standalone bash-band card for a user-initiated shell
+   run (see UserBashView). Same margins as the other turn wrappers; the
+   band itself is the shared .actionStep with the bash hue. */
+.userBashTurn {
+	margin: 8px 0;
+}
+
+/* `$` prompt at the start of the band header — mono, muted; marks the run
+   as the user's own (the agent's bash cards have no prompt glyph). */
+.userBashPrompt {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	user-select: none;
+}
+
+/* `!!` runs are excluded from the LLM context — the whole card recedes. */
+.actionStep[data-muted] {
+	opacity: 0.6;
+}
+
+/* Band preview — the collapsed band's result tail (bash) or error line.
+   Muted mono, one line per row with ellipsis clipping (the preview
+   recedes; the expanded card is the readable surface). The hint row counts
+   the lines above the visible tail. */
+.bandPreview {
+	padding: 0 10px 5px 17px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	line-height: 1.5;
+	color: var(--color-muted-foreground);
+}
+
+.bandPreviewLine {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bandPreviewHint {
+	font-style: italic;
+	opacity: 0.75;
+}
+
+.bandPreviewError {
+	padding: 0 10px 5px 17px;
+	font-size: var(--fs-xs);
+	color: var(--color-error);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Card output block — plain mono result lines (bash output, grep/find/ls
+   matches). Wraps by default (terminal-like); the wrap toggle off gives one
+   line per row with horizontal scroll. */
+.cardOutput {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.6;
+	white-space: pre;
+	overflow-x: auto;
+}
+
+.cardOutput[data-wrap] {
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-x: visible;
+}
+
+.outputLine {
+	padding: 0;
+}
+
+/* Earlier-lines hint — the head of the bash card's middle state: a muted
+   line above the output tail counting the lines the slice skips. */
+.outputHint {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	font-style: italic;
+	color: var(--color-muted-foreground);
+	padding: 0 0 2px;
+}
+
+/* ── Details card — the expanded content region of an action step. ── */
+/* Frameless: no border, no radius, no inset — the card is the document
+   surface. Its background matches --color-background (covering the band
+   tint below the header), so expanded content reads as part of the
+   document; the 3px family strip on the step and the hairline divider
+   above the details are the only separators. Rendered only when expanded
+   (lazy: keeps shiki/code highlighting off collapsed details in long
+   conversations). */
+.detailsCard {
+	background: var(--color-background);
+	padding-bottom: 8px;
+}
+
+/* Status line — light + duration + timeout annotation. Sits at the left
+   of the card's upper side: metadata about the call, not content. Light
+   colors follow the PRD status-dot table: streaming (running) / success
+   (done) / error. Duration is live-witnessed only (exec-start isn't on
+   the wire); the timeout is a call argument, so it survives reload. Text
+   matches the meta tier (muted-foreground). */
+.cardBar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 2px;
+	padding: 5px 8px 0;
+}
+
+.cardMeta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+.cardStatusLight {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--color-muted-foreground);
+}
+
+.cardStatusLight[data-status="running"] {
+	background: var(--color-streaming);
+}
+
+.cardStatusLight[data-status="done"] {
+	background: var(--color-success);
+}
+
+.cardStatusLight[data-status="error"] {
+	background: var(--color-error);
+}
+
+.cardStatusText {
+	white-space: pre-wrap;
+}
+
+/* Status chips — failure metadata (exit code, timeout, abort) parsed out
+   of the result text. Text-only color coding keeps the bar minimal; the
+   error tone matches the light. */
+.cardStatusChip {
+	font-size: var(--fs-xs);
+}
+
+.cardStatusChip[data-tone="error"] {
+	color: var(--color-error);
+}
+
+.cardStatusChip[data-tone="warning"] {
+	color: var(--color-warning);
+}
+
+/* Write confirmation — the tool's success line under the content
+   ("Successfully wrote N bytes to ..."). Muted meta tier. */
+.cardConfirm {
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px solid var(--color-border);
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* Notice strip — truncation/continuation notices parsed out of the content
+   and rendered once, under it, in the warning tier. The full-output path
+   button (bash) copies the daemon-side temp file path. */
+.cardNotice {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px solid var(--color-border);
+	font-size: var(--fs-xs);
+	color: var(--color-warning);
+}
+
+.noticePath {
+	background: none;
+	border: none;
+	padding: 0;
+	font: inherit;
+	font-size: var(--fs-xs);
+	color: var(--color-warning);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+.noticePath:hover {
+	color: var(--color-secondary);
+}
+
+/* Card controls — hover-revealed cluster docked right in the card top
+   bar: copy, wrap, md, show-all. Hidden (opacity, keeps layout stable)
+   until the step band is hovered or a control is focused; on
+   hover-incapable pointers (touch) always visible — hover-only controls
+   would be unreachable there. */
+.cardControls {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+.actionStep:hover .cardControls,
+.actionStep:focus-within .cardControls,
+.cardControls:focus-within {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.cardControls {
+		opacity: 1;
+	}
+}
+
+.cardCtrlBtn {
+	display: inline-flex;
+	align-items: center;
+	background: none;
+	border: none;
+	padding: 1px 5px;
+	font: inherit;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	user-select: none;
+}
+
+.cardCtrlBtn:hover {
+	color: var(--color-secondary);
+	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+}
+
+/* Toggle state: on reads brighter than off, so the affordance is legible
+   without hover (both tiers stay muted — controls stay subordinate). */
+.cardCtrlBtn[data-on] {
+	color: var(--color-secondary);
+}
+
+/* Identity line — the full-form identifier (full cwd-relative path with
+   the read line range, or the whole command). The band summary
+   abbreviates for scannability; this restores the full truth. Lighter
+   treatment (secondary, mono) on the card background — it reads as
+   metadata about the call, distinct from the content below the divider. */
+.cardIdentity {
+	padding: 0 8px 5px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-secondary);
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+/* Error strip — the tool's error text, skeleton-owned so every card
+   renders failures uniformly. Full-bleed inside the card so the wash
+   reads as a strip between the identity and the divider; same error
+   vocabulary as diff removals (error color on a faint error wash). */
+.cardError {
+	margin: 0;
+	padding: 4px 8px;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	border-left: 2px solid var(--color-error);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Fallback card — thin separator between args and result */
+.fallbackDivider {
+	border-top: 1px solid var(--color-border);
+	margin: 6px 0;
+}
+
+.toolArgsGrid {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px 0;
+}
+
+.toolArgRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 1px 0;
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
+
+.toolArgKey {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	min-width: 60px;
+	flex-shrink: 0;
+}
+
+.toolArgValue {
+	color: var(--color-foreground);
+	word-break: break-all;
+}
+
+/* Edit-specific: path row then per-edit diff blocks */
+.toolEdits {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px 0 4px 4px;
+	border-left: 2px solid var(--color-border);
+	margin: 4px 0 4px 56px;
+}
+
+.toolEdit {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.toolEditOld {
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.toolEditArrow {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	padding: 0 6px;
+	user-select: none;
+}
+
+.toolEditNew {
+	color: var(--color-success);
+	background: color-mix(in srgb, var(--color-success) 6%, transparent);
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Write content — highlighted file body */
+.writeContent {
+	padding: 8px 0 0 56px;
+}
+
+/* Tool result text (edit/write status messages) */
+.toolResultText {
+	padding: 4px 0 0 56px;
+	font-size: var(--fs-sm);
+	color: var(--color-secondary);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* System turns — markdown summary body for compaction/branch_summary */
+.systemSummary {
+	padding: 4px 24px 8px;
+	font-size: var(--fs-sm);
+	color: var(--color-secondary);
+}
+
+/* System dividers */
+.systemDivider {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 16px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* Merged model-switch line — divider rules on both sides, markdown content
+ * inline between them (Streamdown's root div sits as the flex item). */
+.systemSwitch {
+	font-size: var(--fs-sm);
+}
+
+.systemDivider::before,
+.systemDivider::after {
+	content: "";
+	flex: 1;
+	border-top: 1px solid var(--color-border);
+}
+
+.systemDividerLabel {
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	flex-shrink: 0;
+}
+
+
