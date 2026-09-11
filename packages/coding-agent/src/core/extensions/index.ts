@@ -135,6 +135,8 @@ export type {
 	ProviderConfig,
 	ProviderModelConfig,
 	ProviderStreamEvent,
+	// Proxy
+	ProxyResolver,
 	ReadToolCallEvent,
 	ReadToolResultEvent,
 	// Commands
