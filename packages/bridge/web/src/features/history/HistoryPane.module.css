@@ -1,0 +1,382 @@
+/* HistoryPane — git-log-style branch graph as a docked right pane (desktop)
+   / right drawer (mobile). Replaces the former centered modal. */
+
+/* Desktop docked pane ───────────────────────────────────────────────────
+   Fixed right rail, full height, inline chrome. Width is set inline from
+   the resize controller and matches the --history-w value the same
+   controller publishes, so the TopBar and .body gutter clear it exactly.
+   Mobile renders .drawer + .backdrop instead.
+   Shares the Sidebar's chrome vocabulary: --color-sidebar surface, mirrored
+   border, padding-top, and a quiet section-header top edge (see .header). */
+.pane {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 20;
+	background: var(--color-sidebar);
+	border-left: 1px solid var(--color-border);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	padding-top: 6px;
+}
+
+/* ── Mobile drawer ────────────────────────────────────────────────────────
+   Slide-over from the right + dismiss backdrop. Off-canvas, so it
+   contributes 0 to --history-w (the gutter stays 0 on mobile). */
+.backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 90;
+	background: var(--color-overlay);
+	border: none;
+	cursor: pointer;
+	padding: 0;
+	margin: 0;
+}
+
+.drawer {
+	position: fixed;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: min(100%, 56rem);
+	z-index: 91;
+	background: var(--color-sidebar);
+	border-left: 1px solid var(--color-border);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+	/* Notch / home-indicator safe areas. Right-attached, so only
+	   top/bottom/right insets matter (left matters once the 56rem cap
+	   kicks in on landscape tablets). */
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Header — matches the Sidebar's .sidebarSectionHeader: a quiet uppercase
+   label with an action button (× here, + on the Sidebar) in the right slot.
+   No chrome bar / border-bottom, so the two panes share a top-edge treatment. */
+.header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-top: 6px;
+	padding: 4px 10px 4px 13px;
+	flex-shrink: 0;
+}
+
+.title {
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	color: var(--color-muted-foreground);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+/* Close button — identical chrome to the Sidebar's .sidebarAddBtn (+), so the
+   two panes' header action buttons read as a matched pair. */
+.closeBtn {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	font-size: var(--fs-md);
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	line-height: 1;
+}
+
+.closeBtn:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
+.scroll {
+	flex: 1;
+	overflow-y: auto;
+	overflow-x: auto;
+	/* Breathing room lives here, not on .content: padding on a positioned
+	   container becomes the origin for its absolutely-positioned children
+	   (padding box), which would desync the SVG (top:0) from the DOM rows.
+	   Keeping .content padding-free makes both share the same origin. */
+	padding: 8px 0;
+}
+
+/* Content canvas — SVG + absolutely-positioned rows share this coordinate space.
+   Width is at least the pane (fills it) and at least the JS-computed canvas
+   width (--canvas-w: graph gutter + time column + a guaranteed readable text
+   slice), whichever is larger — so wide lane graphs overflow .scroll, which
+   scrolls horizontally instead of squeezing the text off-canvas. The rows'
+   right edge is bound to this width via left:0/right:0. */
+.content {
+	position: relative;
+	min-height: 100%;
+	width: max(100%, var(--canvas-w, 100%));
+}
+
+.graph {
+	position: absolute;
+	left: 0;
+	top: 0;
+	pointer-events: none;
+}
+
+.lineageLine {
+	stroke: var(--color-border);
+	stroke-width: 1.5;
+	stroke-linecap: round;
+}
+
+.forkCurve {
+	stroke: var(--color-border);
+	stroke-width: 1.5;
+	fill: none;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+/* Node row — a flex container spanning graph gutter + meta + text. The dot
+   stays absolutely positioned in the gutter at the node's lane (aligns with
+   the SVG); .graphGutter is a transparent flex spacer that reserves the
+   gutter width so columns start after the graph. */
+.row {
+	position: absolute;
+	left: 0;
+	right: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--col-gap, 8px);
+	padding: 0 var(--row-right-pad, 12px) 0 0;
+	background: none;
+	border: none;
+	text-align: left;
+	cursor: pointer;
+	font-family: inherit;
+	color: var(--color-foreground);
+}
+
+.row:hover {
+	background: var(--color-muted);
+}
+
+.rowDisabled {
+	cursor: default;
+	opacity: 0.6;
+}
+
+.rowDisabled:hover {
+	background: none;
+}
+
+.rowOnPath {
+	background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+
+.rowOnPath:hover {
+	background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.rowCurrent {
+	background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.rowCurrent:hover {
+	background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+/* Dot cell — positioned in the graph gutter at the node's lane. */
+.dotCell {
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	pointer-events: none;
+}
+
+.dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--color-background);
+	border: 2px solid var(--color-muted-foreground);
+	box-sizing: border-box;
+}
+
+.dotOnPath {
+	border-color: var(--color-accent);
+}
+
+.dotCurrent {
+	background: var(--color-accent);
+	border-color: var(--color-accent);
+}
+
+/* Graph gutter spacer — transparent flex item reserving the graph's pixel
+   width so the meta/text columns start after the SVG. Width set inline via
+   --gutter-width (the gap + graph width). Click-through so the row's click
+   handler catches gutter clicks (dot has its own pointer-events:none). */
+.graphGutter {
+	flex: 0 0 auto;
+	width: var(--gutter-width, 0px);
+	height: 100%;
+	pointer-events: none;
+}
+
+/* Time column — fixed-width, left-aligned immediately after the graph so
+   every row's timestamp aligns in a crisp vertical column regardless of
+   preview length. Tabular numerals keep 09:07 and 23:59 the same width. */
+.timeCol {
+	flex: 0 0 auto;
+	width: var(--time-col-w, 44px);
+	min-width: 0;
+	overflow: hidden;
+}
+
+.timeText {
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* Text column — owns the flex remainder, truncates with CSS ellipsis. No JS
+   preview slicing: ellipsis bounds the row's right edge by the viewport. */
+.textCol {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.textInner {
+	display: block;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Drafts badge — compact "+N" icon-button in its own flex slot before the
+   text. Present only on keepers with collapsed drafts; absent drafts leave
+   no gutter so text reclaims the space. Fixed width keeps the text column's
+   left edge stable across draft/non-draft rows that share a branch point.
+   The badge is the only interactive child of the row (the row itself is a
+   div role=button); re-enable pointer events here so clicks toggle the
+   popover instead of navigating. */
+.draftsBadge {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--drafts-badge-w, 28px);
+	height: 18px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	background: var(--color-muted);
+	border: none;
+	border-radius: var(--radius-xs);
+	padding: 0;
+	cursor: pointer;
+	white-space: nowrap;
+	line-height: 1;
+	pointer-events: auto;
+	font-variant-numeric: tabular-nums;
+}
+
+.draftsBadge:hover {
+	color: var(--color-foreground);
+	background: var(--color-border);
+}
+
+.draftsBadgeOpen {
+	color: var(--color-foreground);
+	background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+
+.draftsBadgeOpen:hover {
+	background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+/* Drafts popover — overlay below the keeper row, above subsequent rows.
+   Anchors at the gutter end + time column (under the +N chip) and extends
+   rightward into the text area where the visual mass is, capped so it can't
+   run off the pane's right edge on early rows. */
+.draftsPopover {
+	position: absolute;
+	z-index: 10;
+	background: var(--color-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-xs);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+	padding: 4px;
+	min-width: 200px;
+	max-width: min(320px, calc(100% - 16px));
+}
+
+.draftRow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	background: none;
+	border: none;
+	padding: 4px 6px;
+	text-align: left;
+	cursor: pointer;
+	color: var(--color-foreground);
+	font-family: inherit;
+	font-size: var(--fs-xs);
+}
+
+.draftRow:hover {
+	background: var(--color-muted);
+}
+
+.draftRow:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.draftDot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	border: 1.5px solid var(--color-muted-foreground);
+	box-sizing: border-box;
+	flex-shrink: 0;
+}
+
+.draftText {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.draftTime {
+	color: var(--color-muted-foreground);
+	font-variant-numeric: tabular-nums;
+	flex-shrink: 0;
+}
+
+/* Empty-state placeholder. */
+.empty {
+	flex: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-lg);
+	padding: 48px 0;
+}
