@@ -1,0 +1,24 @@
+/* ResultImages — inline strip of tool-result image attachments, placed
+   inside a tool card's white inset panel. Radius uses the token set
+   (ADR 07 §Styling invariants #1); the height cap keeps tall screenshots
+   from dominating the details panel. */
+
+.images {
+	display: flex;
+	flex-direction: column;
+	/* flex-start, not the default stretch: stretch forces each img to the
+	   container's full width, and clamping with max-height then breaks the
+	   aspect ratio (squash). Size imgs by their natural/clamped bounds. */
+	align-items: flex-start;
+	gap: 6px;
+}
+
+.image {
+	width: auto;
+	height: auto;
+	max-width: 100%;
+	max-height: 320px;
+	/* Letterbox, never distort, if a parent still constrains the box. */
+	object-fit: contain;
+	border-radius: var(--radius-sm);
+}
