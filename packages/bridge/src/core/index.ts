@@ -1,3 +1,13 @@
+export type { CacheEntryRecord, EntryCacheStore, SessionStatusHint } from "./cache.ts";
+export {
+	cacheRecordsOfDocument,
+	computeCursor,
+	InMemoryEntryCacheStore,
+	planCacheWrites,
+	projectCacheEntry,
+	seedDocument,
+	statusHintOfDocument,
+} from "./cache.ts";
 export type { BridgeTransport, PullRequestItem, PullResponseItem } from "./client.ts";
 export { BridgeClient, DocumentMirror, planPull } from "./client.ts";
 export type { ReconcileOptions } from "./document.ts";
@@ -15,6 +25,7 @@ export {
 	resolveFieldPath,
 	setAtPath,
 } from "./document.ts";
+export { buildInitialSync, validateCursor } from "./sync.ts";
 export type {
 	AbortRequest,
 	AddOp,
