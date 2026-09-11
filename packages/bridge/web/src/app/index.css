@@ -1,0 +1,302 @@
+@import "tailwindcss";
+@import "streamdown/styles.css";
+
+/* ==========================================================================
+   Design tokens — single source of truth.
+   All colors live in the --color-* namespace (Tailwind v4 @theme): streamdown's
+   precompiled styles.css reads --color-background etc. directly, Tailwind
+   generates bg-/text-/border- utilities from them, and CSS modules reference
+   them via var(--color-*). One declaration site, three consumers.
+   Streamdown's expected names (background, foreground, sidebar, muted,
+   muted-foreground, border, primary, secondary, accent, card, card-foreground)
+   are mapped 1:1; app-specific extensions (user-bg, on-accent, surface-raised,
+   think, code-bg, error/success/streaming/warning, overlay, portal-*) live
+   in the same namespace for consistency.
+   Status palette (success/streaming/error) matches the PRD's status-dot table
+   (#4ade80 / #fb923c / #ef4444); the previous darker material-palette values
+   were stale from the pre-light-theme era.
+   Text hierarchy (foreground > secondary > muted-foreground) clears WCAG AA
+   4.5:1 on both --color-background and the warmer --color-sidebar; the prior
+   #9e9e9e/#6e6e6e values failed AA on the sidebar surface (muted-foreground
+   was ~2.5:1). muted-foreground is pinned to the AA floor on the sidebar,
+   which caps the lightness gap from secondary — the step is perceptible but
+   narrow by necessity.
+   ========================================================================== */
+
+@theme {
+  /* ── Surface & text ─────────────────────────────────────────────────── */
+  --color-background: #faf9f6;            /* warm off-white page tone */
+  --color-foreground: #2c2c2c;            /* primary text */
+  --color-sidebar: #f0ede8;               /* sidebar / topbar / composer chrome */
+  --color-muted: #e8e4dc;                 /* tertiary surface, hovers, code-bg base */
+  --color-muted-foreground: #6a6a6a;      /* meta, timestamps, group headers (WCAG AA) */
+  --color-border: #d4cfc7;                /* hairlines */
+  --color-secondary: #5a5a5a;             /* secondary text (WCAG AA; darker than muted for hierarchy) */
+  --color-primary: #2c2c2c;               /* streamdown: primary actions (= foreground) */
+  --color-card: #f0ede8;                 /* streamdown: card surface (= sidebar) */
+  --color-card-foreground: #2c2c2c;       /* streamdown: card text (= foreground) */
+  --color-card-border: #d4cfc7;           /* tool card border */
+  --color-code-bg: #f2efe9;              /* inline code background (warm tint) */
+
+  /* ── Accent ──────────────────────────────────────────────────────────── */
+  --color-accent: #4a7bab;               /* active state, focus, primary CTA */
+  --color-accent-hover: #3a6a9a;
+  --color-accent-soft: #e1e8ef;           /* attached-instance row tint (accent over warm sidebar) */
+  --color-on-accent: #ffffff;             /* text/icons on accent background */
+  --color-surface-raised: #ffffff;        /* composer card (deliberately brighter than page) */
+
+  /* ── User message ───────────────────────────────────────────────────── */
+  --color-user-bg: #edf3f8;
+  --color-user-border: #c5d8e8;
+
+  /* ── Status (PRD status-dot table) ──────────────────────────────────── */
+  --color-success: #4ade80;              /* green: connected/idle, done, diff + */
+  --color-streaming: #fb923c;            /* orange: streaming, running */
+  --color-error: #ef4444;                /* red: disconnected, error, diff - */
+  --color-error-hover: #dc2626;          /* darker red: error-bg button hover (Stop, toast) */
+  --color-warning: #f9a825;
+  --color-think: var(--color-accent-hover); /* neutral blue: thinking — harmonized with the accent blue, clearly more visible than read */
+  /* Thinking spectrum: neutral gray → teal → blue → indigo → violet → rose.
+     These are deliberately separate from status colors; high thinking is not
+     a warning or error. Each color clears 3:1 against the page surface for
+     graphical UI, while the segment gaps provide non-color separation. */
+  --color-thinking-off: var(--color-muted-foreground);
+  --color-thinking-minimal: #3f8fa3;
+  --color-thinking-low: #3b82a0;
+  --color-thinking-medium: #4f65a6;
+  --color-thinking-high: #7c3aed;
+  --color-thinking-xhigh: #c026d3;
+  --color-thinking-max: #be185d;
+  --color-mutate: #d6336c;              /* rose: file mutation (edit + write) */
+
+  /* ── Action bands (band-as-backstage) ──────────────────────────────── */
+  /* Four color families, three tiers: stand-out (mutate, bash), neutral
+     (think), dimmed (read). The family color's saturation/value carries
+     the tier — one --action-tint strength for all, no per-kind tint
+     multiplier. edit + write share the mutate family (the label/details
+     still distinguish them); the band hue is a family signal. */
+  --action-tint: 6%;                    /* band background strength (uniform) */
+  --kind-mutate: var(--color-mutate);   /* edit + write — stand-out A */
+  --kind-bash:   var(--color-streaming); /* stand-out B */
+  --kind-think:  var(--color-think);   /* neutral */
+  --kind-read:   var(--color-muted-foreground); /* dimmed */
+
+  /* ── Overlays & portals ─────────────────────────────────────────────── */
+  --color-overlay: rgba(0, 0, 0, 0.3);
+  --color-portal-bg: #faf9f6;
+  --color-portal-border: #c8c3b8;
+
+  /* ── Radius scale ───────────────────────────────────────────────────── */
+  --radius-xs: 2px;   /* tiny — pager buttons, edit chips */
+  --radius-sm: 4px;   /* small — inputs, cards, code blocks */
+  --radius-md: 6px;   /* medium — portals, dropdowns */
+  --radius-lg: 8px;   /* large — available, not currently used */
+  --radius-xl: 16px;  /* extra large — composer card (rounder, softer) */
+
+  /* ── Font-size scale (separate from Tailwind --text-* to avoid
+        overriding Tailwind's default text utilities) ─────────────────── */
+  --fs-xs: 0.6875rem;  /* 11px — meta, group headers, toggles */
+  --fs-sm: 0.75rem;     /* 12px — action summaries, sidebar items */
+  --fs-md: 0.8125rem;  /* 13px — small body, code, card content */
+  --fs-lg: 0.875rem;    /* 14px — empty state, completion dropdown */
+  --fs-xl: 1rem;        /* 16px — body, composer textarea (reading baseline) */
+}
+
+/* Scan streamdown's bundled JS for Tailwind utility class names so they
+   survive Tailwind's tree-shaking. */
+@source "../../../../../node_modules/streamdown/dist";
+
+/* ==========================================================================
+   Base element styles.
+   Tokens are declared above; CSS modules reference them via var(--color-*).
+   ========================================================================== */
+
+html, body {
+	margin: 0;
+	padding: 0;
+}
+
+/* Pan-only touch input: a two-finger gesture during scroll must pan, not
+   pinch-zoom. touch-action only constrains touch pointers — mouse, keyboard,
+   and trackpad zoom on desktop are unaffected. */
+html, body {
+	touch-action: pan-x pan-y;
+}
+
+/* The document itself is the scroll container — not a nested overflow:auto
+   div. Mobile browsers only collapse the URL bar in response to
+   viewport/document scroll; a nested scroll container does not trigger it.
+   html overflow defaults to visible, which propagates to the viewport, so
+   overflowing content scrolls the viewport (hiding the URL bar on Firefox
+   mobile) and keeps the fixed composer out of the scroll render tree so it
+   doesn't ride the overscroll bounce. */
+
+body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size: var(--fs-xl);
+	line-height: 1.6;
+	background: var(--color-background);
+	color: var(--color-foreground);
+	-webkit-font-smoothing: antialiased;
+}
+
+#root {
+	min-height: 100dvh;
+}
+
+/* Layout dimensions for the fixed-chrome shell. --sidebar-w is driven at
+   runtime by the Sidebar component (220px when the desktop panel is open,
+   0 otherwise) so closing the sidebar lets the conversation re-claim the
+   gutter; --history-w is driven at runtime by the HistoryPane component
+   (400px when the desktop pane is open, 0 otherwise); --composer-h is driven
+   by the Composer's ResizeObserver so the conversation's bottom padding
+   tracks the live composer footprint. */
+:root {
+	--topbar-h: 48px;
+	--sidebar-w: 0px;
+	--history-w: 0px;
+	--composer-h: 64px;
+	--vv-keyboard: 0px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+/* While a pane resize drag is live (html.pane-resizing, set by
+   ResizeHandle's pointerdown): uniform col-resize cursor and no text
+   selection everywhere — the pointer may travel off the handle over any
+   content, and pointer capture alone doesn't restyle the hovered element.
+   !important beats every module-level cursor/user-select rule. */
+html.pane-resizing,
+html.pane-resizing * {
+	cursor: col-resize !important;
+	user-select: none !important;
+}
+
+button {
+	font-family: inherit;
+	cursor: pointer;
+}
+
+/* Monospace for content that is literally code or terminal I/O; proportional for chrome and annotation. */
+pre, code, .mono {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+input, textarea {
+	font-family: inherit;
+}
+
+/* Visible keyboard focus everywhere. Mouse focus is suppressed by
+   :focus-visible semantics. The ring is accent-colored, 2px, offset 1px. */
+:where(button, a, input, textarea, select, summary, [tabindex]):focus-visible {
+	outline: 2px solid var(--color-accent);
+	outline-offset: 1px;
+}
+
+/* Mobile body baseline: 14px for density. The PRD's 16px floor is the
+   desktop long-form reading baseline; below the measure cap (48rem) the
+   shorter mobile viewing distance makes 14px perceptually equivalent,
+   and the narrower viewport rewards density. Desktop keeps 16px.
+   --fs-xl is consumed by body, .composerBar, .composerTextarea — all
+   reading-baseline surfaces shrink together. Unlayered :root outranks
+   the @theme-layered token (see index.css top comment). */
+@media (max-width: 48rem) {
+	:root {
+		--fs-xl: 0.875rem;  /* 14px */
+	}
+}
+
+/* ==========================================================================
+   Streamdown element overrides.
+   Streamdown emits a double-boxed "card within a card" for tables and code
+   blocks (outer bg-sidebar wrapper + inner bg-background body, each
+   bordered), plus a chrome header band and a bordered, blurred actions pill
+   on code blocks. On the warm page tone that reads as a thick, chrome-framed
+   region — incoherent with the tool-card annotation-line rhythm (edit/read/
+   write cards: .stepDetails is bg-background, radius-sm, 6px 10px padding,
+   single border, a dimmed .fileCardLine annotation, no header band, no
+   actions pill). De-chrome both to match: bg-background + radius-sm + single
+   border, the inner body transparent and unpadded (the card padding wraps
+   the content — no double pad), and the code copy action borderless. The h-8
+   code header is kept — the sticky copy action's -mt offset is calibrated to
+   it, so shrinking it would float the action above the card. Unlayered rules
+   outrank Tailwind's layered utilities without !important. (Tool-card code
+   uses CodeSnippet — a bare <pre> — not Streamdown, so this only affects
+   markdown content.)
+   ========================================================================== */
+
+/* Table: de-chrome the outer card; the inner scroll div goes transparent. */
+[data-streamdown="table-wrapper"] {
+	background: var(--color-background);
+	border-radius: var(--radius-sm);
+}
+[data-streamdown="table-wrapper"] > div {
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+}
+
+/* Code: de-chrome the card (bg-background, radius-sm, single border; inner
+   body transparent/unpadded), drop the language tag + its h-8 header band,
+   and float the copy action at the top-right — dimmed by default, revealed on
+   hover, not clickable while hidden. (Download is disabled in markdown.tsx,
+   so the pill holds only the copy button.) */
+[data-streamdown="code-block"] {
+	position: relative;
+	background: var(--color-background);
+	/* The de-chrome comment above calls for a "single border" on the card;
+	   without it the #faf9f6 surface has no separation from the page tone. */
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+}
+/* Drop the language tag and the h-8 band it sits in. */
+[data-streamdown="code-block-header"] {
+	display: none;
+}
+/* Float the actions wrapper at the top-right, out of flow (no vertical band).
+   Resets Streamdown's sticky / -mt-10 / h-8 — those were calibrated to the
+   now-hidden header. :has targets the wrapper (it has no data-streamdown
+   attribute of its own); if Streamdown restructures, revisit this. */
+[data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	margin-top: 0;
+	height: auto;
+	z-index: 10;
+}
+[data-streamdown="code-block-actions"] {
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+	backdrop-filter: none;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.15s ease;
+}
+[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
+	opacity: 1;
+	pointer-events: auto;
+}
+[data-streamdown="code-block-body"] {
+	/* Streamdown hardcodes text-sm (14px), which exceeds the 12px thinking and
+	   tool-card contexts. Use fs-sm to match CodeSnippet (tool-card code) so
+	   all code in the app is one size and never larger than its surrounding
+	   text. */
+	font-size: var(--fs-sm);
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+}
+
+/* Line-number gutter: 1px smaller than the code (fs-xs = 11px), preserving
+   Streamdown's prior 13px-gutter-vs-14px-code de-emphasis — the gutter is
+   navigation, not content, so it recedes behind the code. Only line spans
+   carry a ::before (counter content), so the descendant selector is safe. */
+[data-streamdown="code-block-body"] span::before {
+	font-size: var(--fs-xs);
+}

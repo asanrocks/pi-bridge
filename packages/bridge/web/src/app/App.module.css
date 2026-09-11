@@ -1,0 +1,36 @@
+.root {
+	display: flex;
+	flex-direction: column;
+	min-height: 100dvh;
+}
+
+/* Main layout — padded shell clearing the fixed TopBar and (desktop)
+   Sidebar / HistoryPane. Neither chrome scrolls with the document; only the
+   conversation content does. */
+.body {
+	padding-top: var(--topbar-h);
+	padding-left: var(--sidebar-w, 0px);
+	padding-right: var(--history-w, 0px);
+}
+
+/* Conversation area — in normal document flow (the viewport is the
+   scroller). min-height fills the viewport below the TopBar so the
+   Launcher / empty state centers; taller content grows the document and scrolls. */
+.conversation {
+	min-height: calc(100dvh - var(--topbar-h));
+	display: flex;
+	flex-direction: column;
+	/* desktop default: responsive gutter centers the measure-capped
+	   content. Mobile zeros this below — see the max-width: 48rem block. */
+	padding-inline: clamp(0.5rem, 4vw, 2rem);
+}
+
+@media (max-width: 48rem) {
+	.conversation {
+		/* mobile: no gutter — user-message backgrounds go full-bleed,
+		   eliminating the white-blue-white striping on narrow viewports.
+		   (The measure cap is inactive below 48rem since the viewport is
+		   already narrower than 48rem, so the gutter is pure waste.) */
+		padding-inline: 0;
+	}
+}
