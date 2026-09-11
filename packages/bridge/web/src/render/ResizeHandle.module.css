@@ -1,0 +1,44 @@
+/* ResizeHandle — invisible 12px hit strip, 2px accent indicator on hover.
+   Position (left/right offset, full height) is inline from the component —
+   it tracks the live pane width. z-index sits above the panes (20) and the
+   TopBar (30) so the strip stays grabbable along its whole height, including
+   across the TopBar's edge; the TopBar's 12px start padding keeps its
+   leftmost controls clear of the 6px overlap on the conversation side. */
+.handle {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	/* Explicitly auto: Tailwind's preflight sets `hr { height: 0 }` in a
+	   @layer base; this module is unlayered so declaring height here wins,
+	   letting top/bottom stretch the element full-height. Without it the
+	   handle collapses to 0px tall — in the DOM, but unhoverable. */
+	height: auto;
+	z-index: 40;
+	cursor: col-resize;
+	background: transparent;
+	/* <hr> element: neutralize the UA's default horizontal-rule chrome. */
+	border: none;
+	padding: 0;
+	margin: 0;
+	/* Touch drags must resize, not scroll the document. */
+	touch-action: none;
+}
+
+.handle::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 5px;
+	width: 2px;
+	background: var(--color-accent);
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.handle:hover::after,
+.handle:focus-visible::after,
+.handle[data-dragging="true"]::after {
+	opacity: 0.6;
+}
