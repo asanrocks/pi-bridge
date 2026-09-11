@@ -1,0 +1,111 @@
+.topBar {
+	position: fixed;
+	top: 0;
+	/* Shares the viewport width with the side panes: left edge clears the
+	   Sidebar gutter, right edge clears the HistoryPane gutter. On mobile
+	   both gutters are 0 (the panes are off-canvas drawers), so the topbar
+	   spans the full width there. */
+	left: var(--sidebar-w, 0px);
+	right: var(--history-w, 0px);
+	z-index: 30;
+	height: var(--topbar-h);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 12px;
+	background: var(--color-sidebar);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.topBarInput {
+	flex: 1;
+	background: var(--color-muted);
+	color: var(--color-foreground);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	font-size: inherit;
+	font-weight: bold;
+	padding: 0 8px;
+	outline: none;
+	line-height: 1;
+}
+
+.topBarTitle {
+	flex: 1;
+	font-weight: bold;
+	color: var(--color-foreground);
+	background: none;
+	border: none;
+	text-align: left;
+	font-size: inherit;
+	padding: 0;
+	cursor: pointer;
+}
+
+.topBarTitle:disabled {
+	cursor: default;
+	opacity: 1;
+}
+
+.topBarBtn {
+	background: none;
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-sm);
+	padding: 8px;
+	min-width: 36px;
+	min-height: 36px;
+	border-radius: var(--radius-sm);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.topBarBtn:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-secondary);
+}
+
+/* Connection chip (T4) — shown only on down states. Always-on signal for
+   the attached case; the Launcher renders the full panel when unattached. */
+.connChip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--fs-xs);
+	font-family: inherit;
+	padding: 4px 10px;
+	border-radius: var(--radius-sm);
+	border: 1px solid var(--color-border);
+	background: var(--color-muted);
+	color: var(--color-secondary);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.connDot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.connMuted {
+	color: var(--color-muted-foreground);
+}
+
+.connWarn {
+	color: var(--color-streaming);
+	border-color: var(--color-streaming);
+}
+
+.connErr {
+	color: var(--color-error);
+	border-color: var(--color-error);
+}
+
+.connChip:hover {
+	color: var(--color-foreground);
+}
