@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,11 @@ export interface BridgeHarnessOptions {
 	tokensPerSecond?: number;
 	/** Extra settings to merge into the in-memory SettingsManager. */
 	settings?: Record<string, unknown>;
+	/** Enable ADR 10 git identity stamps. Default: off (test seam). */
+	gitStamps?: boolean;
+	/** Run `git init` + an initial empty commit in tempCwd before creating
+	 * the Manager, so stamp tests observe a real repository. */
+	initGitRepo?: boolean;
 }
 
 export interface BridgeHarness {
@@ -28,6 +34,8 @@ export interface BridgeHarness {
 	faux: FauxProviderRegistration;
 	/** The harness temp cwd — session files written here are switch targets. */
 	tempCwd: string;
+	/** Run git in tempCwd; resolves to trimmed stdout. */
+	git: (...args: string[]) => Promise<string>;
 	patches: Patch[];
 	/** All ops from all patches, in order. */
 	ops: PatchOp[];
@@ -78,6 +86,19 @@ export async function createBridgeHarness(opts: BridgeHarnessOptions): Promise<B
 	// 2. Resume the fixture via cwdOverride.
 	const sessionManager = SessionManager.open(fixtureCopy, undefined, tempCwd);
 
+	const git = (...args: string[]): Promise<string> =>
+		new Promise((resolve, reject) => {
+			execFile("git", args, { cwd: tempCwd }, (err, stdout) =>
+				err ? reject(err) : resolve(stdout.toString().trim()),
+			);
+		});
+	if (opts.initGitRepo) {
+		await git("init", "-q", "-b", "main");
+		await git("config", "user.email", "bridge@test");
+		await git("config", "user.name", "Bridge Test");
+		await git("commit", "--allow-empty", "-q", "-m", "initial");
+	}
+
 	// 3. Create the Manager with injected services.
 	const manager = await createManager({
 		cwd: tempCwd,
@@ -87,6 +108,9 @@ export async function createBridgeHarness(opts: BridgeHarnessOptions): Promise<B
 		sessionManager,
 		model,
 		customTools: opts.customTools,
+		// Default off: existing fixtures observe a non-repo temp cwd, and the
+		// stamp observation would shift prompt-path timing for unrelated tests.
+		gitStamps: opts.gitStamps ?? false,
 	});
 
 	const patches: Patch[] = [];
@@ -100,6 +124,7 @@ export async function createBridgeHarness(opts: BridgeHarnessOptions): Promise<B
 		manager,
 		faux,
 		tempCwd,
+		git,
 		patches,
 		ops: allOps,
 		hasOp: (predicate) => allOps.some(predicate),

@@ -20,6 +20,7 @@ import {
 	buildInitialSync,
 	type ContextUsage,
 	type Document,
+	GIT_STAMP_CUSTOM_TYPE,
 	type ImageContent,
 	initFromEntries,
 	type JsonValue,
@@ -33,6 +34,7 @@ import {
 	type ScopedModelInfo,
 	setAtPath,
 } from "../core/index.ts";
+import { createGitStampExtension } from "./git-stamp-extension.ts";
 
 // ============================================================================
 // Helpers
@@ -73,6 +75,8 @@ export interface CreateManagerOptions {
 	model?: Model<string>;
 	/** Custom tools to register. */
 	customTools?: ToolDefinition[];
+	/** Write git identity stamps (ADR 10). Default: true. Test seam. */
+	gitStamps?: boolean;
 }
 
 /**
@@ -222,6 +226,20 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			agentDir,
 			settingsManager,
 			modelRuntime,
+			// ADR 10: the bridge bundles the git-stamp writer; it loads for
+			// every runtime (initial bind and each session rebind).
+			resourceLoaderOptions:
+				options.gitStamps === false
+					? undefined
+					: {
+							extensionFactories: [
+								{
+									name: GIT_STAMP_CUSTOM_TYPE,
+									factory: createGitStampExtension(),
+									hidden: true,
+								},
+							],
+						},
 		});
 		const result = await createAgentSessionFromServices({
 			services,
