@@ -25,6 +25,16 @@ export {
 	resolveFieldPath,
 	setAtPath,
 } from "./document.ts";
+export type { GitIdentity, GitStampAnchor, GitStampData } from "./git-stamp.ts";
+export {
+	GIT_STAMP_CUSTOM_TYPE,
+	isValidBranchName,
+	isValidCommitId,
+	parseGitIdentity,
+	parseGitStampData,
+	parseGitStampEntry,
+	sameGitIdentity,
+} from "./git-stamp.ts";
 export { buildInitialSync, validateCursor } from "./sync.ts";
 export type {
 	AbortRequest,
