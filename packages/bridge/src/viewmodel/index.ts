@@ -11,6 +11,7 @@
 // ============================================================================
 
 import type { PullRequestItem } from "../core/client.ts";
+import { GIT_STAMP_CUSTOM_TYPE, type GitIdentity, parseGitStampEntry } from "../core/git-stamp.ts";
 import type {
 	BashExecutionEntry,
 	Content,
@@ -69,6 +70,10 @@ export interface UserTurn {
 	 * interval runs from the old branch's leaf assistant. Omitted when no
 	 * assistant has completed before this send (the first turn). */
 	thoughtForMs?: number;
+	/** ADR 10 git identity stamps: the effective identity at this send — the
+	 * last valid stamp on the path at or before this user message, carried
+	 * forward. Undefined when the path has no stamps (unknown). */
+	gitIdentity?: GitIdentity;
 }
 
 export interface UserBashTurn {
@@ -289,6 +294,10 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// percent chain: the new model's turns still get their own percent, the
 	// first one just carries no delta.
 	let prevReading: { percent: number; model: string } | null = null;
+	// ADR 10 fold state: the effective git identity carried forward from the
+	// last valid stamp on the leaf path. Stamps are transitions, so every
+	// user turn after a stamp inherits it until the next transition.
+	let carriedGit: GitIdentity | null = null;
 	const modelList = input.models;
 	const contextWindowOf = (provider: string | undefined, model: string | undefined): number | undefined => {
 		if (!model) return undefined;
@@ -374,7 +383,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				} else {
 					flushSwitchRun();
 					flushPending();
-					const t = buildUserTurn(entry, turns.length, doc.entries, prevTurns, asstSeals);
+					const t = buildUserTurn(entry, turns.length, doc.entries, prevTurns, asstSeals, carriedGit ?? undefined);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
 				}
@@ -410,6 +419,12 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				}
 				break;
 			default:
+				// ADR 10: git stamp transitions update the carried identity but
+				// stay invisible — they neither render nor break the merge.
+				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
+					const stamp = parseGitStampEntry(entry);
+					if (stamp) carriedGit = { commit: stamp.commit, branch: stamp.branch };
+				}
 				// tool_result (joined into ToolActionStepVM), label, session_info,
 				// custom, custom_message — invisible; do not break the merge.
 				break;
@@ -516,6 +531,7 @@ function buildUserTurn(
 	entries: Record<string, Entry>,
 	prevTurns: Map<string, TurnVM>,
 	asstSeals: string[],
+	gitIdentity?: GitIdentity,
 ): UserTurn {
 	const text = entry.content
 		.filter((c) => c.type === "text")
@@ -549,6 +565,7 @@ function buildUserTurn(
 		currentSiblingIndex: siblings.currentIndex,
 		timestamp: entry.timestamp,
 		thoughtForMs,
+		gitIdentity,
 	};
 
 	const prev = prevTurns.get(`user:${entry.id}`);

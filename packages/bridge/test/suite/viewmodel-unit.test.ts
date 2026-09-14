@@ -1926,3 +1926,113 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// ADR 10: git identity stamps — fold along the leaf path
+// ---------------------------------------------------------------------------
+
+describe("git identity fold", () => {
+	const SHA1 = "0123456789abcdef0123456789abcdef01234567";
+	const SHA1_B = "fedcba9876543210fedcba9876543210fedcba98";
+
+	function stampEntry(id: string, parentId: string | null, data: unknown): Record<string, unknown> {
+		return makeEntry(id, parentId, "2024-01-01T00:00:00Z", "custom", {
+			customType: "pi-bridge.git-stamp",
+			data,
+		});
+	}
+
+	function userEntry(id: string, parentId: string | null, ts: string): Record<string, unknown> {
+		return makeEntry(id, parentId, ts, "message", { role: "user", content: [{ type: "text", text: id }] });
+	}
+
+	function userTurnAt(vm: ReturnType<typeof computeViewModel>, i: number) {
+		const t = vm.turns[i];
+		if (t?.kind !== "user") throw new Error(`turn ${i} is not a user turn`);
+		return t;
+	}
+
+	it("prompt stamp before the user message becomes that turn's identity", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+	});
+
+	it("identity carries forward to later turns until a transition", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "turn_end", commit: SHA1, branch: "main" }));
+		// Same identity re-stamped is impossible per the writer invariant, but
+		// the fold must tolerate it: carried value simply stays.
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+		appendEntry(doc, stampEntry("s3", "u2", { v: 1, anchor: "prompt", commit: SHA1_B, branch: "dev" }));
+		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+		expect(userTurnAt(vm, 2).gitIdentity).toEqual({ commit: SHA1_B, branch: "dev" });
+	});
+
+	it("null commit (unborn) and null branch (detached) fold like any identity", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: null, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "turn_end", commit: SHA1, branch: null }));
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: null, branch: "main" });
+		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: null });
+	});
+
+	it("unknown versions, malformed payloads, and foreign custom types are invisible", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 2, commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "prompt", commit: "garbage", branch: "main" }));
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+		appendEntry(
+			doc,
+			makeEntry("s3", "u2", "2024-01-01T00:00:00Z", "custom", { customType: "other.ext", data: { v: 1 } }),
+		);
+		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
+		appendEntry(doc, stampEntry("s4", "u3", null));
+		appendEntry(doc, userEntry("u4", "s4", "2024-01-01T00:00:04Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		for (let i = 0; i < 4; i++) expect(userTurnAt(vm, i).gitIdentity).toBeUndefined();
+		expect(vm.turns).toHaveLength(4); // stamps never produce turns
+	});
+
+	it("no stamps means unknown (undefined), never an error", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(userTurnAt(vm, 0).gitIdentity).toBeUndefined();
+	});
+
+	it("fork paths fold from their own stamps only", () => {
+		// Root: s1(main@SHA1) → u1 → s2(dev@SHA1_B) → u2 (abandoned branch)
+		// Fork from u1: s3(main@SHA1) → u3 — u3 must NOT inherit s2.
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
+		const u1 = userEntry("u1", "s1", "2024-01-01T00:00:01Z");
+		appendEntry(doc, u1);
+		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "prompt", commit: SHA1_B, branch: "dev" }));
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+		appendEntry(doc, stampEntry("s3", "u1", { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
+		doc.status.leafId = "u3"; // active path is the fork, not u2
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+		expect(vm.turns).toHaveLength(2); // u2 is off-path
+	});
+});
