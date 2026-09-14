@@ -31,6 +31,7 @@ export const Sidebar = memo(function Sidebar({
 	onSwitchInstance,
 	onNewInstance,
 	onKillInstance,
+	onShowLauncher,
 	onSwitch,
 	onNew,
 	onLoadMore,
@@ -46,6 +47,8 @@ export const Sidebar = memo(function Sidebar({
 	onSwitchInstance: (instanceId: string) => void;
 	onNewInstance: (cwd: string) => Promise<void>;
 	onKillInstance: (instanceId: string) => Promise<void>;
+	/** Detach and return to the Launcher (full-page instance list). */
+	onShowLauncher: () => void;
 	onSwitch: (session: SidebarSession) => void;
 	onNew: () => void;
 	onLoadMore: () => void;
@@ -160,15 +163,36 @@ export const Sidebar = memo(function Sidebar({
 			{/* Instances section */}
 			<div className={styles.sidebarSectionHeader}>
 				<span>Instances</span>
-				<button
-					ref={newInstanceBtnRef}
-					type="button"
-					className={styles.sidebarAddBtn}
-					onClick={triggerNewInstance}
-					title="New instance"
-				>
-					+
-				</button>
+				<span className={styles.headerActions}>
+					{/* Back to the full-page instance list (Launcher). Hidden while
+					    unattached — the Launcher is the view in that state. Shares the
+					    header-action chrome with the + button (matched pair across panes). */}
+					{attachedInstanceId !== null && (
+						<button
+							type="button"
+							className={styles.sidebarAddBtn}
+							onClick={() => {
+								onShowLauncher();
+								if (!isWide) setOpen(false);
+							}}
+							title="Back to instance list"
+							aria-label="Back to instance list"
+						>
+							<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">
+								<path d="M3.5 3.5a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H4.5a1 1 0 01-1-1V3.5zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H12a1 1 0 01-1-1V3.5zM3.5 11a1 1 0 011-1H8a1 1 0 011 1v3.5a1 1 0 01-1 1H4.5a1 1 0 01-1-1V11zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1v3.5a1 1 0 01-1 1H12a1 1 0 01-1-1V11z" />
+							</svg>
+						</button>
+					)}
+					<button
+						ref={newInstanceBtnRef}
+						type="button"
+						className={styles.sidebarAddBtn}
+						onClick={triggerNewInstance}
+						title="New instance"
+					>
+						+
+					</button>
+				</span>
 			</div>
 			{cwdPopoverAnchor && cwdAllowlist.length > 1 && (
 				<>

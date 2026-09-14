@@ -13,7 +13,7 @@ request the Document snapshot or request lazy content.
 
 [The PRD (04)](./04-prd-web-ui.md) adds verbs: `abort`, `discardSteer`, `renameSession`,
 `navigate`, `switchSession`, `newSession`, `setModel`, `setThinkingLevel`,
-`listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, `switchInstance`, `newInstance`, `killInstance`, and the content `pull` mechanism. They fall
+`listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, `switchInstance`, `newInstance`, `killInstance`, `detachInstance`, and the content `pull` mechanism. They fall
 into four natural categories:
 
 - **Session verbs** — modify the pi conversation (`prompt`, `abort`, `discardSteer`,
@@ -21,7 +21,7 @@ into four natural categories:
   `switchSession`, `newSession`).
 - **Daemon verbs** — query global state (`listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, `console`).
 - **Routing verbs** — mutate the instance registry (`switchInstance`, `newInstance`, `killInstance`).
-- **Connection verbs** — manage per-client transport state (`pull`).
+- **Connection verbs** — manage per-client transport state (`pull`, `detachInstance`).
 
 The current architecture has no place for these categories. The `Daemon`
 class is a monolith: it duplicates the host's pi-setup logic inline, owns
@@ -117,7 +117,7 @@ pi ──events──► Manager ──onPatch/onReplace──► Connection ─
   sees `id` values or WebSockets.
 - **Connection → Daemon**: `listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, plus routing verbs `switchInstance`/`newInstance`/`killInstance`. These bypass
   the Manager — they are global queries/mutations.
-- **Connection → self**: `pull`. Reads `manager.document`, mutates own
+- **Connection → self**: `pull`, `detachInstance`. `pull` reads `manager.document`, mutates own
   subscriptions, sends reply. The Manager is not involved.
 
 ### Ownership
@@ -255,6 +255,7 @@ exclusively via push.
 | `switchInstance` | Daemon (routing) | `{ ok, error? }` |
 | `newInstance` | Daemon (routing) | `{ ok, instanceId }` |
 | `killInstance` | Daemon (routing) | `{ ok, error? }` |
+| `detachInstance` | Connection | `{ ok }` — unbind from the attached instance (back to the instance list) |
 | `pull` | Connection | `{ ok, values: { entryId, fieldPath, value }[] }` |
 | `console` | Daemon | `{ ok }` (dev-mode) |
 

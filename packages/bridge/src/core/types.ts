@@ -450,6 +450,12 @@ export interface ListInstancesRequest {
 	verb: "listInstances";
 }
 
+/** Detach the connection from its instance (client returned to the instance
+ * list). Connection-local: unbinds without touching the registry. */
+export interface DetachInstanceRequest {
+	verb: "detachInstance";
+}
+
 /** Union of all RPC request shapes (for type-safe verb methods). */
 export type RpcRequestBody =
 	| PromptRequest
@@ -469,7 +475,8 @@ export type RpcRequestBody =
 	| SwitchInstanceRequest
 	| NewInstanceRequest
 	| KillInstanceRequest
-	| ListInstancesRequest;
+	| ListInstancesRequest
+	| DetachInstanceRequest;
 
 // ── Verb-specific reply shapes ───────────────────────────────────────────
 
