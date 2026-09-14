@@ -1,10 +1,12 @@
 # ADR 10: Git Identity Stamps
 
-**Status:** Proposed. Adds bridge-owned metadata using existing pi extension and
-session primitives. No changes to pi-core, the pi session format, or the wire
-protocol. Bridge-scoped in v1: only bridge-created instances write stamps.
-Extraction into a shared or built-in pi extension is deferred until the feature
-proves useful outside the bridge.
+**Status:** Decided. Implemented — writer extension (`src/host/git-stamp-extension.ts`,
+enabled by `createManager`), shared payload module (`src/core/git-stamp.ts`),
+viewmodel fold, and web chip. Adds bridge-owned metadata using existing pi
+extension and session primitives. No changes to pi-core, the pi session
+format, or the wire protocol. Bridge-scoped in v1: only bridge-created
+instances write stamps. Extraction into a shared or built-in pi extension is
+deferred until the feature proves useful outside the bridge.
 
 ## Context
 
