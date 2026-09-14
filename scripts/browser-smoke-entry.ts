@@ -2,6 +2,7 @@ import { Client } from "@earendil-works/pi-client";
 import {
 	applyEvent,
 	applyPatch,
+	beautifyShellCommand,
 	BridgeClient,
 	CompactCodec,
 	computeCursor,
@@ -123,6 +124,7 @@ console.log(
 	typeof MAX_IMAGE_BASE64_LENGTH,
 	typeof projectSnapshot,
 	typeof applyPatch,
+	typeof beautifyShellCommand,
 	typeof DocumentMirror,
 	typeof planPull,
 	typeof resolveFieldPath,

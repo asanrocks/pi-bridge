@@ -9,9 +9,11 @@
 
 import { memo, useCallback, useMemo } from "react";
 import {
+	beautifyShellCommand,
 	kindForTool,
 	makeActionIdentity,
 	makeActionSummary,
+	type ShellCommandSegment,
 	stepWants,
 	type ToolActionStepVM,
 } from "../../../../src/viewmodel/index.ts";
@@ -42,7 +44,7 @@ const WRAP_TOOLS = new Set(["read", "write", "bash", "powershell", "grep", "find
 /** Registry-known tool names (anything else renders via the fallback body). */
 const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
 
-export const ToolActionStepView = memo(function ToolActionStepView({
+const ToolActionStepView = memo(function ToolActionStepView({
 	step,
 	onToggleStep,
 }: {
@@ -73,6 +75,7 @@ export const ToolActionStepView = memo(function ToolActionStepView({
 	const identity = makeActionIdentity(step.toolName, args, cwd);
 	const recArgs = args && typeof args === "object" && !Array.isArray(args) ? (args as ToolArgs) : null;
 	const isShell = SHELL_TOOLS.has(step.toolName);
+	const liveCmd = isShell && typeof recArgs?.command === "string" ? (recArgs.command as string) : null;
 	const timeout = isShell && typeof recArgs?.timeout === "number" ? (recArgs.timeout as number) : null;
 	const timing = useToolTiming(step.toolCallId, step.status);
 
@@ -156,7 +159,12 @@ export const ToolActionStepView = memo(function ToolActionStepView({
 					aria-label={`${isExpanded ? "Collapse" : "Expand"} ${liveSummary}`}
 				>
 					<span className={styles.foldTri}>{isExpanded ? "\u25BE" : "\u25B8"}</span>
-					<span className={styles.stepSummary}>{liveSummary}</span>
+					<span className={styles.stepSummary}>
+						{/* Collapsed shell steps render the beautified command (folded
+						  tokens as chips); the raw string stays the aria label, and the
+						  expanded card's identity line shows the command unmodified. */}
+						{isShell && liveCmd !== null ? <ShellSummary command={liveCmd} cwd={cwd} /> : liveSummary}
+					</span>
 				</button>
 			</div>
 			{!isExpanded && <BandPreview step={step} />}
@@ -195,3 +203,34 @@ export const ToolActionStepView = memo(function ToolActionStepView({
 		</div>
 	);
 });
+
+/** Beautified shell command for the collapsed fold row — command words
+ * ("npm run") as tinted chips, folded tokens (leading "cd dir &&", deep
+ * absolute paths) as dimmed-italic abbreviations whose title tooltip carries
+ * the original. A command nothing applies to renders as the plain string. */
+function ShellSummary({ command, cwd }: { command: string; cwd: string | null }) {
+	const segments = useMemo(() => beautifyShellCommand(command, cwd), [command, cwd]);
+	if (segments.length === 1 && segments[0].kind === "text") return segments[0].text;
+	return (
+		<>
+			{segments.map((s: ShellCommandSegment, i: number) =>
+				s.kind === "fold" ? (
+					// biome-ignore lint/suspicious/noArrayIndexKey: segment order is the identity; originals may repeat
+					<span key={i} className={styles.foldAbbrev} title={s.original}>
+						{s.label}
+					</span>
+				) : s.kind === "cmd" ? (
+					// biome-ignore lint/suspicious/noArrayIndexKey: segment order is the identity
+					<span key={i} className={styles.cmdChip}>
+						{s.text}
+					</span>
+				) : (
+					// biome-ignore lint/suspicious/noArrayIndexKey: segment order is the identity
+					<span key={i}>{s.text}</span>
+				),
+			)}
+		</>
+	);
+}
+
+export { ToolActionStepView };
