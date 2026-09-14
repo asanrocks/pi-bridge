@@ -201,6 +201,16 @@ export function useRpc() {
 		}
 	}, []);
 
+	/** Back to the instance list: unbind server-side (patches stop), then
+	 * clear local instance state. The instance keeps running headless. */
+	const detachInstance = useCallback(async () => {
+		const reply = await rpc(() => getGlobalClient()?.detachInstance(), "detach failed");
+		if (reply?.ok) {
+			discardSessionCandidate(); // unattached: a pending switch can never promote
+			getStore().getState().detachInstance();
+		}
+	}, []);
+
 	/** Refresh the instance list without side effects. Used by the Launcher's
 	 * liveness poll while unattached (no instances_changed push yet). */
 	const refreshInstances = useCallback(async () => {
@@ -241,6 +251,7 @@ export function useRpc() {
 			switchInstance,
 			newInstance,
 			killInstance,
+			detachInstance,
 			refreshInstances,
 			loadMoreSessions,
 			listFiles,
@@ -258,6 +269,7 @@ export function useRpc() {
 			switchInstance,
 			newInstance,
 			killInstance,
+			detachInstance,
 			refreshInstances,
 			loadMoreSessions,
 			listFiles,

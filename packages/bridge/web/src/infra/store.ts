@@ -69,6 +69,11 @@ export interface ClientStore {
 
 	// Attachment state — which Manager (project) this tab is watching
 	attachedInstanceId: string | null;
+	/** True when the user explicitly returned to the Launcher (detach). A
+	 * reconnect must not auto-attach over that choice — the T1 sole-instance
+	 * resume is for tabs that didn't choose. Cleared on the next attach; not
+	 * persisted, so a reload resumes normal auto-attach. */
+	launcherPinned: boolean;
 
 	/** Composer draft — the single source of truth for the textarea content.
 	    Discriminated by kind: idle (nothing), compose (new message), edit
@@ -144,6 +149,9 @@ export interface ClientStore {
 	syncInstances: (partial: { instances?: InstanceInfo[]; attachedInstanceId?: string | null }) => void;
 	/** Clear instance state (on instance_exit or initial state). */
 	clearInstance: () => void;
+	/** User detach (back to the instance list): clear instance state and pin
+	 * the Launcher against reconnect auto-attach. */
+	detachInstance: () => void;
 	/**
 	 * Append a page of sessions from load-more. Upserts by id: new entries
 	 * are added, existing entries are updated with fresh metadata. Keeps
@@ -228,6 +236,27 @@ function emptyDocument(): Document {
 	};
 }
 
+/** Fields reset whenever the tab leaves its attached instance — instance
+ * death (clearInstance) and user detach both leave no session state behind. */
+function detachedInstanceState() {
+	return {
+		attachedInstanceId: null as string | null,
+		activeSessionId: null as string | null,
+		document: emptyDocument(),
+		sessions: [] as SessionInfo[],
+		sessionsHasMore: false,
+		expandedActionGroups: new Set<string>(),
+		expandedSteps: new Set<string>(),
+		uncappedDetails: new Set<string>(),
+		frozenActionGroups: new Set<string>(),
+		frozenSteps: new Set<string>(),
+		loadingPaths: new Set<string>(),
+		draft: { kind: "idle" } as ComposerDraft,
+		composerExpanded: false,
+		focusedTurnId: null as string | null,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Set helpers (immutable copy-on-write)
 // ---------------------------------------------------------------------------
@@ -305,6 +334,7 @@ export function createClientStore() {
 		activeSessionId: null,
 		connection: { kind: "connecting" },
 		attachedInstanceId: null,
+		launcherPinned: false,
 		draft: { kind: "idle" },
 		composerExpanded: false,
 		focusedTurnId: null,
@@ -354,25 +384,14 @@ export function createClientStore() {
 			set((s) => ({
 				instances: partial.instances ?? s.instances,
 				attachedInstanceId: "attachedInstanceId" in partial ? partial.attachedInstanceId! : s.attachedInstanceId,
+				// Attaching again clears the launcher pin (the user chose an instance).
+				launcherPinned:
+					"attachedInstanceId" in partial && partial.attachedInstanceId !== null ? false : s.launcherPinned,
 			})),
 
-		clearInstance: () =>
-			set({
-				attachedInstanceId: null,
-				activeSessionId: null,
-				document: emptyDocument(),
-				sessions: [],
-				sessionsHasMore: false,
-				expandedActionGroups: new Set(),
-				expandedSteps: new Set(),
-				uncappedDetails: new Set(),
-				frozenActionGroups: new Set(),
-				frozenSteps: new Set(),
-				loadingPaths: new Set(),
-				draft: { kind: "idle" },
-				composerExpanded: false,
-				focusedTurnId: null,
-			}),
+		clearInstance: () => set(detachedInstanceState()),
+
+		detachInstance: () => set({ ...detachedInstanceState(), launcherPinned: true }),
 
 		appendSessions: (incoming, hasMore) =>
 			set((s) => {
