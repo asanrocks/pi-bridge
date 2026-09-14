@@ -355,6 +355,14 @@ export class Connection {
 					break;
 				}
 
+				case "detachInstance": {
+					// Back to the instance list: unbind from the Manager so its
+					// patches stop flowing. The instance keeps running headless.
+					this.detach();
+					this.sendReply(id, true);
+					break;
+				}
+
 				default:
 					throw new Error(`Unknown verb: ${verb}`);
 			}
