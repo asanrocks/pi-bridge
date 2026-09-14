@@ -645,6 +645,28 @@
 	color: var(--color-foreground);
 }
 
+/* Command-word chip in the beautified shell summary (beautifyShellCommand
+   rule 3): the first command of every chained segment ("npm run", "git
+   commit") — the signal of the line. Tinted with the step's kind hue and
+   rounded so it stands off the plain shell text. Spec: inline, no
+   font-size change (the summary line is already the small scale), padding
+   0 4px, radius-sm, 12% step-hue tint. */
+.cmdChip {
+	background: color-mix(in srgb, var(--step-hue) 12%, transparent);
+	border-radius: var(--radius-sm);
+	padding: 0 4px;
+	margin: 0 1px;
+}
+
+/* Folded token in the beautified shell summary (beautifyShellCommand rules
+   1–2): the abbreviated "cd dir" / "cd;" / "…" / "...last/two" forms — the
+   elided noise, de-emphasized rather than highlighted. Dimmed italic, no
+   background; the title tooltip carries the original. */
+.foldAbbrev {
+	color: var(--color-muted-foreground);
+	font-style: italic;
+}
+
 /* Think preview is plain escaped text (not Markdown) so nowrap holds and a
    long single line stays clipped — Streamdown's root wrapper applies
    whitespace-normal, which defeated .stepSummary's nowrap when the preview
