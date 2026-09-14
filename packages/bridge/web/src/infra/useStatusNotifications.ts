@@ -29,12 +29,26 @@ export interface ActivitySignal {
 // Module-level state (one app, one notification)
 // ---------------------------------------------------------------------------
 
+const NOTIFICATION_TAG = "pi-bridge-turn-complete";
+
 let activeNotification: Notification | null = null;
 
 function closeNotification(): void {
 	if (activeNotification) {
 		activeNotification.close();
 		activeNotification = null;
+	}
+	// SW-displayed notifications have no JS-side handle; close them by tag.
+	if (typeof navigator !== "undefined" && navigator.serviceWorker) {
+		navigator.serviceWorker
+			.getRegistration()
+			.then((reg) => reg?.getNotifications({ tag: NOTIFICATION_TAG }))
+			.then((list) => {
+				list?.forEach((n) => {
+					n.close();
+				});
+			})
+			.catch(() => {});
 	}
 }
 
@@ -141,8 +155,19 @@ export function useStatusNotifications({
 			setUnreadCount(0);
 			closeNotification();
 		};
+		// Cancel a pending fire when the tab becomes visible. A page resumed
+		// from background freeze processes its queued WebSocket frames *before*
+		// the visibilitychange (visible) task, so document.hidden is stale-true
+		// during that burst — the grace timer alone can still lose that race.
+		const onVisibility = () => {
+			if (document.visibilityState === "visible") cancelPendingFire();
+		};
 		window.addEventListener("focus", onFocus);
-		return () => window.removeEventListener("focus", onFocus);
+		document.addEventListener("visibilitychange", onVisibility);
+		return () => {
+			window.removeEventListener("focus", onFocus);
+			document.removeEventListener("visibilitychange", onVisibility);
+		};
 	}, []);
 
 	// Tab title
@@ -163,21 +188,70 @@ export function useStatusNotifications({
 // Fire browser notification
 // ---------------------------------------------------------------------------
 
+// Grace window before actually posting a Notification. A tab resumed from
+// background freeze flushes queued WebSocket frames before its
+// visibilitychange (visible) task, so a completion seen "while hidden" may
+// really be a foregrounding user. Deferring the fire gives the visibility
+// task time to cancel it; a genuinely hidden tab just fires ~1s late
+// (background timer clamping is >= 1s anyway).
+const NOTIFY_GRACE_MS = 1000;
+
+let fireTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingFire(): void {
+	if (fireTimer !== null) {
+		clearTimeout(fireTimer);
+		fireTimer = null;
+	}
+}
+
 function fireNotification(sessionName: string, durationMs: number): void {
 	syncPermissionState();
 	if (permissionState !== "granted") return;
 	if (typeof Notification === "undefined") return;
 
-	closeNotification();
-
 	const seconds = Math.round(durationMs / 1000);
-	const n = new Notification("pi-bridge", {
-		body: `${sessionName} · Completed (${seconds}s)`,
-		tag: "pi-bridge-turn-complete",
-	});
-	activeNotification = n;
+	cancelPendingFire();
+	fireTimer = setTimeout(() => {
+		fireTimer = null;
+		// Foregrounded during the grace window: the user is looking at the
+		// completed turn; a notification now would be noise.
+		if (!document.hidden) return;
 
-	n.addEventListener("close", () => {
-		if (activeNotification === n) activeNotification = null;
-	});
+		closeNotification();
+		void showNotification(`${sessionName} · Completed (${seconds}s)`);
+	}, NOTIFY_GRACE_MS);
+}
+
+/**
+ * Post the notification. Prefers the service-worker path: SW-shown
+ * notifications go through the OS channel and display while the browser
+ * itself is backgrounded. The document constructor is only a fallback —
+ * Firefox Android defers it to foreground and most other mobile browsers
+ * throw TypeError on it.
+ */
+async function showNotification(body: string): Promise<void> {
+	const options = { body, tag: NOTIFICATION_TAG };
+
+	// Only use the SW if one already controls the page — getRegistration()
+	// can wait on a registration that never finishes installing.
+	const swReg = navigator.serviceWorker?.controller ? await navigator.serviceWorker.getRegistration() : null;
+	if (swReg) {
+		try {
+			await swReg.showNotification("pi-bridge", options);
+			return;
+		} catch {
+			// Fall through to the constructor
+		}
+	}
+
+	try {
+		const n = new Notification("pi-bridge", options);
+		activeNotification = n;
+		n.addEventListener("close", () => {
+			if (activeNotification === n) activeNotification = null;
+		});
+	} catch {
+		// Mobile browsers throw TypeError here; nothing to show.
+	}
 }
