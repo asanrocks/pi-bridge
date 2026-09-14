@@ -1069,6 +1069,264 @@ function buildActionSummary(block: ToolCallBlock): string {
 	return makeActionSummary(block.name, block.arguments);
 }
 
+// ---------------------------------------------------------------------------
+// Beautified shell command — the collapsed bash step renders the command
+// with two decorations (rendered as spans by the web layer): command words
+// ("npm run", "git commit") as tinted chips, and abbreviated tokens as
+// dimmed italic text (the title carries the original). Purely cosmetic:
+// the raw command stays the data model, and the expanded card's identity
+// line shows it unmodified. The rules are deliberately ad-hoc — no shell
+// parsing, just shape heuristics that cover the common cases:
+//   1. a leading "cd <dir> &&" folds by its relation to the cwd (under it →
+//      cwd-relative chip; equal to it → no-op "cd;" chip; outside it →
+//      elided-prefix chip keeping the last two segments);
+//   2. any other path token (absolute or ./ ../-prefixed) with more than
+//      two real segments folds to its last two ("/a/b/c/d.ts" →
+//      "...c/d.ts"; "../.." never leaks beside a "..." label);
+//   3. the first command of every &&/;/|-separated segment gets a chip,
+//      plus its subcommand when the parent is a known multi-word tool
+//      (npm/pnpm/yarn/bun, git, cargo, docker, …). Boring text/file
+//      utilities (ls, head, tail, rg, sed, cat, …) stay plain.
+// ---------------------------------------------------------------------------
+
+/** One piece of a beautified shell command: literal text, a highlighted
+ * command word, or a folded token (shortened label + the original for the
+ * hover title). */
+export type ShellCommandSegment =
+	| { kind: "text"; text: string }
+	| { kind: "cmd"; text: string }
+	| { kind: "fold"; label: string; original: string };
+
+const CD_PREFIX = /^cd\s+([^\s;&|]+)\s*(&&|;)\s*/;
+// A whole path token at a token boundary: absolute ("/a/b/c.ts"), or
+// dot-relative ("./x/y.ts", "../../x/y.ts"). The boundary lookbehind keeps
+// the regex from starting mid-token ("foo=/a/b" stays plain) and the
+// dot-prefixes keep "../.." from being left beside a "..." label.
+const PATH_TOKEN = /(?<=^|[\s"'])(?:\.\.|\.)?\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+/g;
+
+/** Fold a shell command into display segments. A command nothing applies
+ * to yields a single text segment — callers can treat a one-text result as
+ * "no decoration needed". */
+export function beautifyShellCommand(command: string, cwd?: string | null): ShellCommandSegment[] {
+	const segments: ShellCommandSegment[] = [];
+	let rest = command;
+
+	// Rule 1: leading "cd <dir> <sep>" — three shapes:
+	//   dir under cwd   → one chip "cd <relative>" (the separator folds in);
+	//   dir is the cwd  → one chip "cd;" — a no-op cd, nothing to show;
+	//   dir outside cwd → "cd" and the separator stay plain text; a deep dir
+	//                     elides its prefix to a "…" chip with the last two
+	//                     segments as plain text (a shallow dir stays raw —
+	//                     eliding "/" would be decoration without gain).
+	// In every shape the dir is consumed here, so rule 2 never re-folds it.
+	const cd = CD_PREFIX.exec(rest);
+	if (cd) {
+		const dir = cd[1];
+		const sep = cd[2];
+		const relative = displayPath(dir, cwd ?? null);
+		if (relative !== dir) {
+			segments.push({
+				kind: "fold",
+				label: relative.length > 0 ? `cd ${relative}` : "cd;",
+				original: `cd ${dir} ${sep}`,
+			});
+			// The chip swallows the clause's trailing whitespace; re-add one
+			// space so the following command doesn't butt against it.
+			const after = rest.slice(cd[0].length);
+			rest = after.length > 0 ? ` ${after}` : "";
+		} else {
+			// Real segments only — ".."/"." are not content; a dir without two
+			// real trailing segments stays raw.
+			const parts = dir.split("/").filter((p) => p !== "" && p !== "." && p !== "..");
+			const tail = parts.length > 2 ? `${parts[parts.length - 2]}/${parts[parts.length - 1]}` : null;
+			const elided = tail !== null ? dir.slice(0, dir.length - tail.length) : "";
+			if (tail !== null && elided.length > 1) {
+				segments.push({ kind: "text", text: "cd " });
+				segments.push({ kind: "fold", label: "…", original: dir });
+				segments.push({ kind: "text", text: `${tail} ${sep} ${rest.slice(cd[0].length)}` });
+				rest = "";
+			}
+		}
+	}
+
+	// Rule 2: path tokens with more than two real segments (".."/"." don't
+	// count — "../../a.ts" stays plain) — keep the last two.
+	let last = 0;
+	for (const m of rest.matchAll(PATH_TOKEN)) {
+		const token = m[0];
+		const parts = token.split("/").filter((p) => p !== "" && p !== "." && p !== "..");
+		if (parts.length <= 2 || m.index === undefined) continue;
+		if (m.index > last) segments.push({ kind: "text", text: rest.slice(last, m.index) });
+		segments.push({
+			kind: "fold",
+			label: `...${parts[parts.length - 2]}/${parts[parts.length - 1]}`,
+			original: token,
+		});
+		last = m.index + token.length;
+	}
+	if (last < rest.length) segments.push({ kind: "text", text: rest.slice(last) });
+
+	// Rule 3: command-word chips — applied to the text segments the rules
+	// above produced (folds interrupt text; a command split across a fold is
+	// not recognized — acceptable for a heuristic).
+	const out: ShellCommandSegment[] = [];
+	for (const seg of segments) {
+		if (seg.kind !== "text") {
+			out.push(seg);
+			continue;
+		}
+		for (const piece of highlightCommands(seg.text)) {
+			const prev = out[out.length - 1];
+			if (piece.kind === "text" && prev?.kind === "text") prev.text += piece.text;
+			else out.push(piece);
+		}
+	}
+	return out;
+}
+
+/** Text/file utilities that never get a command chip — they are the noise a
+ * summary wants to de-emphasize, not the signal. */
+const BORING_COMMANDS = new Set([
+	"ls",
+	"head",
+	"tail",
+	"rg",
+	"sed",
+	"cat",
+	"echo",
+	"cd",
+	"pwd",
+	"grep",
+	"find",
+	"fd",
+	"wc",
+	"sort",
+	"uniq",
+	"tr",
+	"cut",
+	"touch",
+	"mkdir",
+	"rmdir",
+	"rm",
+	"cp",
+	"mv",
+	"ln",
+	"chmod",
+	"chown",
+	"du",
+	"df",
+	"ps",
+	"kill",
+	"which",
+	"whereis",
+	"file",
+	"stat",
+	"date",
+	"whoami",
+	"id",
+	"env",
+	"printenv",
+	"export",
+	"set",
+	"unset",
+	"source",
+	"alias",
+	"sleep",
+	"true",
+	"false",
+	"test",
+	"xargs",
+	"tee",
+	"less",
+	"more",
+	"diff",
+	"cmp",
+	"md5sum",
+	"sha256sum",
+	"basename",
+	"dirname",
+	"realpath",
+	"readlink",
+	"seq",
+	"nl",
+	"tac",
+	"awk",
+	"vim",
+	"nvim",
+	"nano",
+]);
+
+/** Tools whose first argument is a subcommand worth sharing the chip
+ * ("npm run", "git commit", "docker compose"). */
+const SUBCOMMAND_PARENTS = new Set([
+	"git",
+	"npm",
+	"pnpm",
+	"yarn",
+	"bun",
+	"deno",
+	"cargo",
+	"docker",
+	"kubectl",
+	"helm",
+	"terraform",
+	"pip",
+	"pip3",
+	"uv",
+	"go",
+	"brew",
+	"apt",
+	"apt-get",
+	"dnf",
+	"yum",
+	"systemctl",
+	"aws",
+	"gcloud",
+	"az",
+	"dotnet",
+	"composer",
+	"poetry",
+	"gem",
+	"pi",
+]);
+
+const WORD = /^[A-Za-z][\w.-]*$/;
+const SEPARATOR = /^(?:\|\||&&|;|\|)$/;
+
+/** Chip the command word(s) of every &&/;/|-separated segment of `text`. */
+function highlightCommands(text: string): ShellCommandSegment[] {
+	const out: ShellCommandSegment[] = [];
+	const pushText = (t: string) => {
+		if (t.length === 0) return;
+		const prev = out[out.length - 1];
+		if (prev?.kind === "text") prev.text += t;
+		else out.push({ kind: "text", text: t });
+	};
+
+	for (const part of text.split(/(\|\||&&|;|\|)/)) {
+		if (part.length === 0) continue;
+		if (SEPARATOR.test(part)) {
+			pushText(part);
+			continue;
+		}
+		const lead = part.slice(0, part.length - part.trimStart().length);
+		const body = part.slice(lead.length);
+		const first = body.match(/^\S+/)?.[0] ?? "";
+		// Only a plain word that is not boring gets a chip; assignments
+		// ("FOO=1 npm …"), flags, and paths fall through as text.
+		if (!WORD.test(first) || BORING_COMMANDS.has(first)) {
+			pushText(part);
+			continue;
+		}
+		const after = body.slice(first.length);
+		const sub = SUBCOMMAND_PARENTS.has(first) ? after.match(/^\s+([A-Za-z][\w-]*)\b/) : null;
+		pushText(lead);
+		out.push({ kind: "cmd", text: sub ? `${first}${sub[0]}` : first });
+		pushText(sub ? after.slice(sub[0].length) : after);
+	}
+	return out;
+}
+
 /**
  * The full-form identifier for a tool call — the counterpart of
  * makeActionSummary. The collapsed band abbreviates for scannability

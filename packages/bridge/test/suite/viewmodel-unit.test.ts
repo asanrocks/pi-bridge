@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { Document } from "../../src/core/types.ts";
 import {
+	beautifyShellCommand,
 	computeViewModel,
 	makeActionIdentity,
 	makeActionSummary,
@@ -1797,5 +1798,131 @@ describe("identity preservation", () => {
 		if (a1.kind === "assistant" && a2.kind === "assistant") {
 			expect(a2.blocks[0]).not.toBe(a1.blocks[0]);
 		}
+	});
+});
+
+describe("beautifyShellCommand — folded shell summaries", () => {
+	const CWD = "/home/x/inst";
+
+	it("folds a leading cd to a cwd-relative chip", () => {
+		const segs = beautifyShellCommand(`cd ${CWD}/and/sub/dir && npm run check`, CWD);
+		expect(segs).toEqual([
+			{ kind: "fold", label: "cd and/sub/dir", original: `cd ${CWD}/and/sub/dir &&` },
+			{ kind: "text", text: " " },
+			{ kind: "cmd", text: "npm run" },
+			{ kind: "text", text: " check" },
+		]);
+	});
+
+	it("folds deep absolute paths to the last two segments", () => {
+		const segs = beautifyShellCommand(`npm run check ${CWD}/and/sub/dir/to/path.tsx`, CWD);
+		expect(segs).toEqual([
+			{ kind: "cmd", text: "npm run" },
+			{ kind: "text", text: " check " },
+			{ kind: "fold", label: "...to/path.tsx", original: `${CWD}/and/sub/dir/to/path.tsx` },
+		]);
+	});
+
+	it("combines fold rules with command chips", () => {
+		const segs = beautifyShellCommand(`cd ${CWD}/sub && npm run check ${CWD}/sub/to/path.tsx`, CWD);
+		expect(segs).toEqual([
+			{ kind: "fold", label: "cd sub", original: `cd ${CWD}/sub &&` },
+			{ kind: "text", text: " " },
+			{ kind: "cmd", text: "npm run" },
+			{ kind: "text", text: " check " },
+			{ kind: "fold", label: "...to/path.tsx", original: `${CWD}/sub/to/path.tsx` },
+		]);
+	});
+
+	it("leaves short and shallow paths alone", () => {
+		expect(beautifyShellCommand("cat /tmp/a.ts", CWD)).toEqual([{ kind: "text", text: "cat /tmp/a.ts" }]);
+		expect(beautifyShellCommand("echo hello", CWD)).toEqual([{ kind: "text", text: "echo hello" }]);
+	});
+
+	it("cd to the cwd itself folds to a no-op chip", () => {
+		expect(beautifyShellCommand(`cd ${CWD} && npm test 2>&1 | tail -4`, CWD)).toEqual([
+			{ kind: "fold", label: "cd;", original: `cd ${CWD} &&` },
+			{ kind: "text", text: " " },
+			{ kind: "cmd", text: "npm test" },
+			{ kind: "text", text: " 2>&1 | tail -4" },
+		]);
+	});
+
+	it("cd outside cwd keeps cd plain and elides the dir prefix", () => {
+		// The cd target is an ancestor of the cwd — no cwd-relative form, so
+		// "cd"/"&&" stay plain and the deep dir elides to a "…" chip + tail.
+		const dir = "/home/hugh/project/agenty/pi";
+		const cwd = "/home/hugh/project/agenty/pi/packages/bridge";
+		expect(beautifyShellCommand(`cd ${dir} && npm run check`, cwd)).toEqual([
+			{ kind: "text", text: "cd " },
+			{ kind: "fold", label: "…", original: dir },
+			{ kind: "text", text: "agenty/pi && " },
+			{ kind: "cmd", text: "npm run" },
+			{ kind: "text", text: " check" },
+		]);
+	});
+
+	it("does not fold a cd outside cwd when eliding gains nothing", () => {
+		expect(beautifyShellCommand("cd /tmp && ls", CWD)).toEqual([{ kind: "text", text: "cd /tmp && ls" }]);
+		expect(beautifyShellCommand("cd /a/b && ls", CWD)).toEqual([{ kind: "text", text: "cd /a/b && ls" }]);
+	});
+
+	it("cd without a chained command is not folded", () => {
+		expect(beautifyShellCommand("cd somewhere", CWD)).toEqual([{ kind: "text", text: "cd somewhere" }]);
+	});
+
+	it("chips the first command of every chained segment", () => {
+		expect(beautifyShellCommand("git commit -m x && git push origin main", CWD)).toEqual([
+			{ kind: "cmd", text: "git commit" },
+			{ kind: "text", text: " -m x && " },
+			{ kind: "cmd", text: "git push" },
+			{ kind: "text", text: " origin main" },
+		]);
+		expect(beautifyShellCommand("cargo build --release | gzip > out.tgz", CWD)).toEqual([
+			{ kind: "cmd", text: "cargo build" },
+			{ kind: "text", text: " --release | " },
+			{ kind: "cmd", text: "gzip" },
+			{ kind: "text", text: " > out.tgz" },
+		]);
+	});
+
+	it("boring commands stay plain", () => {
+		expect(beautifyShellCommand("ls -la", CWD)).toEqual([{ kind: "text", text: "ls -la" }]);
+		expect(beautifyShellCommand("cat a.ts | rg foo | head -5", CWD)).toEqual([
+			{ kind: "text", text: "cat a.ts | rg foo | head -5" },
+		]);
+		expect(beautifyShellCommand("sed -n 1,5p x.ts && tail -3 y.ts", CWD)).toEqual([
+			{ kind: "text", text: "sed -n 1,5p x.ts && tail -3 y.ts" },
+		]);
+	});
+
+	it("non-command first tokens stay plain", () => {
+		// assignment prefix and paths — only a plain-word first token chips
+		expect(beautifyShellCommand("FOO=1 npm test", CWD)).toEqual([{ kind: "text", text: "FOO=1 npm test" }]);
+		expect(beautifyShellCommand("./scripts/x.sh run", CWD)).toEqual([{ kind: "text", text: "./scripts/x.sh run" }]);
+	});
+
+	it("folds ../-prefixed path tokens whole — no dot collision with the label", () => {
+		// Regression: the old regex started mid-token at "/node_modules/...",
+		// leaving " .." plain text right before the "..." label ("......").
+		expect(beautifyShellCommand("node ../../node_modules/vitest/dist/cli.js --run x", CWD)).toEqual([
+			{ kind: "cmd", text: "node" },
+			{ kind: "text", text: " " },
+			{ kind: "fold", label: "...dist/cli.js", original: "../../node_modules/vitest/dist/cli.js" },
+			{ kind: "text", text: " --run x" },
+		]);
+	});
+
+	it("dot-only path tails stay plain", () => {
+		expect(beautifyShellCommand("cd ../../a.ts && ls", "/somewhere/else")).toEqual([
+			{ kind: "text", text: "cd ../../a.ts && ls" },
+		]);
+		expect(beautifyShellCommand("ls ../../..", CWD)).toEqual([{ kind: "text", text: "ls ../../.." }]);
+	});
+
+	it("paths not at a token boundary stay plain", () => {
+		expect(beautifyShellCommand("grep --foo=/a/b/c/d.ts x", CWD)).toEqual([
+			{ kind: "text", text: "grep --foo=/a/b/c/d.ts x" },
+		]);
 	});
 });

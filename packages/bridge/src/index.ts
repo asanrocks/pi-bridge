@@ -112,6 +112,7 @@ export type {
 	ModelRefLike,
 	PlacedNode,
 	SessionAccounting,
+	ShellCommandSegment,
 	SystemTurn,
 	TextBlockVM,
 	ThinkActionStepVM,
@@ -124,6 +125,7 @@ export type {
 	ViewModelInput,
 } from "./viewmodel/index.ts";
 export {
+	beautifyShellCommand,
 	collapseDrafts,
 	computeActiveUserPath,
 	computeHistoryTree,
