@@ -12,9 +12,11 @@ import {
 	kindForTool,
 	makeActionIdentity,
 	makeActionSummary,
+	stepWants,
 	type ToolActionStepVM,
 } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
+import { wantPull } from "../../infra/wants.ts";
 import styles from "./conversation.module.css";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";
@@ -59,7 +61,13 @@ export const ToolActionStepView = memo(function ToolActionStepView({
 
 	// Live arguments from the store so the summary and the identity line
 	// update as the tool call arguments stream in (the VM cache key excludes
-	// argument values).
+	// argument values). ADR 09: the group header only pulls edit/write
+	// arguments, so this step registers its own want whenever it renders
+	// (collapsed rows need the summary too); ActionDetails adds the result
+	// wants when expanded. The pullTick subscription re-registers wants
+	// after pull failures and refreshes after ingests.
+	useStore((s) => s.pullTick);
+	wantPull(stepWants(step, false));
 	const args = useLiveArgs(step);
 	const liveSummary = makeActionSummary(step.toolName, args, cwd);
 	const identity = makeActionIdentity(step.toolName, args, cwd);

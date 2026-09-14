@@ -63,6 +63,8 @@
 
 ### Changed
 
+- Action group headers name only the changed files, and pull less: the collapsed label lists edit/write basenames together under one category plus counts (`edit: a.ts, b.ts · run 2 tools · read 3 files`) — the bash key command (and its `2>&1`-mangling `extractKeyCommand` split) is gone from the header, and every non-edit/write tool renders as a count, needing no arguments (edit vs write stays visible in the expanded step rows and card identities). Thinking no longer appears alongside tool categories (a thinking-only group still shows a `think` fallback so the fold row isn't a bare triangle). The group-level `arguments` pull is restricted to edit/write steps; per-step argument wants moved into `ToolActionStepView` (mirroring `ThinkActionStepView`), so expanded rows keep their live summaries while collapsed groups fetch nothing for bash/read steps.
+
 - Text selection now follows the chrome/content split: interactive surfaces (Launcher instance rows, Sidebar instance/session rows, History graph rows, TopBar title/buttons, toasts, composer pickers and path completion) are `user-select: none` so taps and double-clicks don't flash document-style selection; copy targets stay selectable — Launcher row cwd paths and message previews explicitly opt back in, and conversation content is untouched.
 
 - Assistant Copy is attached to messages, not turns: each assistant text segment carries its own Copy chip (same `.toolbarBtn` style as the user-message Copy, floating at the segment's top-right, hover/focus-revealed, always visible on touch, hidden for empty text), and the assistant turn-header Copy is gone — a run-merged turn holds several messages, so there is no single "turn text" to copy. User turns are unchanged (header toolbar Copy).
