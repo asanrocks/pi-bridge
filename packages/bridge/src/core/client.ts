@@ -231,6 +231,11 @@ export class BridgeClient {
 		return this.call({ verb: "killInstance", instanceId });
 	}
 
+	/** Detach from the attached instance (back to the instance list). */
+	detachInstance(): Promise<RpcReply> {
+		return this.call({ verb: "detachInstance" });
+	}
+
 	listInstances(): Promise<RpcReply> {
 		return this.call({ verb: "listInstances" });
 	}

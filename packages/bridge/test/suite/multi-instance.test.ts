@@ -497,4 +497,51 @@ describe("multi-instance daemon routing", () => {
 		ws1.close();
 		ws2.close();
 	});
+
+	it("detachInstance unbinds the Connection — no patches on the wire, re-attach works", async () => {
+		const stubs = new Map<string, { manager: Manager; handles: StubHandles }>();
+		const { port } = await startDaemon({
+			cwdAllowlist: ["/proj-a"],
+			managerFactory: async (opts) => {
+				const cwd = opts?.cwd ?? "";
+				const entry = makeStubManager({ cwd, liveSessionId: `sess-${cwd}`, name: cwd });
+				stubs.set(cwd, entry);
+				return entry.manager;
+			},
+		});
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		// Create + attach
+		const createId = send(ws, { verb: "newInstance", cwd: "/proj-a" });
+		const createReply = (await waitForReply(frames, createId)) as unknown as NewInstanceReply;
+		await waitForPush(frames, "replace");
+		const instanceId = createReply.instanceId;
+		const stub = stubs.get("/proj-a");
+		if (!stub) throw new Error("stub not found");
+		expect(stub.handles.patchListenerCount()).toBe(1);
+
+		// Detach → ok, no exit push, connection handles removed
+		const detachId = send(ws, { verb: "detachInstance" });
+		expect((await waitForReply(frames, detachId)).ok).toBe(true);
+		expect(stub.handles.patchListenerCount()).toBe(0);
+
+		// Patches from the (still running) instance must not reach the wire
+		const framesBefore = frames.length;
+		stub.handles.emitPatch({ ops: [{ op: "replace", path: "/status/isStreaming", value: true }] });
+		await settle();
+		expect(frames.length).toBe(framesBefore);
+
+		// Session verbs require an attached instance again
+		const promptId = send(ws, { verb: "prompt", text: "hi" });
+		expect((await waitForReply(frames, promptId)).ok).toBe(false);
+
+		// The instance is still alive in the registry — re-attach works
+		const reattachId = send(ws, { verb: "switchInstance", instanceId });
+		expect((await waitForReply(frames, reattachId)).ok).toBe(true);
+		expect(stub.handles.patchListenerCount()).toBe(1);
+
+		ws.close();
+	});
 }, 30000);

@@ -312,6 +312,10 @@ function AppInner() {
 		[rpc],
 	);
 
+	const handleDetachInstance = useCallback(() => {
+		void rpc.detachInstance();
+	}, [rpc]);
+
 	const handleLoadMoreSessions = useCallback(() => {
 		if (sessions.length > 0) {
 			const lastTs = sessions[sessions.length - 1].timestamp;
@@ -493,6 +497,7 @@ function AppInner() {
 					onSwitchInstance={handleSwitchInstance}
 					onNewInstance={handleNewInstance}
 					onKillInstance={handleKillInstance}
+					onShowLauncher={handleDetachInstance}
 					onSwitch={handleSwitchSession}
 					onNew={handleNewSession}
 					onLoadMore={handleLoadMoreSessions}

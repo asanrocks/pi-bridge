@@ -28,8 +28,8 @@
 	letter-spacing: 0.04em;
 }
 
-/* Matched pair with .sidebarAddBtn / HistoryPane .closeBtn — the three
-   header action buttons (+/×) share one chrome. */
+/* Matched chrome with .sidebarAddBtn / HistoryPane .closeBtn / the sidebar's
+   instance-list button — the header action buttons share one spec. */
 .addBtn {
 	background: none;
 	border: 1px solid var(--color-border);

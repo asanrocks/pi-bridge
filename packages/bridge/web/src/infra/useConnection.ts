@@ -176,20 +176,22 @@ export function useConnection(): { retry: () => void } {
 				// allowlist cwd — each resuming its most recent prior session —
 				// and attach to the last. The Launcher's empty state is pure
 				// friction on the common path (you must create one to start anyway).
+				// Skipped when launcher-pinned: the user deliberately returned to
+				// the instance list — a reconnect must not attach over that choice.
 				const allowlist = info.cwdAllowlist ?? [];
 				let attachId: string | null = null;
 				let seeded = false;
-				if (stillAlive) {
+				if (!state.launcherPinned && stillAlive) {
 					attachId = currentId;
 					await attachInstance(
 						client,
 						currentId,
 						instances.find((inst) => inst.instanceId === currentId)?.sessionId,
 					);
-				} else if (instances.length === 1) {
+				} else if (!state.launcherPinned && instances.length === 1) {
 					attachId = instances[0].instanceId;
 					await attachInstance(client, attachId, instances[0].sessionId);
-				} else if (instances.length === 0 && allowlist.length > 0) {
+				} else if (!state.launcherPinned && instances.length === 0 && allowlist.length > 0) {
 					// newInstance starts a fresh session; listSessions is
 					// server-scoped to the just-attached instance's cwd and
 					// excludes the live fresh session, so sessions[0] is the
