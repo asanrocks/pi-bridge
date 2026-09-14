@@ -91,6 +91,7 @@
 	justify-content: center;
 	padding: 0;
 	line-height: 1;
+	user-select: none;
 }
 
 .closeBtn:hover {
@@ -145,7 +146,8 @@
 /* Node row — a flex container spanning graph gutter + meta + text. The dot
    stays absolutely positioned in the gutter at the node's lane (aligns with
    the SVG); .graphGutter is a transparent flex spacer that reserves the
-   gutter width so columns start after the graph. */
+   gutter width so columns start after the graph. Select-none: the row is a
+   nav control (the same text stays selectable in the conversation). */
 .row {
 	position: absolute;
 	left: 0;
@@ -160,6 +162,7 @@
 	cursor: pointer;
 	font-family: inherit;
 	color: var(--color-foreground);
+	user-select: none;
 }
 
 .row:hover {
@@ -336,6 +339,7 @@
 	color: var(--color-foreground);
 	font-family: inherit;
 	font-size: var(--fs-xs);
+	user-select: none;
 }
 
 .draftRow:hover {

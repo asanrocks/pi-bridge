@@ -612,6 +612,9 @@
 	font-size: var(--fs-lg);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	cursor: pointer;
+	/* Menu item, not content: the chosen path lands in the textarea, where
+	   it stays selectable. */
+	user-select: none;
 }
 
 .completionItemSelected {
@@ -639,6 +642,7 @@
 	font-size: var(--fs-sm);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	color: var(--color-muted-foreground);
+	user-select: none;
 }
 
 .thinkingLevelLabel {
@@ -819,6 +823,7 @@
 	border: none;
 	cursor: pointer;
 	border-left: 2px solid transparent;
+	user-select: none;
 }
 
 .portalItem:hover {

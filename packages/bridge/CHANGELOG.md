@@ -63,6 +63,8 @@
 
 ### Changed
 
+- Text selection now follows the chrome/content split: interactive surfaces (Launcher instance rows, Sidebar instance/session rows, History graph rows, TopBar title/buttons, toasts, composer pickers and path completion) are `user-select: none` so taps and double-clicks don't flash document-style selection; copy targets stay selectable — Launcher row cwd paths and message previews explicitly opt back in, and conversation content is untouched.
+
 - Assistant Copy is attached to messages, not turns: each assistant text segment carries its own Copy chip (same `.toolbarBtn` style as the user-message Copy, floating at the segment's top-right, hover/focus-revealed, always visible on touch, hidden for empty text), and the assistant turn-header Copy is gone — a run-merged turn holds several messages, so there is no single "turn text" to copy. User turns are unchanged (header toolbar Copy).
 
 - Turn structure reverted to run granularity: consecutive assistant entries merge into one turn again, and text blocks never split a turn — the per-message split from 8386faacf multiplied assistant turns ~5x on real sessions (54 → 271 on the before-compaction fixture). `segmentBlocks` already renders interleaved text and action groups in order within a turn, so the split's visual goal (keeping tool cards out of message turns) cost 5x the turns for a cosmetic gain. `turnKey` (now always `entryId`), per-turn timing windows, context-usage reporting, and error-line attachment (stopReason/errorMessage on the run-closing turn) are unchanged.

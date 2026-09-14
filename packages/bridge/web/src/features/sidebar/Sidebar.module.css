@@ -79,6 +79,7 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	border-left: 3px solid transparent;
+	user-select: none;
 }
 
 .sidebarItem:hover {
@@ -129,6 +130,7 @@
 	background: none;
 	border: none;
 	cursor: pointer;
+	user-select: none;
 }
 
 .sidebarLoadMore:hover {
@@ -153,7 +155,8 @@
 
 /* Section header: bold uppercase, flush. No separator line — sections
    break by a generous gap above (suppressed on the first, which sits at
-   the sidebar top). Gap > group gap > row gap carries the hierarchy. */
+   the sidebar top). Gap > group gap > row gap carries the hierarchy.
+   user-select: none — label + action buttons are pane chrome. */
 .sidebarSectionHeader {
 	display: flex;
 	align-items: center;
@@ -165,6 +168,7 @@
 	color: var(--color-muted-foreground);
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
+	user-select: none;
 }
 
 /* First section sits at the top of the sidebar — no section gap above it. */
@@ -257,6 +261,7 @@
 	gap: 4px;
 	padding: 0 6px 0 7px;
 	border-left: 3px solid transparent;
+	user-select: none;
 }
 
 .sidebarInstanceRow:hover,
