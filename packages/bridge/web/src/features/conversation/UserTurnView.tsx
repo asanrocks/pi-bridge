@@ -14,7 +14,7 @@ import { Markdown } from "../../render/markdown.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import styles from "./conversation.module.css";
-import { formatDuration, formatTimestamp } from "./format.ts";
+import { formatDuration, formatGitIdentity, formatTimestamp } from "./format.ts";
 
 export const UserTurnView = memo(function UserTurnView({
 	turn,
@@ -37,6 +37,7 @@ export const UserTurnView = memo(function UserTurnView({
 	const hasSiblings = turn.siblings && turn.siblings.length > 1;
 	const ts = formatTimestamp(turn.timestamp);
 	const thoughtFor = formatDuration(turn.thoughtForMs);
+	const gitStamp = turn.gitIdentity ? formatGitIdentity(turn.gitIdentity) : "";
 
 	const handleCopy = useCallback(async () => {
 		if (await copyToClipboard(turn.text)) {
@@ -56,6 +57,7 @@ export const UserTurnView = memo(function UserTurnView({
 					{ts && <span className={styles.msgTime}>{ts}</span>}
 					<span className={styles.msgRole}>You</span>
 					{thoughtFor && <span className={styles.msgTiming}>{thoughtFor}</span>}
+					{gitStamp && <span className={styles.gitStamp}>{gitStamp}</span>}
 					{isEditing && <span className={styles.editingBadge}>Editing</span>}
 				</span>
 				<div className={styles.turnToolbar}>
