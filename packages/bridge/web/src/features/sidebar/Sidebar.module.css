@@ -136,6 +136,14 @@
 	color: var(--color-foreground);
 }
 
+/* Right slot of a section header: stacks multiple action buttons (the
+   instance-list button, +) with the pane's gap hierarchy. */
+.headerActions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
 .sidebarEmpty {
 	padding: 20px 10px;
 	text-align: center;
@@ -164,6 +172,9 @@
 	margin-top: 6px;
 }
 
+/* Header action button (32×32 bordered icon slot) — shared chrome across
+   panes: this +, the instance-list button next to it, Launcher .addBtn,
+   HistoryPane .closeBtn. */
 .sidebarAddBtn {
 	background: none;
 	border: 1px solid var(--color-border);
