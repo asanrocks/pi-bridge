@@ -27,6 +27,9 @@
 	color: var(--color-on-accent);
 	cursor: pointer;
 	white-space: nowrap;
+	/* Click-to-dismiss control: selection drag and dismissal gesture would
+	   fight over the same surface. */
+	user-select: none;
 }
 
 @media (prefers-reduced-motion: no-preference) {
