@@ -109,7 +109,8 @@ The daemon owns the mapping:
 projectId → normalized cwd
 ```
 
-Clients never derive a cwd or a pi session directory from a project ID.
+Clients never derive a cwd or a pi session directory from a project ID. The
+public `cwd` field is display/configuration data only.
 
 ### Pi session storage
 
@@ -123,10 +124,9 @@ session storage namespace. This is a storage collision check, not a project
 archival feature. Without it, the same JSONL file could be addressed through
 two project IDs and activation exclusivity would become ambiguous.
 
-Within one Project, duplicate header `sessionId` values are invalid storage
-and are rejected as ambiguous. A session may be renamed as a file only when
-there is still one file for that header identity; the stem and header id remain
-independent.
+`sessionId` is globally unique by contract. Pi-generated session IDs are UUIDs;
+custom or copied files that violate global uniqueness are outside the supported
+session storage model. The stem and header id remain independent.
 
 ### Session address
 
@@ -137,7 +137,12 @@ interface SessionAddress {
   projectId: string;
   stem: string;
 }
+
+const TEMPORAL_SESSION_STEM = "__temporal__";
 ```
+
+`SessionAddress` represents a durable session. `TEMPORAL_SESSION_STEM` is a
+reserved protocol sentinel, not a filesystem stem or a `SessionAddress`.
 
 `stem` is a relative session path, not an encoded session ID. Nested paths are
 allowed. For example, `foo/bar` resolves to
@@ -163,34 +168,45 @@ The resolver must:
 5. for an existing file, canonicalize the target and reject symlink targets
    outside the directory.
 
+The exact root-level stem `TEMPORAL_SESSION_STEM` is reserved and is handled
+as a temporal-session lookup before filesystem resolution. It is never joined
+to the session directory.
+
 Containment and canonicalization are the security boundary. The bridge does
 not require the stem suffix to match the header session ID. Pi's header is
 authoritative for `sessionId`, and pi remains responsible for validating the
 session file. A Project's session scanner uses the same containment rule and
 only returns regular `.jsonl` files under the canonical session directory.
 
-### Provisional stems
+### Temporal sessions
 
 `SessionManager` allocates the intended filename before the first durable
-flush. An attached Connection may therefore receive:
+flush. Each Project may have at most one temporal, non-durable session. An
+attached Connection receives:
 
 ```ts
 interface AttachedSession {
   projectId: string;
   sessionId: string;
+  /** null until the session file is durable. */
   stem: string | null;
   durable: boolean;
 }
 ```
 
-The provisional stem is resolvable only through a live activation in the same
-daemon. It is not included in Project session browsing, is not a durable
-permalink, and is not accepted through a cold-start file lookup until the file
-exists.
+The temporal session is not included in Project session browsing or active
+session queries. It is addressed through the reserved route marker:
 
-The client keeps the URL at `/chat/<projectId>` while the session is
-non-durable. After the first flush, the daemon updates the attached-session
-metadata with the durable stem and the client may write
+```text
+/chat/<projectId>/__temporal__
+```
+
+The marker is not a durable permalink. It resolves only while the Project's
+sole temporal session exists in the same daemon. If it no longer exists, the
+client replaces the URL with `/chat/<projectId>`.
+
+After the first flush, the daemon updates the attached-session metadata with
+the durable stem and the client replaces the marker URL with
 `/chat/<projectId>/<stem>`. The client still knows only the Project and
 Session; the activation that serves them remains internal.
 
@@ -240,12 +256,14 @@ instance-management operation.
 
 `openSession(projectId, stem)` resolves activations in this order:
 
-1. If the target session already has a live activation, attach the Connection
-   to that activation.
-2. Otherwise, if the requesting Connection is the only Connection on a
+1. If `stem` is `TEMPORAL_SESSION_STEM`, attach to the Project's sole temporal
+   session, returning not-found if none exists.
+2. If the durable target session already has a live activation, attach the
+   Connection to that activation.
+3. Otherwise, if the requesting Connection is the only Connection on a
    pending same-project instance, detach it and reuse that instance.
-3. Otherwise, reuse an unattached pending same-project instance.
-4. Otherwise, create a new Manager for the target session.
+4. Otherwise, reuse an unattached pending same-project instance.
+5. Otherwise, create a new Manager for the durable target session.
 
 The daemon must not rebind an instance with unrelated attached Connections.
 Those Connections must continue observing their current session.
@@ -260,22 +278,24 @@ The daemon maintains both the instance registry and a reverse session index:
 
 ```ts
 instances: Map<string, Manager>;
-activationBySession: Map<string, string>; // projectId + sessionId → instance
-activationByStem: Map<string, string>;    // projectId + provisional stem → instance
+activationBySession: Map<string, string>; // sessionId → instance
+temporalActivationByProject: Map<string, string>; // projectId → instance
 pendingActivations: Map<string, Promise<Activation>>;
 activationReservations: Map<string, Promise<void>>;
 ```
 
 `pendingActivations` serializes concurrent opens for the same session.
-`activationByStem` resolves provisional sessions, which have no file/header to
-look up. `activationReservations` serializes selection and rebinding of a
-pending instance, including opens for different sessions. Manager creation and
+`temporalActivationByProject` enforces the one-temporal-session-per-Project
+rule. `activationReservations` serializes selection and rebinding of a pending
+instance, including opens for different sessions. Manager creation and
 rebinding are asynchronous, so check-then-create or check-then-rebind without
 these locks can create duplicate activations or race one Manager onto two
 sessions.
 
 The reverse indexes are updated atomically when an activation is created,
-reused, rebound, or disposed.
+reused, rebound, or disposed. Creating a second temporal session for one
+Project reuses the existing temporal activation rather than creating another
+one.
 
 ## Protocol v2
 
@@ -292,10 +312,15 @@ path-based session navigation as a second protocol.
 
 ```ts
 getDaemonInfo()
-  → { projects, models, thinkingLevels, devMode }
+  → { projects: ProjectInfo[], models, thinkingLevels, devMode }
 
-listSessions({ projectId, max?, ts? })
-  → { sessions, hasMore }
+interface ProjectInfo {
+  id: string;
+  cwd: string;
+}
+
+listSessions({ projectId, max?, cursor? })
+  → { sessions, hasMore, nextCursor? }
 
 listActiveSessions({ projectId? })
   → { sessions }
@@ -311,23 +336,37 @@ detach()
 ```
 
 `listSessions` is the paginated durable-history query. It retains the existing
-`max` + `ts` cursor semantics: sessions are ordered by file mtime descending,
-and `ts` requests entries older than the supplied timestamp. The scan is
-recursive under the Project's canonical session directory, and the daemon
-mtime cache remains keyed by canonical file path. Active durable sessions are
-included rather than filtered after pagination; each result carries `active`
-and `isStreaming` state.
+incremental loading behavior while replacing the timestamp-only boundary with
+a total-order cursor:
+
+```ts
+interface SessionListCursor {
+  mtimeMs: number;
+  stem: string;
+}
+```
+
+Sessions are ordered by file mtime descending, then canonical stem descending.
+`cursor` is exclusive and `nextCursor` identifies the last returned position.
+The scan is recursive under the Project's canonical session directory, and the
+daemon mtime cache remains keyed by canonical file path. `SessionInfo.timestamp`
+is the file mtime as an ISO string. Active durable sessions are included rather
+than filtered after pagination; each result carries `active` and `isStreaming`
+state.
 
 `listActiveSessions` is backed by the daemon's internal activation index rather
 than a session-directory scan. It returns active durable sessions and their
 streaming state. Non-durable sessions are omitted from both browsing queries.
 
-`openSession` accepts a durable relative stem or exactly matches a provisional
-stem on a live activation. It never accepts an arbitrary filesystem path.
+`openSession` accepts either a durable relative stem or the reserved
+`TEMPORAL_SESSION_STEM`. The sentinel resolves the Project's sole temporal
+session; it is never treated as a filesystem path. Durable stems are resolved
+only within the selected Project and the operation never accepts an arbitrary
+filesystem path.
 
-`newSession` creates or reuses a pending activation for the Project and returns
-attached session metadata. The provisional stem is available to the attached
-Connection but is not listed or written to the URL. Its stem becomes a durable
+`newSession` creates or reuses the Project's sole temporal session and returns
+attached session metadata. The client writes the temporal route marker rather
+than a provisional filesystem stem. The session's real stem becomes a durable
 address only after pi flushes the file.
 
 `detach` removes the Connection's attachment but leaves the activation alive
@@ -382,12 +421,15 @@ interface AttachedSession {
 
 The initial-sync frame includes the relevant `AttachedSession` and the
 Document. No instance identity, lifecycle, or connection count crosses the
-wire. After the first flush, the daemon sends updated attached-session
-metadata so the client can write the durable URL.
+wire. After the first flush, the daemon sends an `attached_session_changed`
+push so the client can write the durable URL.
 
 A reconnect is resolved by `openSession(projectId, stem, cursor?)`, not by
-reviving an instance id. If a live activation still exists, the daemon
-reattaches to it. If not, it reactivates the durable session.
+reviving an instance id. A durable URL supplies its durable stem. The temporal
+route supplies `TEMPORAL_SESSION_STEM` and reattaches only if the Project's
+sole temporal session still exists; otherwise the client falls back to the
+Project route. If a live activation for a durable session still exists, the
+daemon reattaches to it. If not, it reactivates the durable session.
 
 ### Registry and session updates
 
@@ -405,6 +447,17 @@ page used to refresh the durable session list:
   projectId: string;
   sessions: SessionInfo[];
   hasMore: boolean;
+  nextCursor?: SessionListCursor;
+}
+```
+
+An attachment becoming durable is reported after the normal durable Document
+patches, so the file exists before the client writes its address:
+
+```ts
+{
+  kind: "attached_session_changed";
+  session: AttachedSession;
 }
 ```
 
@@ -448,26 +501,28 @@ The client store keeps:
 
 - the attached Document;
 - the current `AttachedSession`, without instance identity;
-- the durable or provisional `SessionAddress` when available;
+- the durable `SessionAddress` or temporal route when available;
 - Projects and project-scoped session lists;
 - active/streaming session state from the session-oriented query and pushes.
 
 The URL is a projection of the current session address. The session path is
 the remainder of the URL after the Project segment, so nested stems are
-supported:
+supported. The reserved temporal marker is a separate route target:
 
 ```text
 /launcher
 /chat/<projectId>
 /chat/<projectId>/<relative-stem>
+/chat/<projectId>/__temporal__
 ```
 
 The URL is read at boot to select an initial session and is written with
 `replaceState`. It is not consulted as a second live navigation state machine.
 
 A durable session URL survives daemon restart while the file and Project
-configuration still exist. A provisional session has no durable URL until its
-first flush.
+configuration still exist. The temporal route survives only while the sole
+temporal session remains live in the same daemon; after its first flush, the
+client replaces it with the durable URL.
 
 The HTTP server serves `index.html` for the known application routes. Static
 assets are served by exact path; unknown assets remain 404. Route segments are
@@ -478,7 +533,7 @@ decoded and validated before use.
 The daemon enforces:
 
 ```text
-at most one live activation for (projectId, sessionId)
+at most one live activation for sessionId
 ```
 
 Two concurrent `openSession` calls for a dormant session share one
@@ -506,17 +561,20 @@ list filtering as the exclusivity mechanism.
 - reject absolute paths, NUL, and escaping symlinks;
 - open legacy or renamed files using the header session ID without deriving it
   from the stem;
-- reject duplicate header session IDs in one Project as ambiguous storage.
 
 ### Session resolution
 
 - open a durable `(projectId, stem)` session, including a nested stem;
 - reject an unknown stem;
 - reject a stem from another Project;
-- match an exact provisional stem on a live unflushed activation;
-- do not resolve a provisional stem after daemon restart when no file exists;
+- resolve `TEMPORAL_SESSION_STEM` to the Project's sole live temporal session;
+- reject the temporal marker after daemon restart when no temporal activation
+  exists;
+- reject a real filesystem stem equal to the reserved temporal marker;
 - keep `sessionId` and stem independent in metadata and cache keys;
-- update attached-session metadata when the first flush makes the stem durable.
+- update attached-session metadata when the first flush makes the stem durable;
+- replace the temporal URL with the durable stem after the first flush;
+- paginate files with equal mtimes without skipping or repeating a stem.
 
 ### Activation lifecycle
 
@@ -538,15 +596,19 @@ list filtering as the exclusivity mechanism.
   metadata;
 - `openSession` uses the cursor and initial-sync ordering rules from ADR 09;
 - reconnect resolves by project/stem rather than instance ID;
-- `listSessions` preserves incremental `max`/`ts` loading semantics;
+- `listSessions` preserves incremental page loading with the compound cursor,
+  including equal-mtime files;
 - `listActiveSessions` returns active durable sessions without a filesystem
   scan;
+- temporal sessions do not appear in either browser-facing session query;
+- `attached_session_changed` follows the first durable Document patch and
+  carries no instance metadata;
 - `active_sessions_changed` contains Project/Session data only;
 - `sessions_changed` includes its project ID;
 - no public RPC accepts a session filesystem path or instance ID;
 - switching from one session to another does not rebind a Manager with unrelated
   attached Connections;
-- provisional attached-session metadata becomes durable after first flush.
+- temporal attached-session metadata becomes durable after first flush.
 
 ## Consequences
 
@@ -569,16 +631,18 @@ list filtering as the exclusivity mechanism.
 - Initial-sync frames carry attached Project/Session metadata.
 - Projects with the same pi storage namespace must be rejected or treated as
   aliases; v1 chooses rejection.
-- A provisional session cannot be reopened after daemon restart until it has
-  flushed a file.
+- A temporal session cannot be reopened after daemon restart until it has
+  flushed a file; the temporal route falls back to the Project page.
 
 ## Open questions deferred from v1
 
 - The exact GC delay and whether it becomes configurable.
-- Whether `newSession` should always reuse a pending same-project activation or
-  always create one.
+- Whether the temporal route should be shown as a distinct Project-page state
+  when no durable sessions exist.
 - Whether browser Back/Forward should drive session navigation; v1 uses
   `replaceState` only.
+- Whether project-scoped session pushes broadcast to all Connections or are
+  queried on demand; either way, the payload remains Project/Session scoped.
 - Cross-process daemons serving the same pi session directory. The in-process
   activation map does not provide cross-process locking.
 
@@ -594,7 +658,8 @@ list filtering as the exclusivity mechanism.
 - **ADR 08:** not adopted by this ADR. A future object-kernel implementation
   can host the same Project, Session, and Instance objects.
 - **ADR 09:** unchanged cache identity and prefix cursor rules. Cursors remain
-  keyed by `sessionId`; the Project/stem address only resolves the session.
+  keyed by globally unique `sessionId`; the Project/stem address only resolves
+  the session.
 - **ADR 10:** unchanged. Git stamps remain entries in the active session.
 - **PRD 04:** its instance/session sidebar is replaced by a Project/Session
   browser with active/streaming session indicators.
