@@ -80,6 +80,7 @@
   --kind-bash:   var(--color-streaming); /* stand-out B */
   --kind-think:  var(--color-think);   /* neutral */
   --kind-read:   var(--color-muted-foreground); /* dimmed */
+  --kind-git:    var(--color-success); /* meta: observed repo identity — diff/merge green, not a tool action */
 
   /* ── Overlays & portals ─────────────────────────────────────────────── */
   --color-overlay: rgba(0, 0, 0, 0.3);

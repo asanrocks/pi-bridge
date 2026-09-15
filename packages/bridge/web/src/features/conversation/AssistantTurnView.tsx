@@ -6,12 +6,18 @@
 // Padding matches the user band so headers/text align.
 
 import { memo, useCallback, useMemo } from "react";
-import { type AssistantTurn, type ParsedProviderError, segmentBlocks } from "../../../../src/viewmodel/index.ts";
+import {
+	type AssistantTurn,
+	assignGroupGitChanges,
+	type ParsedProviderError,
+	segmentBlocks,
+} from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
 import styles from "./conversation.module.css";
 import { formatDuration, formatTimestamp } from "./format.ts";
+import { GitChangeView } from "./GitChangeView.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
 import { useNow } from "./useNow.ts";
 
@@ -36,6 +42,10 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const now = useNow(isStreaming);
 
 	const segments = useMemo(() => segmentBlocks(turn.blocks), [turn.blocks]);
+	// ADR 10 v2: mid-run git marks fold into the groups they render in —
+	// summary segment + in-group card. Marks with no group (a text-only run)
+	// fall back to standalone cards after the segments.
+	const groupGit = useMemo(() => assignGroupGitChanges(segments, turn.gitChanges ?? []), [segments, turn.gitChanges]);
 	const lastIdx = segments.length - 1;
 	const ts = formatTimestamp(turn.timestamp);
 	const models = useStore(useCallback((s) => s.models, []));
@@ -106,12 +116,28 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 						key={seg.key}
 						groupKey={seg.key}
 						steps={seg.steps}
+						gitChanges={groupGit.byGroup.get(seg.key)}
 						isTrailing={isStreaming && idx === lastIdx}
 						onToggleGroup={onToggleGroup}
 						onToggleStep={onToggleStep}
 					/>
 				),
 			)}
+			{groupGit.unattached.map((c) => (
+				<GitChangeView
+					key={c.entryId}
+					turn={{
+						kind: "gitChange",
+						entryId: c.entryId,
+						index: turn.index,
+						timestamp: c.timestamp,
+						identity: c.identity,
+						commitSubject: c.commitSubject,
+						anchor: c.anchor,
+						isInitial: c.isInitial,
+					}}
+				/>
+			))}
 			{/* Abnormal stop reasons (error, aborted, length) render below the content. */}
 			{turn.stopReason === "error" && (
 				<ProviderErrorLine parsedError={turn.parsedError} errorMessage={turn.errorMessage} />
