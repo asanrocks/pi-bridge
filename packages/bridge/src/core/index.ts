@@ -55,6 +55,8 @@ export type {
 	EntryBase,
 	GetDaemonInfoReply,
 	GetDaemonInfoRequest,
+	GitShowReply,
+	GitShowRequest,
 	ImageContent,
 	InstanceExitMessage,
 	InstanceInfo,
