@@ -7,7 +7,7 @@
 // ============================================================================
 
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDefaultSessionDir } from "@earendil-works/pi-coding-agent";
 
 /** Validated project id shape (ADR 11). */
@@ -107,6 +107,47 @@ export function normalizeStem(stem: string): string {
 	return parts.join("/");
 }
 
+/** `realpathSync` when the path exists, else the input unchanged. A Project's
+ * session directory may not exist yet (no sessions), so containment checks
+ * need a non-throwing canonical base. */
+function realpathOrSelf(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+/** Boundary-aware containment (path-prefix, not string-prefix). */
+function isContained(parent: string, child: string): boolean {
+	if (child === parent) return true;
+	const base = parent.endsWith(sep) ? parent : parent + sep;
+	return child.startsWith(base);
+}
+
+/**
+ * Canonicalize a candidate session file inside `sessionDir` and verify it is a
+ * regular file that stays contained. Returns the real path, or null when the
+ * candidate is missing, not a regular file, or escapes via symlink. Used by
+ * the session scanner so a symlinked `.jsonl` cannot expose a file outside the
+ * Project's session namespace (ADR 11 security boundary).
+ */
+export function containedSessionFile(sessionDir: string, candidate: string): string | null {
+	let real: string;
+	try {
+		real = realpathSync(candidate);
+	} catch {
+		return null;
+	}
+	if (!isContained(realpathOrSelf(sessionDir), real)) return null;
+	try {
+		if (!statSync(real).isFile()) return null;
+	} catch {
+		return null;
+	}
+	return real;
+}
+
 /**
  * Resolve a canonical stem to an absolute `.jsonl` path inside `sessionDir`.
  * Containment is enforced by filesystem resolution, not lexical normalization:
@@ -115,12 +156,25 @@ export function normalizeStem(stem: string): string {
  */
 export function resolveStemPath(sessionDir: string, stem: string): string {
 	const candidate = `${join(sessionDir, ...stem.split("/"))}.jsonl`;
-	const dir = sessionDir.endsWith(sep) ? sessionDir : sessionDir + sep;
-	if (!candidate.startsWith(dir)) throw new Error("Session stem escapes the project directory");
+	const lexicalDir = sessionDir.endsWith(sep) ? sessionDir : sessionDir + sep;
+	if (!candidate.startsWith(lexicalDir)) throw new Error("Session stem escapes the project directory");
+	const dirReal = realpathOrSelf(sessionDir);
 	if (existsSync(candidate)) {
 		const real = realpathSync(candidate);
-		if (!real.startsWith(dir)) throw new Error("Session stem escapes the project directory");
+		if (!isContained(dirReal, real)) throw new Error("Session stem escapes the project directory");
 		return real;
+	}
+	// Non-existent file: canonicalize the parent so an intermediate symlink
+	// cannot redirect the (later) write outside the namespace.
+	let parentReal: string | null;
+	try {
+		parentReal = realpathSync(dirname(candidate));
+	} catch {
+		parentReal = null;
+	}
+	if (parentReal !== null) {
+		if (!isContained(dirReal, parentReal)) throw new Error("Session stem escapes the project directory");
+		return join(parentReal, basename(candidate));
 	}
 	return candidate;
 }

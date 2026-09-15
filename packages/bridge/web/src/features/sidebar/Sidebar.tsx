@@ -42,7 +42,7 @@ export const Sidebar = memo(function Sidebar({
 	isBusy: boolean;
 	sessionsHasMore: boolean;
 	onOpenProject: (projectId: string) => void;
-	onOpenSession: (projectId: string, stem: string) => void;
+	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	onNewSession: (projectId: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
 	onShowLauncher: () => void;
@@ -144,7 +144,7 @@ export const Sidebar = memo(function Sidebar({
 
 	const handleOpenSession = (session: SidebarSession) => {
 		if (isBusy) return;
-		onOpenSession(session.projectId, session.stem);
+		onOpenSession(session.projectId, session.stem, session.sessionId);
 		if (!isWide) setOpen(false);
 	};
 
