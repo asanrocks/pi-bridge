@@ -5,6 +5,13 @@ detail. This document defines the architecture such that new features (a TUI
 client, a binary transport, server-side auto-respond) slot into existing
 categories without restructuring.
 
+> **Navigation model is now ADR 11.** Where this document describes an
+> `Instance` as the client-facing navigation/reconnect handle, read
+> [ADR 11](./11-adr-projects.md) instead: the client-facing domain is
+> `Project` + `Session`, addressed by `(projectId, stem)`; the runtime
+> (`Instance`) is an internal, never-on-the-wire activation. The Document
+> layer, sync model, and invariants below are unchanged.
+
 ## 1. System overview
 
 ### Logical model

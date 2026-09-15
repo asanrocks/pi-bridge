@@ -4,7 +4,7 @@
 // buildInitialSync turns the canonical Document plus pi's file-ordered entry
 // list into exactly one wire frame: a delta multi-op patch when the client's
 // prefix cursor is valid, otherwise a full replace snapshot. Both frames
-// carry the durable sessionId.
+// carries the session reference.
 //
 // Mid-turn pairing rule: pi persists every user/assistant/toolResult message
 // at message_end, while the canonical Document holds those entries as
@@ -19,7 +19,16 @@
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { findProvisional, projectEntry, stripLazyFields } from "./document.ts";
-import type { Document, Entry, JsonValue, PatchMessage, PatchOp, PrefixCursor, ReplaceMessage } from "./types.ts";
+import type {
+	Document,
+	Entry,
+	JsonValue,
+	PatchMessage,
+	PatchOp,
+	PrefixCursor,
+	ReplaceMessage,
+	SessionRef,
+} from "./types.ts";
 
 /**
  * Server-side cursor check (ADR 09 §Prefix Cursor). Catches a wrong session,
@@ -80,10 +89,10 @@ function projectProvisional(doc: Document): Array<[string, Entry]> {
 export function buildInitialSync(
 	doc: Document,
 	piEntries: SessionEntry[],
-	sessionId: string,
+	session: SessionRef,
 	cursor: PrefixCursor | null,
 ): PatchMessage | ReplaceMessage {
-	const valid = cursor !== null && validateCursor(piEntries, cursor, sessionId);
+	const valid = cursor !== null && validateCursor(piEntries, cursor, session.sessionId);
 
 	if (!valid) {
 		const entries: Record<string, Entry> = {};
@@ -95,7 +104,7 @@ export function buildInitialSync(
 		}
 		return {
 			kind: "replace",
-			sessionId,
+			session,
 			document: { status: doc.status, entries, scopedModels: doc.scopedModels },
 		};
 	}
@@ -111,5 +120,5 @@ export function buildInitialSync(
 	}
 	ops.push({ op: "replace", path: "/status", value: doc.status as unknown as JsonValue });
 	ops.push({ op: "replace", path: "/scopedModels", value: doc.scopedModels as unknown as JsonValue });
-	return { kind: "patch", sessionId, ops };
+	return { kind: "patch", session, ops };
 }
