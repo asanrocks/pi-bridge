@@ -11,20 +11,33 @@ export const GIT_STAMP_CUSTOM_TYPE = "pi-bridge.git-stamp";
 
 /** Which session boundary the observation was taken at. Delta storage makes
  * position alone ambiguous, so the payload is explicit. */
-export type GitStampAnchor = "prompt" | "turn_end";
+export type GitStampAnchor = "prompt" | "tool_end" | "turn_end" | "user_bash_end";
 
-/** Persisted payload. Versioned because session entries outlive the code that
- * wrote them; unknown versions never establish a baseline and never render. */
-export interface GitStampData {
+/** v1 payload (implemented baseline). Anchor set predates tool and user-bash
+ * boundaries; no commit subject. */
+export interface GitStampDataV1 {
 	v: 1;
-	anchor: GitStampAnchor;
-	/** Full lower-case object ID (40 hex chars, or 64 for SHA-256 repos).
-	 * Null for an unborn or otherwise unresolved HEAD. */
+	anchor: "prompt" | "turn_end";
 	commit: string | null;
-	/** Short symbolic branch name. Null for detached HEAD. An unborn branch
-	 * has a branch name with a null commit. */
 	branch: string | null;
 }
+
+/** v2 payload: adds the HEAD commit subject and the tool/user-bash anchors. */
+export interface GitStampDataV2 {
+	v: 2;
+	anchor: GitStampAnchor;
+	commit: string | null;
+	branch: string | null;
+	/** First line of HEAD's commit message, best-effort: null for an unborn
+	 * HEAD, a failed lookup, or a v1 stamp. Subject problems never invalidate
+	 * a valid identity. */
+	commitSubject: string | null;
+}
+
+/** Persisted payload. Versioned because session entries outlive the code that
+ * wrote them; versions may be mixed in one file, and unknown versions never
+ * establish a baseline and never render. */
+export type GitStampData = GitStampDataV1 | GitStampDataV2;
 
 /** The identity key compared between observations. */
 export interface GitIdentity {
@@ -37,6 +50,9 @@ const COMMIT_ID_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
 // name, so no stricter refname-syntax check (would risk rejecting legitimate
 // names).
 const BRANCH_NAME_RE = /^[^\u0000-\u001f\u007f]+$/;
+
+/** All v2 anchors. */
+const V2_ANCHORS = new Set<GitStampAnchor>(["prompt", "tool_end", "turn_end", "user_bash_end"]);
 
 export function isValidCommitId(value: string): boolean {
 	return COMMIT_ID_RE.test(value);
@@ -55,18 +71,40 @@ export function parseGitIdentity(commitRaw: string | null, branchRaw: string | n
 	return { commit: commitRaw, branch: branchRaw };
 }
 
+/** Validate a subject line of unknown provenance: non-empty, single line, no
+ * control characters. Returns the subject or null (best-effort metadata — an
+ * invalid subject clears itself, never the identity). */
+export function parseCommitSubject(value: string): string | null {
+	if (value.length === 0 || /[\n\r]/.test(value) || !BRANCH_NAME_RE.test(value)) return null;
+	return value;
+}
+
 /** Validate a stamp payload of unknown provenance (session file, wire mirror).
- * Returns null for anything that is not a well-formed v1 stamp. */
+ * Returns null for anything that is not a well-formed v1 or v2 stamp. A
+ * mistyped or invalid `commitSubject` clears the subject but keeps the stamp:
+ * subject lookup was best-effort at write time too. */
 export function parseGitStampData(data: unknown): GitStampData | null {
 	if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
-	const d = data as { v?: unknown; anchor?: unknown; commit?: unknown; branch?: unknown };
-	if (d.v !== 1) return null;
-	if (d.anchor !== "prompt" && d.anchor !== "turn_end") return null;
+	const d = data as { v?: unknown; anchor?: unknown; commit?: unknown; branch?: unknown; commitSubject?: unknown };
 	if (d.commit !== null && typeof d.commit !== "string") return null;
 	if (d.branch !== null && typeof d.branch !== "string") return null;
 	if (d.commit !== null && !isValidCommitId(d.commit)) return null;
 	if (d.branch !== null && !isValidBranchName(d.branch)) return null;
-	return { v: 1, anchor: d.anchor, commit: d.commit, branch: d.branch };
+	if (d.v === 1) {
+		if (d.anchor !== "prompt" && d.anchor !== "turn_end") return null;
+		return { v: 1, anchor: d.anchor, commit: d.commit, branch: d.branch };
+	}
+	if (d.v === 2) {
+		if (typeof d.anchor !== "string" || !V2_ANCHORS.has(d.anchor as GitStampAnchor)) return null;
+		const subject =
+			d.commitSubject === undefined || d.commitSubject === null
+				? null
+				: typeof d.commitSubject === "string"
+					? parseCommitSubject(d.commitSubject)
+					: null;
+		return { v: 2, anchor: d.anchor as GitStampAnchor, commit: d.commit, branch: d.branch, commitSubject: subject };
+	}
+	return null;
 }
 
 /** Entry shape accepted by {@link parseGitStampEntry}: pi session entries use
@@ -78,7 +116,7 @@ interface StampEntryLike {
 	data?: unknown;
 }
 
-/** Extract a valid v1 git stamp from a custom entry of either flavor
+/** Extract a valid v1 or v2 git stamp from a custom entry of either flavor
  * (pi SessionEntry or bridge Entry). Returns null for other entry kinds,
  * other custom types, and malformed payloads. */
 export function parseGitStampEntry(entry: StampEntryLike): GitStampData | null {
