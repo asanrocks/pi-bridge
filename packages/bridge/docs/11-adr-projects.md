@@ -25,8 +25,8 @@ time.
 - A `Connection` attaches to one instance.
 - `switchSession(sessionPath)` is routed to the attached Manager. Rebinding a
   Manager changes the Document for every Connection attached to it.
-- `listSessions` scans pi's cwd-derived session directory and returns file
-  paths.
+- `listSessions` scans pi's cwd-derived session directory, returns file paths,
+  and filters live sessions out of the listing.
 - Reconnect resumes an `instanceId`, not a durable session address.
 - The web cache is keyed by `sessionId`, but the UI navigates with
   `instanceId` and `sessionPath`.
@@ -165,22 +165,19 @@ two project IDs and activation exclusivity would become ambiguous.
 custom or copied files that violate global uniqueness are outside the supported
 session storage model. The stem and header id remain independent.
 
-The daemon validates this assumption globally. At startup it scans all Project
-session namespaces and rejects multiple claims for the same `sessionId` when
-they have distinct `(projectId, stem)` addresses. After startup, every session
-scan and open operation registers the discovered header id atomically against
-its address. A newly copied or externally-created file that conflicts with an
-existing address is not activated or silently replaced:
+The daemon enforces this invariant at its boundaries rather than modeling
+violations on the wire:
 
-- `listSessions` omits the ambiguous entry and reports a `SessionConflict`;
-- `listActiveSessions` cannot create an entry for the conflict;
-- `openSession` returns `ok: false` with a deterministic session-conflict
-  error; and
-- removing the original file releases the id only after the ownership index is
-  refreshed.
+- at startup, a scan of all Project session namespaces detects a `sessionId`
+  claimed by two distinct `(projectId, stem)` addresses and refuses to start;
+- at `openSession`, the daemon compares the target header `sessionId` with the
+  address already registered for that id. If a different address owns it, the
+  open fails with a session-conflict error.
 
-The ownership index is keyed by `sessionId`, and duplicate claims within one
-Project are treated the same as claims across Projects.
+`listSessions` and `listActiveSessions` do not report conflicts. A duplicate
+discovered after startup does not invalidate the already-registered address;
+the server logs the conflict and the conflicting open fails. This treats
+duplicate ids as unsupported input rather than a protocol state.
 
 ### Session address
 
@@ -197,6 +194,11 @@ interface SessionAddress {
 allowed. For example, `foo/bar` resolves to `<sessionDir>/foo/bar.jsonl`.
 `sessionId` is read from the pi session header and remains the cache and
 activation identity.
+
+The canonical stem is a normalized relative path: forward slashes, no `.` or
+`..` components, no leading or trailing slash, and no `.jsonl` extension. The
+address is lexical; symlink resolution is a separate security step and does not
+change the address string.
 
 `stem` is known before the file exists. Pi allocates a session's filename
 (`<fileTimestamp>_<sessionId>.jsonl`) when the session is created and only
@@ -270,11 +272,14 @@ isStreaming == false
 isCompacting == false
 ```
 
-and the session can be safely re-activated later: either its file exists, or
-the session has no content beyond its header. `SessionManager` defers the
-write until an assistant message exists, so collecting an unflushed session
-that already has entries would drop those entries; the daemon keeps that
-activation instead.
+and the session is durable (its file exists) or empty (no content beyond its
+header).
+
+`SessionManager` defers the write until an assistant message exists, so an
+unflushed session can hold entries that are not yet on disk. As the one
+exception, an entry-bearing unflushed activation is collected after a longer
+single idle cap; collecting it drops those non-durable entries. This is a
+deliberate tradeoff, recorded in Costs, not a tiered or configurable policy.
 
 GC calls the normal Manager disposal path. It never deletes session files.
 
@@ -300,36 +305,31 @@ at all.
 
 ### Activation bookkeeping
 
-The daemon maintains the activation registry and a reverse session index:
+The daemon keys every activation lookup on the session address:
 
 ```ts
+addressKey(projectId, stem) = `${projectId}\0${stem}`
+
 activations: Map<string, Manager>; // activationId → Manager
-activationBySession: Map<string, string>; // sessionId → activationId
-pendingActivations: Map<string, Promise<Manager>>; // sessionId → in-flight create
-gcTimers: Map<string, ReturnType<typeof setTimeout>>; // activationId → pending disposal
+activationByAddress: Map<addressKey, activationId>;
+pendingActivations: Map<addressKey, Promise<Manager>>; // in-flight create
+gcTimers: Map<addressKey, ReturnType<typeof setTimeout>>; // pending disposal
+sessionOwnerById: Map<sessionId, SessionAddress>; // duplicate-id check
 ```
 
-`pendingActivations` serializes concurrent opens for the same session.
+`activationByAddress`, `pendingActivations`, and `gcTimers` share the address
+key, so resolution, locking, and collection cannot disagree about which session
+an activation serves. `sessionId` is not a lock key: for a durable stem it is
+only known after a header read, and that read must not happen before the
+reservation is taken.
+
+`pendingActivations` serializes concurrent opens for the same address.
 `gcTimers` holds delayed disposal; reserving an activation cancels its timer.
 Because Manager creation is asynchronous, check-then-create without the lock
 can create duplicate activations for one session.
 
-The reverse index is updated atomically when an activation is created or
-disposed. The daemon also maintains all discovered ownership claims:
-
-```ts
-sessionClaimsById: Map<string, SessionAddress[]>; // all scanned session ids
-```
-
-A one-element array is the unique-owner case. Two or more addresses represent
-a conflict and are retained together; no claim overwrites another. The
-`activationBySession` map contains only uniquely-owned active sessions.
-
-`activationBySession` and `sessionClaimsById` are keyed by the globally unique
-`sessionId`. Startup scanning rejects duplicate claims. Every later scan or
-open updates the claims map transactionally; the resulting `SessionConflict`
-is reported by list queries or returned as an `openSession` failure, rather
-than allowing the activation index or client cache key to become ambiguous.
+`sessionOwnerById` is a single-owner index used only by the startup and
+`openSession` duplicate checks. It is not part of the wire protocol.
 
 ## Protocol v2
 
@@ -354,7 +354,7 @@ interface ProjectInfo {
 }
 
 listSessions({ projectId, max?, cursor? })
-  → { sessions, conflicts, hasMore, nextCursor? }
+  → { sessions, hasMore, nextCursor? }
 
 listActiveSessions()
   → { sessions: SessionInfo[] }
@@ -394,14 +394,6 @@ included rather than filtered after pagination; each result carries `active`
 and `isStreaming` state, and an active session that has not flushed yet is
 included from the activation index.
 
-The scan discovers and registers candidate headers before applying ordering
-and pagination. Conflicted records are excluded from `sessions` before
-ordering, cursor comparison, and `max` is applied. They do not consume page
-slots and do not participate in `nextCursor`; `nextCursor` always identifies
-the last returned non-conflicting session. `conflicts` reports all conflicts
-discovered for the scan, including conflicts whose addresses would otherwise
-fall outside the returned page.
-
 mtime is a deliberate approximation: it lets pagination run from `stat`
 without reading file contents. It is not immutable — appending to a session,
 or reopening a file that pi migrates, changes it. Paging is therefore
@@ -418,6 +410,7 @@ mtime does not change, pages stably.
 `SessionInfo` shape, sourced from the daemon's activation index rather than a
 directory scan. It is global (not project-scoped) so the launcher can show
 work across Projects, and it includes active sessions that have not flushed.
+It is not paginated.
 
 `openSession` resolves a relative stem within the selected Project only, and
 never accepts an arbitrary filesystem path. It attaches to a live activation
@@ -431,7 +424,7 @@ session per Project.
 for later reattachment or internal GC. Activation termination is not a
 client-facing operation.
 
-The following old operations are removed from the v2 client surface:
+The following old operations and pushes are removed from the v2 client surface:
 
 ```text
 switchSession(sessionPath)
@@ -439,10 +432,15 @@ switchInstance(instanceId)
 newInstance(cwd)
 listInstances()
 killInstance(instanceId)
+detachInstance()             (replaced by detach())
+getDaemonInfo.cwdAllowlist   (replaced by projects)
+instance_exit push
 ```
 
-Manager-level `switchSession(path)` and `newSession()` may remain as internal
-runtime operations. They are not the domain navigation protocol.
+`Manager.switchSession(path)` is not called by the v2 daemon: activations are
+never rebound to a different session. The rebind plumbing is retained only
+because pi's runtime exposes it and is expected to be removed once it is
+demonstrably unused.
 
 ### Attached session operations
 
@@ -457,11 +455,16 @@ setModel
 setThinkingLevel
 renameSession
 navigate
+listFiles
+readFile
+gitShow
 pull
 ```
 
-Replies remain acknowledgements/failure channels. Document state continues to
-arrive through push messages.
+`listFiles`, `readFile`, and `gitShow` resolve relative paths against the
+attached session's Project cwd and require an attachment. Replies remain
+acknowledgements/failure channels. Document state continues to arrive through
+push messages.
 
 ### Initial sync metadata
 
@@ -509,7 +512,15 @@ attachment, clears its lazy subscriptions, and sends the initial-sync push
 before sending the successful RPC reply. The reply means that the attachment
 and initial mirror state are committed. A failed operation sends no success
 reply and no initial-sync push. This ordering also applies when a candidate
-mirror is promoted from a cursor-aware initial patch.
+mirror is promoted from a cursor-aware initial patch. A successful open
+first detaches the Connection from any previous activation; a failed open
+leaves the previous attachment and mirror untouched.
+
+Initial-sync frames bypass wire compaction. `CompactCodec` encodes a single-op
+`append` patch as a bare string keyed by a remembered path; a cursor-aware
+initial patch carries `session`, so compacting it would drop the address, and
+a stale remembered path must not survive an attach. Frames carrying `session`
+are always emitted in full, and `Connection.attach` resets the codec.
 
 No activation identity, lifecycle, or connection count crosses the wire.
 
@@ -535,7 +546,6 @@ interface SessionsChangedMessage {
   kind: "sessions_changed";
   projectId: string;
   sessions: SessionInfo[];
-  conflicts: SessionConflict[];
   hasMore: boolean;
   nextCursor?: SessionListCursor;
 }
@@ -559,12 +569,6 @@ optimization may reduce broadcast traffic without changing these payloads.
 ### Session metadata
 
 ```ts
-interface SessionConflict {
-  sessionId: string;
-  addresses: SessionAddress[];
-  error: "duplicate_session_id";
-}
-
 interface SessionInfo {
   projectId: string;
   sessionId: string;
@@ -578,11 +582,13 @@ interface SessionInfo {
 }
 ```
 
-`stem` is always present, including for an unflushed session. `timestamp` is
-an ISO rendering of the ordering value described above: filesystem mtime for
-durable sessions and the in-memory header creation time before flush.
-`sessionPath` is not public wire data. The client never parses or sends
-filesystem paths.
+`stem` is always present, including for an unflushed session. It omits the
+`.jsonl` extension; for a legacy or renamed file it is the relative path minus
+that extension, independent of pi's `<timestamp>_<sessionId>` naming. The
+header id remains authoritative for `sessionId`. `timestamp` is an ISO
+rendering of the ordering value described above: filesystem mtime for durable
+sessions and the in-memory header creation time before flush. `sessionPath` is
+not public wire data.
 
 ## Client state and URLs
 
@@ -595,7 +601,8 @@ The client store keeps:
 
 The URL is a projection of the current session address. The session path is
 the remainder of the URL after the Project segment, so nested stems are
-supported:
+supported. The client percent-encodes each stem segment and the server decodes
+the path once; a stem containing a literal `%2F` round-trips as `%252F`:
 
 ```text
 /launcher                           project picker + active sessions across Projects
@@ -669,10 +676,9 @@ list filtering as the exclusivity mechanism.
   creation timestamp for ordering and `timestamp`;
 - move an unflushed session to filesystem mtime ordering after its first flush;
 - reject the same `sessionId` appearing in two Projects at startup;
-- detect a duplicate `sessionId` introduced after startup during list/open and
-  return a `SessionConflict` or deterministic open error;
-- exclude conflicts before `max`/cursor calculation, report them separately,
-  and keep `nextCursor` anchored to the last valid session;
+- fail `openSession` when the target header id is already owned by a different
+  address;
+- keep an already-running session usable when a conflicting copy appears;
 - paginate files with equal mtimes without skipping or repeating a stem;
 - de-duplicate a page by `sessionId` when an active session's ordering time
   changed between pages;
@@ -686,7 +692,8 @@ list filtering as the exclusivity mechanism.
 - attached activations are not GC'd;
 - streaming or compacting activations are not GC'd;
 - a GC timer racing `openSession` does not dispose a reattached activation;
-- an unflushed session with entries is not GC'd;
+- an entry-bearing unflushed activation is collected only after the longer idle
+  cap;
 - GC never deletes a session file.
 
 ### Protocol and client
@@ -702,10 +709,12 @@ list filtering as the exclusivity mechanism.
   without a filesystem scan;
 - the global `active_sessions_changed` snapshot reaches unattached launcher
   connections;
-- `sessions_changed` is broadcast by the daemon and carries Project/conflict
-  data;
+- `sessions_changed` is broadcast by the daemon and carries the Project's first
+  page;
 - a session-list refresh invalidates the current pagination cursor and causes
   the client to restart from the first page;
+- a cursor-aware initial `patch` is never compacted to a bare append string;
+- a failed open leaves the previous attachment and mirror intact;
 - no public RPC accepts a session filesystem path or an activation id;
 - `newSession` twice for one Project yields two independent unflushed sessions.
 
@@ -735,12 +744,18 @@ list filtering as the exclusivity mechanism.
   falls back to the Project page.
 - Pagination keyed on mtime is approximate for actively-written sessions; the
   client de-duplicates by `sessionId` and the daemon pushes refreshes.
+- An entry-bearing unflushed session that never flushes (for example,
+  prompt-then-abort) is collected after a long idle cap and its entries are
+  lost; they were never durable.
+- Duplicate `sessionId` files created after startup are unsupported: the
+  first-registered address keeps working and a conflicting open fails.
 - The daemon creates one Manager per active session instead of reusing one
   across sessions, so Manager creation cost is paid on each open.
 
 ## Open questions deferred from v1
 
-- The exact GC delay and whether it becomes configurable.
+- The exact GC delay and the longer cap for entry-bearing unflushed
+  activations, and whether either becomes configurable.
 - Whether the launcher auto-opens the most recent session or requires an
   explicit choice; v1 shows the Project home.
 - Whether browser Back/Forward should drive session navigation; v1 uses
@@ -755,16 +770,20 @@ list filtering as the exclusivity mechanism.
 
 - **ADR 02:** unchanged Document and entry model. Session ownership changes
   only at the host/routing layer.
-- **ADR 06:** superseded where it defines instance-centric routing verbs. The
-  Manager and Connection implementation seams remain useful, but public
-  navigation becomes Project/Session based and activations stay internal.
+- **ADR 06 / architecture.md:** superseded where they define instance-centric
+  routing verbs, the instance push table, and the `instance_exit`
+  kill-discovery addendum. The Manager and Connection implementation seams
+  remain useful, but public navigation becomes Project/Session based,
+  activations stay internal, and daemon shutdown closes the socket.
 - **ADR 07:** the client store tracks the current session address; the sidebar
   becomes a Project/Session browser with active/streaming state.
 - **ADR 08:** not adopted by this ADR. A future object-kernel implementation
   can host the same Project and Session objects.
-- **ADR 09:** unchanged cache identity and prefix cursor rules. Cursors remain
-  keyed by globally unique `sessionId`; the Project/stem address only resolves
-  the session.
+- **ADR 09:** cache identity and prefix cursor rules are unchanged, but the
+  frame shapes are not: `ReplaceMessage`/`PatchMessage` carry `SessionRef`
+  instead of a bare `sessionId`, and the `switchInstance`/`switchSession`
+  cursor carriers are gone. Cursors remain keyed by globally unique
+  `sessionId`; the Project/stem address only resolves the session.
 - **ADR 10:** unchanged. Git stamps remain entries in the active session.
 - **PRD 04:** its instance/session sidebar is replaced by a project launcher:
   a Project/Session browser with active/streaming session indicators.
