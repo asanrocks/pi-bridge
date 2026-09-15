@@ -268,6 +268,43 @@
 	margin: 0 2px;
 }
 
+/* ADR 10 v2 — in-group git change card: a slim band inside the action
+   group's spine, after the step it follows. Same anatomy as an action step
+   (left strip + faint tint) in the git family hue (diff/merge green) —
+   meta, not a tool action, so it has no tool family; the group legend's
+   git dot uses the same token. */
+.gitChangeCard {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 2px 0;
+	padding: 4px 10px;
+	font-size: var(--fs-sm);
+	color: var(--color-secondary);
+	background: color-mix(in srgb, var(--kind-git) 6%, transparent);
+	border-left: 3px solid color-mix(in srgb, var(--kind-git) 55%, transparent);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	min-width: 0;
+}
+
+.gitChangeCardLabel {
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+}
+
+.gitChangeCardIdentity {
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.gitChangeCardSubject {
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
 /* User turn — full-width tinted band (a distinct part of the document,
    not a bubble). Hairline top/bottom borders separate it from the flat
    assistant turns. Header line + text use the same 16px padding the
@@ -621,6 +658,7 @@
 .groupSwatches > span[data-family="bash"]   { background: var(--kind-bash); }
 .groupSwatches > span[data-family="think"]  { background: var(--kind-think); }
 .groupSwatches > span[data-family="read"]   { background: var(--kind-read); }
+.groupSwatches > span[data-family="git"]    { background: var(--kind-git); }
 
 /* Vertical list of steps under a group — no tree branching, no indent
    (the step's own left accent border is the nesting cue). */

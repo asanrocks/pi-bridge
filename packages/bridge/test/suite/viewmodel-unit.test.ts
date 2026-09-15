@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { Document } from "../../src/core/types.ts";
 import {
+	assignGroupGitChanges,
 	beautifyShellCommand,
 	computeViewModel,
 	makeActionIdentity,
@@ -2111,7 +2112,7 @@ describe("git identity fold", () => {
 		});
 	});
 
-	it("a mid-run stamp splits the run's visual grouping but not its contents", () => {
+	it("a mid-run stamp folds into the run: no split, mark positioned after its block", () => {
 		// Path: user → assistant(toolCall) → stamp → tool_result → assistant(text)
 		const doc = emptyDoc();
 		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
@@ -2145,14 +2146,101 @@ describe("git identity fold", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
-		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant", "gitChange", "assistant"]);
-		// The tool result still joins its tool call across the split.
-		const first = vm.turns[1];
-		if (first?.kind !== "assistant") throw new Error("expected assistant");
-		const step = first.blocks[0];
+		// One assistant turn — the run does not split.
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
+		const run = vm.turns[1];
+		if (run?.kind !== "assistant") throw new Error("expected assistant");
+		expect(run.gitChanges).toHaveLength(1);
+		expect(run.gitChanges![0]).toMatchObject({
+			entryId: "s1",
+			identity: { commit: SHA1_B, branch: "main" },
+			commitSubject: "agent commit",
+			anchor: "tool_end",
+			isInitial: true,
+			afterBlockKey: "a1:b0",
+		});
+		// The tool result still joins its tool call.
+		const step = run.blocks[0];
 		if (step?.blockType !== "tool") throw new Error("expected tool step");
 		expect(step.status).toBe("done");
 		expect(step.result).toMatchObject({ entryId: "tr1", isError: false });
+	});
+
+	it("a turn_end stamp with an open run folds as a trailing mark", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s0", null, { v: 2, anchor: "prompt", commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s0", "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:02Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			stampEntry("s1", "a1", {
+				v: 2,
+				anchor: "turn_end",
+				commit: SHA1_B,
+				branch: "main",
+				commitSubject: "backstop",
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(vm.turns.map((t) => t.kind)).toEqual(["gitChange", "user", "assistant"]);
+		const run = vm.turns[2];
+		if (run?.kind !== "assistant") throw new Error("expected assistant");
+		expect(run.gitChanges).toHaveLength(1);
+		expect(run.gitChanges![0]).toMatchObject({ anchor: "turn_end", afterBlockKey: "a1:b0", isInitial: false });
+	});
+
+	it("assignGroupGitChanges places marks in the owning group", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:02Z", "message", {
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "tc1", name: "edit", arguments: { path: "foo.ts" } },
+					{ type: "text", text: "mid" },
+					{ type: "toolCall", id: "tc2", name: "read", arguments: { path: "bar.ts" } },
+				],
+			}),
+		);
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const run = vm.turns[1];
+		if (run?.kind !== "assistant") throw new Error("expected assistant");
+		const segments = segmentBlocks(run.blocks);
+		// Two groups (edit step, read step) separated by text.
+		expect(segments).toHaveLength(3);
+		const { byGroup, unattached } = assignGroupGitChanges(segments, [
+			{
+				entryId: "s1",
+				timestamp: "",
+				identity: { commit: SHA1, branch: "main" },
+				commitSubject: null,
+				anchor: "tool_end",
+				isInitial: false,
+				afterBlockKey: "a1:b0",
+			},
+			{
+				entryId: "s2",
+				timestamp: "",
+				identity: { commit: SHA1_B, branch: "main" },
+				commitSubject: null,
+				anchor: "turn_end",
+				isInitial: false,
+				afterBlockKey: "a1:b1", // text block → falls to the last group
+			},
+		]);
+		expect(unattached).toHaveLength(0);
+		expect(byGroup.get("a1:0")).toHaveLength(1);
+		expect(byGroup.get("a1:0")![0]!.entryId).toBe("s1");
+		expect(byGroup.get("a1:2")).toHaveLength(1);
+		expect(byGroup.get("a1:2")![0]!.entryId).toBe("s2");
 	});
 });
 
