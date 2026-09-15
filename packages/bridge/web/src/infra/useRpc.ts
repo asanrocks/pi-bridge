@@ -21,6 +21,7 @@ import { getGlobalClient } from "./client.ts";
 import { prepareSwitch } from "./entryCache.ts";
 import { projectPath, sessionPath, writeRoute } from "./routes.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
+import { loadProjectHome, SESSION_PAGE_SIZE } from "./sessionList.ts";
 import { getStore } from "./store.tsx";
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,22 @@ export function useRpc() {
 		}
 		store.getState().setCurrentSession(projectId, null);
 		writeRoute({ kind: "project", projectId });
+		// A live switch does not go through the boot/reconnect path, so the
+		// Project's history must be fetched here (loadProjectHome clears the
+		// previous Project's rows first).
+		const client = getGlobalClient();
+		if (!client) return;
+		await loadProjectHome({
+			store,
+			projectId,
+			listSessions: (pid, max) => rpc(() => client.listSessions(pid, max), "load sessions failed"),
+			// Guard against a newer navigation (project switch or session open)
+			// that started while this page was in flight.
+			isStillCurrent: () => {
+				const s = getStore().getState();
+				return s.currentProjectId === projectId && s.currentStem === null;
+			},
+		});
 	}, []);
 
 	const newSession = useCallback(async (projectId: string) => {
@@ -170,7 +187,7 @@ export function useRpc() {
 		const projectId = state.currentProjectId;
 		if (!projectId) return;
 		const reply = await rpc(
-			() => getGlobalClient()?.listSessions(projectId, 10, state.sessionsNextCursor),
+			() => getGlobalClient()?.listSessions(projectId, SESSION_PAGE_SIZE, state.sessionsNextCursor),
 			"load more sessions failed",
 		);
 		if (reply?.ok) {
