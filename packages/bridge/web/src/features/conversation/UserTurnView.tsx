@@ -10,8 +10,8 @@ import type { Entry } from "../../../../src/core/index.ts";
 import { newestLeafInSubtree, type UserTurn } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
-import { Markdown } from "../../render/markdown.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
+import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import styles from "./conversation.module.css";
 import { formatDuration, formatGitIdentity, formatTimestamp } from "./format.ts";
@@ -111,7 +111,7 @@ export const UserTurnView = memo(function UserTurnView({
 				</div>
 			</div>
 			<div className={`${styles.userMsgText} ${styles.markdownContent}`}>
-				<Markdown text={turn.text} mode="static" />
+				<AppMarkdown text={turn.text} mode="static" />
 			</div>
 			{turn.images.length > 0 && <ResultImages images={turn.images} />}
 		</div>

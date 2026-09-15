@@ -98,7 +98,7 @@ Text fields are wire-eager (never null) per ADR 07.
 | pi | Node | durable history (jsonl), AgentSession, model selection, tool execution |
 | Manager | Node | canonical Document, event→Patch pipeline, `onPatch`/`onReplace`/`onExit`/`onSettled` callbacks, typed session verbs |
 | Connection | Node | WebSocket, subscription set, RPC demux, pull handler, `CompactCodec` |
-| Daemon | Node | Manager list (`Map<instanceId, Manager>`), Connection list, WS/HTTP server, `ModelRuntime`, session-file mtime cache, daemon verbs (`listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, `console`) + routing verbs (`switchInstance`, `newInstance`, `killInstance`) |
+| Daemon | Node | Manager list (`Map<instanceId, Manager>`), Connection list, WS/HTTP server, `ModelRuntime`, session-file mtime cache, daemon verbs (`listSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `listInstances`, `console`) + routing verbs (`switchInstance`, `newInstance`, `killInstance`) |
 | BridgeClient | browser | DocumentMirror, RPC pending map, typed verb methods |
 
 State flow: pi → Manager (events + durable state), Manager → Connection
@@ -218,6 +218,7 @@ Daemon verbs (handled by the Daemon, bypass the Manager):
 | `listSessions` | `{ ok, sessions: SessionInfo[], hasMore }` | Mtime-cached per-file, filtered by `cwd`, paginated (`max`/`ts` cursor), live sessions excluded |
 | `getDaemonInfo` | `{ ok, models: ModelInfo[], thinkingLevels: string[], cwdAllowlist: string[], devMode: boolean }` | Queries shared `ModelRuntime` (`getAvailableSnapshot()` + `getSupportedThinkingLevels`); `ModelInfo` carries `providerName`/`reasoning`/`supportedThinkingLevels`/`contextWindow` |
 | `listFiles` | `{ ok, entries: { path, isDirectory }[] }` | Prefix match against instance cwd |
+| `readFile` | `{ ok, path, content, truncated, bytes }` | Fresh disk read for the web file viewer; relative paths resolve against the attached instance cwd, `~` expands; capped at 256 KB with `truncated: true` |
 | `listInstances` | `{ ok, instances: InstanceInfo[] }` | Enriched from each Manager's `Document` (`lastActivityAt`/`preview`/`messageCount`) |
 | `console` | `{ ok }` | Dev-mode only (`--dev`); relay `console.*` from browser |
 
@@ -291,6 +292,7 @@ its DocumentMirror wholesale. No client→server `Init` message.
 | `listSessions` | Daemon | `{ ok, sessions: SessionInfo[], hasMore? }` |
 | `getDaemonInfo` | Daemon | `{ ok, models: ModelInfo[], thinkingLevels: string[], cwdAllowlist: string[], devMode: boolean }` |
 | `listFiles` | Daemon | `{ ok, entries: { path, isDirectory }[] }` |
+| `readFile` | Daemon | `{ ok, path, content, truncated, bytes }` |
 | `listInstances` | Daemon | `{ ok, instances: InstanceInfo[] }` |
 | `switchInstance` | Daemon (routing) | `{ ok, error? }` |
 | `newInstance` | Daemon (routing) | `{ ok, instanceId }` |
@@ -328,6 +330,7 @@ bridge.newSession()                             // → Promise<RpcReply>
 bridge.listSessions()                           // → Promise<RpcReply>
 bridge.getDaemonInfo()                          // → Promise<RpcReply>
 bridge.listFiles(prefix)                        // → Promise<RpcReply>
+bridge.readFile(path)                          // → Promise<RpcReply>
 bridge.listInstances()                          // → Promise<RpcReply>
 bridge.switchInstance(id)                       // → Promise<RpcReply>
 bridge.newInstance(cwd)                         // → Promise<RpcReply>
