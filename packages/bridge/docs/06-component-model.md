@@ -19,7 +19,7 @@ into four natural categories:
 - **Session verbs** — modify the pi conversation (`prompt`, `abort`, `discardSteer`,
   `setModel`, `setThinkingLevel`, `renameSession`, `navigate`,
   `switchSession`, `newSession`).
-- **Daemon verbs** — query global state (`listSessions`, `getDaemonInfo`, `listFiles`, `listInstances`, `console`).
+- **Daemon verbs** — query global state (`listSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `listInstances`, `console`).
 - **Routing verbs** — mutate the instance registry (`switchInstance`, `newInstance`, `killInstance`).
 - **Connection verbs** — manage per-client transport state (`pull`, `detachInstance`).
 
@@ -251,6 +251,7 @@ exclusively via push.
 | `listSessions` | Daemon | `{ ok, sessions: SessionInfo[], hasMore? }` |
 | `getDaemonInfo` | Daemon | `{ ok, models: ModelInfo[], thinkingLevels: string[], cwdAllowlist: string[], devMode: boolean }` |
 | `listFiles` | Daemon | `{ ok, entries: { path, isDirectory }[] }` |
+| `readFile` | Daemon | `{ ok, path, content, truncated, bytes }` — fresh disk read for the web file viewer; relative paths resolve against the attached instance's cwd |
 | `listInstances` | Daemon | `{ ok, instances: InstanceInfo[] }` |
 | `switchInstance` | Daemon (routing) | `{ ok, error? }` |
 | `newInstance` | Daemon (routing) | `{ ok, instanceId }` |

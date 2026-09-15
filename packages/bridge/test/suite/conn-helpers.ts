@@ -86,6 +86,9 @@ export const mockDaemonVerbs: DaemonVerbs = {
 		devMode: false,
 	}),
 	listFiles: () => [],
+	readFile: () => {
+		throw new Error("readFile not wired in mock");
+	},
 	listInstances: () => [],
 	switchInstance: async (
 		_instanceId: string,
