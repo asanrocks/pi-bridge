@@ -37,13 +37,19 @@ export interface GitRunResult {
 
 export type GitRunner = (args: string[], options: GitRunOptions) => Promise<GitRunResult>;
 
+function removeOneLineEnding(raw: string): string {
+	if (!raw.endsWith("\n")) return raw;
+	const withoutLf = raw.slice(0, -1);
+	return withoutLf.endsWith("\r") ? withoutLf.slice(0, -1) : withoutLf;
+}
+
 /**
  * Spawn `git <args>` with a bounded lifetime. Exit code 1 is meaningful for
  * the plumbing commands used here (unborn HEAD / detached HEAD); spawn
  * failures and kills resolve with `code: null` so the caller can tell them
  * apart from exit 1.
  */
-function spawnGit(args: string[], options: GitRunOptions): Promise<GitRunResult> {
+export function spawnGit(args: string[], options: GitRunOptions): Promise<GitRunResult> {
 	return new Promise((resolve) => {
 		let proc: ReturnType<typeof spawn>;
 		try {
@@ -61,32 +67,49 @@ function spawnGit(args: string[], options: GitRunOptions): Promise<GitRunResult>
 		let settled = false;
 		let killTimer: NodeJS.Timeout | undefined;
 		let forceKillTimer: NodeJS.Timeout | undefined;
+		const clearKillState = () => {
+			if (killTimer) clearTimeout(killTimer);
+			if (forceKillTimer) clearTimeout(forceKillTimer);
+			killTimer = undefined;
+			forceKillTimer = undefined;
+			options.signal?.removeEventListener("abort", kill);
+		};
 		const finish = (code: number | null, killed = false) => {
 			if (settled) return;
 			settled = true;
-			if (killTimer) clearTimeout(killTimer);
-			if (forceKillTimer) clearTimeout(forceKillTimer);
-			options.signal?.removeEventListener("abort", kill);
+			clearKillState();
 			resolve({ code, stdout, killed });
 		};
 		const kill = () => {
+			if (settled) return;
+			settled = true;
+			if (killTimer) clearTimeout(killTimer);
+			killTimer = undefined;
+			options.signal?.removeEventListener("abort", kill);
 			// Resolve first — the budget is spent; the kills are just cleanup.
-			finish(null, true);
+			resolve({ code: null, stdout, killed: true });
 			proc.kill("SIGTERM");
-			// Bounded cleanup even if git ignores SIGTERM.
-			forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 1000);
+			// Bounded cleanup even if git ignores SIGTERM. The normal close event
+			// clears this timer when the child exits after SIGTERM.
+			forceKillTimer = setTimeout(() => {
+				forceKillTimer = undefined;
+				proc.kill("SIGKILL");
+			}, 1000);
 		};
 
 		proc.on("error", () => finish(null)); // e.g. missing git binary
 		proc.stdout?.on("data", (chunk) => {
 			stdout += chunk.toString();
 		});
-		proc.on("close", (code) => finish(code));
+		proc.on("close", (code) => {
+			if (settled) clearKillState();
+			else finish(code);
+		});
 		if (options.signal) {
 			if (options.signal.aborted) kill();
 			else options.signal.addEventListener("abort", kill, { once: true });
 		}
-		if (options.timeoutMs > 0) killTimer = setTimeout(kill, options.timeoutMs);
+		if (!settled && options.timeoutMs > 0) killTimer = setTimeout(kill, options.timeoutMs);
 	});
 }
 
@@ -160,8 +183,8 @@ export function createGitStampExtension(deps: Partial<GitStampDeps> = {}): Exten
 			if (head.code !== 0 && head.code !== 1) return null;
 			if (symref.code !== 0 && symref.code !== 1) return null;
 			return parseGitIdentity(
-				head.code === 1 ? null : head.stdout.trim(),
-				symref.code === 1 ? null : symref.stdout.trim(),
+				head.code === 1 ? null : removeOneLineEnding(head.stdout),
+				symref.code === 1 ? null : removeOneLineEnding(symref.stdout),
 			);
 		};
 
