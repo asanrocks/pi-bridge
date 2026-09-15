@@ -4,9 +4,9 @@
 // activation sharing, detach-before-attach, idle GC, session queries, and the
 // address/identity rules, not pi itself.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { Document, Patch, RpcReply, SessionRef } from "../../src/core/index.ts";
@@ -238,24 +238,31 @@ async function settle(ms = 60): Promise<void> {
 	await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Header + one user message, so a fixture file is a parseable session. */
+function sessionFileText(sessionId: string, cwd: string): string {
+	return `${[
+		JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: "2026-01-01T00:00:00Z", cwd }),
+		JSON.stringify({
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:01Z",
+			message: { role: "user", content: "hello", timestamp: 0 },
+		}),
+	].join("\n")}\n`;
+}
+
+/** Write a minimal durable session file at an explicit path. */
+function writeSessionAt(file: string, sessionId: string, cwd: string): void {
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, sessionFileText(sessionId, cwd));
+}
+
 /** Write a minimal durable session file; returns its stem. */
 function writeSessionFile(cwd: string, agentDir: string, sessionId: string, stem?: string): string {
 	const dir = sessionDirFor(cwd, agentDir);
-	mkdirSync(dir, { recursive: true });
 	const name = stem ?? `2026-01-01T00-00-00-000Z_${sessionId}`;
-	writeFileSync(
-		join(dir, `${name}.jsonl`),
-		`${[
-			JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: "2026-01-01T00:00:00Z", cwd }),
-			JSON.stringify({
-				type: "message",
-				id: "m1",
-				parentId: null,
-				timestamp: "2026-01-01T00:00:01Z",
-				message: { role: "user", content: "hello", timestamp: 0 },
-			}),
-		].join("\n")}\n`,
-	);
+	writeSessionAt(join(dir, `${name}.jsonl`), sessionId, cwd);
 	return name;
 }
 
@@ -295,6 +302,50 @@ describe("daemon: projects", () => {
 		const { agentDir, a } = makeProjectRoots();
 		await expect(new Daemon().start({ agentDir, allow: [join(a, "nope")] })).rejects.toThrow(/does not exist/);
 		await expect(new Daemon().start({ agentDir, allow: [`Bad_Id=${a}`] })).rejects.toThrow(/Invalid project id/);
+	});
+});
+
+describe("daemon: session scan containment", () => {
+	it("omits a session symlink that escapes the Project namespace", async () => {
+		const { root, agentDir, a } = makeProjectRoots();
+		// A real session file outside the Project's session namespace.
+		writeSessionAt(join(root, "outside", "secret.jsonl"), "outside-id", a);
+		const dir = sessionDirFor(a, agentDir);
+		mkdirSync(dir, { recursive: true });
+		symlinkSync(join(root, "outside", "secret.jsonl"), join(dir, "leak.jsonl"));
+
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const reply = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+		};
+		expect(reply.sessions.some((s) => s.stem === "leak")).toBe(false);
+
+		ws.close();
+	});
+
+	it("omits an escaping symlink from the startup session-id conflict scan", async () => {
+		const { root, agentDir, a } = makeProjectRoots();
+		// Both files claim the same session id; the escaping one must not be
+		// counted as a second address (which would refuse startup).
+		writeSessionFile(a, agentDir, "same-id", "2026-01-01T00-00-00-000Z_real");
+		writeSessionAt(join(root, "outside", "secret.jsonl"), "same-id", a);
+		const dir = sessionDirFor(a, agentDir);
+		symlinkSync(join(root, "outside", "secret.jsonl"), join(dir, "leak.jsonl"));
+
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const reply = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+		};
+		expect(reply.sessions.map((s) => s.stem)).toContain("2026-01-01T00-00-00-000Z_real");
+		expect(reply.sessions.some((s) => s.stem === "leak")).toBe(false);
+
+		ws.close();
 	});
 });
 
@@ -431,6 +482,41 @@ describe("daemon: session activation", () => {
 		ws.close();
 	});
 
+	it("a failed open leaves the previous attachment intact", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const stubRef: { current: StubManager | null } = { current: null };
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "keep-1");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		await waitForPush(frames, "replace");
+
+		// The client restores its previous address on a failed open, which is
+		// only correct if the server kept the old attachment alive.
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: "missing" }))).ok).toBe(
+			false,
+		);
+		const stub = stubRef.current;
+		if (!stub) throw new Error("stub not created");
+		const before = frames.length;
+		stub.handles.emitPatch({ ops: [{ op: "replace", path: "/status/isStreaming", value: true }] });
+		await settle();
+		expect(frames.length).toBeGreaterThan(before);
+
+		ws.close();
+	});
+
 	it("rejects duplicate session ids across the session namespaces at startup", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		// Two durable files whose headers share one session id.
@@ -537,6 +623,60 @@ describe("daemon: idle GC", () => {
 		const list = (await waitForReply(frames, listId)) as unknown as { sessions: unknown[] };
 		expect(list.sessions).toHaveLength(1);
 		expect(factoryCalls).toBe(1);
+
+		ws.close();
+	});
+
+	it("reserves the address during disposal so a concurrent open cannot duplicate the runtime", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let factoryCalls = 0;
+		let signalDisposeStarted!: () => void;
+		const disposeStarted = new Promise<void>((r) => {
+			signalDisposeStarted = r;
+		});
+		let releaseDispose!: () => void;
+		const disposeGate = new Promise<void>((r) => {
+			releaseDispose = r;
+		});
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			idleGcMs: 20,
+			unflushedIdleGcMs: 20,
+			managerFactory: async (opts) => {
+				factoryCalls++;
+				const stub = makeStubManager(opts ?? {});
+				const originalDispose = stub.manager.dispose.bind(stub.manager);
+				stub.manager.dispose = async () => {
+					signalDisposeStarted();
+					await disposeGate;
+					await originalDispose();
+				};
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "gc-race");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		await waitForPush(frames, "replace");
+		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
+
+		// GC fires and blocks inside disposal.
+		await disposeStarted;
+
+		// An open during disposal must wait for the reservation rather than
+		// create a second Manager for the same address (ADR 11 exclusivity).
+		const openId = send(ws, { verb: "openSession", projectId, stem });
+		await settle(80);
+		expect(frames.some((f) => (f as { id?: string }).id === openId)).toBe(false);
+		expect(factoryCalls).toBe(1);
+
+		releaseDispose();
+		expect((await waitForReply(frames, openId)).ok).toBe(true);
+		expect(factoryCalls).toBe(2);
 
 		ws.close();
 	});

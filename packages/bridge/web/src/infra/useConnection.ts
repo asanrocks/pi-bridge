@@ -102,52 +102,83 @@ export function useConnection(): { retry: () => void } {
 	// connecting→unreachable threshold and backoff exponent.
 	const attemptRef = useRef(0);
 
-	/**
-	 * Open a session address, seeding the mirror from cache when the address's
-	 * session id is known (ADR 09 §Client Restore Flow). Cold load without a
-	 * remembered id: plain open, full replace.
-	 */
-	const openSessionAddress = useCallback(async (client: BridgeClient, projectId: string, stem: string) => {
-		const store = getStore();
-		store.getState().setCurrentSession(projectId, stem);
-		const sessionId = lookupSessionId(projectId, stem);
-		if (!sessionId) {
-			await client.openSession(projectId, stem);
-			return;
-		}
-		let records: CacheEntryRecord[] = [];
-		let hint: SessionStatusHint | null = null;
-		try {
-			({ records, hint } = await (await getEntryCache()).loadSession(sessionId));
-		} catch {
-			// Cache read failure: plain open, full replace.
-		}
-		if (clientRef.current !== client) return; // superseded mid-load
-		const state = store.getState();
-		const sameSession = state.activeSessionId === sessionId && Object.keys(state.document.entries).length > 0;
-		const seed = sameSession ? state.document : seedDocument(records, hint ?? undefined);
-		client.mirror.applyReplace(seed);
-		// The seed mirrors the cache content — it becomes the session's cache
-		// base so the initial-sync delta's flush persists only new entries.
-		cacheBase = { sessionId, doc: seed };
-		if (!sameSession && records.length > 0) {
-			store.getState().applyReplace(seed);
-		}
-		const cursor = computeCursor(records);
-		await client.openSession(projectId, stem, cursor ?? undefined);
-	}, []);
-
-	/** Open a Project's home: bind the address, fetch its first session page. */
-	const openProjectAddress = useCallback(async (client: BridgeClient, projectId: string) => {
-		const store = getStore();
-		store.getState().setCurrentSession(projectId, null);
+	/** Fetch and publish a Project's first session page. */
+	const loadProjectPage = useCallback(async (client: BridgeClient, projectId: string) => {
 		const reply = await client.listSessions(projectId, SESSION_PAGE_SIZE);
 		if (clientRef.current !== client) return;
 		const data = reply as unknown as ListSessionsReply;
 		const sessions = (data.sessions as SessionInfo[] | undefined) ?? [];
 		for (const row of sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-		store.getState().replaceSessions(sessions, data.hasMore === true, data.nextCursor ?? null);
+		getStore()
+			.getState()
+			.replaceSessions(sessions, data.hasMore === true, data.nextCursor ?? null);
 	}, []);
+
+	/** Open a Project's home: bind the address, fetch its first session page. */
+	const openProjectAddress = useCallback(
+		async (client: BridgeClient, projectId: string) => {
+			getStore().getState().setCurrentSession(projectId, null);
+			await loadProjectPage(client, projectId);
+		},
+		[loadProjectPage],
+	);
+
+	/** A failed open falls back to the Project page (ADR 11): the stem no longer
+	 * resolves (deleted file, or an unflushed session after a daemon restart),
+	 * so the seeded cache/paint and any session identity must be dropped. */
+	const fallbackToProjectPage = useCallback(
+		async (client: BridgeClient, projectId: string) => {
+			getStore().getState().clearCurrentSession(projectId);
+			writeRoute({ kind: "project", projectId });
+			await loadProjectPage(client, projectId);
+		},
+		[loadProjectPage],
+	);
+
+	/**
+	 * Open a session address, seeding the mirror from cache when the address's
+	 * session id is known (ADR 09 §Client Restore Flow). Cold load without a
+	 * remembered id: plain open, full replace. A failure (unknown stem, deleted
+	 * file, unflushed session after restart) falls back to the Project page —
+	 * the server left any previous attachment untouched, so the client must not
+	 * claim the new address either.
+	 */
+	const openSessionAddress = useCallback(
+		async (client: BridgeClient, projectId: string, stem: string) => {
+			const store = getStore();
+			store.getState().setCurrentSession(projectId, stem);
+			const sessionId = lookupSessionId(projectId, stem);
+			if (!sessionId) {
+				const reply = await client.openSession(projectId, stem);
+				if (clientRef.current !== client) return;
+				if (!reply.ok) await fallbackToProjectPage(client, projectId);
+				return;
+			}
+			let records: CacheEntryRecord[] = [];
+			let hint: SessionStatusHint | null = null;
+			try {
+				({ records, hint } = await (await getEntryCache()).loadSession(sessionId));
+			} catch {
+				// Cache read failure: plain open, full replace.
+			}
+			if (clientRef.current !== client) return; // superseded mid-load
+			const state = store.getState();
+			const sameSession = state.activeSessionId === sessionId && Object.keys(state.document.entries).length > 0;
+			const seed = sameSession ? state.document : seedDocument(records, hint ?? undefined);
+			client.mirror.applyReplace(seed);
+			// The seed mirrors the cache content — it becomes the session's cache
+			// base so the initial-sync delta's flush persists only new entries.
+			cacheBase = { sessionId, doc: seed };
+			if (!sameSession && records.length > 0) {
+				store.getState().applyReplace(seed);
+			}
+			const cursor = computeCursor(records);
+			const reply = await client.openSession(projectId, stem, cursor ?? undefined);
+			if (clientRef.current !== client) return;
+			if (!reply.ok) await fallbackToProjectPage(client, projectId);
+		},
+		[fallbackToProjectPage],
+	);
 
 	const initDaemonInfo = useCallback(
 		async (client: BridgeClient) => {
