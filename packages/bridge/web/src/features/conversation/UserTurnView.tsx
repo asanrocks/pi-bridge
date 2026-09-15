@@ -57,7 +57,11 @@ export const UserTurnView = memo(function UserTurnView({
 					{ts && <span className={styles.msgTime}>{ts}</span>}
 					<span className={styles.msgRole}>You</span>
 					{thoughtFor && <span className={styles.msgTiming}>{thoughtFor}</span>}
-					{gitStamp && <span className={styles.gitStamp}>{gitStamp}</span>}
+					{gitStamp && (
+						<span className={styles.gitStamp} title={turn.gitCommitSubject ?? undefined}>
+							{gitStamp}
+						</span>
+					)}
 					{isEditing && <span className={styles.editingBadge}>Editing</span>}
 				</span>
 				<div className={styles.turnToolbar}>
