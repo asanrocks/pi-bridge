@@ -1,465 +1,546 @@
-# ADR 11: Projects, Sessions, Instances — Grounding the Domain Model
+# ADR 11: Projects, Sessions, and Activations
 
-**Status:** Proposed. Introduces a domain layer above ADR 06's component model:
-`Project` becomes a first-class concept, `Instance` is demoted to a transient
-*activation*, and session identity is grounded in the archive file name
-(`sessionId` stays the durable id; the **file stem** is the address). Amends
-ADR 06 (routing verbs become project-scoped), plans invariants §7.19–7.24 for
-`architecture.md`, and restructures the web sidebar. URL addressability is a
-**consequence** of the corrected model, not its motivation — it is recorded in
-§"Addressability falls out", after the model is settled.
+**Status:** Proposed. Reworks the daemon's session domain model and the client
+protocol around three distinct concepts: a static `Project` configuration, a
+durable `Session` file, and an ephemeral `Instance` activation. The protocol
+uses session addresses for navigation and instance ids only for liveness
+management.
+
+This ADR does not introduce project archival, project migration, or a generic
+object-kernel protocol. It keeps pi's existing session storage and the bridge's
+Document sync model, while replacing the instance-centric navigation surface.
 
 ## Context
 
-### What exists today
+### Current implementation
 
-- `--allow <dir>` populates `cwdAllowlist: string[]` (default
-  `[process.cwd()]`). That list is the only notion of "the things this daemon
-  serves".
-- pi keeps one flat archive per cwd: `getDefaultSessionDir(cwd)` →
-  `~/.pi/agent/sessions/--<cwd-slugged>--/`, read non-recursively, files named
-  `<fileTimestamp>_<sessionId>.jsonl` where `sessionId` is a UUID.
-- A `Manager` owns one pi runtime and one canonical Document, 1:1 with a
-  session file. `Daemon.instances: Map<instanceId, Manager>` is the registry;
-  `instanceId` is a `randomUUID()` minted at creation.
-- `newInstance(cwd)` spawns a Manager; `switchInstance(instanceId, cursor)`
-  rebinds a Connection; `switchSession(sessionPath, cursor)` repoints a live
-  Manager to another file.
-- `listSessions({ cwd, max, ts })` scans one archive and **filters out** ids
-  held by live Managers (`getLiveSessionIds`).
-- The web store keys everything on `attachedInstanceId`; the Sessions section
-  is inert with no attached instance.
+The current bridge has these properties:
 
-### The muddle
+- `--allow <dir>` supplies a flat cwd allowlist.
+- `Daemon.instances` is a `Map<instanceId, Manager>`.
+- An `Instance` is a pi runtime and canonical Document bound to one session at a
+time.
+- A `Connection` attaches to one instance.
+- `switchSession(sessionPath)` is routed to the attached Manager. Rebinding a
+  Manager changes the Document for every Connection attached to it.
+- `listSessions` scans pi's cwd-derived session directory and returns file
+  paths.
+- Reconnect resumes an `instanceId`, not a durable session address.
+- The web cache is keyed by `sessionId`, but the UI navigates with
+  `instanceId` and `sessionPath`.
 
-1. **Three concepts share one field.** `cwd` is at once a config entry, an
-   archive namespace key, an instance attribute, and (today) the only
-   human-facing address. There is no name for "the thing that owns an
-   archive", so every place that needs one reaches for a filesystem path with
-   four unrelated meanings.
-2. **The instance is the only door.** Sessions are reachable only *through* a
-   live instance: `listSessions` is scoped by `attachedManager?.cwd`, and the
-   client passes the attached manager's cwd to `listFiles`/`readFile`. A
-   project with no live instance is therefore invisible — its history is not
-   merely unrendered, it is unrequestable.
-3. **Instance identity leaks upward.** `instanceId` is the least durable
-   object in the system (it dies with the process) yet it is the handle the
-   UI, `listInstances`, `switchInstance`, `killInstance`, and any naive URL
-   would use.
-4. **Exclusivity is implicit.** "At most one live instance per session" holds
-   today only because `listSessions` *hides* live ids from the picker.
-   `switchSession` goes `Connection → attached Manager` and never consults the
-   registry, so nothing prevents two Managers from loading the same file if it
-   is addressed directly. Deep linking is exactly direct addressing — the
-   feature that motivated this ADR turns a latent hole into a routine one.
-5. **"Attach" is overloaded across two different bindings.** Today it means
-   both *Connection → Instance* (transport binding, M:1, in
-   `Connection.attach`) and, colloquially, *Session → Instance* (activation,
-   1:1-at-a-time). Conflating them is why (4) went unnoticed: the exclusive
-   relation was assumed to be the nonexclusive one.
+Pi creates a session's intended filename when `SessionManager.newSession()` is
+called, before the first assistant response flushes the file. Thus an
+unflushed session can have a known provisional stem even though it is not yet
+durable.
 
-This is a naming and ownership problem, not a feature gap. The fix is to name
-the missing concept and re-ground the two that already exist.
+### Problems
 
-## The model
+1. `cwd` is simultaneously configuration, storage namespace, runtime cwd, and
+   user-facing identity.
+2. A dormant session cannot be opened without first creating or selecting a
+   live instance.
+3. `instanceId` is ephemeral but is currently the primary reconnect and
+   navigation handle.
+4. Manager-wide `switchSession` makes session navigation affect unrelated
+   Connections attached to the same Manager.
+5. At-most-one activation per session is implicit and can be violated by
+   independent Manager creation paths.
+6. A pending session opened for browsing can leave a runtime behind forever,
+   while creating every opened session as a permanent runtime is wasteful.
+
+This is primarily an ownership and protocol problem. The solution is not a
+new persistent Project database. Projects are static daemon configuration;
+sessions remain pi files; instances are runtime activations.
+
+## Domain model
 
 ```
-Daemon                       process; owns static config + live registry
- │
- ├── Project "foo"           one --allow entry; owns exactly one archive namespace
- │    │                      identity: projectId (derived)  lifetime: daemon
- │    ├── Session S1         durable record: one jsonl file in the archive
- │    ├── Session S2         identity: sessionId (UUID)      lifetime: forever
- │    │                      address:  file stem (<timestamp>_<sessionId>)
- │    │
- │    └── Instance I1        transient activation of one session at a time
- │         │                 identity: instanceId (ephemeral) lifetime: process
- │         ├── Connection C1 client transport, attached
+Daemon
+ ├── Project "foo"       static allowlisted configuration
+ │    ├── Session S1      durable pi JSONL file
+ │    ├── Session S2
+ │    └── Instance I1     ephemeral activation of one session
+ │         ├── Connection C1
  │         └── Connection C2
- │
  └── Project "bar"
-      └── Instance I2 ...
+      └── Instance I2
 ```
 
 | Term | Definition | Identity | Lifetime |
 |---|---|---|---|
-| **Daemon** | The process. Owns the project configuration and the live registry. | — | process |
-| **Project** | One `--allow` directory plus the session archive it owns. The unit of configuration and of history browsing. | `projectId` — derived, stable | daemon (config) |
-| **Session** | One pi session file: a durable record in a project's archive, existing for the project's entire lifetime. | `sessionId` — UUID, immutable, in filename + header. Addressed by its **file stem**. | forever |
-| **Instance** | A spawned pi runtime + canonical Document that activates one session at a time. An implementation mechanism, not an addressable entity. | `instanceId` — daemon-local UUID | process |
-| **Connection** | One client transport. Attaches to at most one instance. | — | socket |
-| **Session name** | Mutable display metadata (`status.name`, `renameSession`). Never an identity, never part of a path. | — | session |
+| **Daemon** | Process that owns project configuration and live activations. | — | process |
+| **Project** | One allowlisted cwd and its pi session namespace. | `projectId` | daemon configuration |
+| **Session** | One pi session file, addressed by its filename stem. | `sessionId` + `stem` | while file exists |
+| **Instance** | A pi runtime and canonical Document activating one session. | `instanceId` | process, subject to GC |
+| **Connection** | One client transport attached to at most one instance. | transport-local | socket |
 
-There is deliberately no separate term for "a session while live": the live view
-is an activated session, and the exclusivity rule is stated on the session.
-Naming it (early drafts used `Conversation`) would add a word without adding an
-identity, and would re-create exactly the ambiguity this ADR removes.
+A Project is not an archival object. If a cwd is removed from `--allow`, its
+sessions are simply not served by that daemon. There is no orphan-project UI,
+project migration, or persisted project registry in v1.
 
 ### Cardinality
 
 | Relation | Cardinality | Notes |
 |---|---|---|
-| daemon → project | 1 : N | Static config. N ≥ 1 (a daemon with no project serves nothing). |
-| project → session | 1 : N | Sessions never migrate between projects. |
-| session → live instance (activation) | ≤ 1 | **The exclusivity invariant.** |
-| instance → session (at a time) | 1 : 1 | Repointable: `switchSession` moves the activation. Not a permanent binding. |
-| instance → connection (attachment) | 1 : N | Fan-out to many viewers. |
-| connection → instance | ≤ 1 | Existing `attach`/`detach` contract. |
+| daemon → project | 1 : N | Static configuration. |
+| project → session | 1 : N | Determined by pi's session storage for the project cwd. |
+| session → live instance | ≤ 1 | Enforced by the daemon's activation map. |
+| instance → session | 1 : 1 at a time | A pending instance may be reused for another session. |
+| instance → connection | 1 : N | Multiple viewers can share an activation. |
+| connection → instance | ≤ 1 | Attachment is transport state. |
 
-### Identity rules
+## Identity and storage
 
-- **`projectId` is derived, validated, and unique.** Last path segment of the
-  allowlisted directory (`/path/to/foo` → `foo`), normalized and checked
-  against a reserved charset. The daemon **rejects startup** on any duplicate
-  id, invalid segment, or archive-key collision (see Decision 10) — a
-  URL-addressable id must be unambiguous, and silent suffixing (`foo-2`) would
-  encode registration order into a shared link.
-- **`sessionId` is the durable session identity.** It is a UUID, it is in the
-  filename, and it survives renames (`renameSession` touches header metadata
-  only). It is the key for cursors and cache (ADR 09) and for deduplicating
-  live activations.
-- **The session *address* is the jsonl file stem** — the filename without
-  `.jsonl` (`<fileTimestamp>_<sessionId>`). pi names the file by timestamp plus
-  id, so the id alone does **not** locate a file: mapping `sessionId → path`
-  requires scanning the archive, while mapping `stem → path` is a direct
-  `join(archiveDir, stem + ".jsonl")`. The stem is unique within a project's
-  archive by construction, is URL-safe (its charset is exactly what pi's
-  session-id validation permits), and is stable across renames. Addresses use
-  the stem; durable records and caches use the id. Where both are needed the
-  stem's suffix *is* the id.
-- **`instanceId` is never durable, never user-facing, and never in a URL.**
-  It remains the in-memory registry key.
+### Project identity
 
-## Decisions
+The default `projectId` is the last segment of the normalized allowlisted cwd.
+An explicit `id=path` allow entry is available when a deliberate alias is
+needed. IDs are lowercase URL-safe slugs. Duplicate IDs are rejected at
+startup.
 
-1. **Project becomes a first-class domain concept**, derived from `--allow`.
-   It is what owns an archive, what `getDaemonInfo` reports, and what the
-   client navigates by. `cwdAllowlist: string[]` is replaced by
-   `projects: { id, cwd }[]` in the daemon's public surface.
+Project IDs are stable across daemon restarts when the same configuration is
+provided. They are not promised to survive arbitrary directory renames. A
+future persisted project configuration can provide that guarantee if needed.
 
-2. **`projectId` = last path segment**, validated, unique across the daemon.
-   Startup fails on duplicates or invalid segments (`.`/`..`/empty, characters
-   that cannot appear in a URL path unescaped). An explicit `--allow
-   id=path` form is the escape hatch for deliberately aliased or colliding
-   basenames; it is sugar over the same field, not a second mechanism.
+The daemon owns the mapping:
 
-3. **The project owns the session archive, but pi keeps the archive key.**
-   Two namespaces exist and must be mapped, not merged: bridge's `projectId`
-   (short, URL-facing, bridge-owned) and pi's encoded-cwd archive directory
-   (`~/.pi/agent/sessions/--<cwd-slugged>--`, path-derived, pi-owned). The
-   daemon holds the single mapping `projectId → cwd → archive dir`. Bridge
-   MUST NOT re-derive archive paths from `projectId`.
-
-4. **A session is addressed by its archive file stem; `sessionId` remains the
-   durable id; the display name never addresses anything.** Addresses,
-   cursors (ADR 09), and cache keys split accordingly: the URL and the
-   resolve path use the stem (direct file mapping), durable records and
-   dedup use the id. Any user-visible label (`status.name`, first-message
-   text) is presentation only.
-
-5. **Instance is an activation, not an entity of interest.** It exists to make
-   one session chat-able. It is not addressable by clients, not reported as a
-   durable identity, and not a term in the URL space. `listInstances` remains
-   as a liveness view (its payload gains `projectId`), but nothing attaches
-   *by* instance except the Connection contract.
-
-6. **Exclusivity is enforced at resolution, not by filtering.** "At most one
-   live instance per session" becomes a guard on the activation path, in the
-   only component that can see the whole registry: the daemon. `listSessions`
-   hiding live ids is retained as defense-in-depth for the picker, not as the
-   mechanism.
-
-7. **Addressability is `(projectId, sessionStem)`.** A single daemon verb
-   resolves it:
-
-   ```
-   openSession(projectId, stem, cursor?) → { instanceId, created: boolean } | { error }
-     live instance holds that session             → reuse it (attach there)
-     join(archiveDir, stem + ".jsonl") exists      → create an instance, activate
-     otherwise                                    → not found (no cross-project revive)
-   ```
-
-   Resolution is scoped by project, and the dormant branch is a direct path
-   join — no directory scan, no header parse. The live branch matches the
-   instance whose current session file stem (or, before its first flush, whose
-   `liveSessionId` — the stem's suffix) equals the request. A stem that exists
-   under a different project is *not found* here, never revived.
-
-8. **Client attach becomes resolve-and-attach.** The client's current
-   `newInstance → listSessions → switchSession` sequence (in
-   `useConnection.initDaemonInfo` and `useRpc`) moves server-side into
-   `openSession`. Instance creation stops being a client concern; the client
-   names a session and the daemon decides what must exist.
-
-9. **Wire surface changes** (ADR 06 §"Verb contracts" amended):
-
-   | Change | Shape |
-   |---|---|
-   | `getDaemonInfo` | `projects: { id, cwd }[]` (replaces `cwdAllowlist`) |
-   | `InstanceInfo` | `+ projectId` (instanceId retained for the attach contract) |
-   | `SessionInfo` | `+ projectId`, `+ stem` (the address; derivable from `sessionPath` but kept explicit so the client never parses paths) |
-   | new verb | `openSession(projectId, stem, cursor?) → { instanceId, created }` |
-   | `newInstance` | re-scoped to `(projectId)` or subsumed by `openSession` with a null stem (fresh session) |
-   | `switchSession` | gains the exclusivity guard (consult registry before repointing a live Manager) |
-   | `listSessions` | scoped by `projectId` instead of an ambient attached cwd |
-
-10. **Archive-key collisions are rejected, not tolerated.**
-    `getDefaultSessionDir`'s encoding is lossy: `/a/b-c` and `/a/b/c` both slug
-    to `--a-b-c--`, so two allowlisted projects would share one archive and a
-    session would descend from two projects — breaking the model's own axiom
-    (§Cardinality) and corrupting exclusivity. The daemon computes archive keys
-    at startup and rejects collisions. (Fixing the upstream encoding is an
-    orthogonal pi concern; bridge must not depend on it.)
-
-## Addressability falls out
-
-Given Decisions 1–7, the URL is a pure function of `(projectId, sessionStem)`
-— there is nothing new to invent. The scheme is short and flat, and reuses the
-name the client already has for the unattached view:
-
-```
-/launcher                    → project list (the Launcher; today's attachedInstanceId === null view)
-/chat/<project>              → one project's session list (optional; the sidebar already browses this)
-/chat/<project>/<stem>       → the session (resolve → attach or activate)
+```text
+projectId → normalized cwd
 ```
 
-| Store/URL fact | Value |
-|---|---|
-| Opens the same session for a colleague | Yes — a durable file stem, not the process-local instance |
-| Survives daemon restart | Yes — resolution falls to the dormant branch |
-| Survives rename | Yes — names are not addresses (Decision 4) |
-| Resolvable without a scan | Yes — the stem *is* the archive filename, so dormant resolution is one `join` + `existsSync` |
-| Backed by | `openSession` (Decision 7); no per-link server state |
+Clients never derive a cwd or a pi session directory from a project ID.
 
-Because the paths are real paths (not `#` fragments), the daemon's HTTP server
-needs an SPA fallback: today unknown paths `404` in both embedded and
-`--web-root` modes, so `/launcher` and `/chat/*` MUST serve `index.html`.
-Unknown-asset-vs-unknown-route is the usual extension heuristic. There is no
-server-side content for these routes; the fallback is the whole mechanism.
+### Pi session storage
 
-Write side: the URL is written on attach (when the session file stem is known)
-and on project navigation; `/launcher` replaces today's `launcherPinned` flag
-as the unattached state; `instance_exit` and explicit detach rewrite it. Boot
-reads it; in-app navigation writes it. Three properties keep it a side effect
-rather than a second source of truth:
+Pi's cwd-derived session directory remains the storage implementation. The
+bridge may resolve it internally for direct stem lookup, but it is not part of
+the Project domain object or public wire model. Use `sessionDir` or
+`sessionStorage`, not "archive".
 
-- **It is derived state, never consulted during a running session.** The store
-  remains authoritative; the URL mirrors it. A mismatch cannot exist because
-  nothing reads the URL after boot. (`popstate`/live handling is a later
-  option, not part of this decision.)
-- **`replaceState`-only in v1**, so the URL is a live permalink and does not
-  introduce a second navigation model competing with the sidebar/history pane.
-  Back-button navigation is a separate decision.
-- **A brand-new session has no address yet.** `sessionId` exists at
-  construction, but the stem requires a filename, which requires the first
-  flush (ADR 09's live stub has `sessionPath: null`). Until then the URL stays
-  at `/chat/<project>`; this makes the address *durable by construction* —
-  anything addressable can be reopened — at the cost of an unaddressable first
-  turn.
+At startup, the daemon should reject two Projects that resolve to the same pi
+session storage namespace. This is a storage collision check, not a project
+archival feature. Without it, the same JSONL file could be addressed through
+two project IDs and activation exclusivity would become ambiguous.
 
-The one behavior this changes: a URL is honored over the reconnect auto-attach
-heuristics (`launcherPinned`, T1 sole-instance resume). Explicit intent beats a
-convenience default.
+### Session address
 
-## Consequences for the client: the sidebar becomes a project browser
+A durable session is addressed by:
 
-The URL is not the only thing the corrected model restructures. Today's
-sidebar is `attachedInstanceId`-shaped in a way the model no longer justifies:
-
-| Today | Why it no longer fits |
-|---|---|
-| Section **Instances** (live) | An instance is now an internal mechanism. Listing instances asks the user to choose a process, not a session. |
-| Section **Sessions** (dormant) | Scoped to the attached instance's cwd (`listSessions` needs `attachedManager?.cwd`), so it shows one project and only while something is live in it. |
-| Sessions disabled with no instance | Dormant projects are unreachable — the exact defect §Context 2 names. |
-| Flat lists, no hierarchy | Projects are the ownership boundary of both config and history; the sidebar renders neither. |
-
-The restructure: **projects are folders, sessions are their items.**
-
-```
-▾ foo                               ● 2 live
-    ▸ 2026-07-21T10-00-00-000Z_3f2a…  ● streaming
-    ▸ 2026-07-20T18-04-11-000Z_91cd…
-▾ bar
-    ▸ 2026-07-19T09-12-00-000Z_77ab…  ● idle
+```ts
+interface SessionAddress {
+  projectId: string;
+  stem: string;
+}
 ```
 
-Consequences:
+The stem is the filename without `.jsonl`. It is a filename address, not an
+encoded session ID. `sessionId` is read from the pi session header and remains
+the cache and activation identity.
 
-- Liveness becomes a per-session attribute (a dot/streaming badge), not a
-  grouping. The Instances section disappears as a user-facing concept; which
-  processes exist is an implementation detail, surfaced at most as a count.
-- Every project is browsable with zero live instances — the archive is the
-  primary object (sessions fetched by `projectId`, not by an attached cwd).
-- Selecting an item is exactly `openSession` — the same operation the URL
-  resolves to, so the sidebar and a shared link are the same code path.
-- The Launcher (`/launcher`) shows the same project/session tree at full width
-  plus the connection down-state panels; it is no longer an *instance* picker.
-- The header's "back to instance list" button added for detach now targets
-  `/launcher` — the same state the URL names.
-- The store keeps `attachedInstanceId` as the transport binding, but gains
-  project/session navigation state (`expandedProjects`, selected project) and
-  loses `instances` as a first-class list rendered in the rail.
+The server resolves a stem only within the selected Project's session storage:
 
-This is a larger UI PR than the protocol work and must amend `docs/04-prd-web-ui.md`
-(whose "Instances + Sessions" sidebar is now wrong). It is recorded here
-because it follows from the model, not because it can ride along with
-`openSession`.
+```text
+(projectId, stem)
+  → project cwd
+  → pi session directory
+  → sanitized `${stem}.jsonl`
+```
 
-## Exclusivity: the guard and its placement
+The resolver must:
 
-The guard must sit where the registry is visible, and only there:
+1. decode the URL segment once;
+2. reject empty names, path separators, NUL, `.` and `..`;
+3. allow only the bridge's URL-safe filename charset;
+4. resolve the candidate below the Project's session directory; and
+5. canonicalize an existing file and reject symlink targets outside that
+   directory.
 
-- **Placement.** In the daemon, on the activation path (`openSession` and
-  `switchSession`). `Connection` cannot see other Connections' Managers; a
-  `Manager` cannot see the registry at all. Any guard in either is a racy
-  approximation.
-- **Conflict resolution is reattach, not rejection.** If the target session is
-  already activated, the daemon attaches the caller to the *existing* instance.
-  A second browser tab or a shared link therefore joins the session instead of
-  forking a second writer onto one jsonl. Rejection (`409`) is reserved for the
-  case where a caller explicitly asks to *become* the writer, which no current
-  verb does.
-- **Races.** Two `openSession` calls for the same dormant stem can both pass a
-  "no live instance" check before either mints one. The daemon serializes
-  activation per session (the registry map is in-process and the
-  check-then-create is synchronous up to the factory call), so the second
-  caller observes the first's instance. No cross-process hazard exists while
-  one daemon owns an archive.
-- **Defense-in-depth.** `listSessions` keeps hiding live ids so a client
-  cannot even offer a live session as a picker target.
+Path containment and filename sanitization are the security boundary. The
+bridge does not require the stem suffix to match the header session ID. Pi's
+header is authoritative for `sessionId`, and pi remains responsible for
+validating the session file.
 
-## Alternatives considered
+### Provisional stems
 
-- **URL carries `instanceId`.** Simplest to wire (the registry key already
-  exists) and rejected: the id dies with the daemon, so links rot on restart;
-  it names the mechanism instead of the thing the user means; and sharing a
-  link would target a specific process rather than a session.
-- **Address sessions by `sessionId` (UUID) rather than the file stem.**
-  Rejected: pi names files `<fileTimestamp>_<sessionId>.jsonl`, so the id is
-  not the filename — mapping id → file needs a scan (or a glob) of the
-  archive, while the stem is a direct `join`. The stem also carries the
-  creation timestamp, which makes a shared link self-describing. The id keeps
-  its job as the durable identity for cursors, caches, and dedup; the two are
-  connected by the filename (the stem's suffix *is* the id).
-- **URL carries `sessionId` only, no project segment.** Session ids are
-  globally unique, so lookup is possible without the project. Rejected as the
-  *canonical* form because it forces a cross-project scan (or a global index)
-  to resolve, and because it makes cross-project mistakes invisible: a link
-  carrying the wrong project should fail loudly, not silently revive from
-  wherever the id happens to live. Project scoping is cheap because the
-  mapping (Decision 3) is direct.- **Project as a client-side slug of cwd.** Keeps the daemon unchanged.
-  Rejected: the uniqueness rule, the collision check, and the id→cwd mapping
-  are all daemon-owned facts. A client re-deriving them would duplicate the
-  policy and could not enforce uniqueness at startup.
-- **URL carries the encoded cwd path.** Human-readable and no new concept.
-  Rejected: it is pi's lossy archive encoding (Decision 10), it exposes
-  filesystem layout to links, it makes the URL long, and it hardcodes a
-  storage detail into the address space.
-- **Explicit `--allow id=path` only, no derivation.** Maximal clarity, no
-  collisions by construction. Rejected as the default because the common case
-  (`--allow ~/src/foo` → `foo`) needs no ceremony; retained as the escape
-  hatch (Decision 2).
-- **Permanent instance↔session binding.** Makes exclusivity structural
-  (an instance *is* an activation for life) but forces a process spawn per
-  session switch; repointing is cheaper and the guard (Decision 6) gives
-  the same guarantee. This is exactly the ambiguity in "an instance activates
-  one session" that the model must state as *at a time*.
-- **Keep `cwd` as the term, add no Project.** Least churn. Rejected: the
-  invisible-dormant-project problem (§Context 2) is not a missing feature but
-  a missing concept, and a path cannot be the address once the URL must be
-  stable across cwd moves, short in a link, and unique per daemon.
+`SessionManager` allocates the intended filename before the first durable
+flush. An activation may therefore expose:
 
-## Invariants
+```ts
+interface ActivationSession {
+  projectId: string;
+  sessionId: string;
+  stem: string | null;
+  durable: boolean;
+}
+```
 
-Planned additions to `architecture.md` §7 (numbers provisional until
-acceptance):
+For a persistent pi session, `stem` is normally known even when `durable` is
+false. The provisional stem is resolvable only through a live activation in
+the same daemon. It is not a durable permalink and is not accepted through a
+cold-start file lookup until the file exists.
 
-19. **A project owns exactly one archive; a session descends from exactly one
-    project.** Archive-key collisions are a startup error (Decision 10).
-20. **`projectId` is unique per daemon, derived, and stable for the daemon's
-    life.** Duplicates and invalid segments are startup errors.
-21. **`sessionId` is the only durable session identity; the archive file stem
-    is the only session address.** Display names are metadata and never
-    address anything. The stem's suffix is the id.
-22. **At most one live instance per session; activation is exclusive and
-    guarded at the daemon.** Reattachment, not duplication, is the conflict
-    resolution.
-23. **`instanceId` is ephemeral and internal.** It never appears in an
-    address, a cache key, or a durable record.
-24. **The URL is derived state.** Written from the store, read only at boot;
-    no behavior depends on it during a session.
+The client keeps the URL at `/chat/<projectId>` while the session is
+non-durable. After the first flush, the normal session/instance metadata
+refresh exposes the durable stem and the client may write
+`/chat/<projectId>/<stem>`.
 
-## Open questions
+## Activation lifecycle
 
-- **Orphan sessions.** An archive can outlive its project (cwd removed from
-  `--allow`, or the directory deleted). Options: hide orphans, surface them in
-  the landing page as unmanaged, or offer re-registration. The model says they
-  descend from no project; the UX is undecided.
-- **Transient first-turn URL.** A session with no file yet (pre-flush) has no
-  stem, so the URL stays at `/chat/<project>` until the first persist. Whether
-  that intermediate URL is a supported route or an internal state is undecided.
-- **Stem stability under file rename.** The address is the filename, so it is
-  only stable while pi never renames an existing session file. pi mints a new
-  file (and id) for a new session, so this holds today; if a fork/rollover
-  ever renames in place, URLs rot and the id suffix becomes the fallback
-  resolver. Worth confirming with pi before depending on it.
-- **Project page scope.** Full archive with paging, or a recent-N window? The
-  archive can be large; this interacts with ADR 09's cache keyed by session.
-- **Runtime project management.** Adding a project after startup (CLI verb,
-  RPC) would make the registry mutable and `projectId` uniqueness a runtime
-  check. Out of scope for v1 (config is static), but the id rules should not
-  preclude it.
-- **Multiple daemons over one archive.** Two daemons with different
-  `projectId`s pointing at one cwd would each enforce exclusivity over their
-  own registry and write one jsonl from two processes. Today's posture assumes
-  a single daemon; if that assumption weakens, exclusivity needs a file-level
-  lock, not a registry check.
+Instances have an internal lifecycle:
 
-## Test plan
+```ts
+type InstanceLifecycle = "pending" | "permanent";
+```
 
-- **Daemon unit** — `projectId` derivation (last segment, normalization, case);
-  startup rejection for duplicates, invalid segments, and archive-key
-  collisions (`/a/b-c` vs `/a/b/c`).
-- **`openSession` matrix** — live stem (reattach, `created: false`); dormant
-  stem (create + activate, `created: true`); unknown stem (not found); stem
-  from another project (not found — no cross-project revive); stem whose
-  suffix matches a live but unflushed instance (live branch).
-- **Stem → file mapping** — a dormant resolve touches exactly one path
-  (`join(archive, stem + ".jsonl")`), with no `readdir`/scan.
-- **Exclusivity** — two Connections opening the same session land on one
-  instance; a direct `switchSession` to a live session in another instance is
-  reattached/refused rather than double-bound.
-- **Daemon HTTP** — `/launcher` and `/chat/*` serve `index.html` (SPA
-  fallback) while unknown assets still `404`.
-- **Pure URL module** — parse/serialize for `/launcher`, `/chat/<project>`,
-  `/chat/<project>/<stem>`; unknown or malformed segments, project/stem
-  mismatch.
-- **Store** — landing vs project vs session state transitions; `/launcher`
-  replaces the pin semantics (URL wins over auto-attach on boot).
-- **Integration** — cold open of a session URL against a fixture-resumed
-  daemon (dormant branch), and against a live one (reattach branch), driven
-  through the full Manager + faux-provider stack.
+### Pending instances
+
+A pending instance is a runtime opened for browsing or a new session that has
+not started an agent turn in this activation. It may have attached idle
+Connections. It is GC-eligible only after all Connections detach.
+
+A pending instance is promoted when the Manager first transitions into active
+streaming (`/status/isStreaming: false → true`). Promotion is permanent for
+the activation lifetime. Manual `killInstance` remains available in either
+state.
+
+### Garbage collection
+
+When the last Connection detaches from a pending instance, the daemon starts a
+delayed GC timer. The timer is cancelled when the instance is reattached or
+starts streaming.
+
+GC is allowed only when:
+
+```text
+lifecycle == "pending"
+connectionCount == 0
+isStreaming == false
+```
+
+GC calls the normal Manager disposal path. It never deletes session files. A
+new unflushed session may lose its empty in-memory activation, but no durable
+session data is removed.
+
+Permanent instances are not automatically collected. This avoids killing
+background work merely because the UI temporarily disconnected. The user can
+kill pending or permanent instances explicitly.
+
+### Reuse
+
+`openSession(projectId, stem)` resolves activations in this order:
+
+1. If the target session already has a live activation, attach the Connection
+   to that activation.
+2. Otherwise, if the requesting Connection is the only Connection on a
+   pending same-project instance, detach it and reuse that instance.
+3. Otherwise, reuse an unattached pending same-project instance.
+4. Otherwise, create a new Manager for the target session.
+
+The daemon must not rebind an instance with unrelated attached Connections.
+Those Connections must continue observing their current session.
+
+Cross-project pending-instance reuse is deferred. A Manager captures
+project-local settings and extension state; reusing it across Projects requires
+explicit cwd, trust, settings, and extension rebinding.
+
+### Activation bookkeeping
+
+The daemon maintains both the instance registry and a reverse session index:
+
+```ts
+instances: Map<string, Manager>;
+activationBySession: Map<string, string>; // projectId + sessionId → instanceId
+pendingActivations: Map<string, Promise<Activation>>;
+```
+
+`pendingActivations` serializes concurrent opens for the same session. Manager
+creation is asynchronous, so a check-then-create sequence without this lock
+can create duplicate activations.
+
+The reverse index is updated atomically when an activation is created, reused,
+rebound, or disposed.
+
+## Protocol v2
+
+The protocol is upgraded to model Project, Session, and Instance activation
+explicitly. This is a typed domain protocol, not the generic object-kernel
+protocol proposed by ADR 08. The existing WebSocket transport, Document
+patches, lazy pulls, and cursor semantics remain.
+
+The v2 protocol is a coordinated bridge/client change. It does not preserve
+path-based session navigation as a second protocol.
+
+### Daemon and navigation operations
+
+```ts
+getDaemonInfo()
+  → { projects, models, thinkingLevels, devMode }
+
+listSessions({ projectId, max?, ts? })
+  → { sessions, hasMore }
+
+openSession({ projectId, stem, cursor? })
+  → { ok, activation }
+
+newSession({ projectId })
+  → { ok, activation }
+
+detach()
+  → { ok }
+
+listInstances()
+  → { ok, instances }
+
+killInstance({ instanceId })
+  → { ok }
+```
+
+`openSession` accepts a durable stem or exactly matches a provisional stem on
+a live activation. It never accepts an arbitrary filesystem path.
+
+`newSession` creates or reuses a pending activation for the Project and returns
+its provisional session metadata. Its stem becomes a durable address only after
+pi flushes the file.
+
+`detach` removes the Connection's attachment but leaves the activation alive
+for reuse or GC. `killInstance` explicitly destroys an activation regardless
+of lifecycle.
+
+The following old operations are removed from the v2 client surface:
+
+```text
+switchSession(sessionPath)
+switchInstance(instanceId)
+newInstance(cwd)
+```
+
+Manager-level `switchSession(path)` and `newSession()` may remain as internal
+runtime operations. They are not the domain navigation protocol.
+
+### Attached session operations
+
+These operations target the session attached to the requesting Connection:
+
+```text
+prompt
+executeBash
+abort
+discardSteer
+setModel
+setThinkingLevel
+renameSession
+navigate
+pull
+```
+
+Replies remain acknowledgements/failure channels. Document state continues to
+arrive through push messages.
+
+### Initial sync metadata
+
+The existing `replace` and cursor-aware initial-sync patch carry attachment
+metadata in addition to the Document:
+
+```ts
+interface ActivationInfo {
+  instanceId: string;
+  projectId: string;
+  sessionId: string;
+  stem: string | null;
+  durable: boolean;
+  lifecycle: "pending" | "permanent";
+  connectionCount: number;
+  isStreaming: boolean;
+}
+```
+
+The initial-sync frame includes the relevant `ActivationInfo` and the
+Document. This makes the current attachment explicit without requiring a
+separate `session_address` push.
+
+A reconnect is resolved by `openSession(projectId, stem, cursor?)`, not by
+reviving an `instanceId`. If a live activation still exists, the daemon
+reattaches to it. If not, it reactivates the durable session.
+
+### Registry and session updates
+
+The daemon publishes an `instances_changed` push when an activation is created,
+promoted, rebound, detached, GC'd, or killed. The payload is a current
+`ActivationInfo[]` snapshot. This replaces launcher polling as the normal
+update path; polling remains an acceptable repair mechanism after reconnect.
+
+`instance_exit` remains the terminal push to Connections attached to a killed
+activation.
+
+`SessionsChangedMessage` is project-scoped:
+
+```ts
+{
+  kind: "sessions_changed";
+  projectId: string;
+  sessions: SessionInfo[];
+  hasMore: boolean;
+}
+```
+
+The list may include a non-durable live stub for the current activation. Such a
+stub is not a cold-start navigation target.
+
+### Session metadata
+
+```ts
+interface SessionInfo {
+  projectId: string;
+  sessionId: string;
+  stem: string;
+  durable: boolean;
+  name?: string;
+  timestamp: string;
+  firstMessageText?: string;
+  messageCount?: number;
+}
+```
+
+`sessionPath` is not public wire data. The client never parses or sends
+filesystem paths.
+
+## Client state and URLs
+
+The client store keeps:
+
+- the attached Document;
+- the current `ActivationInfo`, including `instanceId` for management;
+- the durable or provisional `SessionAddress` when available;
+- Projects and project-scoped session lists.
+
+The URL is a projection of the current session address:
+
+```text
+/launcher
+/chat/<projectId>
+/chat/<projectId>/<stem>
+```
+
+The URL is read at boot to select an initial session and is written with
+`replaceState`. It is not consulted as a second live navigation state machine.
+
+A durable session URL survives daemon restart while the file and Project
+configuration still exist. A provisional session has no durable URL until its
+first flush.
+
+The HTTP server serves `index.html` for the known application routes. Static
+assets are served by exact path; unknown assets remain 404. Route segments are
+decoded and validated before use.
+
+## Exclusivity and races
+
+The daemon enforces:
+
+```text
+at most one live activation for (projectId, sessionId)
+```
+
+Two concurrent `openSession` calls for a dormant session share one
+`pendingActivations` promise and attach to the resulting activation. A second
+open of an already-live session attaches to the existing activation rather than
+creating another Manager.
+
+The daemon does not use filename suffixes, client-provided instance IDs, or
+list filtering as the exclusivity mechanism.
+
+## Testing plan
+
+### Project and storage
+
+- derive and validate default project IDs;
+- parse explicit `id=path` entries;
+- reject duplicate project IDs;
+- detect session-storage collisions;
+- resolve stems only inside the selected session directory;
+- reject separators, dot segments, NUL, and escaping symlinks;
+- open legacy or renamed files using the header session ID without deriving it
+  from the stem.
+
+### Session resolution
+
+- open a durable `(projectId, stem)` session;
+- reject an unknown stem;
+- reject a stem from another Project;
+- match an exact provisional stem on a live unflushed activation;
+- do not resolve a provisional stem after daemon restart when no file exists;
+- keep `sessionId` and stem independent in metadata and cache keys.
+
+### Activation lifecycle
+
+- two concurrent opens produce one activation;
+- opening a live session reattaches rather than duplicates;
+- a pending instance with no Connections is reused;
+- a pending instance with another attached Connection is not rebound;
+- first streaming transition promotes an instance permanently;
+- detached pending instances are GC'd after the delay;
+- attached pending instances are not GC'd;
+- permanent detached instances are not automatically GC'd;
+- manual kill works for both lifecycle states;
+- GC never deletes a session file.
+
+### Protocol and client
+
+- initial sync includes activation metadata and session ID;
+- `openSession` uses the cursor and initial-sync ordering rules from ADR 09;
+- reconnect resolves by project/stem rather than instance ID;
+- `instances_changed` reports creation, promotion, rebind, GC, and kill;
+- `sessions_changed` includes its project ID;
+- no public RPC accepts a session filesystem path;
+- switching from one session to another does not rebind a Manager with unrelated
+  attached Connections;
+- provisional session metadata becomes durable after first flush.
+
+## Consequences
+
+### Positive
+
+- Session navigation names the durable object the user means.
+- Instance IDs are no longer used as links or reconnect identities.
+- Opening and browsing many sessions does not permanently create runtimes.
+- Exclusivity is explicit and race-safe.
+- GC is a runtime policy, not a second session model.
+- The client can display activation lifecycle and allow manual killing.
+- Existing Document synchronization and ADR 09 cache semantics remain useful.
+
+### Costs
+
+- The web and server must move together to protocol v2.
+- The daemon gains activation indexing, lifecycle transitions, and delayed GC.
+- `InstanceInfo` and initial-sync frames carry more metadata.
+- Projects with the same pi storage namespace must be rejected or treated as
+  aliases; v1 chooses rejection.
+- A provisional session cannot be reopened after daemon restart until it has
+  flushed a file.
+
+## Open questions deferred from v1
+
+- The exact GC delay and whether it becomes configurable.
+- Whether `newSession` should always reuse a pending same-project activation or
+  always create one.
+- Whether browser Back/Forward should drive session navigation; v1 uses
+  `replaceState` only.
+- Cross-process daemons serving the same pi session directory. The in-process
+  activation map does not provide cross-process locking.
 
 ## Relationship to other ADRs
 
-- **ADR 02 (data model)** — unchanged. A session remains an append-only
-  ordered log; this ADR only says who owns it.
-- **ADR 06 (component model)** — amended. Routing verbs become project-scoped;
-  `InstanceInfo` gains `projectId`; the Daemon gains `openSession` and the
-  exclusivity guard. The Instance and Connection contracts are otherwise
-  untouched.
-- **ADR 07 (client architecture)** — the store's `attachedInstanceId` stays as
-  the transport binding, but the *user-facing* unit becomes the session; the
-  URL is a derived projection of that store, not a new source of truth. The
-  sidebar restructure (§Consequences) supersedes ADR 07's two-section rail.
-- **ADR 08 (object kernel, Proposed)** — Projects and Sessions are natural
-  objects in that model (Project = directory + registry, Session = Log facet).
-  This ADR does not depend on it; if ADR 08 lands, `openSession` becomes a
-  directory-level resolution.
-- **ADR 09 (incremental sync)** — unaffected. Cursors are keyed by
-  `sessionId`; the project segment only scopes lookup, and the cache key is
-  unchanged.
-- **ADR 10 (git stamps)** — unaffected.
-- **PRD 04 (web UI)** — amended. Its "Instances + Sessions" sidebar and
-  instance-centric Launcher are replaced by the project browser
-  (§Consequences); the URL space is added.
+- **ADR 02:** unchanged Document and entry model. Session ownership changes
+  only at the host/routing layer.
+- **ADR 06:** superseded where it defines instance-centric routing verbs. The
+  Manager and Connection implementation seams remain useful, but public
+  navigation becomes Project/Session based.
+- **ADR 07:** the client store tracks the attached activation and session
+  address; the sidebar becomes a Project/Session browser.
+- **ADR 08:** not adopted by this ADR. A future object-kernel implementation
+  can host the same Project, Session, and Instance objects.
+- **ADR 09:** unchanged cache identity and prefix cursor rules. Cursors remain
+  keyed by `sessionId`; the Project/stem address only resolves the session.
+- **ADR 10:** unchanged. Git stamps remain entries in the active session.
+- **PRD 04:** its instance/session sidebar is replaced by a Project/Session
+  browser with activation lifecycle indicators.
