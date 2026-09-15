@@ -15,6 +15,7 @@ import {
 	makeActionSummary,
 	newestLeafInSubtree,
 	parseProviderError,
+	scanShellPieces,
 	segmentBlocks,
 } from "../../src/viewmodel/index.ts";
 
@@ -1896,9 +1897,11 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		]);
 	});
 
-	it("non-command first tokens stay plain", () => {
-		// assignment prefix and paths — only a plain-word first token chips
-		expect(beautifyShellCommand("FOO=1 npm test", CWD)).toEqual([{ kind: "text", text: "FOO=1 npm test" }]);
+	it("env assignments keep the command expectation alive", () => {
+		expect(beautifyShellCommand("FOO=1 npm test", CWD)).toEqual([
+			{ kind: "text", text: "FOO=1 " },
+			{ kind: "cmd", text: "npm test" },
+		]);
 		expect(beautifyShellCommand("./scripts/x.sh run", CWD)).toEqual([{ kind: "text", text: "./scripts/x.sh run" }]);
 	});
 
@@ -2048,5 +2051,66 @@ describe("git identity fold", () => {
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(vm.turns).toHaveLength(2); // u2 is off-path
+	});
+});
+
+describe("beautifyShellCommand — quote awareness (piece scanner front-end)", () => {
+	const CWD = "/home/x/inst";
+
+	it("quoted separators are not command separators", () => {
+		// Regression: the regex front-end split rg "foo|bar" into three
+		// phantom segments and could chip quoted words.
+		expect(beautifyShellCommand('rg "foo|bar" file', CWD)).toEqual([{ kind: "text", text: 'rg "foo|bar" file' }]);
+		expect(beautifyShellCommand('echo "a|b" && npm test', CWD)).toEqual([
+			{ kind: "text", text: 'echo "a|b" && ' },
+			{ kind: "cmd", text: "npm test" },
+		]);
+		expect(beautifyShellCommand('node "a|git commit"', CWD)).toEqual([
+			{ kind: "cmd", text: "node" },
+			{ kind: "text", text: ' "a|git commit"' },
+		]);
+		expect(beautifyShellCommand("sed 's/a|b/c/' x", CWD)).toEqual([{ kind: "text", text: "sed 's/a|b/c/' x" }]);
+	});
+
+	it("quoted paths are not folded", () => {
+		expect(beautifyShellCommand('git commit -m "fix /a/b/c/d.ts now"', CWD)).toEqual([
+			{ kind: "cmd", text: "git commit" },
+			{ kind: "text", text: ' -m "fix /a/b/c/d.ts now"' },
+		]);
+	});
+
+	it("scanner round-trips adversarial strings exactly", () => {
+		const cases = [
+			'rg "foo|bar" file',
+			'sed -e "s/a\\/b/" && echo done',
+			"it's 2>&1 | tee 'a;b.log'",
+			"a && b || c ; d|e|f",
+			"\\ escaped\\ space /x/y/z.ts",
+			'unterminated "quote | still one span',
+			"",
+			"   ",
+			"2>&1",
+		];
+		for (const c of cases) {
+			expect(
+				scanShellPieces(c)
+					.map((p) => p.text)
+					.join(""),
+			).toBe(c);
+		}
+	});
+
+	it("scanner classifies pieces", () => {
+		expect(scanShellPieces('FOO=1 npm "a|b" | ls')).toEqual([
+			{ kind: "word", text: "FOO=1" },
+			{ kind: "other", text: " " },
+			{ kind: "word", text: "npm" },
+			{ kind: "other", text: " " },
+			{ kind: "quoted", text: '"a|b"' },
+			{ kind: "other", text: " " },
+			{ kind: "sep", text: "|" },
+			{ kind: "other", text: " " },
+			{ kind: "word", text: "ls" },
+		]);
 	});
 });
