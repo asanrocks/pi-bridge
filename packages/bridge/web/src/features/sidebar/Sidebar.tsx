@@ -256,7 +256,11 @@ export const Sidebar = memo(function Sidebar({
 						{showHeaders && <div className={styles.sidebarGroupHeader}>{group.label}</div>}
 						{group.items.map((s) => {
 							const label = (s.name || s.firstMessageText || s.stem) ?? "";
-							const dotCls = [styles.sidebarLiveDot, s.isStreaming ? styles.sidebarLiveDotStreaming : ""]
+							// Green = active, orange + pulse = streaming, muted = dormant history.
+							const dotCls = [
+								styles.sidebarLiveDot,
+								s.isStreaming ? styles.sidebarLiveDotStreaming : s.active ? "" : styles.sidebarDotIdle,
+							]
 								.filter(Boolean)
 								.join(" ");
 							return (
