@@ -289,21 +289,26 @@ own root-to-leaf path. The effective identity at a display point is the last
 valid stamp at or before that point, carried forward along the path. An empty
 stamp set means unknown, not an error.
 
-A valid stamp is also represented as a `GitChange` item in the existing
-ordered viewmodel sequence. The item carries the stamp entry id, timestamp,
-identity, subject, and anchor. It participates in transcript ordering and
-scrolling, but is not a user or assistant turn: it does not merge assistant
-runs, participate in sibling navigation or editing, or join with assistant
-tool results. User and assistant turn indexes retain their existing editing
-semantics.
+A valid stamp is represented in one of two ways, depending on where it
+falls. A stamp observed while an assistant run is open (the `tool_end` and
+`turn_end` anchors — the run is still accumulating when the walk reaches
+the stamp) **folds into the run**: the run does not split; the stamp becomes
+a `GitChangeMark` on the turn carrying its position (the last block
+accumulated when it was observed). The mark renders as its own card inside
+the owning action group, after the step it follows — for a tool-anchored
+stamp, between the committing tool's band and the following steps — and the
+group's collapsed summary leads with a `git:` segment (e.g. `git:
+ae02c151 · edit: foo.ts · run 1 tool · read 3 files`), and the group's
+family-dot legend gains a leading git swatch. A stamp whose anchor block is
+text attaches to the turn's last group; a text-only run has no group, so
+the mark falls back to a standalone card after the run.
 
-A stamp that falls mid-run splits the run's visual grouping at that point —
-the sequence must show the card between the entries it sits between (for a
-tool-anchored stamp, between the committing tool's call and its result), so
-the run renders as two consecutive assistant groups around the card. This is
-placement, not restructuring: the run's blocks, tool-result joins, and turn
-keys are unchanged, and only the grouping breaks. Stamps at run boundaries
-(next to a user message, compaction, or turn end) leave the run intact.
+A boundary stamp (the `prompt` and `user_bash_end` anchors, or a run-anchor
+stamp with no open run) is a `GitChange` item in the ordered viewmodel
+sequence — a standalone card at its path position. Either way the item is
+not a user or assistant turn: it does not merge assistant runs, participate
+in sibling navigation or editing, or join with assistant tool results, and
+user and assistant turn indexes retain their existing editing semantics.
 
 A stamp with no prior valid identity is rendered as an initial state recording;
 a stamp with a changed identity is rendered as a Git change card. The card
@@ -327,18 +332,26 @@ The viewmodel must process valid Git stamps while walking the active leaf path:
 - update the carried effective identity after each valid stamp;
 - expose that identity on every `UserTurn` so the prompt's repository state is
   easy to scan;
-- emit one ordered `GitChange` item for each valid stamp; the first item is an
-  initial state recording and later changed keys are Git change cards;
+- emit one ordered `GitChange` item for each valid boundary stamp; the
+  first item is an initial state recording and later changed keys are Git
+  change cards;
+- fold each valid mid-run stamp (`tool_end`/`turn_end` with an open run)
+  into the run as a `GitChangeMark` positioned after its last accumulated
+  block;
 - preserve v1 items without inventing a subject or tool relationship;
 - leave unknown custom types and malformed Git stamps invisible;
 - keep observation cards out of LLM context.
 
-Git-change items are separate visual cards in the conversation timeline. They
-appear at the stamp's path position, including between an assistant tool-call
-entry and its later tool result when the observation is tool-anchored. They are
-not mistaken for user or assistant messages. The card shows the new identity
-and optional subject, and uses wording such as "Git state observed" rather than
-claiming that a particular tool caused the change when tools were concurrent.
+Boundary git-change items are separate visual cards in the conversation
+timeline at the stamp's path position. Mid-run marks render inside the owning
+action group: the group's collapsed summary leads with a `git:` hash segment
+(git: ae02c151 · edit: foo.ts · run 1 tool · read 3 files), the family-dot
+legend gains a leading git swatch, and
+expansion shows the change as its own slim card after the step it follows —
+including between an assistant tool-call entry and its later tool result when
+the observation is tool-anchored. Neither is mistaken for a user or assistant
+message, and wording stays neutral ("Git state observed") rather than claiming
+that a particular tool caused the change when tools were concurrent.
 
 Plain pi TUI sessions do not enable the bridge extension and therefore do not
 write new stamps. Existing stamps remain inert there unless the same extension
@@ -449,7 +462,8 @@ silently incorrect repository metadata.
   the active path.
 - Unknown versions and malformed payloads never establish a baseline and never
   render as Git identity or a change card.
-- A valid stamp produces one ordered Git state item and updates the carried
+- A valid stamp produces one rendered Git state item (a standalone card or a
+  mid-run mark folded into its group) and updates the carried
   identity; it does not enter LLM context.
 - Commit subject and the observation anchor never affect transition
   deduplication.
@@ -471,7 +485,8 @@ silently incorrect repository metadata.
 - branch and subject validation, including extra output;
 - fold behavior across interleaved stamps, forks, and missing observations;
 - viewmodel identity preservation when a user's effective identity changes;
-- Git-change item ordering and card data for each anchor.
+- Git-change item ordering and card/mark data for each anchor, including
+  mid-run fold placement and group-summary segments.
 
 ### Extension and integration tests
 
@@ -504,7 +519,8 @@ provider:
   user-bash, and turn-end events;
 - Git-change items carry stable entry ids, appear in path order, and do not
   alter user/assistant editing indexes, assistant-run contents, or tool-result
-  joining (a mid-run stamp splits the run's visual grouping only);
+  joining (mid-run stamps fold into the run's action groups as marks, not
+  splits);
 
 ## Relationship to Other ADRs
 
