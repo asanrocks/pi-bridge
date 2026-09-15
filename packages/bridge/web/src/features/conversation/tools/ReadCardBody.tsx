@@ -7,8 +7,8 @@
 import { memo, useMemo } from "react";
 import { useStore } from "../../../infra/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
-import { Markdown } from "../../../render/markdown.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
+import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
 import styles from "../conversation.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 import { parseReadNotice } from "./resultText.ts";
@@ -33,7 +33,7 @@ export const ReadCardBody = memo(function ReadCardBody({ args, resultText, resul
 			{resultImages.length > 0 ? (
 				<ResultImages images={resultImages} />
 			) : renderProse ? (
-				<Markdown text={parsed.content} mode="static" />
+				<AppMarkdown text={parsed.content} mode="static" />
 			) : (
 				parsed.content && <CodeSnippet code={parsed.content} language={lang} wrap={wrap} />
 			)}

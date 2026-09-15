@@ -12,7 +12,7 @@
 import { memo, useCallback, useDeferredValue, useState } from "react";
 import { useStore } from "../../infra/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
-import { Markdown } from "../../render/markdown.tsx";
+import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import styles from "./conversation.module.css";
 
@@ -72,5 +72,5 @@ export const TextBlockView = memo(function TextBlockView({
 // TextBlockView, but the Streamdown subtree should not re-render for the
 // same text.
 const MarkdownBlock = memo(function MarkdownBlock({ text, isProvisional }: { text: string; isProvisional: boolean }) {
-	return <Markdown text={text} mode={isProvisional ? "streaming" : "static"} />;
+	return <AppMarkdown text={text} mode={isProvisional ? "streaming" : "static"} />;
 });

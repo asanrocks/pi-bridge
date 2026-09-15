@@ -46,6 +46,8 @@ export type {
 	PullRequest,
 	PullRequestItem,
 	PullResponseItem,
+	ReadFileReply,
+	ReadFileRequest,
 	ReconcileOptions,
 	RemoveOp,
 	RenameSessionRequest,
