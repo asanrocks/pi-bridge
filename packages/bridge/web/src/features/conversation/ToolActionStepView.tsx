@@ -23,6 +23,7 @@ import styles from "./conversation.module.css";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";
 import { BandPreview } from "./tools/BandPreview.tsx";
+import { BashIdentity } from "./tools/BashIdentity.tsx";
 import { CardControls, CardError, CardIdentity, CardStatusLine } from "./tools/CardSkeleton.tsx";
 import {
 	BASH_TAIL_LINES,
@@ -184,7 +185,13 @@ const ToolActionStepView = memo(function ToolActionStepView({
 							onToggleCap={handleUncap}
 						/>
 					</div>
-					<CardIdentity text={identity} />
+					{/* Shell cards highlight the command (bash/powershell grammar);
+					    every other kind keeps the plain identity line. */}
+					{isShell && identity !== null ? (
+						<BashIdentity command={identity} lang={step.toolName} />
+					) : (
+						<CardIdentity text={identity} />
+					)}
 					<CardError text={errorText} />
 					<div className={styles.stepDetailsWrap}>
 						<div
