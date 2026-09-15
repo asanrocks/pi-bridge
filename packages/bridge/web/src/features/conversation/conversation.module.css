@@ -252,11 +252,8 @@
 	background: var(--color-code-bg);
 	padding: 1px 4px;
 	border-radius: var(--radius-sm);
-	/* Relative, not absolute: an inline <code> must scale with its parent
-	   so code inside an h1/h2 isn't stuck at body-text size. 0.8125em
-	   preserves the prior 13px-on-16px-body ratio for inline prose while
-	   letting headings grow it proportionally. Block code is reset below. */
-	font-size: 0.8125em;
+	/* Font-size is the global inline-code rule (index.css, 0.8125em) — one
+	  ratio for the chip role in every host context (ADR 07 invariant #4). */
 	/* Long unbreakable tokens (paths, URLs, flags) must wrap inside the chip
 	   instead of overflowing the column — on mobile the overflow runs past
 	   the viewport edge and is unreachable (Firefox Android notably, which
@@ -689,13 +686,13 @@
    first-line preview (see .stepFold in ThinkActionStepView); the rule is
    kept for the tool-step summary. */
 
-/* Inline code inside the think body shares the warm code-bg chip so it
-   matches body prose (0.917em preserves the 11px-on-12px de-emphasis). */
+/* Inline code inside the think body shares the warm code-bg chip; sizing
+   is the global inline-code rule (index.css) so the chip is identical in
+   every host context (ADR 07 invariant #4). */
 .thinkBody code {
 	background: var(--color-code-bg);
 	padding: 1px 4px;
 	border-radius: var(--radius-sm);
-	font-size: 0.917em;
 	/* Long unbreakable tokens wrap inside the chip (see .markdownContent code). */
 	overflow-wrap: break-word;
 }
