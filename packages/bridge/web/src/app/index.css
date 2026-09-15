@@ -293,6 +293,58 @@ input, textarea {
 	border-radius: 0;
 }
 
+/* ── Typography scale: relative, not absolute (ADR 07 §Styling invariants
+   #2/#4). Streamdown hardcodes Tailwind text-* utilities (text-sm …
+   text-3xl) on every element it styles — inline code, table cells, sup/sub,
+   headings — while paragraphs, list items, and blockquotes inherit. Those
+   utilities are rem-absolute and calibrated for the 16px reading baseline,
+   so in shrunken contexts (12px thinking and tool-card markdown, 14px
+   mobile body) they render at — or far above — the surrounding paragraphs:
+   an h1 is 30px inside 12px card text; inline code is 14px inside 12px
+   prose. Restate each as the em-equivalent of its Tailwind value: the
+   document baseline stays pixel-identical and every other context scales
+   proportionally. Line-height needs no override — Tailwind's text-*
+   line-heights are unitless, so they track font-size. Block code stays
+   absolute (fs-sm, rule above): a relative block-code size would fall to
+   9px in the 12px contexts. */
+[data-streamdown="inline-code"] {
+	/* One ratio for the chip role everywhere (invariant #3) — the
+	   historical 13px-on-16px-body de-emphasis. */
+	font-size: 0.8125em;
+}
+
+/* text-sm's own ratio (14px on the 16px baseline) — cells stay one step
+   below their paragraphs in every context. */
+[data-streamdown="table-header-cell"],
+[data-streamdown="table-cell"],
+[data-streamdown="superscript"],
+[data-streamdown="subscript"] {
+	font-size: 0.875em;
+}
+
+/* Heading scale: each value is the em-equivalent of its Tailwind utility
+   (text-3xl … text-sm), so the 16px document is unchanged while the 12px
+   think/card contexts and the 14px mobile body scale headings with their
+   prose instead of pinning them at document scale. */
+[data-streamdown="heading-1"] {
+	font-size: 1.875em; /* text-3xl */
+}
+[data-streamdown="heading-2"] {
+	font-size: 1.5em; /* text-2xl */
+}
+[data-streamdown="heading-3"] {
+	font-size: 1.25em; /* text-xl */
+}
+[data-streamdown="heading-4"] {
+	font-size: 1.125em; /* text-lg */
+}
+[data-streamdown="heading-5"] {
+	font-size: 1em; /* text-base */
+}
+[data-streamdown="heading-6"] {
+	font-size: 0.875em; /* text-sm */
+}
+
 /* Line-number gutter: 1px smaller than the code (fs-xs = 11px), preserving
    Streamdown's prior 13px-gutter-vs-14px-code de-emphasis — the gutter is
    navigation, not content, so it recedes behind the code. Only line spans
