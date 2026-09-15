@@ -28,22 +28,20 @@ function isSealedMessage(e: Entry | undefined): boolean {
 
 export class UnreadMessageCounter {
 	private seen = new Set<string>();
-	private instanceId: string | null = null;
+	private sessionKey: string | null = null;
 
-	/** Instance-identity check: true when the attached instance changed since
-	 *  the last call (caller resets the count and rebases the baseline).
-	 *  Note: a session switch WITHIN an instance keeps the same id — the
-	 *  wholesale entry replacement is absorbed by sync/rebase, which is safe
-	 *  because session switches are user actions (window focused → silent). */
-	switchedInstance(id: string | null): boolean {
-		if (this.instanceId === id) return false;
-		this.instanceId = id;
+	/** Session-identity check: true when the open session changed since the
+	 *  last call (caller resets the count and rebases the baseline). The key is
+	 *  the `sessionId` (ADR 09/11) — stable across the address form. */
+	switchedSession(id: string | null): boolean {
+		if (this.sessionKey === id) return false;
+		this.sessionKey = id;
 		this.seen.clear();
 		return true;
 	}
 
 	/** Mark all current sealed messages as seen — the baseline. Used on
-	 *  attach/instance switch so pre-existing history never counts. */
+	 *  attach/session switch so pre-existing history never counts. */
 	rebase(entries: Record<string, Entry>): void {
 		for (const id in entries) {
 			if (isSealedMessage(entries[id])) this.seen.add(id);

@@ -8,6 +8,7 @@ import {
 	createAgentSessionRuntime,
 	createAgentSessionServices,
 	getAgentDir,
+	getDefaultSessionDir,
 	ModelRuntime,
 	type ContextUsage as PiContextUsage,
 	resolveModelScopeWithDiagnostics,
@@ -32,6 +33,7 @@ import {
 	type ReplaceMessage,
 	reconcile,
 	type ScopedModelInfo,
+	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
 import { createGitStampExtensionWithTrigger, type GitStampTrigger } from "./git-stamp-extension.ts";
@@ -62,7 +64,8 @@ function getContextUsageOption(session: AgentSession | undefined): ContextUsage 
 export interface CreateManagerOptions {
 	cwd?: string;
 	agentDir?: string;
-	/** Session path for targeting a specific session (v2 attachManager). */
+	/** Resume a session from this file (ADR 11 `openSession`). Omit to create a
+	 * fresh, initially unflushed session (`newSession`). */
 	sessionPath?: string;
 
 	/** Injected model runtime. Default: ModelRuntime.create({ authPath }) */
@@ -81,14 +84,14 @@ export interface CreateManagerOptions {
 
 /**
  * One attached wire Connection, addressed individually (ADR 09). The Manager
- * relays live patches via onPatch and initial-sync frames (replace snapshot
- * or cursor delta, both carrying sessionId) via onInitialSync — at attach
- * and after every session rebind.
+ * relays live patches via onPatch and the initial-sync frame (replace snapshot
+ * or cursor delta, both carrying the session reference) via onInitialSync at
+ * attach. There is no rebind: an activation serves exactly one session for its
+ * lifetime (ADR 11).
  */
 export interface ConnectionHandle {
 	onPatch(patch: Patch): void;
 	onInitialSync(frame: PatchMessage | ReplaceMessage): void;
-	onExit(): void;
 }
 
 export interface Manager {
@@ -101,18 +104,22 @@ export interface Manager {
 	/** The instance cwd this Manager is bound to. */
 	readonly cwd: string;
 
+	/** Absolute session file path. Always set: pi allocates the filename at
+	 * session creation, before the first flush. Never null. */
+	readonly sessionFile: string;
+
+	/** Session header creation timestamp (ISO). Orders an unflushed session
+	 * before its first flush (ADR 11). */
+	readonly createdAt: string;
+
 	// ── Callbacks (replaces BridgeBus) ────────────────────────────────────
 
 	/** Register a patch listener. Returns unsubscribe function. */
 	onPatch(listener: (patch: Patch) => void): () => void;
-	/** Register an initial-sync listener for raw-object-mode tests. */
-	onReplace(listener: (document: Document) => void): () => void;
-	/** Register a listener for Manager exit. Returns unsubscribe function. */
-	onExit(listener: () => void): () => void;
 	/** Attach a Connection. Emits its initial sync synchronously (ADR 09):
 	 * a delta patch when `cursor` validates against the current session,
 	 * otherwise a full replace. */
-	addConnection(handle: ConnectionHandle, cursor?: PrefixCursor | null): void;
+	addConnection(handle: ConnectionHandle, session: SessionRef, cursor?: PrefixCursor | null): void;
 	/** Detach a Connection. Removes its handle. */
 	removeConnection(handle: ConnectionHandle): void;
 	/**
@@ -137,8 +144,6 @@ export interface Manager {
 	setThinkingLevel(level: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
-	switchSession(sessionPath: string, cursor?: PrefixCursor | null, initiator?: ConnectionHandle): Promise<void>;
-	newSession(): Promise<void>;
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -154,51 +159,35 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const agentDir = options.agentDir ?? getAgentDir();
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const modelRuntime = options.modelRuntime ?? (await ModelRuntime.create({ authPath: join(agentDir, "auth.json") }));
-	let sessionManager = options.sessionManager ?? SessionManager.create(cwd);
+	// Pin the session directory to this Manager's agentDir. SessionManager.create
+	// would otherwise derive it from the process-global agent dir, so a daemon
+	// started with a custom agentDir (tests, embeddings) would allocate new
+	// sessions outside its Project's session storage (ADR 11).
+	const sessionDir = getDefaultSessionDir(cwd, agentDir);
+	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, sessionDir);
 
 	if (options.sessionPath) {
 		sessionManager.setSessionFile(options.sessionPath);
 	}
 
 	const patchListeners = new Set<(patch: Patch) => void>();
-	const replaceListeners = new Set<(document: Document) => void>();
 	const settledListeners = new Set<() => void>();
-	const exitListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
-	// ADR 10: one bundle shared by every runtime bind (initial + rebinds), so
-	// the host trigger always points at the currently-bound session's queue.
+	// ADR 10: one bundle per Manager. An activation serves exactly one session
+	// for its lifetime (ADR 11), so the host trigger never rebinds.
 	const gitStampBundle = createGitStampExtensionWithTrigger();
-
-	// ADR 09: the switch verb records the initiating Connection's cursor so
-	// the rebind emission can send it a delta while every other Connection
-	// receives a full replace.
-	let pendingSwitchCursor: PrefixCursor | null = null;
-	let pendingSwitchInitiator: ConnectionHandle | null = null;
 
 	// ADR 10 v2: host-side user-bash observations. The trigger enqueues into
 	// the extension's serialized stream; null until the runtime binds (the
 	// factory sets its target) or when stamps are disabled.
 	let gitStampTrigger: GitStampTrigger | null = null;
 
-	// ── Event processing (captured in closure; rebound on session switch) ──
+	// ── Event processing (captured in closure) ──
 
 	let unsubscribe: (() => void) | null = null;
 	const emitPatch = (patch: Patch) => {
 		for (const l of patchListeners) l(patch);
 		for (const h of connectionHandles) h.onPatch(patch);
-	};
-	const emitReplace = () => {
-		for (const l of replaceListeners) l(document);
-	};
-	/** Per-Connection initial sync (ADR 09): delta for the initiator's cursor,
-	 * full replace for everyone else. Synchronous — runs inside the rebind
-	 * callback, so no later patch can interleave ahead of it. */
-	const emitInitialSync = (cursor: PrefixCursor | null, initiator: ConnectionHandle | null) => {
-		const piEntries = sessionManager.getEntries();
-		const sessionId = sessionManager.getSessionId();
-		for (const handle of connectionHandles) {
-			handle.onInitialSync(buildInitialSync(document, piEntries, sessionId, handle === initiator ? cursor : null));
-		}
 	};
 
 	const processEvent = (event: AgentSessionEvent) => {
@@ -252,8 +241,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			agentDir,
 			settingsManager,
 			modelRuntime,
-			// ADR 10: the bridge bundles the git-stamp writer; it loads for
-			// every runtime (initial bind and each session rebind).
+			// ADR 10: the bridge bundles the git-stamp writer into the
+			// runtime's extension set.
 			resourceLoaderOptions:
 				options.gitStamps === false
 					? undefined
@@ -289,79 +278,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// runtime creation, so its enqueue target is set. Null when disabled.
 	gitStampTrigger = options.gitStamps === false ? null : gitStampBundle.trigger;
 
-	let session = runtime.session;
+	const session = runtime.session;
 	await session.bindExtensions({});
-
-	// Set up rebindSession callback for switchSession/newSession
-	runtime.setRebindSession(async (newSession: AgentSession) => {
-		// Unsubscribe from old session's events
-		if (unsubscribe) {
-			unsubscribe();
-			unsubscribe = null;
-		}
-
-		// Bind extensions on new session
-		await newSession.bindExtensions({});
-
-		// Re-bootstrap the canonical Document from the new session's entries
-		const newEntries = newSession.sessionManager.getEntries();
-		let newDoc = initFromEntries(newEntries);
-		if (newSession.model) {
-			newDoc = setAtPath(newDoc, "/status/model", {
-				provider: newSession.model.provider,
-				modelId: newSession.model.id,
-			} as unknown as JsonValue);
-		}
-		newDoc = setAtPath(newDoc, "/status/thinkingLevel", newSession.thinkingLevel);
-		// Sync context usage for the new session into the document before the
-		// replace push so the full snapshot carries the value.
-		{
-			const cu = getContextUsageOption(newSession);
-			if (cu !== undefined) {
-				newDoc = setAtPath(newDoc, "/status/contextUsage", cu as unknown as JsonValue);
-			}
-		}
-
-		// Resolve scoped models from settings (global ~/.pi config) if the new session has none
-		if (newSession.scopedModels.length === 0 && settingsManager) {
-			const patterns = settingsManager.getEnabledModels();
-			if (patterns && patterns.length > 0) {
-				const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime);
-				if (resolved.length > 0) {
-					newSession.setScopedModels(
-						resolved.map((sm) => ({
-							model: sm.model,
-							thinkingLevel: sm.thinkingLevel,
-						})),
-					);
-				}
-			}
-		}
-
-		// Sync scoped models from the session
-		{
-			const scoped: ScopedModelInfo[] = newSession.scopedModels.map((sm) => ({
-				provider: sm.model.provider,
-				id: sm.model.id,
-				name: sm.model.name ?? sm.model.id,
-				thinkingLevel: sm.thinkingLevel,
-			}));
-			newDoc = setAtPath(newDoc, "/scopedModels", scoped as unknown as JsonValue);
-		}
-
-		// Replace the document reference and sessionManager
-		sessionManager = newSession.sessionManager;
-		document = newDoc;
-
-		// Re-subscribe on new session
-		session = newSession;
-		unsubscribe = newSession.subscribe(processEvent);
-
-		// Push full replace to raw-mode listeners, then per-Connection initial
-		// sync (ADR 09): the initiator's cursor may yield a delta patch.
-		emitReplace();
-		emitInitialSync(pendingSwitchCursor, pendingSwitchInitiator);
-	});
 
 	// Bootstrap the canonical Document
 	let document: Document = initFromEntries(sessionManager.getEntries());
@@ -439,28 +357,28 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			return runtime.cwd;
 		},
 
+		get sessionFile() {
+			// pi allocates the filename at session creation, so this is always
+			// set — including for a session that has not flushed yet.
+			return sessionManager.getSessionFile() ?? "";
+		},
+
+		get createdAt() {
+			return sessionManager.getHeader()?.timestamp ?? new Date(0).toISOString();
+		},
+
 		onPatch(listener) {
 			patchListeners.add(listener);
 			return () => patchListeners.delete(listener);
 		},
-		onReplace(listener) {
-			replaceListeners.add(listener);
-			return () => replaceListeners.delete(listener);
-		},
-		addConnection(handle, cursor = null) {
+		addConnection(handle, sessionRef, cursor = null) {
 			connectionHandles.add(handle);
 			// Initial sync is emitted synchronously at attach, before any later
 			// live patch on this Connection (ADR 09 invariant 7).
-			handle.onInitialSync(
-				buildInitialSync(document, sessionManager.getEntries(), sessionManager.getSessionId(), cursor),
-			);
+			handle.onInitialSync(buildInitialSync(document, sessionManager.getEntries(), sessionRef, cursor));
 		},
 		removeConnection(handle) {
 			connectionHandles.delete(handle);
-		},
-		onExit(listener) {
-			exitListeners.add(listener);
-			return () => exitListeners.delete(listener);
 		},
 		onSettled(listener) {
 			settledListeners.add(listener);
@@ -540,49 +458,16 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			}
 		},
 
-		async switchSession(
-			sessionPath: string,
-			cursor: PrefixCursor | null = null,
-			initiator: ConnectionHandle | null = null,
-		) {
-			// The sidebar sessions list can contain a stub row for the live
-			// session — a bare session id (UUID), because the new session has
-			// no file on disk yet. Treating that id as a file path would make
-			// SessionManager.open() resolve `cwd/<uuid>` and create a junk
-			// file on the first message. The manager is already attached to
-			// that session, so switching to it is a no-op.
-			if (sessionPath === sessionManager.getSessionId()) return;
-			pendingSwitchCursor = cursor;
-			pendingSwitchInitiator = initiator;
-			try {
-				// A pre-rebind failure (bad path, cwd assert, cancellation)
-				// throws before the rebind callback, so no initial sync is sent
-				// and the caller's reply is ok:false (ADR 09 rebind failure path).
-				await runtime.switchSession(sessionPath);
-			} finally {
-				pendingSwitchCursor = null;
-				pendingSwitchInitiator = null;
-			}
-		},
-
-		async newSession() {
-			await runtime.newSession();
-		},
-
 		async dispose() {
 			// 1. Save: finalize + flush the in-flight turn. Listeners are still
-			//    attached, so client tabs see the final patches before manager_exit.
+			//    attached, so client tabs see the final patches before teardown.
 			await session.abort();
-			// 2. Teardown: notify Connections. Each Connection's onExit handler
-			//    sends manager_exit (last frame) and self-detaches its callbacks.
-			for (const l of exitListeners) l();
-			for (const handle of connectionHandles) handle.onExit();
-			// 3. Unsubscribe from pi events.
+			// 2. Unsubscribe from pi events.
 			if (unsubscribe) {
 				unsubscribe();
 				unsubscribe = null;
 			}
-			// 4. Tear down the pi runtime.
+			// 3. Tear down the pi runtime.
 			await runtime.dispose();
 		},
 	};

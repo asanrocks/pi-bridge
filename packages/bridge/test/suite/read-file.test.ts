@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import { Connection, type DaemonVerbs } from "../../src/host/connection.ts";
 import { MAX_READ_FILE_BYTES, readHostFile } from "../../src/host/daemon.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, waitForFrame } from "./conn-helpers.ts";
+import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -40,7 +40,7 @@ describe("readFile verb", () => {
 		const { serverWs, clientWs } = await createWsPair();
 		const frames = collectFrames(clientWs);
 		const conn = new Connection(serverWs, readFileVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 		await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		try {

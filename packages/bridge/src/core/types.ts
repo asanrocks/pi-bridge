@@ -283,30 +283,38 @@ export interface Patch {
 
 export interface ReplaceMessage {
 	kind: "replace";
-	/** Durable session id. Present on initial-sync pushes only (ADR 09); live patches do not repeat it. */
-	sessionId?: string;
+	/** Session reference (ADR 11). Always present: a replace is an initial sync. */
+	session: SessionRef;
 	document: Document;
 }
 
 export interface PatchMessage {
 	kind: "patch";
-	/** Durable session id. Present on the initial-sync delta push only (ADR 09). */
-	sessionId?: string;
+	/**
+	 * Present only for a cursor-aware initial-sync patch (ADR 09 + ADR 11).
+	 * A patch without it is a live Document patch and carries no address.
+	 */
+	session?: SessionRef;
 	ops: PatchOp[];
 }
 
 export interface SessionsChangedMessage {
 	kind: "sessions_changed";
+	projectId: string;
+	/** First paginated page used to refresh that Project's session list. */
 	sessions: SessionInfo[];
 	hasMore: boolean;
+	nextCursor?: SessionListCursor;
 }
 
-export interface InstanceExitMessage {
-	kind: "instance_exit";
-	instanceId: string;
+/** Global snapshot of active/streaming sessions across all Projects (ADR 11).
+ * `SessionInfo.projectId` carries the Project identity. */
+export interface ActiveSessionsChangedMessage {
+	kind: "active_sessions_changed";
+	sessions: SessionInfo[];
 }
 
-export type ServerPushMessage = ReplaceMessage | PatchMessage | SessionsChangedMessage | InstanceExitMessage;
+export type ServerPushMessage = ReplaceMessage | PatchMessage | SessionsChangedMessage | ActiveSessionsChangedMessage;
 
 // ── RPC (client → server, with `id`) ─────────────────────────────────────
 
@@ -379,22 +387,29 @@ export interface NavigateRequest {
 	entryId: string | null;
 }
 
-export interface SwitchSessionRequest {
-	verb: "switchSession";
-	/** Session file path to resume. Not a session id — live sessions have no file yet. */
-	sessionPath: string;
+/** Resolve-or-activate a session by its address (ADR 11). If a live activation
+ * for the session exists the Connection reattaches to it; otherwise one is
+ * created from the session file. */
+export interface OpenSessionRequest {
+	verb: "openSession";
+	projectId: string;
+	stem: string;
 	/** Optional client cache prefix cursor (ADR 09). */
 	cursor?: PrefixCursor;
 }
 
+/** Create a new (initially unflushed) session in a Project (ADR 11). */
 export interface NewSessionRequest {
 	verb: "newSession";
+	projectId: string;
 }
 
+/** Paginated history query for one Project (ADR 11). */
 export interface ListSessionsRequest {
 	verb: "listSessions";
-	ts?: string | null;
+	projectId: string;
 	max?: number | null;
+	cursor?: SessionListCursor | null;
 }
 
 export interface GetDaemonInfoRequest {
@@ -412,7 +427,7 @@ export interface ListFilesRequest {
 }
 
 /** Read a file fresh from disk for the web viewer (not session state).
- * Relative paths resolve against the attached instance's cwd. */
+ * Relative paths resolve against the attached session's Project cwd. */
 export interface ReadFileRequest {
 	verb: "readFile";
 	path: string;
@@ -425,7 +440,7 @@ export interface ConsoleRequest {
 }
 
 /** ADR 10 v2: show a recorded commit's details (`git show --stat`) in the
- * attached instance's working directory. Like readFile, this consults the
+ * attached session's working directory. Like readFile, this consults the
  * live repository on explicit user demand — the stored stamp labels stay
  * the authoritative display source. */
 export interface GitShowRequest {
@@ -434,7 +449,7 @@ export interface GitShowRequest {
 	commit: string;
 }
 
-// ── Instance routing verb request shapes ──────────────────────────────
+// ── Project / session address shapes (ADR 11) ────────────────────────
 
 /** Client cache prefix cursor (ADR 09). Identifies the committed entry
  * prefix a client already holds, so initial sync can send only the suffix. */
@@ -446,31 +461,42 @@ export interface PrefixCursor {
 	entryCount: number;
 }
 
-export interface SwitchInstanceRequest {
-	verb: "switchInstance";
-	instanceId: string;
-	/** Optional client cache prefix cursor (ADR 09). */
-	cursor?: PrefixCursor;
-}
-
-export interface NewInstanceRequest {
-	verb: "newInstance";
+/** One allowlisted cwd and its pi session namespace (ADR 11). */
+export interface ProjectInfo {
+	id: string;
 	cwd: string;
 }
 
-export interface KillInstanceRequest {
-	verb: "killInstance";
-	instanceId: string;
+/** Client-facing session address: project id + relative stem within the
+ * Project's session directory. `stem` omits the `.jsonl` extension. */
+export interface SessionAddress {
+	projectId: string;
+	stem: string;
 }
 
-export interface ListInstancesRequest {
-	verb: "listInstances";
+/** Initial-sync session reference (ADR 11). `sessionId` is the cache identity;
+ * `projectId` + `stem` are the client address. */
+export interface SessionRef {
+	projectId: string;
+	sessionId: string;
+	stem: string;
 }
 
-/** Detach the connection from its instance (client returned to the instance
- * list). Connection-local: unbinds without touching the registry. */
-export interface DetachInstanceRequest {
-	verb: "detachInstance";
+/** Total-order pagination cursor for `listSessions` (ADR 11). */
+export interface SessionListCursor {
+	sortTimeMs: number;
+	stem: string;
+}
+
+/** Global active-session query (ADR 11). Not project-scoped, not paginated. */
+export interface ListActiveSessionsRequest {
+	verb: "listActiveSessions";
+}
+
+/** Detach the Connection from its activation (ADR 11). Connection-local:
+ * unbinds without touching the activation registry. */
+export interface DetachRequest {
+	verb: "detach";
 }
 
 /** Union of all RPC request shapes (for type-safe verb methods). */
@@ -482,51 +508,36 @@ export type RpcRequestBody =
 	| SetThinkingLevelRequest
 	| RenameSessionRequest
 	| NavigateRequest
-	| SwitchSessionRequest
+	| OpenSessionRequest
 	| NewSessionRequest
 	| ListSessionsRequest
+	| ListActiveSessionsRequest
 	| GetDaemonInfoRequest
 	| PullRequest
 	| ListFilesRequest
 	| ReadFileRequest
 	| GitShowRequest
 	| ConsoleRequest
-	| SwitchInstanceRequest
-	| NewInstanceRequest
-	| KillInstanceRequest
-	| ListInstancesRequest
-	| DetachInstanceRequest;
+	| DetachRequest;
 
 // ── Verb-specific reply shapes ───────────────────────────────────────────
 
+/** Session metadata (ADR 11). `stem` is always present, including for an
+ * unflushed session; `sessionId` is durable and is the cache/activation key.
+ * `timestamp` is an ISO rendering of the ordering value: filesystem mtime for
+ * a durable session, the in-memory header creation time before flush. */
 export interface SessionInfo {
-	/** Durable session id from the session file header (ADR 09). Cache key. */
+	projectId: string;
 	sessionId: string;
-	/** Session file path, or null for a live session with no file on disk yet. */
-	sessionPath: string | null;
+	/** Relative session path minus the `.jsonl` extension. */
+	stem: string;
+	/** A live activation exists for this session. */
+	active: boolean;
+	/** The active session is streaming a turn. False when inactive. */
+	isStreaming: boolean;
 	name?: string;
 	timestamp: string;
 	firstMessageText?: string;
-	messageCount?: number;
-}
-
-/** Info about a running instance (Manager), for listInstances reply. */
-export interface InstanceInfo {
-	/** Stable id assigned by the Daemon at instance creation. */
-	instanceId: string;
-	/** The instance's current session id (from SessionManager). */
-	sessionId: string;
-	/** The instance cwd. */
-	cwd: string;
-	/** Session name (from document.status.name). */
-	name: string;
-	/** Whether the instance's session is streaming. */
-	isStreaming: boolean;
-	/** ISO timestamp of the most recent entry (last activity). Omitted when the session has no sealed entries yet. */
-	lastActivityAt?: string;
-	/** Most recent message text (any role), clamped to one line. Omitted when no message with text exists yet. */
-	preview?: string;
-	/** Message count from session stats. */
 	messageCount?: number;
 }
 
@@ -535,6 +546,13 @@ export interface ListSessionsReply {
 	ok: true;
 	sessions: SessionInfo[];
 	hasMore?: boolean;
+	nextCursor?: SessionListCursor;
+}
+
+export interface ListActiveSessionsReply {
+	id: string;
+	ok: true;
+	sessions: SessionInfo[];
 }
 
 export interface ScopedModelInfo {
@@ -573,9 +591,9 @@ export interface ModelRef {
 export interface GetDaemonInfoReply {
 	id: string;
 	ok: true;
+	projects: ProjectInfo[];
 	models: ModelInfo[];
 	thinkingLevels: string[];
-	cwdAllowlist: string[];
 	devMode: boolean;
 }
 
@@ -610,18 +628,6 @@ export interface GitShowReply {
 	output: string;
 	/** True when the output exceeded the byte cap and is a prefix. */
 	truncated: boolean;
-}
-
-export interface ListInstancesReply {
-	id: string;
-	ok: true;
-	instances: InstanceInfo[];
-}
-
-export interface NewInstanceReply {
-	id: string;
-	ok: true;
-	instanceId: string;
 }
 
 export interface VerbReply {
