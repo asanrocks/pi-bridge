@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { createServer, type Server as HttpServer, type ServerResponse } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
@@ -238,6 +238,8 @@ export class Daemon {
 		listFiles: (prefix: string, cwd?: string): Array<{ path: string; isDirectory: boolean }> => {
 			return listFiles(prefix, cwd ?? this.cwd);
 		},
+
+		readFile: (path: string, cwd?: string) => readHostFile(path, cwd ?? this.cwd),
 
 		getDaemonInfo: () => {
 			const runtime = this.modelRuntime;
@@ -549,6 +551,45 @@ function clampPreview(text: string): string {
 	const single = text.replace(/\s+/g, " ").trim();
 	if (single.length <= PREVIEW_MAX) return single;
 	return `${single.slice(0, PREVIEW_MAX - 1)}…`;
+}
+
+// ── File reads (web viewer) ───────────────────────────────────────────────
+
+/** Byte cap for viewer reads. Larger files return a prefix with truncated=true
+ * — the viewer is a human reading surface, not a data channel, and an
+ * unbounded reply would stall the socket on huge files. */
+export const MAX_READ_FILE_BYTES = 256 * 1024;
+
+/** Read a file fresh from disk for the `readFile` verb. Relative paths (and
+ * `~`) resolve against the instance cwd; throws on missing paths / non-files
+ * so the Connection converts the message into an `ok:false` reply. Exported
+ * for Connection-level tests (the DaemonVerbs seam takes the same function). */
+export function readHostFile(
+	rawPath: string,
+	cwd: string,
+): { path: string; content: string; truncated: boolean; bytes: number } {
+	let p = rawPath;
+	if (p.startsWith("~")) {
+		p = (process.env.HOME ?? process.env.USERPROFILE ?? "") + p.slice(1);
+	}
+	const abs = isAbsolute(p) ? p : join(cwd, p);
+	const st = statSync(abs);
+	if (!st.isFile()) throw new Error(`Not a file: ${abs}`);
+
+	const len = Math.min(st.size, MAX_READ_FILE_BYTES);
+	const buf = Buffer.alloc(len);
+	const fd = openSync(abs, "r");
+	try {
+		readSync(fd, buf, 0, len, 0);
+	} finally {
+		closeSync(fd);
+	}
+	return {
+		path: abs,
+		content: buf.toString("utf8"),
+		truncated: st.size > MAX_READ_FILE_BYTES,
+		bytes: st.size,
+	};
 }
 
 // ── File path completion ─────────────────────────────────────────────────

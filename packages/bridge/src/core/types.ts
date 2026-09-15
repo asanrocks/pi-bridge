@@ -409,6 +409,13 @@ export interface ListFilesRequest {
 	prefix: string;
 }
 
+/** Read a file fresh from disk for the web viewer (not session state).
+ * Relative paths resolve against the attached instance's cwd. */
+export interface ReadFileRequest {
+	verb: "readFile";
+	path: string;
+}
+
 export interface ConsoleRequest {
 	verb: "console";
 	level: "log" | "warn" | "error";
@@ -469,6 +476,7 @@ export type RpcRequestBody =
 	| GetDaemonInfoRequest
 	| PullRequest
 	| ListFilesRequest
+	| ReadFileRequest
 	| ConsoleRequest
 	| SwitchInstanceRequest
 	| NewInstanceRequest
@@ -568,6 +576,18 @@ export interface ListFilesReply {
 	id: string;
 	ok: true;
 	entries: Array<{ path: string; isDirectory: boolean }>;
+}
+
+export interface ReadFileReply {
+	id: string;
+	ok: true;
+	/** Absolute resolved path (cwd-relative links resolve server-side). */
+	path: string;
+	content: string;
+	/** True when the file exceeded the byte cap and content is a prefix. */
+	truncated: boolean;
+	/** Full file size in bytes. */
+	bytes: number;
 }
 
 export interface ListInstancesReply {

@@ -82,6 +82,8 @@ export type {
 	PromptRequest,
 	PullReply,
 	PullRequest,
+	ReadFileReply,
+	ReadFileRequest,
 	RemoveOp,
 	RenameSessionRequest,
 	ReplaceMessage,

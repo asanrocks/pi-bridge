@@ -244,6 +244,10 @@ export class BridgeClient {
 		return this.call({ verb: "listFiles", prefix });
 	}
 
+	readFile(path: string): Promise<RpcReply> {
+		return this.call({ verb: "readFile", path });
+	}
+
 	console(level: "log" | "warn" | "error", args: JsonValue[]): Promise<RpcReply> {
 		return this.call({ verb: "console", level, args });
 	}

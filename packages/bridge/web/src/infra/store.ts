@@ -136,6 +136,14 @@ export interface ClientStore {
 	scrollToEntryId: string | null;
 	setScrollToEntryId: (id: string | null) => void;
 
+	// File viewer (markdown file links → in-app read of the freshest file)
+	/** Raw link href of the file being viewed, or null when closed. The
+	 * FileViewer resolves it via the readFile verb on every open — content is
+	 * never cached, so re-opening always reads from disk. */
+	fileViewerPath: string | null;
+	openFileViewer: (path: string) => void;
+	closeFileViewer: () => void;
+
 	// Notifications
 	notifications: Toast[];
 	pushToast: (id: string, message: string) => void;
@@ -358,6 +366,8 @@ export function createClientStore() {
 		historyOpen: false,
 		scrollToEntryId: null,
 
+		fileViewerPath: null,
+
 		notifications: [],
 
 		pushToast: (id, message) =>
@@ -421,6 +431,9 @@ export function createClientStore() {
 
 		setHistoryOpen: (historyOpen) => set({ historyOpen }),
 		setScrollToEntryId: (scrollToEntryId) => set({ scrollToEntryId }),
+
+		openFileViewer: (path) => set({ fileViewerPath: path }),
+		closeFileViewer: () => set({ fileViewerPath: null }),
 
 		setCwdAllowlist: (cwdAllowlist) => set({ cwdAllowlist }),
 
