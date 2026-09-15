@@ -21,6 +21,8 @@ export type {
 	GetDaemonInfoReply,
 	GetDaemonInfoRequest,
 	GitIdentity,
+	GitShowReply,
+	GitShowRequest,
 	GitStampAnchor,
 	GitStampData,
 	ImageContent,

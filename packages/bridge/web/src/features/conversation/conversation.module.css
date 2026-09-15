@@ -217,92 +217,32 @@
 	margin: 0 2px;
 }
 
-/* ADR 10 v2 — git change card. A slim divider band at the stamp's path
-   position: label, identity chip, subject, boundary hint, time. Muted like
-   system dividers; the identity is the only emphasized token. */
-.gitChange {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	padding: 6px 16px;
-	font-size: var(--fs-xs);
+/* ADR 10 v2 — git change cards reuse the tool-card skeleton (.actionStep
+   band + .stepFold row + .detailsCard), in the git family hue. */
+.actionStep[data-kind="git"] {
+	--step-hue: var(--kind-git);
+}
+
+/* Standalone (boundary) card wrapper — the band between turns. */
+.gitChangeTurn {
+	margin: 4px 0;
+}
+
+/* Branch + short hash docked right in the fold row (the read tool's
+   summary abbreviates the path; here the identity abbreviates the same
+   way). Muted mono machine tokens. */
+.gitStepMeta {
+	flex-shrink: 0;
+	white-space: nowrap;
 	color: var(--color-muted-foreground);
-	min-width: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-.gitChange::before,
-.gitChange::after {
-	content: "";
-	flex: 1;
-	border-top: 1px solid var(--color-border);
-	align-self: center;
-}
-
-.gitChangeLabel {
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-	flex-shrink: 0;
-}
-
-.gitChangeIdentity {
-	color: var(--color-secondary);
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-.gitChangeSubject {
-	color: var(--color-muted-foreground);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	min-width: 0;
-}
-
-.gitChangeAnchor {
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-.gitChangeAnchor::before {
-	content: "· ";
-	margin: 0 2px;
-}
-
-/* ADR 10 v2 — in-group git change card: a slim band inside the action
-   group's spine, after the step it follows. Same anatomy as an action step
-   (left strip + faint tint) in the git family hue (diff/merge green) —
-   meta, not a tool action, so it has no tool family; the group legend's
-   git dot uses the same token. */
-.gitChangeCard {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	margin: 2px 0;
-	padding: 4px 10px;
+/* Muted note inside the expanded content region (loading / unavailable /
+   truncated). */
+.gitShowNote {
 	font-size: var(--fs-sm);
-	color: var(--color-secondary);
-	background: color-mix(in srgb, var(--kind-git) 6%, transparent);
-	border-left: 3px solid color-mix(in srgb, var(--kind-git) 55%, transparent);
-	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-	min-width: 0;
-}
-
-.gitChangeCardLabel {
 	color: var(--color-muted-foreground);
-	flex-shrink: 0;
-}
-
-.gitChangeCardIdentity {
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-.gitChangeCardSubject {
-	color: var(--color-muted-foreground);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	min-width: 0;
 }
 
 /* User turn — full-width tinted band (a distinct part of the document,
