@@ -27,7 +27,7 @@ export const Launcher = memo(function Launcher({
 	/** When set, the Launcher is scoped to one Project's home. */
 	projectId: string | null;
 	onOpenProject: (projectId: string) => void;
-	onOpenSession: (projectId: string, stem: string) => void;
+	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	onNewSession: (projectId: string) => void;
 	retry: () => void;
 }) {
@@ -154,7 +154,7 @@ export const Launcher = memo(function Launcher({
 								<button
 									type="button"
 									className={styles.rowMain}
-									onClick={() => onOpenSession(session.projectId, session.stem)}
+									onClick={() => onOpenSession(session.projectId, session.stem, session.sessionId)}
 									title={label}
 								>
 									<div className={styles.rowLine1}>
