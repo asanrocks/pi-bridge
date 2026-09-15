@@ -56,6 +56,20 @@ describe("clearCurrentSession", () => {
 		expect(store.getState().projects).toEqual([{ id: "proj", cwd: "/proj" }]);
 		expect(store.getState().activeSessions).toHaveLength(1);
 	});
+
+	it("lands on the given Project's home when a Project is passed", () => {
+		const store = createClientStore();
+		openAndDirty(store);
+
+		// Failed-open fallback: drop the session but stay in the Project.
+		store.getState().clearCurrentSession("proj");
+
+		const s = store.getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(s.document.entries).toEqual({});
+	});
 });
 
 describe("session pages", () => {

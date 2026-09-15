@@ -157,10 +157,12 @@ export interface ClientStore {
 	setProjects: (projects: ProjectInfo[]) => void;
 	/** Set the global active/streaming snapshot. */
 	setActiveSessions: (sessions: SessionInfo[]) => void;
-	/** Commit the address this tab is watching (ADR 11). */
-	setCurrentSession: (projectId: string, stem: string | null) => void;
-	/** Unbind from the current Project/session (Launcher, open failure). */
-	clearCurrentSession: () => void;
+	/** Commit the address this tab is watching (ADR 11). `null` Project = the
+	 * global launcher; `null` stem = that Project's home. */
+	setCurrentSession: (projectId: string | null, stem: string | null) => void;
+	/** Unbind from the current Project/session (Launcher, open failure). Pass a
+	 * `projectId` to land on that Project's home instead of the launcher. */
+	clearCurrentSession: (projectId?: string | null) => void;
 	/**
 	 * Append a page of sessions from load-more. Upserts by sessionId: new entries
 	 * are added, existing entries are updated with fresh metadata. Keeps
@@ -397,7 +399,7 @@ export function createClientStore() {
 
 		setCurrentSession: (currentProjectId, currentStem) => set({ currentProjectId, currentStem }),
 
-		clearCurrentSession: () => set(clearedSessionState()),
+		clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
 
 		appendSessions: (incoming, hasMore, nextCursor) =>
 			set((s) => {
