@@ -4,6 +4,8 @@
 // and reusable (the tree dialog may want them later).
 // ============================================================================
 
+import type { SessionInfo } from "../../../../src/core/index.ts";
+
 export type GroupLabel = "Today" | "This week" | "Earlier";
 
 const HR12 = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: false });
@@ -50,14 +52,8 @@ export function relativeTime(iso: string): string {
 	return MONTH_DAY.format(d);
 }
 
-export interface SidebarSession {
-	sessionId: string;
-	sessionPath: string | null;
-	name?: string;
-	timestamp: string;
-	firstMessageText?: string;
-	messageCount?: number;
-}
+/** The sidebar renders `SessionInfo` rows directly (ADR 11). */
+export type SidebarSession = SessionInfo;
 
 export function groupSessions(sessions: SidebarSession[]): { label: GroupLabel; items: SidebarSession[] }[] {
 	const buckets = new Map<GroupLabel, SidebarSession[]>();

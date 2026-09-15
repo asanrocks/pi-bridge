@@ -27,7 +27,7 @@ describe("UnreadMessageCounter", () => {
 	it("rebase seeds the baseline: existing history never counts", () => {
 		const c = new UnreadMessageCounter();
 		const doc = entriesDoc({ a1: messageEntry({ id: "a1" }), a2: messageEntry({ id: "a2" }) });
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(doc);
 		expect(c.sync(doc)).toBe(0);
 	});
@@ -35,7 +35,7 @@ describe("UnreadMessageCounter", () => {
 	it("counts a newly sealed message once, then not again", () => {
 		const c = new UnreadMessageCounter();
 		const doc1 = entriesDoc({ a1: messageEntry({ id: "a1" }) });
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(doc1);
 
 		const doc2 = entriesDoc({ a1: messageEntry({ id: "a1" }), a2: messageEntry({ id: "a2" }) });
@@ -48,7 +48,7 @@ describe("UnreadMessageCounter", () => {
 		// REMOVED and a durable entry appears — the re-key must not
 		// double-count.
 		const c = new UnreadMessageCounter();
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(entriesDoc({}));
 
 		const streaming = entriesDoc({
@@ -63,7 +63,7 @@ describe("UnreadMessageCounter", () => {
 
 	it("does not count thinking-only, tool-only, or user entries", () => {
 		const c = new UnreadMessageCounter();
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(entriesDoc({}));
 
 		const doc = entriesDoc({
@@ -108,7 +108,7 @@ describe("UnreadMessageCounter", () => {
 
 	it("counts an aborted entry with text (it said something)", () => {
 		const c = new UnreadMessageCounter();
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(entriesDoc({}));
 		const doc = entriesDoc({
 			a1: messageEntry({ id: "a1", stopReason: "aborted", errorMessage: "Operation aborted" }),
@@ -118,7 +118,7 @@ describe("UnreadMessageCounter", () => {
 
 	it("counts messages on sibling branches (entries live document-wide)", () => {
 		const c = new UnreadMessageCounter();
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		const doc1 = entriesDoc({ a1: messageEntry({ id: "a1" }) });
 		c.rebase(doc1);
 
@@ -127,23 +127,23 @@ describe("UnreadMessageCounter", () => {
 		expect(c.sync(doc2)).toBe(1);
 	});
 
-	it("switchedInstance: true once per instance change, false otherwise", () => {
+	it("switchedSession: true once per session change, false otherwise", () => {
 		const c = new UnreadMessageCounter();
 		// Counter starts unattached (null) — matches the hook mounting before
 		// any attach, when the document is empty; no rebase needed.
-		expect(c.switchedInstance(null)).toBe(false);
-		expect(c.switchedInstance("inst-1")).toBe(true);
-		expect(c.switchedInstance("inst-1")).toBe(false);
-		expect(c.switchedInstance("inst-2")).toBe(true);
+		expect(c.switchedSession(null)).toBe(false);
+		expect(c.switchedSession("inst-1")).toBe(true);
+		expect(c.switchedSession("inst-1")).toBe(false);
+		expect(c.switchedSession("inst-2")).toBe(true);
 	});
 
 	it("instance switch clears the seen baseline (new history never counts)", () => {
 		const c = new UnreadMessageCounter();
-		c.switchedInstance("inst-1");
+		c.switchedSession("inst-1");
 		c.rebase(entriesDoc({ a1: messageEntry({ id: "a1" }) }));
 
 		// Switch instance: a fresh document with different entries.
-		expect(c.switchedInstance("inst-2")).toBe(true);
+		expect(c.switchedSession("inst-2")).toBe(true);
 		const doc2 = entriesDoc({ b1: messageEntry({ id: "b1" }) });
 		c.rebase(doc2);
 		expect(c.sync(doc2)).toBe(0);

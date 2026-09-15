@@ -1,20 +1,28 @@
-// ADR 09 stage-4 integration tests: initial sync through the wired stack
-// (Manager connection handles + Connection + Daemon). The pure decision logic
-// is covered by initial-sync.test.ts / cache-policy.test.ts; these tests
-// verify the host plumbing: cursor pass-through, per-connection emission at
-// attach and rebind, subscription reset on initial sync, and the durable
-// session id in session listing.
+// ADR 09/11 integration tests: initial sync through the wired stack (Manager
+// connection handles + Connection + Daemon). The pure decision logic is
+// covered by initial-sync.test.ts / cache-policy.test.ts; these tests verify
+// the host plumbing: cursor pass-through, per-connection emission at attach,
+// subscription reset on initial sync, and the Project/session address in
+// session listing.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import type { Document, Entry, Patch, PatchMessage, PrefixCursor, ReplaceMessage } from "../../src/core/index.ts";
+import type {
+	Document,
+	Entry,
+	Patch,
+	PatchMessage,
+	PrefixCursor,
+	ReplaceMessage,
+	SessionRef,
+} from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from "../../src/host/index.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, waitFor, waitForFrame } from "./conn-helpers.ts";
+import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitFor, waitForFrame } from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -34,7 +42,6 @@ class FrameCollector implements ConnectionHandle {
 	onInitialSync(frame: PatchMessage | ReplaceMessage): void {
 		this.frames.push(frame);
 	}
-	onExit(): void {}
 }
 
 /** Committed entries of an initial-sync document, in ord order. */
@@ -42,39 +49,6 @@ function committedOf(doc: Document): Entry[] {
 	return Object.values(doc.entries)
 		.filter((e) => !e.id.startsWith("pending:") && e.ord !== undefined)
 		.sort((a, b) => (a.ord ?? 0) - (b.ord ?? 0));
-}
-
-/** Write a minimal two-message session file; returns its path and entry ids. */
-function writeSecondSession(dir: string): { path: string; sessionId: string; first: string; second: string } {
-	const path = join(dir, "other-session.jsonl");
-	const lines = [
-		JSON.stringify({
-			type: "session",
-			version: 3,
-			id: "other-session-id",
-			timestamp: "2024-01-01T00:00:00Z",
-			cwd: dir,
-			provider: "faux",
-			modelId: "faux-1",
-			thinkingLevel: "off",
-		}),
-		JSON.stringify({
-			type: "message",
-			id: "o1",
-			parentId: null,
-			timestamp: "2024-01-01T00:00:01Z",
-			message: { role: "user", content: "hello other", timestamp: 0 },
-		}),
-		JSON.stringify({
-			type: "message",
-			id: "o2",
-			parentId: "o1",
-			timestamp: "2024-01-01T00:00:02Z",
-			message: { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 0 },
-		}),
-	];
-	writeFileSync(path, `${lines.join("\n")}\n`);
-	return { path, sessionId: "other-session-id", first: "o1", second: "o2" };
 }
 
 /** Committed ids excluding system messages. Upstream commits a per-turn
@@ -85,7 +59,6 @@ function committedNonSystemIds(doc: Document): string[] {
 		.filter((e) => !(e.kind === "message" && e.role === "system"))
 		.map((e) => e.id);
 }
-
 /** Encode a cwd the way getDefaultSessionDir does (agentDir/sessions/--cwd--). */
 function sessionDirFor(cwd: string, agentDir: string): string {
 	const safePath = `--${resolve(cwd)
@@ -104,32 +77,34 @@ describe("initial sync: attach", () => {
 		while (harnesses.length) harnesses.pop()?.cleanup();
 	});
 
-	it("first attach sends a full replace with sessionId and ord; a cursor attach receives a delta", async () => {
+	it("first attach sends a full replace with the session ref and ord; a cursor attach receives a delta", async () => {
 		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
 		harnesses.push(bh);
+
+		// The inbound ref must carry the manager's real session id so cursor
+		// validation against the runtime succeeds.
+		const ref = { projectId: "proj", sessionId: bh.manager.liveSessionId, stem: mockSessionRef.stem };
 
 		// Connection A: no cursor → full replace.
 		const pairA = await createWsPair();
 		const framesA = collectFrames(pairA.clientWs);
 		const connA = new Connection(pairA.serverWs, mockDaemonVerbs, null, false);
-		connA.attach(bh.manager, "test-mgr");
+		connA.attach(bh.manager, ref);
 
 		const replace = (await waitForFrame(framesA, (f) => (f as { kind?: string }).kind === "replace")) as {
-			sessionId?: string;
+			session: SessionRef;
 			document: Document;
 		};
-		expect(replace.sessionId).toBe(bh.manager.liveSessionId);
+		expect(replace.session).toEqual(ref);
 		const committed = committedOf(replace.document);
 		expect(committed.length).toBeGreaterThan(2);
 		// ord is dense and zero-based.
 		expect(committed.map((e) => e.ord)).toEqual(committed.map((_, i) => i));
-		// Snapshot of the pre-turn committed set (ids are immutable).
-		const _bootstrapIds = new Set(committed.map((e) => e.id));
 
 		// Connection B: cursor covering all but the last two entries → delta.
 		const entryCount = committed.length - 2;
 		const cursor: PrefixCursor = {
-			sessionId: replace.sessionId as string,
+			sessionId: ref.sessionId,
 			lastKnownId: committed[entryCount - 1].id,
 			entryCount,
 		};
@@ -137,10 +112,10 @@ describe("initial sync: attach", () => {
 		const pairB = await createWsPair();
 		const framesB = collectFrames(pairB.clientWs);
 		const connB = new Connection(pairB.serverWs, mockDaemonVerbs, null, false);
-		connB.attach(bh.manager, "test-mgr", cursor);
+		connB.attach(bh.manager, ref, cursor);
 
 		const delta = (await waitForFrame(framesB, (f) => (f as { kind?: string }).kind === "patch")) as PatchMessage;
-		expect(delta.sessionId).toBe(bh.manager.liveSessionId);
+		expect(delta.session).toEqual(ref);
 		const entryAdds = delta.ops.filter((op) => op.op === "add" && op.path.startsWith("/entries/"));
 		expect(entryAdds.map((op) => op.path)).toEqual([
 			`/entries/${committed[entryCount].id}`,
@@ -163,7 +138,7 @@ describe("initial sync: attach", () => {
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr", {
+		conn.attach(bh.manager, mockSessionRef, {
 			sessionId: bh.manager.liveSessionId,
 			lastKnownId: "no-such-entry",
 			entryCount: 1,
@@ -188,7 +163,7 @@ describe("initial sync: attach", () => {
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 		const firstReplace = (await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace")) as {
 			document: Document;
 		};
@@ -204,7 +179,7 @@ describe("initial sync: attach", () => {
 		const pair2 = await createWsPair();
 		const frames2 = collectFrames(pair2.clientWs);
 		const conn2 = new Connection(pair2.serverWs, mockDaemonVerbs, null, false);
-		conn2.attach(bh.manager, "test-mgr-2");
+		conn2.attach(bh.manager, mockSessionRef);
 
 		const frame = await waitForFrame(frames2, (f) => (f as { kind?: string }).kind === "replace");
 		const doc = (frame as { document: Document }).document;
@@ -225,72 +200,41 @@ describe("initial sync: attach", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Rebind: switchSession initiator delta vs other-connection replace
+// Multiple attachments to one activation (ADR 11: no rebind, shared runtime)
 // ---------------------------------------------------------------------------
 
-describe("initial sync: switchSession rebind", () => {
+describe("initial sync: shared activation", () => {
 	const harnesses: BridgeHarness[] = [];
 	afterEach(() => {
 		while (harnesses.length) harnesses.pop()?.cleanup();
 	});
 
-	it("sends the initiator a cursor delta and other connections a full replace", async () => {
-		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
-		harnesses.push(bh);
-		const target = writeSecondSession(bh.tempCwd);
-
-		const initiator = new FrameCollector();
-		const other = new FrameCollector();
-		bh.manager.addConnection(initiator);
-		bh.manager.addConnection(other);
-		initiator.frames.length = 0;
-		other.frames.length = 0;
-
-		await bh.manager.switchSession(
-			target.path,
-			{ sessionId: target.sessionId, lastKnownId: target.first, entryCount: 1 },
-			initiator,
-		);
-
-		expect(bh.manager.liveSessionId).toBe(target.sessionId);
-
-		// Initiator: delta patch with the missing suffix (the cached prefix is
-		// not resent; the runtime may append its own entries post-open — they
-		// are legitimately part of the suffix).
-		expect(initiator.frames.length).toBe(1);
-		const delta = initiator.frames[0] as PatchMessage;
-		expect(delta.kind).toBe("patch");
-		expect(delta.sessionId).toBe(target.sessionId);
-		const entryAdds = delta.ops.filter((op) => op.op === "add" && op.path.startsWith("/entries/"));
-		expect(entryAdds.map((op) => op.path)).toContain(`/entries/${target.second}`);
-		expect(entryAdds.map((op) => op.path)).not.toContain(`/entries/${target.first}`);
-
-		// Other connection: full replace covering the whole target session.
-		expect(other.frames.length).toBe(1);
-		const replace = other.frames[0] as ReplaceMessage;
-		expect(replace.kind).toBe("replace");
-		expect(replace.sessionId).toBe(target.sessionId);
-		expect(replace.document.entries[target.first]?.ord).toBe(0);
-		expect(replace.document.entries[target.second]?.ord).toBe(1);
-	});
-
-	it("a switchSession failure sends no initial sync", async () => {
+	it("gives each attached handle its own cursor view", async () => {
 		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
 		harnesses.push(bh);
 
+		const ref = { projectId: "proj", sessionId: bh.manager.liveSessionId, stem: mockSessionRef.stem };
 		const collector = new FrameCollector();
-		bh.manager.addConnection(collector);
-		collector.frames.length = 0;
+		bh.manager.addConnection(collector, ref);
+		const replace = collector.frames[0] as ReplaceMessage;
+		expect(replace.kind).toBe("replace");
+		expect(replace.session).toEqual(ref);
+		expect(replace.document.entries[Object.keys(replace.document.entries)[0]]?.ord).toBeDefined();
 
-		// An existing non-session file fails SessionManager.open's validity
-		// check before any rebind runs.
-		const garbage = join(bh.tempCwd, "garbage.jsonl");
-		writeFileSync(garbage, "not a session file\n");
-
-		const before = bh.manager.liveSessionId;
-		await expect(bh.manager.switchSession(garbage, null, collector)).rejects.toThrow();
-		expect(collector.frames.length).toBe(0);
-		expect(bh.manager.liveSessionId).toBe(before);
+		const committed = committedOf(replace.document);
+		const entryCount = committed.length - 1;
+		const delta = new FrameCollector();
+		bh.manager.addConnection(delta, ref, {
+			sessionId: ref.sessionId,
+			lastKnownId: committed[entryCount - 1].id,
+			entryCount,
+		});
+		const frame = delta.frames[0] as PatchMessage;
+		expect(frame.kind).toBe("patch");
+		expect(frame.session).toEqual(ref);
+		const entryAdds = frame.ops.filter((op) => op.op === "add" && op.path.startsWith("/entries/"));
+		expect(entryAdds).toHaveLength(1);
+		expect(entryAdds[0].path).toBe(`/entries/${committed[entryCount].id}`);
 	});
 });
 
@@ -333,13 +277,13 @@ describe("initial sync: subscription reset", () => {
 			},
 			liveSessionId: "s-stub",
 			cwd: "/tmp",
+			sessionFile: "/tmp/s-stub.jsonl",
+			createdAt: new Date(0).toISOString(),
 			onPatch: () => () => {},
-			onReplace: () => () => {},
-			onExit: () => () => {},
 			onSettled: () => () => {},
 			addConnection(handle) {
 				handles.add(handle);
-				handle.onInitialSync({ kind: "replace", sessionId: "s-stub", document });
+				handle.onInitialSync({ kind: "replace", session: mockSessionRef, document });
 			},
 			removeConnection(handle) {
 				handles.delete(handle);
@@ -352,17 +296,13 @@ describe("initial sync: subscription reset", () => {
 			setThinkingLevel: async () => {},
 			renameSession: async () => {},
 			navigate: async () => {},
-			switchSession: async () => {},
-			newSession: async () => {},
-			dispose: async () => {
-				for (const h of handles) h.onExit();
-			},
+			dispose: async () => {},
 		};
 
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attach(manager, "stub");
+		conn.attach(manager, mockSessionRef);
 		await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace");
 
 		const lazyPatch: Patch = {
@@ -389,7 +329,7 @@ describe("initial sync: subscription reset", () => {
 		// Re-attach: the initial sync resets subscriptions, so the same lazy
 		// patch is filtered again.
 		const mark = frames.length;
-		conn.attach(manager, "stub");
+		conn.attach(manager, mockSessionRef);
 		await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace" && frames.indexOf(f) >= mark);
 		for (const h of handles) h.onPatch(lazyPatch);
 		// WS delivery is async — allow time for a frame that must not arrive.
@@ -402,7 +342,7 @@ describe("initial sync: subscription reset", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Daemon: durable session identity in session listing
+// Daemon: Project/session address in session listing
 // ---------------------------------------------------------------------------
 
 describe("initial sync: session listing identity", () => {
@@ -411,16 +351,17 @@ describe("initial sync: session listing identity", () => {
 		while (cleanups.length) cleanups.pop()?.();
 	});
 
-	it("listSessions reports the header sessionId and the file sessionPath", async () => {
+	it("listSessions reports the project id, stem, and header sessionId", async () => {
 		const root = join(tmpdir(), `pi-bridge-daemon-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const agentDir = join(root, "agent");
-		// The Daemon scans getDefaultSessionDir(process.cwd(), agentDir) — it has
-		// no cwd option; the temp agentDir keeps the scan off the real one.
+		// The Daemon scans getDefaultSessionDir(project.cwd, agentDir) for the
+		// allowlisted cwd; the temp agentDir keeps the scan off the real one.
 		const sessionDir = sessionDirFor(process.cwd(), agentDir);
 		mkdirSync(sessionDir, { recursive: true });
 		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
 
-		const sessionPath = join(sessionDir, "2024-01-01T00-00-00-000Z_durable-id-1234.jsonl");
+		const stem = "2024-01-01T00-00-00-000Z_durable-id-1234";
+		const sessionPath = join(sessionDir, `${stem}.jsonl`);
 		writeFileSync(
 			sessionPath,
 			`${[
@@ -445,7 +386,7 @@ describe("initial sync: session listing identity", () => {
 		cleanups.push(() => {
 			void daemon.dispose();
 		});
-		const opts: DaemonOptions = { agentDir, cwdAllowlist: [process.cwd()] };
+		const opts: DaemonOptions = { agentDir, allow: [process.cwd()] };
 		await daemon.start(opts);
 		const addr = daemon.address;
 		if (!addr) throw new Error("daemon not listening");
@@ -457,15 +398,18 @@ describe("initial sync: session listing identity", () => {
 		});
 		cleanups.push(() => ws.close());
 		const frames = collectFrames(ws);
-		ws.send(JSON.stringify({ id: "1", verb: "listSessions" }));
+		const projectId = basename(process.cwd()).toLowerCase();
+		ws.send(JSON.stringify({ id: "1", verb: "listSessions", projectId }));
 
 		const reply = (await waitForFrame(frames, (f) => (f as { id?: string }).id === "1")) as {
 			ok: boolean;
-			sessions: Array<{ sessionId: string; sessionPath: string | null }>;
+			sessions: Array<{ projectId: string; sessionId: string; stem: string; active: boolean }>;
 		};
 		expect(reply.ok).toBe(true);
 		expect(reply.sessions.length).toBe(1);
+		expect(reply.sessions[0].projectId).toBe(projectId);
 		expect(reply.sessions[0].sessionId).toBe("durable-id-1234");
-		expect(reply.sessions[0].sessionPath).toBe(sessionPath);
+		expect(reply.sessions[0].stem).toBe(stem);
+		expect(reply.sessions[0].active).toBe(false);
 	});
 });

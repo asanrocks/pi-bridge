@@ -264,34 +264,43 @@ describe("BridgeClient", () => {
 		expect(frame.entryId).toBe("entry-42");
 	});
 
-	it("switchSession sends sessionPath and optional cursor", () => {
+	it("openSession sends projectId, stem, and optional cursor", () => {
 		const { client, transport } = makeClient();
-		client.switchSession("/tmp/session.jsonl");
+		client.openSession("proj", "2024-01-01_abc");
 		const frame = JSON.parse(transport.sent[0]);
-		expect(frame.verb).toBe("switchSession");
-		expect(frame.sessionPath).toBe("/tmp/session.jsonl");
+		expect(frame.verb).toBe("openSession");
+		expect(frame.projectId).toBe("proj");
+		expect(frame.stem).toBe("2024-01-01_abc");
 		expect(frame.cursor).toBeUndefined();
 
-		client.switchSession("/tmp/other.jsonl", { sessionId: "s", lastKnownId: "e2", entryCount: 3 });
+		client.openSession("proj", "other", { sessionId: "s", lastKnownId: "e2", entryCount: 3 });
 		const withCursor = JSON.parse(transport.sent[1]);
-		expect(withCursor.sessionPath).toBe("/tmp/other.jsonl");
+		expect(withCursor.stem).toBe("other");
 		expect(withCursor.cursor).toEqual({ sessionId: "s", lastKnownId: "e2", entryCount: 3 });
 	});
 
-	it("abort, newSession, listSessions, getDaemonInfo send correct verbs", () => {
+	it("abort, newSession, listSessions, listActiveSessions, getDaemonInfo send correct verbs", () => {
 		const { client, transport } = makeClient();
 
 		client.abort();
 		expect(JSON.parse(transport.sent[0]).verb).toBe("abort");
 
-		client.newSession();
-		expect(JSON.parse(transport.sent[1]).verb).toBe("newSession");
+		client.newSession("proj");
+		const newSessionFrame = JSON.parse(transport.sent[1]);
+		expect(newSessionFrame.verb).toBe("newSession");
+		expect(newSessionFrame.projectId).toBe("proj");
 
-		client.listSessions();
-		expect(JSON.parse(transport.sent[2]).verb).toBe("listSessions");
+		client.listSessions("proj", 10, { sortTimeMs: 42, stem: "a" });
+		const listFrame = JSON.parse(transport.sent[2]);
+		expect(listFrame.verb).toBe("listSessions");
+		expect(listFrame.projectId).toBe("proj");
+		expect(listFrame.cursor).toEqual({ sortTimeMs: 42, stem: "a" });
+
+		client.listActiveSessions();
+		expect(JSON.parse(transport.sent[3]).verb).toBe("listActiveSessions");
 
 		client.getDaemonInfo();
-		expect(JSON.parse(transport.sent[3]).verb).toBe("getDaemonInfo");
+		expect(JSON.parse(transport.sent[4]).verb).toBe("getDaemonInfo");
 	});
 
 	it("pull sends requests array", () => {

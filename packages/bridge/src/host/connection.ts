@@ -4,23 +4,23 @@ import type {
 	GetDaemonInfoReply,
 	GitShowRequest,
 	ImageContent,
-	InstanceInfo,
 	JsonValue,
-	KillInstanceRequest,
 	ListFilesRequest,
 	ListSessionsRequest,
 	NavigateRequest,
-	NewInstanceRequest,
+	NewSessionRequest,
+	OpenSessionRequest,
 	PrefixCursor,
+	ProjectInfo,
 	PromptRequest,
 	PullRequest,
 	ReadFileRequest,
 	RenameSessionRequest,
 	SessionInfo,
+	SessionListCursor,
+	SessionRef,
 	SetModelRequest,
 	SetThinkingLevelRequest,
-	SwitchInstanceRequest,
-	SwitchSessionRequest,
 } from "../core/index.ts";
 import {
 	CompactCodec,
@@ -34,15 +34,14 @@ import type { TrafficLogger } from "./logger.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
 
 // ============================================================================
-// Connection — owns one WebSocket, attached to one Manager (or none)
+// DaemonVerbs — the Connection → Daemon seam (ADR 11)
 // ============================================================================
 
 export interface DaemonVerbs {
-	listSessions: (opts?: { max?: number; ts?: string; cwd?: string }) => Promise<{
-		sessions: SessionInfo[];
-		hasMore: boolean;
-	}>;
+	/** Static Project configuration (ADR 11). Never a cwd allowlist: clients
+	 * address sessions by `(projectId, stem)`. */
 	getDaemonInfo: () => {
+		projects: ProjectInfo[];
 		models: {
 			provider: string;
 			id: string;
@@ -51,9 +50,29 @@ export interface DaemonVerbs {
 			supportedThinkingLevels?: string[];
 		}[];
 		thinkingLevels: string[];
-		cwdAllowlist: string[];
 		devMode: boolean;
 	};
+	/** Paginated history query for one Project. */
+	listSessions: (
+		projectId: string,
+		max?: number,
+		cursor?: SessionListCursor | null,
+	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
+	/** Global active/streaming snapshot. */
+	listActiveSessions: () => SessionInfo[];
+	/** Resolve-or-activate `(projectId, stem)` and attach this Connection. */
+	openSession: (
+		projectId: string,
+		stem: string,
+		conn: Connection,
+		cursor?: PrefixCursor | null,
+	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
+	/** Create a new unflushed session in a Project and attach this Connection. */
+	newSession: (projectId: string, conn: Connection) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
+	/** Release this Connection's attachment (activation stays alive for GC). */
+	detach: (conn: Connection) => void;
+	/** Broadcast a Project's refreshed first page (rename, settle). */
+	sessionsChanged: (projectId: string) => void;
 	listFiles: (prefix: string, cwd?: string) => Array<{ path: string; isDirectory: boolean }>;
 	/** Read a file for the web viewer. Throws on missing/unreadable paths
 	 * (converted to an ok:false reply). Relative paths resolve against cwd. */
@@ -61,18 +80,10 @@ export interface DaemonVerbs {
 	/** Show a commit (`git show --stat`) for an ADR 10 change card. Throws on
 	 * invalid commits and spawn failures (converted to an ok:false reply). */
 	gitShow: (commit: string, cwd?: string) => Promise<{ output: string; truncated: boolean }>;
-	listInstances: () => InstanceInfo[];
-	switchInstance: (
-		instanceId: string,
-		conn: Connection,
-		cursor?: PrefixCursor | null,
-	) => Promise<{ ok: boolean; error?: string }>;
-	newInstance: (cwd: string, conn: Connection) => Promise<{ ok: boolean; error?: string; instanceId?: string }>;
-	killInstance: (instanceId: string, conn: Connection) => Promise<{ ok: boolean; error?: string }>;
 }
 
 // ============================================================================
-// Connection — owns one WebSocket, attached to one Manager (or none)
+// Connection — owns one WebSocket, attached to at most one Manager
 // ============================================================================
 
 export class Connection {
@@ -83,9 +94,8 @@ export class Connection {
 	private subscriptions = new Set<string>();
 	private codec = new CompactCodec();
 	private handle: ConnectionHandle;
-	private onSettledUnsubscribe: (() => void) | null = null;
 	private _attachedManager: Manager | null = null;
-	private _attachedInstanceId: string | null = null;
+	private _attachedSession: SessionRef | null = null;
 
 	constructor(ws: WebSocket, daemonVerbs: DaemonVerbs, logger: TrafficLogger | null, devMode: boolean) {
 		this.ws = ws;
@@ -95,7 +105,7 @@ export class Connection {
 
 		// The Manager-facing handle (ADR 09). Initial-sync frames are sent
 		// unfiltered — construction already stripped lazy fields — and reset
-		// connection-local lazy subscriptions (attach + session rebind).
+		// connection-local lazy subscriptions.
 		this.handle = {
 			onPatch: (patch: Patch) => {
 				const filtered = filterPatchForSocket(patch.ops, this.subscriptions);
@@ -108,17 +118,9 @@ export class Connection {
 				this.subscriptions.clear();
 				this.send(frame as unknown as Record<string, unknown>);
 			},
-			onExit: () => {
-				this.send({ kind: "instance_exit", instanceId: this._attachedInstanceId ?? "" });
-				this._attachedManager = null;
-				this._attachedInstanceId = null;
-			},
 		};
 
-		// Connection starts unattached (no Manager). The Daemon calls attach()
-		// when the client selects an instance.
-
-		// Listen for WS messages
+		// A Connection starts unattached. The Daemon attaches it via openSession.
 		ws.on("message", (data) => {
 			try {
 				const msg = JSON.parse(data.toString()) as ClientMessage;
@@ -136,33 +138,35 @@ export class Connection {
 		return this._attachedManager;
 	}
 
-	get attachedInstanceId(): string | null {
-		return this._attachedInstanceId;
+	/** The address + identity of the attached session (ADR 11). */
+	get attachedSession(): SessionRef | null {
+		return this._attachedSession;
 	}
 
-	attach(manager: Manager, instanceId: string, cursor?: PrefixCursor | null): void {
+	attach(manager: Manager, session: SessionRef, cursor?: PrefixCursor | null): void {
 		this.detach();
 		this._attachedManager = manager;
-		this._attachedInstanceId = instanceId;
-		manager.addConnection(this.handle, cursor ?? null);
-		this.onSettledUnsubscribe = manager.onSettled(async () => {
-			await this.pushSessionsChanged();
-		});
+		this._attachedSession = session;
+		// A stale remembered append path must not survive an attach (ADR 11):
+		// initial-sync frames carry `session` and are never compacted.
+		this.codec.reset();
+		manager.addConnection(this.handle, session, cursor ?? null);
 	}
 
 	detach(): void {
 		if (!this._attachedManager) return;
-		this._attachedInstanceId = null;
 		this._attachedManager.removeConnection(this.handle);
-		if (this.onSettledUnsubscribe) {
-			this.onSettledUnsubscribe();
-			this.onSettledUnsubscribe = null;
-		}
 		this._attachedManager = null;
+		this._attachedSession = null;
 	}
 
 	dispose(): void {
 		this.detach();
+	}
+
+	/** Push a daemon-originated frame (sessions_changed / active_sessions_changed). */
+	push(frame: Record<string, unknown>): void {
+		this.send(frame);
 	}
 
 	// ── Message handler ──────────────────────────────────────────────────
@@ -172,9 +176,9 @@ export class Connection {
 
 		try {
 			switch (verb) {
-				// ── Session verbs (require attached Manager) ────────────────
+				// ── Attached session verbs ─────────────────────────────────
 				case "prompt": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					const m = msg as unknown as PromptRequest;
 					if (typeof m.text !== "string") throw new Error("Missing `text`");
 					// Light shape validation: images are opaque base64 blobs relayed
@@ -201,118 +205,90 @@ export class Connection {
 					break;
 				}
 				case "abort": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					await this._attachedManager.abort();
 					this.sendReply(id, true);
 					break;
 				}
 				case "discardSteer": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					await this._attachedManager.discardSteer();
 					this.sendReply(id, true);
 					break;
 				}
 				case "setModel": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					const m = msg as unknown as SetModelRequest;
 					await this._attachedManager.setModel(m.provider, m.model);
 					this.sendReply(id, true);
 					break;
 				}
 				case "setThinkingLevel": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					const m = msg as unknown as SetThinkingLevelRequest;
 					await this._attachedManager.setThinkingLevel(m.level);
 					this.sendReply(id, true);
 					break;
 				}
 				case "renameSession": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager || !this._attachedSession) throw new Error("no session attached");
 					const m = msg as unknown as RenameSessionRequest;
 					if (typeof m.name !== "string") throw new Error("Missing `name`");
 					await this._attachedManager.renameSession(m.name);
 					this.sendReply(id, true);
-					await this.pushSessionsChanged();
+					this.daemonVerbs.sessionsChanged(this._attachedSession.projectId);
 					break;
 				}
 				case "navigate": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					const m = msg as unknown as NavigateRequest;
 					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 					await this._attachedManager.navigate(m.entryId);
 					this.sendReply(id, true);
 					break;
 				}
-				case "switchSession": {
-					if (!this._attachedManager) throw new Error("no instance attached");
-					const m = msg as unknown as SwitchSessionRequest;
-					if (typeof m.sessionPath !== "string") throw new Error("Missing `sessionPath`");
-					await this._attachedManager.switchSession(m.sessionPath, m.cursor ?? null, this.handle);
-					this.sendReply(id, true);
-					await this.pushSessionsChanged();
+
+				// ── Navigation verbs (Daemon, side-effectful) ──────────────
+				case "openSession": {
+					const m = msg as unknown as OpenSessionRequest;
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
+					const result = await this.daemonVerbs.openSession(m.projectId, m.stem, this, m.cursor ?? null);
+					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
+					else this.sendReply(id, false, result.error);
 					break;
 				}
 				case "newSession": {
-					if (!this._attachedManager) throw new Error("no instance attached");
-					await this._attachedManager.newSession();
+					const m = msg as unknown as NewSessionRequest;
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					const result = await this.daemonVerbs.newSession(m.projectId, this);
+					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
+					else this.sendReply(id, false, result.error);
+					break;
+				}
+				case "detach": {
+					this.daemonVerbs.detach(this);
 					this.sendReply(id, true);
-					// Push updated sessions list (with stub entry for new session)
-					const cwd = this._attachedManager.cwd;
-					const updated = await this.daemonVerbs.listSessions({ max: 10, cwd });
-					const liveId = this._attachedManager.liveSessionId;
-					if (liveId && !updated.sessions.some((s) => s.sessionId === liveId)) {
-						updated.sessions.push({
-							sessionId: liveId,
-							sessionPath: null,
-							name: "",
-							timestamp: new Date().toISOString(),
-							firstMessageText: undefined,
-							messageCount: 0,
-						});
-					}
-					this.send({ kind: "sessions_changed", sessions: updated.sessions, hasMore: updated.hasMore });
-					break;
-				}
-
-				// ── Instance routing verbs (Daemon, side-effectful) ───────
-				case "switchInstance": {
-					const m = msg as unknown as SwitchInstanceRequest;
-					if (typeof m.instanceId !== "string") throw new Error("Missing `instanceId`");
-					const result = await this.daemonVerbs.switchInstance(m.instanceId, this, m.cursor ?? null);
-					if (result.ok) this.sendReply(id, true);
-					else this.sendReply(id, false, result.error);
-					break;
-				}
-				case "newInstance": {
-					const m = msg as unknown as NewInstanceRequest;
-					if (typeof m.cwd !== "string") throw new Error("Missing `cwd`");
-					const result = await this.daemonVerbs.newInstance(m.cwd, this);
-					if (result.ok) {
-						this.send({ id, ok: true, instanceId: result.instanceId } as Record<string, unknown>);
-					} else {
-						this.sendReply(id, false, result.error);
-					}
-					break;
-				}
-				case "killInstance": {
-					const m = msg as unknown as KillInstanceRequest;
-					if (typeof m.instanceId !== "string") throw new Error("Missing `instanceId`");
-					const result = await this.daemonVerbs.killInstance(m.instanceId, this);
-					if (result.ok) this.sendReply(id, true);
-					else this.sendReply(id, false, result.error);
 					break;
 				}
 
 				// ── Daemon query verbs ─────────────────────────────────────
 				case "listSessions": {
 					const m = msg as unknown as ListSessionsRequest;
-					const ts = m.ts ?? undefined;
-					const max = m.max ?? undefined;
-					const cwd = this._attachedManager?.cwd;
-					const result = await this.daemonVerbs.listSessions(
-						max !== undefined || ts !== undefined || cwd !== undefined ? { max, ts, cwd } : undefined,
-					);
-					this.send({ id, ok: true, sessions: result.sessions, hasMore: result.hasMore });
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					const result = await this.daemonVerbs.listSessions(m.projectId, m.max ?? undefined, m.cursor ?? null);
+					const reply: Record<string, unknown> = {
+						id,
+						ok: true,
+						sessions: result.sessions,
+						hasMore: result.hasMore,
+					};
+					if (result.nextCursor) reply.nextCursor = result.nextCursor;
+					this.send(reply);
+					break;
+				}
+				case "listActiveSessions": {
+					this.send({ id, ok: true, sessions: this.daemonVerbs.listActiveSessions() });
 					break;
 				}
 				case "getDaemonInfo": {
@@ -321,25 +297,20 @@ export class Connection {
 					this.send(reply as unknown as Record<string, unknown>);
 					break;
 				}
-				case "listInstances": {
-					const instances = this.daemonVerbs.listInstances();
-					this.send({ id, ok: true, instances });
-					break;
-				}
 				case "listFiles": {
 					const m = msg as unknown as ListFilesRequest;
 					if (typeof m.prefix !== "string") throw new Error("Missing `prefix`");
-					const cwd = this._attachedManager?.cwd;
-					const entries = this.daemonVerbs.listFiles(m.prefix, cwd);
+					if (!this._attachedManager) throw new Error("no session attached");
+					const entries = this.daemonVerbs.listFiles(m.prefix, this._attachedManager.cwd);
 					this.send({ id, ok: true, entries });
 					break;
 				}
 				case "readFile": {
 					const m = msg as unknown as ReadFileRequest;
 					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
-					// Requires an attached instance: relative links resolve against
-					// its cwd, so an unattached read has no authoritative base.
-					if (!this._attachedManager) throw new Error("no instance attached");
+					// Requires an attachment: relative links resolve against the
+					// attached session's Project cwd.
+					if (!this._attachedManager) throw new Error("no session attached");
 					const result = this.daemonVerbs.readFile(m.path, this._attachedManager.cwd);
 					this.send({ id, ok: true, ...result });
 					break;
@@ -347,9 +318,9 @@ export class Connection {
 				case "gitShow": {
 					const m = msg as unknown as GitShowRequest;
 					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
-					// Requires an attached instance: the recorded commit belongs to
-					// that instance's repository, so its cwd is the query base.
-					if (!this._attachedManager) throw new Error("no instance attached");
+					// Requires an attachment: the recorded commit belongs to the
+					// attached session's repository, so its cwd is the query base.
+					if (!this._attachedManager) throw new Error("no session attached");
 					const result = await this.daemonVerbs.gitShow(m.commit, this._attachedManager.cwd);
 					this.send({ id, ok: true, ...result });
 					break;
@@ -364,7 +335,7 @@ export class Connection {
 
 				// ── Connection-local verb ──────────────────────────────────
 				case "pull": {
-					if (!this._attachedManager) throw new Error("no instance attached");
+					if (!this._attachedManager) throw new Error("no session attached");
 					const m = msg as unknown as PullRequest;
 					if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
 					const values: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
@@ -383,14 +354,6 @@ export class Connection {
 					break;
 				}
 
-				case "detachInstance": {
-					// Back to the instance list: unbind from the Manager so its
-					// patches stop flowing. The instance keeps running headless.
-					this.detach();
-					this.sendReply(id, true);
-					break;
-				}
-
 				default:
 					throw new Error(`Unknown verb: ${verb}`);
 			}
@@ -400,12 +363,6 @@ export class Connection {
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────
-
-	private async pushSessionsChanged(): Promise<void> {
-		const cwd = this._attachedManager?.cwd;
-		const updated = await this.daemonVerbs.listSessions({ max: 10, cwd });
-		this.send({ kind: "sessions_changed", sessions: updated.sessions, hasMore: updated.hasMore });
-	}
 
 	private send(data: Record<string, unknown>): void {
 		try {

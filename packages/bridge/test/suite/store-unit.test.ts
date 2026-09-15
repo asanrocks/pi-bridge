@@ -52,15 +52,17 @@ describe("createClientStore", () => {
 
 		expect(state.document).toEqual(emptyDoc());
 		expect(state.connection).toEqual({ kind: "connecting" });
-		expect(state.attachedInstanceId).toBeNull();
-		expect(state.instances).toEqual([]);
+		expect(state.currentProjectId).toBeNull();
+		expect(state.currentStem).toBeNull();
+		expect(state.projects).toEqual([]);
+		expect(state.activeSessions).toEqual([]);
 		expect(state.expandedActionGroups).toEqual(new Set());
 		expect(state.expandedSteps).toEqual(new Set());
 		expect(state.frozenActionGroups).toEqual(new Set());
 		expect(state.frozenSteps).toEqual(new Set());
 		expect(state.loadingPaths).toEqual(new Set());
 		expect(state.sessions).toEqual([]);
-		expect(state.cwdAllowlist).toEqual([]);
+		expect(state.sessionsNextCursor).toBeNull();
 		expect(state.models).toEqual([]);
 		expect(state.thinkingLevels).toEqual([]);
 		expect(state.cardWrap).toBe(true);
@@ -94,39 +96,42 @@ describe("createClientStore", () => {
 		expect(store.getState().connection).toEqual({ kind: "init_failed", error: "boom" });
 	});
 
-	it("syncInstances updates instances and attachedInstanceId", () => {
+	it("setProjects and setActiveSessions update the ADR 11 registries", () => {
 		const store = createClientStore();
 
-		const instances = [
-			{ instanceId: "m1", sessionId: "s1", cwd: "/a", name: "Instance A", isStreaming: false },
-			{ instanceId: "m2", sessionId: "s2", cwd: "/b", name: "Instance B", isStreaming: true },
+		const projects = [
+			{ id: "a", cwd: "/a" },
+			{ id: "b", cwd: "/b" },
 		];
-		store.getState().syncInstances({ instances });
-		expect(store.getState().instances).toEqual(instances);
+		store.getState().setProjects(projects);
+		expect(store.getState().projects).toEqual(projects);
 
-		// Set attachedInstanceId independently
-		store.getState().syncInstances({ attachedInstanceId: "m1" });
-		expect(store.getState().attachedInstanceId).toBe("m1");
-
-		// Null it
-		store.getState().syncInstances({ attachedInstanceId: null });
-		expect(store.getState().attachedInstanceId).toBeNull();
+		const sessions = [
+			{
+				projectId: "a",
+				sessionId: "s1",
+				stem: "2024-01-01_s1",
+				active: true,
+				isStreaming: false,
+				timestamp: new Date(0).toISOString(),
+			},
+		];
+		store.getState().setActiveSessions(sessions);
+		expect(store.getState().activeSessions).toEqual(sessions);
 	});
 
-	it("clearInstance resets to initial state", () => {
+	it("clearCurrentSession resets to initial state but keeps the registries", () => {
 		const store = createClientStore();
 
-		// Set up some state
-		store.getState().syncInstances({
-			attachedInstanceId: "m1",
-			instances: [{ instanceId: "m1", sessionId: "s1", cwd: "/a", name: "P", isStreaming: false }],
-		});
+		store.getState().setProjects([{ id: "a", cwd: "/a" }]);
+		store.getState().setCurrentSession("a", "2024-01-01_s1");
 		store.getState().toggleActionGroup("e1:0");
 
-		store.getState().clearInstance();
+		store.getState().clearCurrentSession();
 
 		const state = store.getState();
-		expect(state.attachedInstanceId).toBeNull();
+		expect(state.currentProjectId).toBeNull();
+		expect(state.projects).toEqual([{ id: "a", cwd: "/a" }]);
 		expect(state.expandedActionGroups).toEqual(new Set());
 		expect(state.loadingPaths).toEqual(new Set());
 	});

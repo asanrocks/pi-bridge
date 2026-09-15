@@ -16,6 +16,7 @@ import type {
 	RpcReply,
 	RpcRequestBody,
 	ServerPushMessage,
+	SessionListCursor,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -192,21 +193,27 @@ export class BridgeClient {
 		return this.call({ verb: "navigate", entryId });
 	}
 
-	switchSession(sessionPath: string, cursor?: PrefixCursor): Promise<RpcReply> {
+	/** Resolve-or-activate a session by address (ADR 11). */
+	openSession(projectId: string, stem: string, cursor?: PrefixCursor): Promise<RpcReply> {
 		return this.call(
-			cursor ? { verb: "switchSession", sessionPath, cursor } : { verb: "switchSession", sessionPath },
+			cursor ? { verb: "openSession", projectId, stem, cursor } : { verb: "openSession", projectId, stem },
 		);
 	}
 
-	newSession(): Promise<RpcReply> {
-		return this.call({ verb: "newSession" });
+	/** Create a new unflushed session in a Project (ADR 11). */
+	newSession(projectId: string): Promise<RpcReply> {
+		return this.call({ verb: "newSession", projectId });
 	}
 
-	listSessions(max?: number, ts?: string | null): Promise<RpcReply> {
-		const body: Record<string, unknown> & { verb: string } = { verb: "listSessions" };
+	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<RpcReply> {
+		const body: Record<string, unknown> & { verb: string } = { verb: "listSessions", projectId };
 		if (max !== undefined) body.max = max;
-		if (ts !== undefined) body.ts = ts;
+		if (cursor !== undefined && cursor !== null) body.cursor = cursor;
 		return this.call(body as RpcRequestBody);
+	}
+
+	listActiveSessions(): Promise<RpcReply> {
+		return this.call({ verb: "listActiveSessions" });
 	}
 
 	getDaemonInfo(): Promise<RpcReply> {
@@ -217,27 +224,9 @@ export class BridgeClient {
 		return this.call({ verb: "pull", requests });
 	}
 
-	switchInstance(instanceId: string, cursor?: PrefixCursor): Promise<RpcReply> {
-		return this.call(
-			cursor ? { verb: "switchInstance", instanceId, cursor } : { verb: "switchInstance", instanceId },
-		);
-	}
-
-	newInstance(cwd: string): Promise<RpcReply> {
-		return this.call({ verb: "newInstance", cwd });
-	}
-
-	killInstance(instanceId: string): Promise<RpcReply> {
-		return this.call({ verb: "killInstance", instanceId });
-	}
-
-	/** Detach from the attached instance (back to the instance list). */
-	detachInstance(): Promise<RpcReply> {
-		return this.call({ verb: "detachInstance" });
-	}
-
-	listInstances(): Promise<RpcReply> {
-		return this.call({ verb: "listInstances" });
+	/** Detach from the attached session (back to the Project home). */
+	detach(): Promise<RpcReply> {
+		return this.call({ verb: "detach" });
 	}
 
 	listFiles(prefix: string): Promise<RpcReply> {

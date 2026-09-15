@@ -371,16 +371,16 @@ describe("composer draft: blurDraft — edit survives blur, compose salvages", (
 });
 
 // ---------------------------------------------------------------------------
-// clearInstance resets the draft (no orphaned edit state across instances)
+// clearCurrentSession resets the draft (no orphaned edit state across sessions)
 // ---------------------------------------------------------------------------
 
-describe("composer draft: clearInstance", () => {
+describe("composer draft: clearCurrentSession", () => {
 	it("resets an in-flight edit draft to idle", () => {
 		const store = createClientStore();
 		store.getState().beginEdit("e1", 1, "editing");
 		expect(store.getState().draft.kind).toBe("edit");
 
-		store.getState().clearInstance();
+		store.getState().clearCurrentSession();
 
 		expect(store.getState().draft).toEqual({ kind: "idle" });
 		expect(store.getState().composerExpanded).toBe(false);
@@ -391,7 +391,7 @@ describe("composer draft: clearInstance", () => {
 		store.getState().setDraftText("unsent");
 		store.getState().setComposerExpanded(true);
 
-		store.getState().clearInstance();
+		store.getState().clearCurrentSession();
 
 		expect(store.getState().draft).toEqual({ kind: "idle" });
 	});

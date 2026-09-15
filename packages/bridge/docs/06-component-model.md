@@ -1,6 +1,11 @@
 # ADR 06: Component Model — Manager, Connection, Daemon
 
-**Status:** Accepted. Replaces ADR 05.
+**Status:** Accepted. Replaces ADR 05. Partially superseded by
+[ADR 11](./11-adr-projects.md): its instance-centric routing verbs
+(`switchInstance`/`newInstance`/`killInstance`/`listInstances`), the instance
+push table, and the `instance_exit` kill-discovery addendum are replaced by
+`openSession`/`newSession`/`detach` and the Project/Session pushes. The
+Manager and Connection implementation seams remain.
 
 ## Context
 

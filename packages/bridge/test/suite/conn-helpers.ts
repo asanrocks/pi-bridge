@@ -2,8 +2,8 @@
 // (connection-daemon.test.ts, initial-sync-integration.test.ts).
 
 import WebSocket, { WebSocketServer } from "ws";
-import type { PrefixCursor, SessionInfo } from "../../src/core/index.ts";
-import type { Connection, DaemonVerbs } from "../../src/host/connection.ts";
+import type { SessionInfo, SessionRef } from "../../src/core/index.ts";
+import type { DaemonVerbs } from "../../src/host/connection.ts";
 
 /** Create an in-process WebSocket pair (server + client). */
 export function createWsPair(): Promise<{ serverWs: WebSocket; clientWs: WebSocket }> {
@@ -69,9 +69,14 @@ export function waitFor(cond: () => boolean, timeout = 5000, what = "condition")
 	});
 }
 
+export const mockSessionRef: SessionRef = { projectId: "proj", sessionId: "s1", stem: "2024-01-01_s1" };
+
 const stubSession: SessionInfo = {
+	projectId: "proj",
 	sessionId: "s1",
-	sessionPath: "/tmp/s1.jsonl",
+	stem: "2024-01-01_s1",
+	active: false,
+	isStreaming: false,
 	name: "Session 1",
 	timestamp: "2024-01-01T00:00:00Z",
 	messageCount: 5,
@@ -79,12 +84,17 @@ const stubSession: SessionInfo = {
 
 export const mockDaemonVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [stubSession], hasMore: false }),
+	listActiveSessions: () => [],
 	getDaemonInfo: () => ({
+		projects: [{ id: "proj", cwd: "/proj" }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
 		thinkingLevels: ["off", "low", "medium", "high"],
-		cwdAllowlist: [],
 		devMode: false,
 	}),
+	openSession: async () => ({ ok: true, session: mockSessionRef }),
+	newSession: async () => ({ ok: true, session: mockSessionRef }),
+	detach: () => {},
+	sessionsChanged: () => {},
 	listFiles: () => [],
 	readFile: () => {
 		throw new Error("readFile not wired in mock");
@@ -92,12 +102,4 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	gitShow: () => {
 		throw new Error("gitShow not wired in mock");
 	},
-	listInstances: () => [],
-	switchInstance: async (
-		_instanceId: string,
-		_conn: Connection,
-		_cursor?: PrefixCursor | null,
-	): Promise<{ ok: boolean }> => ({ ok: true }),
-	newInstance: async () => ({ ok: true, instanceId: "test-mgr" }),
-	killInstance: async () => ({ ok: true }),
 };
