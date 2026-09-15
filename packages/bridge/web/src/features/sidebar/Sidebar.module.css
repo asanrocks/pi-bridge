@@ -65,7 +65,9 @@
 }
 
 .sidebarItem {
-	display: block;
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	width: 100%;
 	text-align: left;
 	padding: 4px 10px;
@@ -100,7 +102,8 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	width: 100%;
+	flex: 1;
+	min-width: 0;
 }
 
 .sidebarItemName {
@@ -299,9 +302,9 @@
 	text-overflow: ellipsis;
 }
 
-/* Alive indicator: green dot on every instance — the visual cue that
-   distinguishes live Instances from dormant Sessions (sections otherwise
-   share row styling). Orange + pulse when the instance is streaming. */
+/* Liveness indicator on a session row: green when the session is active,
+   orange + pulse while streaming. A dormant history row keeps the column
+   aligned with .sidebarDotIdle instead of claiming to be live. */
 .sidebarLiveDot {
 	display: inline-block;
 	width: 6px;
@@ -309,6 +312,11 @@
 	border-radius: 50%;
 	background: var(--color-success);
 	flex-shrink: 0;
+}
+
+/* Dormant session: same slot, muted — no liveness claim. */
+.sidebarDotIdle {
+	background: var(--color-border);
 }
 
 .sidebarLiveDotStreaming {
