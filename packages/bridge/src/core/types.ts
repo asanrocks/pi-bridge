@@ -422,6 +422,16 @@ export interface ConsoleRequest {
 	args: JsonValue[];
 }
 
+/** ADR 10 v2: show a recorded commit's details (`git show --stat`) in the
+ * attached instance's working directory. Like readFile, this consults the
+ * live repository on explicit user demand — the stored stamp labels stay
+ * the authoritative display source. */
+export interface GitShowRequest {
+	verb: "gitShow";
+	/** Full object id of the recorded commit (validated before spawn). */
+	commit: string;
+}
+
 // ── Instance routing verb request shapes ──────────────────────────────
 
 /** Client cache prefix cursor (ADR 09). Identifies the committed entry
@@ -477,6 +487,7 @@ export type RpcRequestBody =
 	| PullRequest
 	| ListFilesRequest
 	| ReadFileRequest
+	| GitShowRequest
 	| ConsoleRequest
 	| SwitchInstanceRequest
 	| NewInstanceRequest
@@ -588,6 +599,15 @@ export interface ReadFileReply {
 	truncated: boolean;
 	/** Full file size in bytes. */
 	bytes: number;
+}
+
+export interface GitShowReply {
+	id: string;
+	ok: true;
+	/** `git show --stat --no-color <commit>` stdout. */
+	output: string;
+	/** True when the output exceeded the byte cap and is a prefix. */
+	truncated: boolean;
 }
 
 export interface ListInstancesReply {

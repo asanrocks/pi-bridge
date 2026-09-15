@@ -89,6 +89,9 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	readFile: () => {
 		throw new Error("readFile not wired in mock");
 	},
+	gitShow: () => {
+		throw new Error("gitShow not wired in mock");
+	},
 	listInstances: () => [],
 	switchInstance: async (
 		_instanceId: string,
