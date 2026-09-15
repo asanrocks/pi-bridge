@@ -1,12 +1,17 @@
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GIT_STAMP_CUSTOM_TYPE } from "../../src/core/git-stamp.ts";
 import {
 	createGitStampExtension,
 	type GitRunner,
 	type GitRunOptions,
 	type GitRunResult,
+	spawnGit,
 } from "../../src/host/git-stamp-extension.ts";
+
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 const SHA1 = "0123456789abcdef0123456789abcdef01234567";
 const SHA1_B = "fedcba9876543210fedcba9876543210fedcba98";
@@ -185,6 +190,62 @@ describe("createGitStampExtension", () => {
 		expect(appended).toHaveLength(0);
 		await runTurnEnd(handlers, ctx);
 		expect(appended).toHaveLength(1);
+	});
+
+	it("rejects extra output after the expected line ending", async () => {
+		const { pi, handlers, appended } = fakePi();
+		const runner = scriptedRunner([
+			...identity(ok(`${SHA1}\n\n`), ok("main\n\n")),
+			...identity(ok(`${SHA1}\r\n`), ok("main\r\n")),
+		]);
+		createGitStampExtension({ runGit: runner })(pi);
+		await runPrompt(handlers, fakeCtx());
+		expect(appended).toHaveLength(0);
+		await runPrompt(handlers, fakeCtx());
+		expect(appended).toHaveLength(1);
+	});
+
+	it("clears the force-kill timer when a timed-out child closes", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new EventEmitter() as ReturnType<typeof spawn>;
+			const kill = vi.fn();
+			Object.assign(child, { stdout: new EventEmitter(), kill });
+			vi.mocked(spawn).mockReturnValue(child);
+
+			const result = spawnGit(["rev-parse"], { cwd: "/repo", timeoutMs: 10 });
+			await vi.advanceTimersByTimeAsync(10);
+			expect(await result).toEqual({ code: null, stdout: "", killed: true });
+
+			child.emit("close", null);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(kill).toHaveBeenCalledTimes(1);
+			expect(kill).toHaveBeenCalledWith("SIGTERM");
+		} finally {
+			vi.useRealTimers();
+			vi.mocked(spawn).mockReset();
+		}
+	});
+
+	it("does not install a timeout after an already-aborted signal", async () => {
+		vi.useFakeTimers();
+		try {
+			const child = new EventEmitter() as ReturnType<typeof spawn>;
+			const kill = vi.fn();
+			Object.assign(child, { stdout: new EventEmitter(), kill });
+			vi.mocked(spawn).mockReturnValue(child);
+
+			const controller = new AbortController();
+			controller.abort();
+			const result = spawnGit(["rev-parse"], { cwd: "/repo", timeoutMs: 10, signal: controller.signal });
+			expect(await result).toEqual({ code: null, stdout: "", killed: true });
+			await vi.advanceTimersByTimeAsync(10);
+			expect(kill).toHaveBeenCalledTimes(1);
+			expect(kill).toHaveBeenCalledWith("SIGTERM");
+		} finally {
+			vi.useRealTimers();
+			vi.mocked(spawn).mockReset();
+		}
 	});
 
 	it("rejects malformed git output (writes nothing)", async () => {

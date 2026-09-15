@@ -1961,6 +1961,20 @@ describe("git identity fold", () => {
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 	});
 
+	it("does not reuse a user turn when its effective identity changes", () => {
+		const withoutStamp = emptyDoc();
+		appendEntry(withoutStamp, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+		const previousVM = computeViewModel({ document: withoutStamp, sessions: [], models: [] });
+
+		const withStamp = emptyDoc();
+		appendEntry(withStamp, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
+		appendEntry(withStamp, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+
+		const vm = computeViewModel({ document: withStamp, sessions: [], models: [] }, previousVM);
+		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
+		expect(userTurnAt(vm, 0)).not.toBe(userTurnAt(previousVM, 0));
+	});
+
 	it("identity carries forward to later turns until a transition", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
