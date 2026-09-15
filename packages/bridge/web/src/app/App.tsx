@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useCallback, useMemo, useRef } from "react";
-import type { Document, ImageContent, SessionInfo } from "../../../src/core/index.ts";
+import type { Document, ImageContent } from "../../../src/core/index.ts";
 import {
 	computeViewModel,
 	findNextModel,
@@ -68,9 +68,10 @@ function AppInner() {
 	const pullTick = useStore((s) => s.pullTick);
 
 	const connection = useStore((s) => s.connection);
-	const attachedInstanceId = useStore((s) => s.attachedInstanceId);
-	const instances = useStore((s) => s.instances);
-	const cwdAllowlist = useStore((s) => s.cwdAllowlist);
+	const currentProjectId = useStore((s) => s.currentProjectId);
+	const currentStem = useStore((s) => s.currentStem);
+	const projects = useStore((s) => s.projects);
+	const activeSessions = useStore((s) => s.activeSessions);
 	const sessions = useStore((s) => s.sessions);
 	const models = useStore((s) => s.models);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
@@ -87,7 +88,6 @@ function AppInner() {
 
 	const toggleActionGroup = useStore((s) => s.toggleActionGroup);
 	const toggleStep = useStore((s) => s.toggleStep);
-	const _syncInstances = useStore((s) => s.syncInstances);
 
 	const historyOpen = useStore((s) => s.historyOpen);
 	const setHistoryOpen = useStore((s) => s.setHistoryOpen);
@@ -121,7 +121,7 @@ function AppInner() {
 			statusThinkingLevel,
 			String(isStreaming),
 			String(isCompacting),
-			String(attachedInstanceId),
+			String(currentStem),
 			String(pullTick),
 			String(JSON.stringify(statusContextUsage)),
 		].join("::");
@@ -143,7 +143,7 @@ function AppInner() {
 		isStreaming,
 		isCompacting,
 		stats,
-		attachedInstanceId,
+		currentStem,
 		sessions,
 		models,
 		pullTick,
@@ -187,12 +187,12 @@ function AppInner() {
 
 	const sidebarToggleRef = useRef<() => void>(() => {});
 	/** Imperative handle the Sidebar populates: open the sidebar (if closed)
-	    and surface the new-instance cwd picker. Driven by Alt+N when the
-	    allowlist has more than one cwd (==1 creates directly). */
-	const newInstanceRef = useRef<() => void>(() => {});
+	    and surface the project picker. Driven by Alt+N when more than one
+	    Project is configured (==1 starts a session directly). */
+	const newSessionRef = useRef<() => void>(() => {});
 
 	const isBusy = isStreaming || isCompacting;
-	const hasAttachedInstance = attachedInstanceId !== null;
+	const hasOpenSession = currentStem !== null;
 
 	const handleCycleModel = useCallback(
 		(direction: "forward" | "backward") => {
@@ -218,7 +218,7 @@ function AppInner() {
 		if (!text.trim() && !(draftImages && draftImages.length > 0)) return;
 		// Connection pre-flight: a disconnected send is a no-op RPC; keep
 		// the draft and surface why instead of silently dropping it.
-		if (s.connection.kind !== "connected" || !s.attachedInstanceId) {
+		if (s.connection.kind !== "connected" || !s.currentStem) {
 			s.pushToast("draft:offline", "Not connected; draft kept");
 			return;
 		}
@@ -278,51 +278,36 @@ function AppInner() {
 		[isBusy],
 	);
 
-	const handleSwitchSession = useCallback(
-		(session: SessionInfo) => {
-			if (isBusy || session.sessionPath === null) return;
-			rpc.switchSession(session.sessionPath, session.sessionId);
+	const handleOpenSession = useCallback(
+		(projectId: string, stem: string) => {
+			if (isBusy) return;
+			rpc.openSession(projectId, stem);
 		},
 		[isBusy, rpc],
 	);
 
-	const handleNewSession = useCallback(() => {
-		if (isBusy) return;
-		rpc.newSession();
-	}, [isBusy, rpc]);
+	const handleNewSession = useCallback(
+		(projectId: string) => {
+			if (isBusy) return;
+			rpc.newSession(projectId);
+		},
+		[isBusy, rpc],
+	);
 
-	const handleSwitchInstance = useCallback(
-		(instanceId: string) => {
-			getStore().getState().syncInstances({ attachedInstanceId: instanceId });
-			rpc.switchInstance(instanceId);
+	const handleOpenProject = useCallback(
+		(projectId: string) => {
+			rpc.openProject(projectId);
 		},
 		[rpc],
 	);
 
-	const handleNewInstance = useCallback(
-		async (cwd: string) => {
-			await rpc.newInstance(cwd);
-		},
-		[rpc],
-	);
-
-	const handleKillInstance = useCallback(
-		async (instanceId: string) => {
-			await rpc.killInstance(instanceId);
-		},
-		[rpc],
-	);
-
-	const handleDetachInstance = useCallback(() => {
-		void rpc.detachInstance();
+	const handleShowLauncher = useCallback(() => {
+		void rpc.detach();
 	}, [rpc]);
 
 	const handleLoadMoreSessions = useCallback(() => {
-		if (sessions.length > 0) {
-			const lastTs = sessions[sessions.length - 1].timestamp;
-			rpc.loadMoreSessions(lastTs);
-		}
-	}, [sessions, rpc]);
+		rpc.loadMoreSessions();
+	}, [rpc]);
 
 	// ── Keyboard navigation (document-level, via useAppKeybindings) ──────────
 	// Handlers read fresh store state at event time (getStore().getState())
@@ -428,30 +413,31 @@ function AppInner() {
 		[vm, isBusy, handleNavigate],
 	);
 
-	const handleCycleInstance = useCallback(
+	const handleCycleProject = useCallback(
 		(direction: "prev" | "next") => {
 			const s = getStore().getState();
-			const { instances, attachedInstanceId } = s;
-			if (instances.length === 0) return;
-			let idx = instances.findIndex((i) => i.instanceId === attachedInstanceId);
+			const { projects, currentProjectId } = s;
+			if (projects.length === 0) return;
+			let idx = projects.findIndex((p) => p.id === currentProjectId);
 			if (idx === -1) idx = 0;
-			const len = instances.length;
+			const len = projects.length;
 			const nextIdx = direction === "next" ? (idx + 1) % len : (idx - 1 + len) % len;
-			const next = instances[nextIdx];
-			if (next.instanceId === attachedInstanceId) return;
-			handleSwitchInstance(next.instanceId);
+			const next = projects[nextIdx];
+			if (next.id === currentProjectId) return;
+			handleOpenProject(next.id);
 		},
-		[handleSwitchInstance],
+		[handleOpenProject],
 	);
 
-	const handleNewInstanceShortcut = useCallback(() => {
-		if (cwdAllowlist.length === 1) {
-			handleNewInstance(cwdAllowlist[0]);
-		} else if (cwdAllowlist.length > 1) {
-			// Multi-cwd: surface the sidebar's cwd picker rather than guess.
-			newInstanceRef.current();
+	const handleNewSessionShortcut = useCallback(() => {
+		const s = getStore().getState();
+		if (s.projects.length === 1) {
+			handleNewSession(s.projects[0].id);
+		} else if (s.projects.length > 1) {
+			// Multi-project: surface the sidebar's project picker rather than guess.
+			newSessionRef.current();
 		}
-	}, [cwdAllowlist, handleNewInstance]);
+	}, [handleNewSession]);
 
 	useAppKeybindings({
 		onCycleModel: handleCycleModel,
@@ -462,8 +448,8 @@ function AppInner() {
 		onEditFocused: handleEditFocused,
 		onCopyFocused: handleCopyFocused,
 		onBranchSibling: handleBranchSibling,
-		onCycleInstance: handleCycleInstance,
-		onNewInstance: handleNewInstanceShortcut,
+		onCycleProject: handleCycleProject,
+		onNewSession: handleNewSessionShortcut,
 		onToggleSidebar: () => sidebarToggleRef.current(),
 		onToggleHistory: () => {
 			const s = getStore().getState();
@@ -489,26 +475,23 @@ function AppInner() {
 			<div className={styles.body}>
 				{/* Sidebar */}
 				<Sidebar
-					instances={instances}
-					attachedInstanceId={attachedInstanceId}
-					cwdAllowlist={cwdAllowlist}
+					projects={projects}
+					currentProjectId={currentProjectId}
 					sessions={sessions}
 					isBusy={isBusy}
 					sessionsHasMore={useStore((s) => s.sessionsHasMore)}
-					onSwitchInstance={handleSwitchInstance}
-					onNewInstance={handleNewInstance}
-					onKillInstance={handleKillInstance}
-					onShowLauncher={handleDetachInstance}
-					onSwitch={handleSwitchSession}
-					onNew={handleNewSession}
+					onOpenProject={handleOpenProject}
+					onOpenSession={handleOpenSession}
+					onNewSession={handleNewSession}
+					onShowLauncher={handleShowLauncher}
 					onLoadMore={handleLoadMoreSessions}
 					toggleRef={sidebarToggleRef}
-					newInstanceRef={newInstanceRef}
+					newSessionRef={newSessionRef}
 				/>
 
-				{/* Conversation */}
+				{/* Conversation or the Project home */}
 				<div className={styles.conversation}>
-					{hasAttachedInstance ? (
+					{hasOpenSession ? (
 						<>
 							<ConversationArea
 								vm={vm}
@@ -538,18 +521,18 @@ function AppInner() {
 					) : (
 						<Launcher
 							connection={connection}
-							instances={instances}
-							cwdAllowlist={cwdAllowlist}
-							onSwitchInstance={handleSwitchInstance}
-							onNewInstance={handleNewInstance}
-							onKillInstance={handleKillInstance}
-							onRefreshInstances={rpc.refreshInstances}
+							projects={projects}
+							activeSessions={activeSessions}
+							projectId={currentProjectId}
+							onOpenProject={handleOpenProject}
+							onOpenSession={handleOpenSession}
+							onNewSession={handleNewSession}
 							retry={retry}
 						/>
 					)}
 				</div>
 			</div>
-			{hasAttachedInstance && <HistoryPane />}
+			{hasOpenSession && <HistoryPane />}
 			<FileViewer />
 		</div>
 	);
