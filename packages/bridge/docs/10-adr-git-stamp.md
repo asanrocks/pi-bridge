@@ -296,16 +296,22 @@ the stamp) **folds into the run**: the run does not split; the stamp becomes
 a `GitChangeMark` on the turn carrying its position (the last block
 accumulated when it was observed). The mark renders as its own card inside
 the owning action group, after the step it follows — for a tool-anchored
-stamp, between the committing tool's band and the following steps — and the
+stamp, between the committing tool's band and the following steps. The
 group's collapsed summary leads with a `git:` segment (e.g. `git:
-ae02c151 · edit: foo.ts · run 1 tool · read 3 files`), and the group's
-family-dot legend gains a leading git swatch. A stamp whose anchor block is
-text attaches to the turn's last group; a text-only run has no group, so
-the mark falls back to a standalone card after the run.
+ae02c151 · edit: foo.ts · run 1 tool · read 3 files`) and its family-dot
+legend gains a leading git swatch. A stamp whose anchor block is
+text attaches to the nearest group *before* that text — placement is
+prefix-stable, so a mark keeps its group (and its DOM parent) as the run
+grows; resolving against the turn's last group instead would let a mark hop
+groups mid-stream and remount its card. A run with no group before the
+anchor falls back to a standalone card after the run.
 
-A boundary stamp (the `prompt` and `user_bash_end` anchors, or a run-anchor
-stamp with no open run) is a `GitChange` item in the ordered viewmodel
-sequence — a standalone card at its path position. Either way the item is
+A `prompt`-anchored stamp renders nothing of its own: its identity (and
+commit subject) is carried onto the following user turn, where the header
+shows a compact identity chip with the commit subject as its tooltip. The
+other boundary stamps (`user_bash_end`, or a run-anchor stamp with no open
+run) are `GitChange` items in the ordered viewmodel sequence — standalone
+cards at their path position. Either way the item is
 not a user or assistant turn: it does not merge assistant runs, participate
 in sibling navigation or editing, or join with assistant tool results, and
 user and assistant turn indexes retain their existing editing semantics.
@@ -337,11 +343,14 @@ The viewmodel must process valid Git stamps while walking the active leaf path:
 
 - accept v1 and v2 stamps with the reserved custom type;
 - update the carried effective identity after each valid stamp;
-- expose that identity on every `UserTurn` so the prompt's repository state is
-  easy to scan;
-- emit one ordered `GitChange` item for each valid boundary stamp; the
-  first item is an initial state recording and later changed keys are Git
-  change cards;
+- expose that identity, plus the effective commit's subject, on every
+  `UserTurn` — the header chip and its tooltip — so the prompt's repository
+  state is easy to scan;
+- emit no item for a `prompt`-anchored stamp (the user turn's chip carries
+  it);
+- emit one ordered `GitChange` item for each other boundary stamp; the
+  first is an initial state recording and later changed keys are Git change
+  cards;
 - fold each valid mid-run stamp (`tool_end`/`turn_end` with an open run)
   into the run as a `GitChangeMark` positioned after its last accumulated
   block;

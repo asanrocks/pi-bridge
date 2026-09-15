@@ -2052,11 +2052,33 @@ describe("git identity fold", () => {
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
-		// u2 and s2 are off-path: user turns + on-path stamps only
-		expect(vm.turns).toHaveLength(4);
+		// Prompt stamps render nothing of their own (the user turn's header chip
+		// carries them); u2 and s2 are off-path.
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "user"]);
 	});
 
-	it("v2 stamps emit ordered gitChange items; the first is an initial recording", () => {
+	it("prompt stamps render no card; their subject rides the user turn", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, {
+				v: 2,
+				anchor: "prompt",
+				commit: SHA1,
+				branch: "dev-bridge",
+				commitSubject: "feat: x",
+			}),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user"]);
+		const u = userTurnAt(vm, 0);
+		expect(u.gitIdentity).toEqual({ commit: SHA1, branch: "dev-bridge" });
+		expect(u.gitCommitSubject).toBe("feat: x");
+	});
+
+	it("a run-anchor stamp with no open run still renders a standalone card", () => {
 		const doc = emptyDoc();
 		appendEntry(
 			doc,
@@ -2077,24 +2099,16 @@ describe("git identity fold", () => {
 
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
 		const changes = vm.turns.filter((t) => t.kind === "gitChange");
-		expect(changes).toHaveLength(2);
-		const [c1, c2] = changes as Extract<(typeof vm.turns)[number], { kind: "gitChange" }>[];
-		expect(c1).toMatchObject({
-			entryId: "s1",
-			identity: { commit: SHA1, branch: "main" },
-			commitSubject: "init",
-			anchor: "prompt",
-			isInitial: true,
-		});
-		expect(c2).toMatchObject({
+		expect(changes).toHaveLength(1);
+		expect(changes[0]).toMatchObject({
 			entryId: "s2",
 			identity: { commit: SHA1_B, branch: "main" },
 			commitSubject: "agent commit",
 			anchor: "tool_end",
 			isInitial: false,
 		});
-		// Ordered at path position: card, user, card, user.
-		expect(vm.turns.map((t) => t.kind)).toEqual(["gitChange", "user", "gitChange", "user"]);
+		// Ordered at path position: user, card, user.
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "gitChange", "user"]);
 	});
 
 	it("v1 stamps emit gitChange items without a subject", () => {
@@ -2189,8 +2203,9 @@ describe("git identity fold", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
-		expect(vm.turns.map((t) => t.kind)).toEqual(["gitChange", "user", "assistant"]);
-		const run = vm.turns[2];
+		// The prompt stamp (s0) renders no card; the turn_end stamp folds in.
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
+		const run = vm.turns[1];
 		if (run?.kind !== "assistant") throw new Error("expected assistant");
 		expect(run.gitChanges).toHaveLength(1);
 		expect(run.gitChanges![0]).toMatchObject({ anchor: "turn_end", afterBlockKey: "a1:b0", isInitial: false });
@@ -2237,10 +2252,73 @@ describe("git identity fold", () => {
 			},
 		]);
 		expect(unattached).toHaveLength(0);
-		expect(byGroup.get("a1:0")).toHaveLength(1);
+		// The step-anchored mark owns its group; the text-anchored one attaches
+		// to the group preceding that text (prefix-stable, see the next test).
+		expect(byGroup.get("a1:0")).toHaveLength(2);
 		expect(byGroup.get("a1:0")![0]!.entryId).toBe("s1");
-		expect(byGroup.get("a1:2")).toHaveLength(1);
-		expect(byGroup.get("a1:2")![0]!.entryId).toBe("s2");
+		expect(byGroup.get("a1:0")![1]!.entryId).toBe("s2");
+		expect(byGroup.get("a1:2")).toBeUndefined();
+	});
+
+	it("mark placement is prefix-stable as the run grows (no group hopping)", () => {
+		// A turn_end mark anchors on a closing text block; the group before it
+		// must stay its home even after a new group appears later in the run —
+		// hopping groups would remount (and visually flash) the card.
+		const doc = emptyDoc();
+		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:02Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "x" } }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("a2", "a1", "2024-01-01T00:00:03Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "let me continue" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			stampEntry("s1", "a2", {
+				v: 2,
+				anchor: "turn_end",
+				commit: SHA1_B,
+				branch: "main",
+				commitSubject: "c",
+			}),
+		);
+
+		const markOf = (vm: ReturnType<typeof computeViewModel>) => {
+			const run = vm.turns.find((t) => t.kind === "assistant");
+			if (!run || run.kind !== "assistant") throw new Error("expected assistant");
+			const { byGroup, unattached } = assignGroupGitChanges(segmentBlocks(run.blocks), run.gitChanges ?? []);
+			expect(unattached).toHaveLength(0);
+			return [...byGroup.keys()];
+		};
+
+		const vm1 = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(markOf(vm1)).toEqual(["a1:0"]);
+
+		// The run grows: text, then a new tool group.
+		appendEntry(
+			doc,
+			makeEntry("a3", "s1", "2024-01-01T00:00:04Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "now reading" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("a4", "a3", "2024-01-01T00:00:05Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc2", name: "bash", arguments: { command: "ls" } }],
+			}),
+		);
+		const vm2 = computeViewModel({ document: doc, sessions: [], models: [] }, vm1);
+		expect(markOf(vm2)).toEqual(["a1:0"]);
 	});
 });
 
