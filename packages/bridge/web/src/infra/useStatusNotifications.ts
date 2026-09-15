@@ -116,8 +116,8 @@ export function useStatusNotifications({
 	useEffect(() => {
 		const counter = new UnreadMessageCounter();
 		return getStore().subscribe((s, prev) => {
-			if (counter.switchedInstance(s.attachedInstanceId)) {
-				// Attach/instance switch: baseline the existing history —
+			if (counter.switchedSession(s.activeSessionId)) {
+				// Attach/session switch: baseline the existing history —
 				// pre-existing messages never count as unread.
 				counter.rebase(s.document.entries);
 				setUnreadCount(0);

@@ -128,16 +128,15 @@ export function normalizeEditArgs(args: ToolArgs | null): Array<{ oldText: strin
 }
 
 // ---------------------------------------------------------------------------
-// CWD hook — reads the attached instance's cwd from the store
+// CWD hook — reads the open Project's cwd from the store (ADR 11)
 // ---------------------------------------------------------------------------
 
-/** Subscribe to the attached instance's cwd. Returns null if no instance. */
+/** Subscribe to the open Project's cwd. Returns null when no Project is open. */
 export function useCwd(): string | null {
 	return useStore(
 		useCallback((s) => {
-			if (!s.attachedInstanceId) return null;
-			const instance = s.instances.find((i) => i.instanceId === s.attachedInstanceId);
-			return instance?.cwd ?? null;
+			if (!s.currentProjectId) return null;
+			return s.projects.find((p) => p.id === s.currentProjectId)?.cwd ?? null;
 		}, []),
 	);
 }

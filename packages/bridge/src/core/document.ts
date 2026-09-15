@@ -901,6 +901,9 @@ function singleAppendOp(msg: unknown): AppendOp | null {
 	if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return null;
 	const obj = msg as Record<string, unknown>;
 	if (obj.kind !== "patch" || !Array.isArray(obj.ops) || obj.ops.length !== 1) return null;
+	// Initial-sync patches carry `session` and are never compacted (ADR 11):
+	// the bare-string form has no place to keep the address.
+	if (obj.session !== undefined) return null;
 	const op = obj.ops[0] as Record<string, unknown> | undefined;
 	if (op === undefined || op === null) return null;
 	if (op.op !== "append" || typeof op.path !== "string" || typeof op.value !== "string") return null;

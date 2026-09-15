@@ -8,15 +8,18 @@ import { useCallback, useMemo } from "react";
 import type {
 	GitShowReply,
 	ImageContent,
-	InstanceInfo,
+	ListActiveSessionsReply,
 	ListFilesReply,
 	ListSessionsReply,
 	PrefixCursor,
 	RpcReply,
 	SessionInfo,
+	SessionRef,
 } from "../../../src/core/index.ts";
+import { rememberAddress } from "./addressIndex.ts";
 import { getGlobalClient } from "./client.ts";
 import { prepareSwitch } from "./entryCache.ts";
+import { projectPath, sessionPath, writeRoute } from "./routes.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
 import { getStore } from "./store.tsx";
 
@@ -31,12 +34,8 @@ function rpcErrorToast(err: unknown, fallback?: string): void {
 
 /**
  * Run one RPC, toasting on failure and returning the reply so callers can
- * branch on success. Collapses the per-verb try/!ok/catch boilerplate:
- * - `reply.ok === false`  → toast (here), return the reply (caller does its
- *   failure-side work, e.g. rollback, without re-toasting).
- * - thrown / no client    → toast (here), return undefined.
- * Returning the reply (rather than void) is what lets the verbs with
- * success-side logic keep their branch while shedding their try/catch.
+ * branch on success. `reply.ok === false` toasts and returns the reply;
+ * a throw / missing client toasts and returns undefined.
  */
 async function rpc(fn: () => Promise<RpcReply> | undefined, fallback: string): Promise<RpcReply | undefined> {
 	try {
@@ -47,6 +46,13 @@ async function rpc(fn: () => Promise<RpcReply> | undefined, fallback: string): P
 		rpcErrorToast(err, fallback);
 		return undefined;
 	}
+}
+
+/** Record the address of every returned row so a later cold load can find the
+ * cache cursor (ADR 09 keyed by sessionId, ADR 11 addressed by stem). */
+function rememberRows(rows: SessionInfo[] | undefined): void {
+	if (!rows) return;
+	for (const row of rows) rememberAddress(row.projectId, row.stem, row.sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -74,20 +80,9 @@ export function useRpc() {
 	);
 
 	const renameSession = useCallback(async (name: string) => {
-		const reply = await rpc(() => getGlobalClient()?.renameSession(name), "rename session failed");
-		if (reply?.ok) {
-			// Refresh instance list so the sidebar picks up the new name
-			// (the server-side document.status.name was updated via
-			// session_info_changed → applyEvent, but the client's instance
-			// list is stale until re-queried).
-			const instReply = await getGlobalClient()?.listInstances();
-			if (instReply?.ok) {
-				const mData = instReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				if (mData.instances) {
-					getStore().getState().syncInstances({ instances: mData.instances });
-				}
-			}
-		}
+		// The server broadcasts sessions_changed for the Project (ADR 11), so
+		// no client-side refresh is needed.
+		await rpc(() => getGlobalClient()?.renameSession(name), "rename session failed");
 	}, []);
 
 	const navigate = useCallback(
@@ -95,142 +90,88 @@ export function useRpc() {
 		[],
 	);
 
-	const switchSession = useCallback(async (sessionPath: string, sessionId?: string) => {
-		// Serial-switch rule (ADR 09): a second switch while a candidate is
-		// pending would race the first promotion — ignore it.
+	/** Resolve-or-activate a session by address and make it the current one. */
+	const openSession = useCallback(async (projectId: string, stem: string, sessionId?: string) => {
+		// Serial-switch rule (ADR 09): a second open while a candidate is
+		// pending would race the first promotion.
 		if (sessionCandidatePending()) return;
+		const store = getStore();
+		// Optimistic address commit: the URL and header update before the
+		// initial-sync push lands.
+		store.getState().setCurrentSession(projectId, stem);
+		writeRoute({ kind: "session", projectId, stem });
+
 		let cursor: PrefixCursor | undefined;
 		if (sessionId) cursor = await prepareSwitch(sessionId);
-		const reply = await rpc(() => getGlobalClient()?.switchSession(sessionPath, cursor), "switch session failed");
-		// The initial-sync push already promoted (or the switch failed / was a
-		// no-op): any orphan candidate is dropped.
+		const reply = await rpc(() => getGlobalClient()?.openSession(projectId, stem, cursor), "open session failed");
+		// The initial-sync push already promoted (or the open failed).
 		discardSessionCandidate();
+		if (!reply?.ok) {
+			store.getState().clearCurrentSession();
+			writeRoute({ kind: "project", projectId });
+		}
+	}, []);
+
+	/** Open a Project's home (session browser) without a session attached. */
+	const openProject = useCallback(async (projectId: string) => {
+		const store = getStore();
+		if (store.getState().currentStem !== null) {
+			await rpc(() => getGlobalClient()?.detach(), "detach failed");
+			discardSessionCandidate();
+		}
+		store.getState().setCurrentSession(projectId, null);
+		writeRoute({ kind: "project", projectId });
+	}, []);
+
+	const newSession = useCallback(async (projectId: string) => {
+		const reply = await rpc(() => getGlobalClient()?.newSession(projectId), "new session failed");
 		if (reply?.ok) {
-			// Refresh instances so the attached instance's current sessionId
-			// (used to key draft persistence) tracks the server's new session.
-			const instReply = await getGlobalClient()?.listInstances();
-			if (instReply?.ok) {
-				const mData = instReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				if (mData.instances) getStore().getState().syncInstances({ instances: mData.instances });
+			const ref = (reply as unknown as { session?: SessionRef }).session;
+			if (ref) {
+				rememberAddress(ref.projectId, ref.stem, ref.sessionId);
+				getStore().getState().setCurrentSession(ref.projectId, ref.stem);
+				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
 			}
 		}
 	}, []);
 
-	const newSession = useCallback(async () => {
-		const reply = await rpc(() => getGlobalClient()?.newSession(), "new session failed");
+	/** Back to the Launcher: unbind server-side, then clear local state. */
+	const detach = useCallback(async () => {
+		const reply = await rpc(() => getGlobalClient()?.detach(), "detach failed");
 		if (reply?.ok) {
-			const instReply = await getGlobalClient()?.listInstances();
-			if (instReply?.ok) {
-				const mData = instReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				if (mData.instances) getStore().getState().syncInstances({ instances: mData.instances });
-			}
+			discardSessionCandidate();
+			getStore().getState().clearCurrentSession();
+			writeRoute({ kind: "launcher" });
 		}
 	}, []);
 
-	const switchInstance = useCallback(async (instanceId: string) => {
-		if (sessionCandidatePending()) return;
-		// Live instance switch: same rebind window as a session switch — seed
-		// a candidate from the target instance's cache so old-instance patches
-		// keep flowing to the active mirror until the target initial sync.
-		const target = getStore()
-			.getState()
-			.instances.find((inst) => inst.instanceId === instanceId);
-		const cursor = target?.sessionId ? await prepareSwitch(target.sessionId) : undefined;
-		const reply = await rpc(() => getGlobalClient()?.switchInstance(instanceId, cursor), "switch instance failed");
-		discardSessionCandidate();
+	/** Refresh the global active/streaming snapshot without side effects. */
+	const refreshActiveSessions = useCallback(async () => {
+		const reply = await getGlobalClient()?.listActiveSessions();
 		if (reply?.ok) {
-			// The replace push from the new instance confirms attachment
-			getStore().getState().syncInstances({ attachedInstanceId: instanceId });
-			// Fetch sessions for the attached instance's cwd
-			const sessReply = await getGlobalClient()?.listSessions(10);
-			if (sessReply?.ok) {
-				const sessData = sessReply as unknown as ListSessionsReply;
-				if (sessData.sessions) {
-					getStore()
-						.getState()
-						.replaceSessions(sessData.sessions as SessionInfo[], sessData.hasMore === true);
-				}
-			}
-		} else {
-			// Roll back optimistic attachedInstanceId set by handleSwitchInstance.
-			// Covers both !ok (toast already fired in rpc()) and a missing
-			// client / thrown call (no client ⇒ nothing is attached, null is
-			// the correct state).
-			getStore().getState().syncInstances({ attachedInstanceId: null });
+			const data = reply as unknown as ListActiveSessionsReply;
+			rememberRows(data.sessions);
+			getStore()
+				.getState()
+				.setActiveSessions(data.sessions ?? []);
 		}
 	}, []);
 
-	const newInstance = useCallback(async (cwd: string) => {
-		const reply = await rpc(() => getGlobalClient()?.newInstance(cwd), "new instance failed");
-		if (reply?.ok) {
-			const r = reply as unknown as { ok: boolean; instanceId: string };
-			if (r.instanceId) {
-				getStore().getState().syncInstances({ attachedInstanceId: r.instanceId });
-			}
-			// Refresh instance list
-			const instReply = await getGlobalClient()?.listInstances();
-			if (instReply?.ok) {
-				const mData = instReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				if (mData.instances) {
-					getStore().getState().syncInstances({ instances: mData.instances });
-				}
-			}
-			// Fetch sessions for the new project's cwd
-			const sessReply = await getGlobalClient()?.listSessions(10);
-			if (sessReply?.ok) {
-				const sessData = sessReply as unknown as ListSessionsReply;
-				if (sessData.sessions) {
-					getStore()
-						.getState()
-						.replaceSessions(sessData.sessions as SessionInfo[], sessData.hasMore === true);
-				}
-			}
-		}
-	}, []);
-
-	const killInstance = useCallback(async (instanceId: string) => {
-		const reply = await rpc(() => getGlobalClient()?.killInstance(instanceId), "kill instance failed");
-		if (reply?.ok) {
-			// Refresh manager list — the killed project is removed
-			const instReply = await getGlobalClient()?.listInstances();
-			if (instReply?.ok) {
-				const mData = instReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				if (mData.instances) {
-					getStore().getState().syncInstances({ instances: mData.instances });
-				}
-			}
-		}
-	}, []);
-
-	/** Back to the instance list: unbind server-side (patches stop), then
-	 * clear local instance state. The instance keeps running headless. */
-	const detachInstance = useCallback(async () => {
-		const reply = await rpc(() => getGlobalClient()?.detachInstance(), "detach failed");
-		if (reply?.ok) {
-			discardSessionCandidate(); // unattached: a pending switch can never promote
-			getStore().getState().detachInstance();
-		}
-	}, []);
-
-	/** Refresh the instance list without side effects. Used by the Launcher's
-	 * liveness poll while unattached (no instances_changed push yet). */
-	const refreshInstances = useCallback(async () => {
-		const reply = await getGlobalClient()?.listInstances();
-		if (reply?.ok) {
-			const mData = reply as unknown as { instances: InstanceInfo[] };
-			if (mData.instances) {
-				getStore().getState().syncInstances({ instances: mData.instances });
-			}
-		}
-	}, []);
-
-	const loadMoreSessions = useCallback(async (ts: string) => {
-		const reply = await rpc(() => getGlobalClient()?.listSessions(10, ts), "load more sessions failed");
+	const loadMoreSessions = useCallback(async () => {
+		const state = getStore().getState();
+		const projectId = state.currentProjectId;
+		if (!projectId) return;
+		const reply = await rpc(
+			() => getGlobalClient()?.listSessions(projectId, 10, state.sessionsNextCursor),
+			"load more sessions failed",
+		);
 		if (reply?.ok) {
 			const r = reply as unknown as ListSessionsReply;
 			const sessions = (r.sessions as SessionInfo[] | undefined) ?? [];
-			const hasMore = r.hasMore === true;
-			getStore().getState().appendSessions(sessions, hasMore);
+			rememberRows(sessions);
+			getStore()
+				.getState()
+				.appendSessions(sessions, r.hasMore === true, r.nextCursor ?? null);
 		}
 	}, []);
 
@@ -247,13 +188,11 @@ export function useRpc() {
 			setThinkingLevel,
 			renameSession,
 			navigate,
-			switchSession,
+			openSession,
+			openProject,
 			newSession,
-			switchInstance,
-			newInstance,
-			killInstance,
-			detachInstance,
-			refreshInstances,
+			detach,
+			refreshActiveSessions,
 			loadMoreSessions,
 			listFiles,
 		}),
@@ -265,13 +204,11 @@ export function useRpc() {
 			setThinkingLevel,
 			renameSession,
 			navigate,
-			switchSession,
+			openSession,
+			openProject,
 			newSession,
-			switchInstance,
-			newInstance,
-			killInstance,
-			detachInstance,
-			refreshInstances,
+			detach,
+			refreshActiveSessions,
 			loadMoreSessions,
 			listFiles,
 		],
@@ -307,3 +244,6 @@ export async function gitShowRpc(commit: string): Promise<{ output: string; trun
 		return null;
 	}
 }
+
+/** ADR 11: the Project home URL, for callers that need it without the hook. */
+export { projectPath, sessionPath };
