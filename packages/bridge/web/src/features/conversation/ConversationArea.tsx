@@ -11,6 +11,7 @@ import { getStore, useStore } from "../../infra/store.tsx";
 import { ChevronDownIcon } from "../../render/icons.tsx";
 import { AssistantTurnView } from "./AssistantTurnView.tsx";
 import styles from "./conversation.module.css";
+import { GitChangeView } from "./GitChangeView.tsx";
 import { SystemTurnView } from "./SystemTurnView.tsx";
 import { UserBashView } from "./UserBashView.tsx";
 import { UserTurnView } from "./UserTurnView.tsx";
@@ -314,6 +315,8 @@ export const ConversationArea = memo(function ConversationArea({
 						return <SystemTurnView key={turn.entryId} turn={turn} />;
 					case "userBash":
 						return <UserBashView key={turn.entryId} turn={turn} />;
+					case "gitChange":
+						return <GitChangeView key={turn.entryId} turn={turn} />;
 					default:
 						return null;
 				}

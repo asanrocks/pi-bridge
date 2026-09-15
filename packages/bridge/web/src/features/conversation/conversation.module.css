@@ -217,6 +217,57 @@
 	margin: 0 2px;
 }
 
+/* ADR 10 v2 — git change card. A slim divider band at the stamp's path
+   position: label, identity chip, subject, boundary hint, time. Muted like
+   system dividers; the identity is the only emphasized token. */
+.gitChange {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 6px 16px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	min-width: 0;
+}
+
+.gitChange::before,
+.gitChange::after {
+	content: "";
+	flex: 1;
+	border-top: 1px solid var(--color-border);
+	align-self: center;
+}
+
+.gitChangeLabel {
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	flex-shrink: 0;
+}
+
+.gitChangeIdentity {
+	color: var(--color-secondary);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.gitChangeSubject {
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.gitChangeAnchor {
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.gitChangeAnchor::before {
+	content: "· ";
+	margin: 0 2px;
+}
+
 /* User turn — full-width tinted band (a distinct part of the document,
    not a bubble). Hairline top/bottom borders separate it from the flat
    assistant turns. Header line + text use the same 16px padding the

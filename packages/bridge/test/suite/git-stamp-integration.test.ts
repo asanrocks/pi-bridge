@@ -24,6 +24,7 @@ interface StampInfo {
 	anchor: string;
 	commit: string | null;
 	branch: string | null;
+	commitSubject: string | null;
 }
 
 /** Valid git stamps in the document, ordered by file position (ord). */
@@ -34,8 +35,24 @@ function stamps(h: BridgeHarness): StampInfo[] {
 		.map((e) => {
 			const s = parseGitStampEntry(e);
 			if (!s) throw new Error("stamp in document failed to parse");
-			return { id: e.id, parentId: e.parentId, anchor: s.anchor, commit: s.commit, branch: s.branch };
+			return {
+				id: e.id,
+				parentId: e.parentId,
+				anchor: s.anchor,
+				commit: s.commit,
+				branch: s.branch,
+				commitSubject: s.v === 2 ? s.commitSubject : null,
+			};
 		});
+}
+
+/** Wait until the document holds n stamps (stamps land asynchronously:
+ * the user-bash observation is queued, not awaited). */
+async function waitForStamps(h: BridgeHarness, n: number): Promise<StampInfo[]> {
+	for (let i = 0; i < 200 && stamps(h).length < n; i++) {
+		await new Promise((r) => setTimeout(r, 10));
+	}
+	return stamps(h);
 }
 
 function userMessageEntry(h: BridgeHarness, text: string): Entry {
@@ -136,7 +153,7 @@ describe("git identity stamps (integration)", () => {
 		expect(stamps(h)).toHaveLength(1);
 	});
 
-	it("a commit between turns produces a prompt-anchored transition", async () => {
+	it("a commit between turns produces a prompt-anchored transition with its subject", async () => {
 		const h = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
 			responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
@@ -151,10 +168,10 @@ describe("git identity stamps (integration)", () => {
 
 		const s = stamps(h);
 		expect(s).toHaveLength(2);
-		expect(s[1]).toMatchObject({ anchor: "prompt", commit: head2, branch: "main" });
+		expect(s[1]).toMatchObject({ anchor: "prompt", commit: head2, branch: "main", commitSubject: "between turns" });
 	});
 
-	it("an agent tool that commits produces a turn_end transition", async () => {
+	it("an agent tool that commits produces a tool_end transition between its tool call and result", async () => {
 		const h = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
 			responses: [
@@ -176,7 +193,56 @@ describe("git identity stamps (integration)", () => {
 		const s = stamps(h);
 		expect(s).toHaveLength(2);
 		expect(s[0]).toMatchObject({ anchor: "prompt", commit: head1 });
-		expect(s[1]).toMatchObject({ anchor: "turn_end", commit: await h.git("rev-parse", "HEAD") });
+		expect(s[1]).toMatchObject({
+			anchor: "tool_end",
+			commit: await h.git("rev-parse", "HEAD"),
+			commitSubject: expect.stringContaining("agent commit in"),
+		});
+		// The tool-end stamp is appended in the awaited tool_execution_end
+		// handler: after the assistant tool-call entry, before the tool result.
+		const parent = h.manager.document.entries[s[1]!.parentId!];
+		expect(
+			parent !== undefined &&
+				parent.kind === "message" &&
+				parent.role === "assistant" &&
+				parent.content.some((c) => c.type === "toolCall"),
+		).toBe(true);
+		const toolResultEntry = Object.values(h.manager.document.entries).find(
+			(e) => e.kind === "tool_result" && e.parentId === s[1]!.id,
+		);
+		expect(toolResultEntry).toBeDefined();
+	});
+
+	it("a user bash commit produces a user_bash_end transition after the bash entry", async () => {
+		const h = await createBridgeHarness({
+			fixturePath: FIXTURE_URL.pathname,
+			responses: [fauxAssistantMessage("one"), fauxAssistantMessage("two")],
+			gitStamps: true,
+			initGitRepo: true,
+		});
+		harnesses.push(h);
+
+		await h.manager.prompt("before bash");
+		const head1 = await h.git("rev-parse", "HEAD");
+		await h.manager.executeBash("git commit --allow-empty -q -m 'user bash commit'");
+
+		const s = await waitForStamps(h, 2);
+		expect(s).toHaveLength(2);
+		// The bash stamp carries no ord until the next reconcile, so select by
+		// anchor rather than position.
+		const promptStamp = s.find((x) => x.anchor === "prompt");
+		const bashStamp = s.find((x) => x.anchor === "user_bash_end");
+		expect(promptStamp).toMatchObject({ commit: head1 });
+		expect(bashStamp).toMatchObject({
+			commit: await h.git("rev-parse", "HEAD"),
+			commitSubject: "user bash commit",
+		});
+		// Parented onto the bash entry (no later append intervenes).
+		const bashEntry = Object.values(h.manager.document.entries).find(
+			(e) => e.kind === "bash_execution" && e.command.includes("user bash commit"),
+		);
+		expect(bashEntry).toBeDefined();
+		expect(bashStamp!.parentId).toBe(bashEntry!.id);
 	});
 
 	it("two separate committing turns produce two transitions", async () => {
