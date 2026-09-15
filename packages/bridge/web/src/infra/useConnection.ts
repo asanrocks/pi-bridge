@@ -17,11 +17,9 @@ import {
 	type GetDaemonInfoReply,
 	type JsonValue,
 	type ListActiveSessionsReply,
-	type ListSessionsReply,
 	type PatchOp,
 	planCacheWrites,
 	type ServerPushMessage,
-	type SessionInfo,
 	type SessionStatusHint,
 	seedDocument,
 	statusHintOfDocument,
@@ -32,6 +30,7 @@ import { getEntryCache } from "./entryCache.ts";
 import { drainWantsOutbox } from "./pullLoop.ts";
 import { parseRoute, writeRoute } from "./routes.ts";
 import { promoteSessionCandidate } from "./sessionCandidate.ts";
+import { loadProjectHome } from "./sessionList.ts";
 import type { ConnectionState } from "./store.ts";
 import { getStore } from "./store.tsx";
 import { setWantsDrainer } from "./wants.ts";
@@ -42,7 +41,6 @@ const UNREACHABLE_THRESHOLD = 5;
 // If the init RPC (getDaemonInfo + listActiveSessions) doesn't resolve in this
 // window, treat it as init_failed rather than hanging in "connecting".
 const INIT_TIMEOUT_MS = 8000;
-const SESSION_PAGE_SIZE = 10;
 
 // Last cache-written base per session (ADR 09): planCacheWrites only sees
 // "unchanged" when before/after share entry references, which holds only for
@@ -104,14 +102,12 @@ export function useConnection(): { retry: () => void } {
 
 	/** Fetch and publish a Project's first session page. */
 	const loadProjectPage = useCallback(async (client: BridgeClient, projectId: string) => {
-		const reply = await client.listSessions(projectId, SESSION_PAGE_SIZE);
-		if (clientRef.current !== client) return;
-		const data = reply as unknown as ListSessionsReply;
-		const sessions = (data.sessions as SessionInfo[] | undefined) ?? [];
-		for (const row of sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-		getStore()
-			.getState()
-			.replaceSessions(sessions, data.hasMore === true, data.nextCursor ?? null);
+		await loadProjectHome({
+			store: getStore(),
+			projectId,
+			listSessions: (pid, max) => client.listSessions(pid, max),
+			isStillCurrent: () => clientRef.current === client,
+		});
 	}, []);
 
 	/** Open a Project's home: bind the address, fetch its first session page. */
