@@ -25,11 +25,12 @@ export {
 	resolveFieldPath,
 	setAtPath,
 } from "./document.ts";
-export type { GitIdentity, GitStampAnchor, GitStampData } from "./git-stamp.ts";
+export type { GitIdentity, GitStampAnchor, GitStampData, GitStampDataV1, GitStampDataV2 } from "./git-stamp.ts";
 export {
 	GIT_STAMP_CUSTOM_TYPE,
 	isValidBranchName,
 	isValidCommitId,
+	parseCommitSubject,
 	parseGitIdentity,
 	parseGitStampData,
 	parseGitStampEntry,

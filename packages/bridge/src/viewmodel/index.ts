@@ -11,7 +11,13 @@
 // ============================================================================
 
 import type { PullRequestItem } from "../core/client.ts";
-import { GIT_STAMP_CUSTOM_TYPE, type GitIdentity, parseGitStampEntry, sameGitIdentity } from "../core/git-stamp.ts";
+import {
+	GIT_STAMP_CUSTOM_TYPE,
+	type GitIdentity,
+	type GitStampAnchor,
+	parseGitStampEntry,
+	sameGitIdentity,
+} from "../core/git-stamp.ts";
 import type {
 	BashExecutionEntry,
 	Content,
@@ -48,7 +54,31 @@ export interface ViewModel {
 	streamingKey: string;
 }
 
-export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn;
+export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn | GitChangeTurn;
+
+/** ADR 10 v2: a git identity stamp rendered as an ordered transcript item.
+ * Not a conversation turn — it does not participate in sibling navigation,
+ * editing, or tool-result joining — but it occupies its path position in the
+ * sequence, so a mid-run stamp (e.g. an agent tool that committed between its
+ * tool-call entry and the tool result) splits the assistant run's visual
+ * grouping at that point. The run's contents are unchanged; only the
+ * grouping breaks. */
+export interface GitChangeTurn {
+	kind: "gitChange";
+	/** The stamp entry id (stable React key). */
+	entryId: string;
+	index: number;
+	timestamp: string;
+	/** The newly observed identity. */
+	identity: GitIdentity;
+	/** HEAD subject at observation; null for v1 stamps and failed lookups. */
+	commitSubject: string | null;
+	/** The observation boundary the stamp was taken at. */
+	anchor: GitStampAnchor;
+	/** First valid stamp on the path — an initial state recording, not a
+	 * transition. */
+	isInitial: boolean;
+}
 
 export interface UserTurn {
 	kind: "user";
@@ -298,6 +328,9 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// last valid stamp on the leaf path. Stamps are transitions, so every
 	// user turn after a stamp inherits it until the next transition.
 	let carriedGit: GitIdentity | null = null;
+	// True once any valid stamp has been seen on the path — the next stamp is
+	// a transition rather than an initial state recording.
+	let seenGitStamp = false;
 	const modelList = input.models;
 	const contextWindowOf = (provider: string | undefined, model: string | undefined): number | undefined => {
 		if (!model) return undefined;
@@ -419,11 +452,22 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				}
 				break;
 			default:
-				// ADR 10: git stamp transitions update the carried identity but
-				// stay invisible — they neither render nor break the merge.
+				// ADR 10: a valid git stamp updates the carried identity and emits
+				// an ordered change item at its path position. Flushing the pending
+				// run places the card between the entries it sits between (e.g.
+				// between a committing tool's call and its result); the blocks
+				// themselves are untouched — accumulation simply resumes after the
+				// card as a new visual group.
 				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
 					const stamp = parseGitStampEntry(entry);
-					if (stamp) carriedGit = { commit: stamp.commit, branch: stamp.branch };
+					if (stamp) {
+						const identity = { commit: stamp.commit, branch: stamp.branch };
+						flushSwitchRun();
+						flushPending();
+						turns.push(buildGitChangeTurn(entry, turns.length, identity, stamp, !seenGitStamp, prevTurns));
+						carriedGit = identity;
+						seenGitStamp = true;
+					}
 				}
 				// tool_result (joined into ToolActionStepVM), label, session_info,
 				// custom, custom_message — invisible; do not break the merge.
@@ -799,6 +843,40 @@ function buildAssistantTurn(
 		prev.contextDeltaPercent === turn.contextDeltaPercent &&
 		prev.blocks.length === turn.blocks.length &&
 		prev.blocks.every((b, i) => b === turn.blocks[i])
+	) {
+		return prev;
+	}
+	return turn;
+}
+
+function buildGitChangeTurn(
+	entry: Entry,
+	index: number,
+	identity: GitIdentity,
+	stamp: NonNullable<ReturnType<typeof parseGitStampEntry>>,
+	isInitial: boolean,
+	prevTurns: Map<string, TurnVM>,
+): GitChangeTurn {
+	const turn: GitChangeTurn = {
+		kind: "gitChange",
+		entryId: entry.id,
+		index,
+		timestamp: entry.timestamp,
+		identity,
+		commitSubject: stamp.v === 2 ? stamp.commitSubject : null,
+		anchor: stamp.anchor,
+		isInitial,
+	};
+	const prev = prevTurns.get(`gitChange:${entry.id}`);
+	if (
+		prev &&
+		prev.kind === "gitChange" &&
+		prev.index === turn.index &&
+		prev.timestamp === turn.timestamp &&
+		prev.commitSubject === turn.commitSubject &&
+		prev.anchor === turn.anchor &&
+		prev.isInitial === turn.isInitial &&
+		sameGitIdentity(prev.identity, identity)
 	) {
 		return prev;
 	}
