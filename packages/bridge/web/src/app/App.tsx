@@ -22,6 +22,7 @@ import { copyToClipboard } from "../features/conversation/clipboard.ts";
 import { HistoryPane } from "../features/history/HistoryPane.tsx";
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { Sidebar } from "../features/sidebar/Sidebar.tsx";
+import { mergeActiveState } from "../features/sidebar/timeUtils.ts";
 import { TopBar } from "../features/topbar/TopBar.tsx";
 import { FileViewer } from "../features/viewer/FileViewer.tsx";
 import { useDraftGuard } from "../infra/draftPersistence.ts";
@@ -73,6 +74,9 @@ function AppInner() {
 	const projects = useStore((s) => s.projects);
 	const activeSessions = useStore((s) => s.activeSessions);
 	const sessions = useStore((s) => s.sessions);
+	// Project rows come from a directory scan and the active snapshot is the
+	// authority for live/streaming state (ADR 11); overlay it for the sidebar.
+	const sidebarSessions = useMemo(() => mergeActiveState(sessions, activeSessions), [sessions, activeSessions]);
 	const models = useStore((s) => s.models);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 	const scopedModels = useStore((s) => s.document.scopedModels);
@@ -279,9 +283,11 @@ function AppInner() {
 	);
 
 	const handleOpenSession = useCallback(
-		(projectId: string, stem: string) => {
+		(projectId: string, stem: string, sessionId?: string) => {
 			if (isBusy) return;
-			rpc.openSession(projectId, stem);
+			// Passing the id lets the client seed a cache cursor (ADR 09) instead of
+			// falling back to a full replace on every UI session switch.
+			rpc.openSession(projectId, stem, sessionId);
 		},
 		[isBusy, rpc],
 	);
@@ -477,7 +483,7 @@ function AppInner() {
 				<Sidebar
 					projects={projects}
 					currentProjectId={currentProjectId}
-					sessions={sessions}
+					sessions={sidebarSessions}
 					isBusy={isBusy}
 					sessionsHasMore={useStore((s) => s.sessionsHasMore)}
 					onOpenProject={handleOpenProject}

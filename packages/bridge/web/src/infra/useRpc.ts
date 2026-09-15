@@ -96,6 +96,7 @@ export function useRpc() {
 		// pending would race the first promotion.
 		if (sessionCandidatePending()) return;
 		const store = getStore();
+		const previous = { projectId: store.getState().currentProjectId, stem: store.getState().currentStem };
 		// Optimistic address commit: the URL and header update before the
 		// initial-sync push lands.
 		store.getState().setCurrentSession(projectId, stem);
@@ -107,8 +108,15 @@ export function useRpc() {
 		// The initial-sync push already promoted (or the open failed).
 		discardSessionCandidate();
 		if (!reply?.ok) {
-			store.getState().clearCurrentSession();
-			writeRoute({ kind: "project", projectId });
+			// A failed open leaves the server's previous attachment untouched, so
+			// restore the previous address instead of clearing to the launcher —
+			// otherwise the client would show no session while the server keeps
+			// the old Manager attached (uncollectable, and a UI/route mismatch).
+			const { projectId: prevProjectId, stem: prevStem } = previous;
+			store.getState().setCurrentSession(prevProjectId, prevStem);
+			if (prevProjectId === null) writeRoute({ kind: "launcher" });
+			else if (prevStem === null) writeRoute({ kind: "project", projectId: prevProjectId });
+			else writeRoute({ kind: "session", projectId: prevProjectId, stem: prevStem });
 		}
 	}, []);
 

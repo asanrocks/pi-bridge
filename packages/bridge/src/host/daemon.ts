@@ -22,7 +22,14 @@ import { Connection, type DaemonVerbs } from "./connection.ts";
 import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
 import { createManager, type Manager } from "./manager.ts";
-import { buildProjects, normalizeStem, type ProjectConfig, resolveStemPath, stemFromSessionPath } from "./projects.ts";
+import {
+	buildProjects,
+	containedSessionFile,
+	normalizeStem,
+	type ProjectConfig,
+	resolveStemPath,
+	stemFromSessionPath,
+} from "./projects.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -168,15 +175,21 @@ export class Daemon {
 			this.logger.dispose();
 			this.logger = null;
 		}
-		const managers = [...this.activations.values()].map((a) => a.manager);
+		const managers: Manager[] = [];
+		const pendingCollections: Promise<void>[] = [];
 		for (const a of this.activations.values()) {
 			if (a.gcTimer) clearTimeout(a.gcTimer);
+			// A mid-collection activation already owns its disposal; awaiting it
+			// avoids a concurrent double-dispose, then it drops out of the map.
+			if (a.collecting) pendingCollections.push(a.collecting);
+			else managers.push(a.manager);
 		}
 		this.activations.clear();
 		this.activationByAddress.clear();
 		this.pendingActivations.clear();
 		this.sessionOwnerById.clear();
 		this.connectionActivation.clear();
+		await Promise.all(pendingCollections);
 		for (const mgr of managers) {
 			await mgr.dispose();
 		}
@@ -228,7 +241,11 @@ export class Daemon {
 			}
 			for (const rel of rels) {
 				if (!rel.endsWith(".jsonl")) continue;
-				const sessionId = readSessionHeaderId(join(project.sessionDir, rel));
+				// A symlinked `.jsonl` that escapes the namespace must not leak a
+				// foreign session id into the conflict registry.
+				const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
+				if (real === null) continue;
+				const sessionId = readSessionHeaderId(real);
 				if (sessionId === null) continue;
 				const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
 				const address = `${project.id}/${stem}`;
@@ -254,20 +271,27 @@ export class Daemon {
 		}
 		for (const rel of rels) {
 			if (!rel.endsWith(".jsonl")) continue;
-			const abs = join(project.sessionDir, rel);
+			// Containment first: statSync follows symlinks, so a symlinked file
+			// pointing outside the namespace would otherwise expose foreign
+			// metadata (name, first message) in listSessions (ADR 11 boundary).
+			const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
+			if (real === null) continue;
 			let st: ReturnType<typeof statSync>;
 			try {
-				st = statSync(abs);
+				st = statSync(real);
 			} catch {
 				continue;
 			}
-			if (!st.isFile()) continue;
 			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-			byStem.set(stem, { stem, abs, sortTimeMs: st.mtimeMs });
+			byStem.set(stem, { stem, abs: real, sortTimeMs: st.mtimeMs });
 		}
 
 		for (const activation of this.activations.values()) {
 			if (activation.ref.projectId !== project.id) continue;
+			// A collecting activation is mid-disposal: it is no longer active, but
+			// its address stays reserved (see maybeCollect). A durable file still
+			// appears through the disk scan above; an unflushed one disappears.
+			if (activation.collecting !== null) continue;
 			const abs = activation.manager.sessionFile;
 			let sortTimeMs = Date.parse(activation.manager.createdAt);
 			if (existsSync(abs)) {
@@ -320,6 +344,7 @@ export class Daemon {
 	listActiveSessions(): SessionInfo[] {
 		const out: SessionInfo[] = [];
 		for (const activation of this.activations.values()) {
+			if (activation.collecting !== null) continue;
 			const project = this.projects.get(activation.ref.projectId);
 			if (!project) continue;
 			const abs = activation.manager.sessionFile;
@@ -499,11 +524,19 @@ export class Daemon {
 			return;
 		}
 		activation.collecting = (async () => {
+			// Dispose first, then release the address. Releasing it before disposal
+			// would let a concurrent openSession create a second activation for a
+			// session whose first Manager is still shutting down, violating the
+			// ADR 11 exclusivity invariant. The address (and its pending-open
+			// promise) stays reserved for the whole disposal.
+			await activation.manager.dispose();
 			this.activations.delete(activation.id);
 			const key = addressKey(activation.ref.projectId, activation.ref.stem);
 			if (this.activationByAddress.get(key) === activation.id) this.activationByAddress.delete(key);
-			this.sessionOwnerById.delete(activation.ref.sessionId);
-			await activation.manager.dispose();
+			const owner = this.sessionOwnerById.get(activation.ref.sessionId);
+			if (owner && owner.projectId === activation.ref.projectId && owner.stem === activation.ref.stem) {
+				this.sessionOwnerById.delete(activation.ref.sessionId);
+			}
 		})().finally(() => {
 			activation.collecting = null;
 			this.broadcastActiveSessions();
