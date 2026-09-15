@@ -15,7 +15,7 @@ import { memo, useCallback } from "react";
 import { stepWants, type ThinkActionStepVM } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { wantPull } from "../../infra/wants.ts";
-import { Markdown } from "../../render/markdown.tsx";
+import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import styles from "./conversation.module.css";
 
 export const ThinkActionStepView = memo(function ThinkActionStepView({
@@ -95,7 +95,7 @@ export const ThinkActionStepView = memo(function ThinkActionStepView({
 					<span className={styles.foldTri}>{"\u25BE"}</span>
 				</button>
 				<div className={styles.thinkBody}>
-					<Markdown text={shown} mode={mode} />
+					<AppMarkdown text={shown} mode={mode} />
 				</div>
 			</div>
 		</div>

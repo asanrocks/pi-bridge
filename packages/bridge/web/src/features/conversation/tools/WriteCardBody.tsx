@@ -7,7 +7,7 @@
 import { memo } from "react";
 import { useStore } from "../../../infra/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
-import { Markdown } from "../../../render/markdown.tsx";
+import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
 import styles from "../conversation.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 
@@ -29,7 +29,7 @@ export const WriteCardBody = memo(function WriteCardBody({ args, resultText }: A
 			{content !== undefined &&
 				content !== null &&
 				(renderProse ? (
-					<Markdown text={content} mode="static" />
+					<AppMarkdown text={content} mode="static" />
 				) : (
 					<CodeSnippet code={content} language={lang} wrap={wrap} />
 				))}

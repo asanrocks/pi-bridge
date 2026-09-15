@@ -13,6 +13,7 @@ import type {
 	PrefixCursor,
 	PromptRequest,
 	PullRequest,
+	ReadFileRequest,
 	RenameSessionRequest,
 	SessionInfo,
 	SetModelRequest,
@@ -53,6 +54,9 @@ export interface DaemonVerbs {
 		devMode: boolean;
 	};
 	listFiles: (prefix: string, cwd?: string) => Array<{ path: string; isDirectory: boolean }>;
+	/** Read a file for the web viewer. Throws on missing/unreadable paths
+	 * (converted to an ok:false reply). Relative paths resolve against cwd. */
+	readFile: (path: string, cwd?: string) => { path: string; content: string; truncated: boolean; bytes: number };
 	listInstances: () => InstanceInfo[];
 	switchInstance: (
 		instanceId: string,
@@ -324,6 +328,16 @@ export class Connection {
 					const cwd = this._attachedManager?.cwd;
 					const entries = this.daemonVerbs.listFiles(m.prefix, cwd);
 					this.send({ id, ok: true, entries });
+					break;
+				}
+				case "readFile": {
+					const m = msg as unknown as ReadFileRequest;
+					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
+					// Requires an attached instance: relative links resolve against
+					// its cwd, so an unattached read has no authoritative base.
+					if (!this._attachedManager) throw new Error("no instance attached");
+					const result = this.daemonVerbs.readFile(m.path, this._attachedManager.cwd);
+					this.send({ id, ok: true, ...result });
 					break;
 				}
 

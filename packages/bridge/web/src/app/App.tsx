@@ -23,6 +23,7 @@ import { HistoryPane } from "../features/history/HistoryPane.tsx";
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { Sidebar } from "../features/sidebar/Sidebar.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
+import { FileViewer } from "../features/viewer/FileViewer.tsx";
 import { useDraftGuard } from "../infra/draftPersistence.ts";
 import { useAppKeybindings } from "../infra/keybindings.ts";
 import { getStore, StoreProvider, useStore } from "../infra/store.tsx";
@@ -549,6 +550,7 @@ function AppInner() {
 				</div>
 			</div>
 			{hasAttachedInstance && <HistoryPane />}
+			<FileViewer />
 		</div>
 	);
 }
