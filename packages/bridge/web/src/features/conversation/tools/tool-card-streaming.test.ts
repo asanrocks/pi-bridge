@@ -37,12 +37,20 @@ vi.mock("../../../render/markdown.tsx", () => ({
 	Markdown: ({ text }: { text: string }) => createElement("div", { "data-md-stub": "" }, text),
 }));
 
+// Stub the Shiki singleton for BashIdentity (same reason as CodeSnippet —
+// keep the node test env free of the highlighter bundle). SSR runs no
+// effects, so the stub is never even awaited.
+vi.mock("../../../render/shiki.ts", () => ({
+	highlightTokens: () => Promise.resolve({ bg: "transparent", fg: "inherit", lines: [] }),
+}));
+
 const { WriteCardBody } = await import("./WriteCardBody.tsx");
 const { EditCardBody } = await import("./EditCardBody.tsx");
 const { ReadCardBody } = await import("./ReadCardBody.tsx");
 const { BashCardBody } = await import("./BashCardBody.tsx");
 const { FallbackCardBody } = await import("./FallbackCardBody.tsx");
 const { CardStatusLine, CardIdentity, CardError, CardControls } = await import("./CardSkeleton.tsx");
+const { BashIdentity } = await import("./BashIdentity.tsx");
 const { SearchResultBody } = await import("./SearchResultBody.tsx");
 const { UserBashView } = await import("../UserBashView.tsx");
 
@@ -498,6 +506,13 @@ describe("card skeleton identity and error zones", () => {
 	test("identity renders the full-form identifier", () => {
 		const html = renderToStaticMarkup(createElement(CardIdentity, { text: "src/viewmodel/index.ts:12-80" }));
 		expect(html).toContain("src/viewmodel/index.ts:12-80");
+	});
+
+	test("bash identity renders the raw command until tokens arrive (SSR fallback)", () => {
+		// SSR runs no effects, so BashIdentity renders its raw-string path —
+		// the same display as the pre-highlighting identity line.
+		const html = renderToStaticMarkup(createElement(BashIdentity, { command: "npm run check 2>&1", lang: "bash" }));
+		expect(html).toContain("npm run check 2&gt;&amp;1");
 	});
 
 	test("identity renders nothing without text", () => {

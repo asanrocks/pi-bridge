@@ -14,6 +14,8 @@
 
 ### Added
 
+- Syntax-highlighted shell command identity lines: expanded bash/powershell cards render the whole command in the identity line through the shared Shiki singleton (grammar per tool name, github-light token colors) instead of the plain secondary-tone text. New `BashIdentity` component; until the grammar loads (first shell card only) it renders the raw string — identical to the previous display — and every non-shell identity line is unchanged.
+
 - Git identity stamps (ADR 10): bridge-created instances record the repository's HEAD commit and branch as `custom` session entries (`pi-bridge.git-stamp`) at prompt and turn-end boundaries — only on identity transitions, with the baseline derived from the active session path (fork-safe, no process-local state). The viewmodel folds stamps into `UserTurn.gitIdentity` and the web user-turn header shows a muted chip (`⎇ main @ a1b2c3d`; detached HEAD shows the hash only). Stamp data never enters LLM context; `createManager({ gitStamps: false })` is the test seam. Shared payload/validation lives in the browser-safe core export (`GIT_STAMP_CUSTOM_TYPE`, `parseGitStamp*`, `GitIdentity`).
 
 - Back to the instance list: a sidebar button detaches the tab from its instance (new connection-local `detachInstance` verb — patches stop flowing, the instance keeps running headless) and returns to the Launcher. The choice survives reconnects: a `launcherPinned` store flag suppresses the sole-instance auto-attach until the next explicit attach.
