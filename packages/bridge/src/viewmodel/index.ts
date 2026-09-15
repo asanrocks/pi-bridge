@@ -56,13 +56,12 @@ export interface ViewModel {
 
 export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn | GitChangeTurn;
 
-/** ADR 10 v2: a git identity stamp rendered as an ordered transcript item.
- * Not a conversation turn — it does not participate in sibling navigation,
- * editing, or tool-result joining — but it occupies its path position in the
- * sequence, so a mid-run stamp (e.g. an agent tool that committed between its
- * tool-call entry and the tool result) splits the assistant run's visual
- * grouping at that point. The run's contents are unchanged; only the
- * grouping breaks. */
+/** ADR 10 v2: a boundary git identity stamp rendered as an ordered
+ * transcript item (prompt / user_bash_end anchors, or a run-anchor stamp
+ * with no open run). Mid-run stamps (tool_end / turn_end inside a run) do
+ * not produce this — they fold into the run's action group as
+ * {@link GitChangeMark}s. Either way it is not a conversation turn:
+ * no sibling navigation, editing, or tool-result joining. */
 export interface GitChangeTurn {
 	kind: "gitChange";
 	/** The stamp entry id (stable React key). */
@@ -177,6 +176,30 @@ export interface AssistantTurn {
 	 * readings incomparable), or below the 1% display threshold — except a
 	 * negative delta (compaction drop), which always renders. */
 	contextDeltaPercent?: number;
+	/** ADR 10 v2: git changes observed while this run was open (tool_end /
+	 * turn_end anchors), folded into the run instead of splitting it. Each
+	 * mark renders as its own card inside its action group, after the step
+	 * it follows, and the group summary gains a `git:` segment. */
+	gitChanges?: GitChangeMark[];
+}
+
+/** One mid-run git identity transition (ADR 10 v2). */
+export interface GitChangeMark {
+	/** The stamp entry id. */
+	entryId: string;
+	timestamp: string;
+	/** The newly observed identity. */
+	identity: GitIdentity;
+	/** HEAD subject at observation; null for v1 stamps and failed lookups. */
+	commitSubject: string | null;
+	/** The observation boundary. */
+	anchor: GitStampAnchor;
+	/** First valid stamp on the path — an initial state recording. */
+	isInitial: boolean;
+	/** Render position: the last block accumulated when the stamp was
+	 * observed — the card renders after the step with this key
+	 * (`"${entryId}:b${blockIndex}"`). */
+	afterBlockKey: string;
 }
 
 export type SystemTurnType = "compaction" | "branch_summary" | "model_switch";
@@ -331,6 +354,9 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// True once any valid stamp has been seen on the path — the next stamp is
 	// a transition rather than an initial state recording.
 	let seenGitStamp = false;
+	// ADR 10 v2: mid-run stamps (tool_end/turn_end observed while a run is
+	// open) folded into the pending run; attached to the turn at flushPending.
+	let pendingGitMarks: GitChangeMark[] = [];
 	const modelList = input.models;
 	const contextWindowOf = (provider: string | undefined, model: string | undefined): number | undefined => {
 		if (!model) return undefined;
@@ -378,12 +404,22 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				prevReading = null; // unknown window / invalid usage breaks the delta chain
 			}
 		}
-		const t = buildAssistantTurn(pending, turns.length, toolResultMap, prevTurns, prevBlocks, pendingAnchor, {
-			contextPercent,
-			contextDeltaPercent,
-		});
+		const t = buildAssistantTurn(
+			pending,
+			turns.length,
+			toolResultMap,
+			prevTurns,
+			prevBlocks,
+			pendingAnchor,
+			{
+				contextPercent,
+				contextDeltaPercent,
+			},
+			pendingGitMarks,
+		);
 		turns.push(t);
 		pending = [];
+		pendingGitMarks = [];
 	};
 
 	for (const entry of path) {
@@ -452,19 +488,32 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				}
 				break;
 			default:
-				// ADR 10: a valid git stamp updates the carried identity and emits
-				// an ordered change item at its path position. Flushing the pending
-				// run places the card between the entries it sits between (e.g.
-				// between a committing tool's call and its result); the blocks
-				// themselves are untouched — accumulation simply resumes after the
-				// card as a new visual group.
+				// ADR 10: a valid git stamp updates the carried identity. Mid-run
+				// stamps (tool_end/turn_end while a run is open) fold into the run
+				// — the run does NOT split; the mark rides the pending refs and
+				// renders inside its action group. Boundary stamps (prompt,
+				// user_bash_end, or no open run) render as standalone cards at
+				// their path position, flushing the run first so the order holds.
 				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
 					const stamp = parseGitStampEntry(entry);
 					if (stamp) {
 						const identity = { commit: stamp.commit, branch: stamp.branch };
-						flushSwitchRun();
-						flushPending();
-						turns.push(buildGitChangeTurn(entry, turns.length, identity, stamp, !seenGitStamp, prevTurns));
+						if (pending.length > 0 && (stamp.anchor === "tool_end" || stamp.anchor === "turn_end")) {
+							const last = pending[pending.length - 1]!;
+							pendingGitMarks.push({
+								entryId: entry.id,
+								timestamp: entry.timestamp,
+								identity,
+								commitSubject: stamp.v === 2 ? stamp.commitSubject : null,
+								anchor: stamp.anchor,
+								isInitial: !seenGitStamp,
+								afterBlockKey: `${last.entry.id}:b${last.blockIndex}`,
+							});
+						} else {
+							flushSwitchRun();
+							flushPending();
+							turns.push(buildGitChangeTurn(entry, turns.length, identity, stamp, !seenGitStamp, prevTurns));
+						}
 						carriedGit = identity;
 						seenGitStamp = true;
 					}
@@ -743,6 +792,7 @@ function buildAssistantTurn(
 	prevBlocks: Map<string, AssistantBlockVM>,
 	turnStartedAt: string,
 	context: { contextPercent?: number; contextDeltaPercent?: number },
+	gitChanges: GitChangeMark[] = [],
 ): AssistantTurn {
 	// Flatten step: one descriptor per accumulated block ref, in order.
 	const blocks: AssistantBlockVM[] = [];
@@ -823,6 +873,7 @@ function buildAssistantTurn(
 		toolMs,
 		contextPercent: context.contextPercent,
 		contextDeltaPercent: context.contextDeltaPercent,
+		gitChanges: gitChanges.length > 0 ? gitChanges : undefined,
 	};
 
 	const prev = prevTurns.get(`assistant:${turn.turnKey}`);
@@ -841,12 +892,31 @@ function buildAssistantTurn(
 		prev.toolMs === turn.toolMs &&
 		prev.contextPercent === turn.contextPercent &&
 		prev.contextDeltaPercent === turn.contextDeltaPercent &&
+		sameGitMarks(prev.gitChanges, turn.gitChanges) &&
 		prev.blocks.length === turn.blocks.length &&
 		prev.blocks.every((b, i) => b === turn.blocks[i])
 	) {
 		return prev;
 	}
 	return turn;
+}
+
+/** Element-wise comparison for AssistantTurn.gitChanges reuse. */
+function sameGitMarks(a: GitChangeMark[] | undefined, b: GitChangeMark[] | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every((m, i) => {
+		const o = b[i]!;
+		return (
+			m.entryId === o.entryId &&
+			m.timestamp === o.timestamp &&
+			m.commitSubject === o.commitSubject &&
+			m.anchor === o.anchor &&
+			m.isInitial === o.isInitial &&
+			m.afterBlockKey === o.afterBlockKey &&
+			sameGitIdentity(m.identity, o.identity)
+		);
+	});
 }
 
 function buildGitChangeTurn(
@@ -1797,6 +1867,43 @@ export function segmentBlocks(blocks: AssistantBlockVM[]): TurnSegment[] {
 		});
 	}
 	return segments;
+}
+
+/** Mid-run git marks assigned to action groups (ADR 10 v2). */
+export interface GroupGitChanges {
+	/** Marks per group key (the group the mark renders inside). */
+	byGroup: Map<string, GitChangeMark[]>;
+	/** Marks with no group to fold into (a text-only run) — the renderer
+	 * falls back to standalone cards after the turn's segments. */
+	unattached: GitChangeMark[];
+}
+
+/** Assign a turn's mid-run git marks to its action groups: a mark renders
+ * inside the group containing its `afterBlockKey` block; when that block is
+ * text (a trailing turn_end stamp after a closing text block, say), the
+ * mark attaches to the last group of the turn. */
+export function assignGroupGitChanges(segments: TurnSegment[], marks: GitChangeMark[]): GroupGitChanges {
+	const byGroup = new Map<string, GitChangeMark[]>();
+	const unattached: GitChangeMark[] = [];
+	if (marks.length === 0) return { byGroup, unattached };
+	const owner = new Map<string, string>();
+	let lastGroupKey: string | null = null;
+	for (const seg of segments) {
+		if (seg.kind !== "group") continue;
+		lastGroupKey = seg.key;
+		for (const s of seg.steps) owner.set(`${s.entryId}:b${s.blockIndex}`, seg.key);
+	}
+	for (const mark of marks) {
+		const key = owner.get(mark.afterBlockKey) ?? lastGroupKey;
+		if (key === null) {
+			unattached.push(mark);
+		} else {
+			const list = byGroup.get(key);
+			if (list) list.push(mark);
+			else byGroup.set(key, [mark]);
+		}
+	}
+	return { byGroup, unattached };
 }
 
 // ============================================================================
