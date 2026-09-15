@@ -11,7 +11,7 @@
 // ============================================================================
 
 import type { PullRequestItem } from "../core/client.ts";
-import { GIT_STAMP_CUSTOM_TYPE, type GitIdentity, parseGitStampEntry } from "../core/git-stamp.ts";
+import { GIT_STAMP_CUSTOM_TYPE, type GitIdentity, parseGitStampEntry, sameGitIdentity } from "../core/git-stamp.ts";
 import type {
 	BashExecutionEntry,
 	Content,
@@ -582,7 +582,11 @@ function buildUserTurn(
 		prev.timestamp === turn.timestamp &&
 		prev.currentSiblingIndex === turn.currentSiblingIndex &&
 		prev.thoughtForMs === turn.thoughtForMs &&
-		sameStringArray(prev.siblings, turn.siblings)
+		sameStringArray(prev.siblings, turn.siblings) &&
+		((prev.gitIdentity === undefined && gitIdentity === undefined) ||
+			(prev.gitIdentity !== undefined &&
+				gitIdentity !== undefined &&
+				sameGitIdentity(prev.gitIdentity, gitIdentity)))
 	) {
 		return prev;
 	}
