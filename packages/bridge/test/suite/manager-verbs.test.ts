@@ -18,16 +18,18 @@ interface VerbHarness {
 	manager: Manager;
 	faux: ReturnType<typeof registerFauxProvider>;
 	patches: Patch[];
+	tempCwd: string;
+	tempAgentDir: string;
 	cleanup: () => void;
 }
 
-async function createVerbHarness(): Promise<VerbHarness> {
+async function createVerbHarness(useFixture = true): Promise<VerbHarness> {
 	const tempCwd = join(tmpdir(), `pi-bridge-verbs-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempCwd, { recursive: true });
 	const tempAgentDir = join(tempCwd, "agent");
 	mkdirSync(tempAgentDir, { recursive: true });
 	const fixtureCopy = join(tempCwd, "session.jsonl");
-	copyFileSync(FIXTURE_URL.pathname, fixtureCopy);
+	if (useFixture) copyFileSync(FIXTURE_URL.pathname, fixtureCopy);
 
 	const faux = registerFauxProvider({
 		models: [
@@ -63,14 +65,14 @@ async function createVerbHarness(): Promise<VerbHarness> {
 		// test observes only the Manager's relay behavior.
 		images: { autoResize: false },
 	} as Record<string, unknown>);
-	const sessionManager = SessionManager.open(fixtureCopy, undefined, tempCwd);
+	const sessionManager = useFixture ? SessionManager.open(fixtureCopy, undefined, tempCwd) : undefined;
 
 	const manager = await createManager({
 		cwd: tempCwd,
 		agentDir: tempAgentDir,
 		modelRuntime,
 		settingsManager,
-		sessionManager,
+		...(sessionManager ? { sessionManager } : {}),
 		model,
 	});
 
@@ -81,6 +83,8 @@ async function createVerbHarness(): Promise<VerbHarness> {
 		manager,
 		faux,
 		patches,
+		tempCwd,
+		tempAgentDir,
 		cleanup() {
 			manager.dispose();
 			faux.unregister();
@@ -193,25 +197,17 @@ describe("Manager verbs", () => {
 		await expect(h.manager.navigate("nonexistent-id")).rejects.toThrow();
 	});
 
-	// ── switchSession ────────────────────────────────────────────────────
+	// ── fresh session allocation (ADR 11) ────────────────────────────────
 
-	it("switchSession with the live session id is a no-op (sidebar stub click)", async () => {
-		const h = await createVerbHarness();
+	it("allocates a fresh session inside the Manager's agentDir session directory", async () => {
+		const h = await createVerbHarness(false);
 		harnesses.push(h);
 
-		const liveId = h.manager.liveSessionId;
-		const junkPath = join(process.cwd(), liveId);
-
-		await h.manager.switchSession(liveId);
-
-		// The sidebar sessions list carries a stub row for the live session
-		// (bare session id, no file on disk yet). Switching to it must not
-		// detach the manager, and must not resolve the id as a file path.
-		expect(h.manager.liveSessionId).toBe(liveId);
-
-		// No junk session file materialized in the daemon cwd.
-		expect(existsSync(junkPath)).toBe(false);
-		rmSync(junkPath, { force: true }); // safety net if the guard regresses
+		// SessionManager.create would use the process-global agent dir; the daemon
+		// computes Project session storage from its own agentDir. They must agree.
+		expect(h.manager.sessionFile.startsWith(join(h.tempAgentDir, "sessions"))).toBe(true);
+		expect(h.manager.sessionFile.endsWith(".jsonl")).toBe(true);
+		expect(h.manager.liveSessionId.length).toBeGreaterThan(0);
 	});
 
 	// ── abort ────────────────────────────────────────────────────────────

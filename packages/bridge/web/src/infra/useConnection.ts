@@ -2,8 +2,8 @@
 // useConnection — WebSocket lifecycle + BridgeClient → store integration.
 // Owns the transport and the connection state machine: connecting → connected
 // | init_failed, and on drop → reconnecting → unreachable (after threshold).
-// Auto-attaches to the sole live instance (T1: 1 instance) or to the tab's
-// previously-attached instance (resume). Otherwise the Launcher shows.
+// The URL (ADR 11) is the navigation source of truth: boot and every reconnect
+// re-resolve `/launcher`, `/chat/<projectId>`, or `/chat/<projectId>/<stem>`.
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";
@@ -15,8 +15,8 @@ import {
 	computeCursor,
 	type Document,
 	type GetDaemonInfoReply,
-	type InstanceInfo,
 	type JsonValue,
+	type ListActiveSessionsReply,
 	type ListSessionsReply,
 	type PatchOp,
 	planCacheWrites,
@@ -26,10 +26,12 @@ import {
 	seedDocument,
 	statusHintOfDocument,
 } from "../../../src/core/index.ts";
+import { lookupSessionId, rememberAddress } from "./addressIndex.ts";
 import { setGlobalClient } from "./client.ts";
-import { getEntryCache, prepareSwitch } from "./entryCache.ts";
+import { getEntryCache } from "./entryCache.ts";
 import { drainWantsOutbox } from "./pullLoop.ts";
-import { discardSessionCandidate, promoteSessionCandidate } from "./sessionCandidate.ts";
+import { parseRoute, writeRoute } from "./routes.ts";
+import { promoteSessionCandidate } from "./sessionCandidate.ts";
 import type { ConnectionState } from "./store.ts";
 import { getStore } from "./store.tsx";
 import { setWantsDrainer } from "./wants.ts";
@@ -37,20 +39,20 @@ import { setWantsDrainer } from "./wants.ts";
 const CONNECTION_TOAST_ID = "connection";
 // After this many failed reconnect attempts, copy shifts to "Can't reach".
 const UNREACHABLE_THRESHOLD = 5;
-// If the init RPC (getDaemonInfo + listInstances) doesn't resolve in this
+// If the init RPC (getDaemonInfo + listActiveSessions) doesn't resolve in this
 // window, treat it as init_failed rather than hanging in "connecting".
 const INIT_TIMEOUT_MS = 8000;
+const SESSION_PAGE_SIZE = 10;
 
 // Last cache-written base per session (ADR 09): planCacheWrites only sees
 // "unchanged" when before/after share entry references, which holds only for
 // same-session documents evolved via applyPatch. Using the store's previous
 // document as `before` made every session switch rewrite the entire new
 // session — documents of different sessions share no references. Seeded at
-// attach/promotion (the cache-derived seed doc), set by the replace repair
-// path, advanced on every delta write; a stale or failed write self-heals via
-// the repair path. Module scope: both attachInstance and the onPush handlers
-// write it, and the tab has at most one live connection (stale-client guards
-// already protect every writer).
+// attach/promotion, set by the replace repair path, advanced on every delta
+// write; a stale or failed write self-heals via the repair path. Module scope:
+// both the open path and the onPush handlers write it, and the tab has at most
+// one live connection (stale-client guards protect every writer).
 let cacheBase: { sessionId: string; doc: Document } | null = null;
 
 // ---------------------------------------------------------------------------
@@ -100,14 +102,17 @@ export function useConnection(): { retry: () => void } {
 	// connecting→unreachable threshold and backoff exponent.
 	const attemptRef = useRef(0);
 
-	// Attach to an instance, seeding the mirror from cache when possible
-	// (ADR 09 §Client Restore Flow). Cold load: seed mirror + paint from the
-	// cached records. Reconnect to the same session: the in-memory document
-	// is newer than the cache — keep it as the seed (delta adds are
-	// overwrite-shaped, so a cache-lagging cursor stays safe).
-	const attachInstance = useCallback(async (client: BridgeClient, instanceId: string, sessionId?: string) => {
+	/**
+	 * Open a session address, seeding the mirror from cache when the address's
+	 * session id is known (ADR 09 §Client Restore Flow). Cold load without a
+	 * remembered id: plain open, full replace.
+	 */
+	const openSessionAddress = useCallback(async (client: BridgeClient, projectId: string, stem: string) => {
+		const store = getStore();
+		store.getState().setCurrentSession(projectId, stem);
+		const sessionId = lookupSessionId(projectId, stem);
 		if (!sessionId) {
-			await client.switchInstance(instanceId);
+			await client.openSession(projectId, stem);
 			return;
 		}
 		let records: CacheEntryRecord[] = [];
@@ -115,10 +120,9 @@ export function useConnection(): { retry: () => void } {
 		try {
 			({ records, hint } = await (await getEntryCache()).loadSession(sessionId));
 		} catch {
-			// Cache read failure: plain attach, full replace.
+			// Cache read failure: plain open, full replace.
 		}
 		if (clientRef.current !== client) return; // superseded mid-load
-		const store = getStore();
 		const state = store.getState();
 		const sameSession = state.activeSessionId === sessionId && Object.keys(state.document.entries).length > 0;
 		const seed = sameSession ? state.document : seedDocument(records, hint ?? undefined);
@@ -127,11 +131,22 @@ export function useConnection(): { retry: () => void } {
 		// base so the initial-sync delta's flush persists only new entries.
 		cacheBase = { sessionId, doc: seed };
 		if (!sameSession && records.length > 0) {
-			// Immediate paint of the cached content before the server responds.
 			store.getState().applyReplace(seed);
 		}
 		const cursor = computeCursor(records);
-		await client.switchInstance(instanceId, cursor ?? undefined);
+		await client.openSession(projectId, stem, cursor ?? undefined);
+	}, []);
+
+	/** Open a Project's home: bind the address, fetch its first session page. */
+	const openProjectAddress = useCallback(async (client: BridgeClient, projectId: string) => {
+		const store = getStore();
+		store.getState().setCurrentSession(projectId, null);
+		const reply = await client.listSessions(projectId, SESSION_PAGE_SIZE);
+		if (clientRef.current !== client) return;
+		const data = reply as unknown as ListSessionsReply;
+		const sessions = (data.sessions as SessionInfo[] | undefined) ?? [];
+		for (const row of sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
+		store.getState().replaceSessions(sessions, data.hasMore === true, data.nextCursor ?? null);
 	}, []);
 
 	const initDaemonInfo = useCallback(
@@ -141,8 +156,8 @@ export function useConnection(): { retry: () => void } {
 				const timeout = new Promise<never>((_, reject) => {
 					timer = setTimeout(() => reject(new Error("daemon did not respond")), INIT_TIMEOUT_MS);
 				});
-				const [daemonReply, managersReply] = await Promise.race([
-					Promise.all([client.getDaemonInfo(), client.listInstances()]),
+				const [daemonReply, activeReply] = await Promise.race([
+					Promise.all([client.getDaemonInfo(), client.listActiveSessions()]),
 					timeout,
 				]);
 
@@ -151,98 +166,48 @@ export function useConnection(): { retry: () => void } {
 
 				const store = getStore();
 
-				// Daemon info — models, thinking levels, cwd allowlist, dev mode
+				// Daemon info — Projects, models, thinking levels, dev mode
 				const info = daemonReply as unknown as GetDaemonInfoReply;
 				if (info.models) {
 					store.getState().setModels(info.models, info.thinkingLevels ?? []);
 				}
-				if (info.cwdAllowlist) {
-					store.getState().setCwdAllowlist(info.cwdAllowlist);
-				}
+				store.getState().setProjects(info.projects ?? []);
 				if (info.devMode) {
 					store.getState().setDevMode(true);
 					hookConsole(client);
 				}
 
-				// Instance list — pick what to attach to.
-				const instancesResult = managersReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-				const instances = instancesResult.instances ?? [];
-				const state = store.getState();
-				const currentId = state.attachedInstanceId;
-				const stillAlive = currentId !== null && instances.some((inst) => inst.instanceId === currentId);
+				// Global active/streaming snapshot
+				const active = activeReply as unknown as ListActiveSessionsReply;
+				const activeSessions = active.sessions ?? [];
+				for (const row of activeSessions) rememberAddress(row.projectId, row.stem, row.sessionId);
+				store.getState().setActiveSessions(activeSessions);
 
-				// Auto-attach: resume this tab's instance if still alive, else
-				// attach the sole live instance (T1). At 0 instances, seed one per
-				// allowlist cwd — each resuming its most recent prior session —
-				// and attach to the last. The Launcher's empty state is pure
-				// friction on the common path (you must create one to start anyway).
-				// Skipped when launcher-pinned: the user deliberately returned to
-				// the instance list — a reconnect must not attach over that choice.
-				const allowlist = info.cwdAllowlist ?? [];
-				let attachId: string | null = null;
-				let seeded = false;
-				if (!state.launcherPinned && stillAlive) {
-					attachId = currentId;
-					await attachInstance(
-						client,
-						currentId,
-						instances.find((inst) => inst.instanceId === currentId)?.sessionId,
-					);
-				} else if (!state.launcherPinned && instances.length === 1) {
-					attachId = instances[0].instanceId;
-					await attachInstance(client, attachId, instances[0].sessionId);
-				} else if (!state.launcherPinned && instances.length === 0 && allowlist.length > 0) {
-					// newInstance starts a fresh session; listSessions is
-					// server-scoped to the just-attached instance's cwd and
-					// excludes the live fresh session, so sessions[0] is the
-					// previous one — resume it. No-op on first use (empty list).
-					let lastId: string | null = null;
-					for (const cwd of allowlist) {
-						const reply = await client.newInstance(cwd);
-						if (clientRef.current !== client) return;
-						const r = reply as unknown as { ok: boolean; instanceId?: string };
-						if (!r?.ok || !r.instanceId) continue;
-						const sessReply = await client.listSessions(1);
-						if (clientRef.current !== client) return;
-						const sessData = sessReply as unknown as ListSessionsReply;
-						// sessionPath null = live stub row — not a switch target (ADR 09).
-						if (sessData?.sessions?.[0]?.sessionPath) {
-							const target = sessData.sessions[0];
-							const cursor = await prepareSwitch(target.sessionId);
-							if (clientRef.current !== client) return;
-							await client.switchSession(target.sessionPath as string, cursor);
-							if (clientRef.current !== client) return;
-						}
-						lastId = r.instanceId;
+				// Route-driven open (ADR 11). The URL is read at boot and after
+				// every reconnect; it is not a second live navigation machine.
+				const route = parseRoute(window.location.pathname);
+				if (route.kind === "session") {
+					const known = (info.projects ?? []).some((p) => p.id === route.projectId);
+					if (!known) {
+						store.getState().clearCurrentSession();
+						writeRoute({ kind: "launcher" });
+					} else {
+						await openSessionAddress(client, route.projectId, route.stem);
 					}
-					if (lastId) {
-						attachId = lastId;
-						seeded = true;
+				} else if (route.kind === "project") {
+					const known = (info.projects ?? []).some((p) => p.id === route.projectId);
+					if (!known) {
+						store.getState().clearCurrentSession();
+						writeRoute({ kind: "launcher" });
+					} else {
+						await openProjectAddress(client, route.projectId);
 					}
+				} else {
+					store.getState().clearCurrentSession();
+					writeRoute({ kind: "launcher" });
 				}
 
-				if (clientRef.current !== client) return; // superseded mid-attach
-
-				// Seeding changed the instance set — refetch so the store reflects
-				// the new instances (the last is already attached via newInstance).
-				let liveInstances = instances;
-				if (seeded) {
-					const freshReply = await client.listInstances();
-					if (clientRef.current !== client) return;
-					const freshData = freshReply as unknown as { ok: boolean; instances: InstanceInfo[] };
-					if (freshData?.instances) liveInstances = freshData.instances;
-				}
-
-				if (attachId) {
-					const sessReply = await client.listSessions(10);
-					if (clientRef.current !== client) return;
-					const sessData = sessReply as unknown as ListSessionsReply;
-					if (sessData.sessions) {
-						store.getState().replaceSessions(sessData.sessions as SessionInfo[], sessData.hasMore === true);
-					}
-				}
-
-				store.getState().syncInstances({ instances: liveInstances, attachedInstanceId: attachId });
+				if (clientRef.current !== client) return;
 
 				// Success: mark connected, reset the doom counter, clear the toast.
 				wasConnectedRef.current = true;
@@ -258,7 +223,7 @@ export function useConnection(): { retry: () => void } {
 				if (timer) clearTimeout(timer);
 			}
 		},
-		[attachInstance],
+		[openProjectAddress, openSessionAddress],
 	);
 
 	const connect = useCallback(() => {
@@ -286,15 +251,11 @@ export function useConnection(): { retry: () => void } {
 
 			// ── Patch coalescing ────────────────────────────────────────────
 			// The mirror is always current (BridgeClient applies patches before
-			// onPush fires). We decouple *when* the store reads the mirror,
-			// coalescing many patches into one store update per animation frame
-			// (visible) or per ~1s (hidden). This caps the urgent render +
-			// selector fan-out rate at the flush cadence, not the token cadence
-			// — the dominant CPU sink during streaming. useDeferredValue (on
-			// TextBlockView) keeps the expensive markdown subtree interruptible
-			// regardless. A `replace` push flushes immediately (load-bearing:
-			// reconnect/session switch resets state wholesale).
-			// Last cache-written base per session — see the module-level declaration.
+			// onPush fires). Store writes are coalesced to one per animation
+			// frame (visible) or ~1s (hidden), capping the urgent render rate at
+			// the flush cadence rather than the token cadence. A `replace` push
+			// flushes immediately (load-bearing: reconnect/session switch resets
+			// state wholesale).
 			let pendingOps: PatchOp[] | null = null;
 			let rafId: number | null = null;
 			let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -310,12 +271,6 @@ export function useConnection(): { retry: () => void } {
 				}
 			};
 
-			// Drain pending patch ops: one migrateExpandKeys pass over the
-			// batched move ops, then push the mirror's current document to the
-			// store. The mirror already holds every applied patch, so this is a
-			// single applyReplace regardless of how many patches coalesced.
-			// `cacheMode "skip"` is for flushes whose before/after span sessions
-			// (the replace path persists via replaceSession repair instead).
 			const flush = (cacheMode: "delta" | "skip" = "delta") => {
 				cancelPending();
 				const ops = pendingOps;
@@ -341,8 +296,7 @@ export function useConnection(): { retry: () => void } {
 				const after = client.mirror.document;
 				store.getState().applyReplace(after);
 				// Write-through (ADR 09): persist committed-entry deltas under the
-				// active session, planned against the session's cache base (see
-				// cacheBase above). Cache failures never break the UI.
+				// active session, planned against the session's cache base.
 				if (cacheMode === "delta") {
 					const sessionId = store.getState().activeSessionId;
 					if (sessionId) {
@@ -361,25 +315,16 @@ export function useConnection(): { retry: () => void } {
 				}
 			};
 
-			// Arm the flush without arguments (rAF passes a timestamp).
 			const scheduleFlush = () => {
 				if (document.hidden) {
-					// Hidden: rAF won't fire. Drain on a ~1s timer so the store
-					// stays bounded-stale (lets useStatusNotifications catch a
-					// turn that completes in the background) at ~0 render cost.
 					if (hideTimer === null) hideTimer = setTimeout(flush, 1000);
 				} else if (rafId === null) {
-					// Visible: align the store write with paint. Multiple patches
-					// in one frame coalesce into one store update.
 					rafId = requestAnimationFrame(() => flush());
 				}
 			};
 
 			const onVisibilityChange = () => {
 				if (document.hidden) {
-					// rAF is deferred (won't fire while hidden); cancel it and arm
-					// the slow timer so pending work drains in the background
-					// rather than waiting for refocus.
 					if (rafId !== null) {
 						cancelAnimationFrame(rafId);
 						rafId = null;
@@ -388,9 +333,6 @@ export function useConnection(): { retry: () => void } {
 						hideTimer = setTimeout(flush, 1000);
 					}
 				} else {
-					// Back to visible: cancel the slow timer and flush now so the
-					// returning user sees the latest without a frame's delay. The
-					// next patch arms a fresh rAF.
 					if (hideTimer !== null) {
 						clearTimeout(hideTimer);
 						hideTimer = null;
@@ -411,74 +353,69 @@ export function useConnection(): { retry: () => void } {
 				if (clientRef.current !== client) return;
 				const store = getStore();
 
-				// Sessions-changed push: upsert metadata, preserve loaded pages.
+				// Project-scoped session-list refresh (ADR 11). Carries the first
+				// page; the previous cursor is invalidated, so restart from page 1.
 				if (push.kind === "sessions_changed") {
-					store.getState().appendSessions(push.sessions, push.hasMore);
+					for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
+					if (push.projectId === store.getState().currentProjectId) {
+						store.getState().replaceSessions(push.sessions, push.hasMore, push.nextCursor ?? null);
+					}
 					return;
 				}
 
-				// Instance exit: clear instance state, show initial state.
-				if (push.kind === "instance_exit") {
-					discardSessionCandidate(); // a pending switch can never complete now
-					store.getState().clearInstance();
-					// Refresh instance list so the killed instance disappears from the sidebar.
-					client.listInstances().then((reply) => {
-						if (reply.ok) {
-							const mData = reply as unknown as { instances: InstanceInfo[] };
-							if (mData.instances) {
-								store.getState().syncInstances({ instances: mData.instances });
-							}
-						}
-					});
+				// Global active/streaming snapshot.
+				if (push.kind === "active_sessions_changed") {
+					for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
+					store.getState().setActiveSessions(push.sessions);
 					return;
 				}
 
 				// replace: flush barrier + cache repair (ADR 09). The mirror already
-				// holds the snapshot. A sessionId-bearing replace is an initial sync;
-				// it sets the cache key and repairs that session's cached records.
-				// Replace nulls lazy fields; bumpPullTick re-triggers want
-				// registration so the pull loop re-fetches what's on screen.
+				// holds the snapshot. A replace always carries the session ref
+				// (ADR 11) — it is an initial sync.
 				if (push.kind === "replace") {
 					flush("skip");
-					if (push.sessionId) {
-						store.getState().setActiveSessionId(push.sessionId);
-						const doc = client.mirror.document;
-						const sessionId = push.sessionId;
-						const repairRecords = cacheRecordsOfDocument(sessionId, doc);
-						// The repair rewrites the whole session by design — the snapshot
-						// becomes the new cache base.
-						cacheBase = { sessionId, doc };
-						void getEntryCache()
-							.then((cache) => cache.replaceSession(sessionId, repairRecords, statusHintOfDocument(doc)))
-							.catch(() => {});
-					}
+					const ref = push.session;
+					store.getState().setActiveSessionId(ref.sessionId);
+					store.getState().setCurrentSession(ref.projectId, ref.stem);
+					rememberAddress(ref.projectId, ref.stem, ref.sessionId);
+					writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+					const doc = client.mirror.document;
+					const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
+					// The repair rewrites the whole session by design — the snapshot
+					// becomes the new cache base.
+					cacheBase = { sessionId: ref.sessionId, doc };
+					void getEntryCache()
+						.then((cache) => cache.replaceSession(ref.sessionId, repairRecords, statusHintOfDocument(doc)))
+						.catch(() => {});
 					store.getState().bumpPullTick();
 					return;
 				}
 
-				// Initial-sync delta (ADR 09): a patch frame carrying sessionId.
-				// If a candidate mirror is pending for that session, apply the
-				// delta to the candidate and promote it atomically — the mirror's
-				// own application ran against the old-session base and is
-				// discarded. Without a candidate (reconnect/attach seeded the
-				// mirror directly), the mirror application is already correct:
-				// flush barrier only.
-				if (push.kind === "patch" && push.sessionId) {
-					const promoted = promoteSessionCandidate(push.sessionId, push.ops);
+				// Initial-sync delta (ADR 09): a patch frame carrying `session`. If a
+				// candidate mirror is pending for that session, apply the delta to
+				// the candidate and promote it atomically — the mirror's own
+				// application ran against the old-session base and is discarded.
+				if (push.kind === "patch" && push.session) {
+					const ref = push.session;
+					const promoted = promoteSessionCandidate(ref.sessionId, push.ops);
 					if (promoted) {
 						client.mirror.applyReplace(promoted.doc);
 						// The candidate was seeded from the cached records — its
 						// pre-promotion document IS the cache base, so the flush below
-						// persists only the delta's new entries, not the whole session.
-						cacheBase = { sessionId: push.sessionId, doc: promoted.before };
+						// persists only the delta's new entries.
+						cacheBase = { sessionId: ref.sessionId, doc: promoted.before };
 					}
-					store.getState().setActiveSessionId(push.sessionId);
+					store.getState().setActiveSessionId(ref.sessionId);
+					store.getState().setCurrentSession(ref.projectId, ref.stem);
+					rememberAddress(ref.projectId, ref.stem, ref.sessionId);
+					writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
 					flush(); // barrier + delta write-through under the new session id
 					store.getState().bumpPullTick();
 					return;
 				}
 
-				// patch: buffer ops for the move scan, schedule a coalesced flush.
+				// Live patch without an address: buffer ops, schedule a flush.
 				if (push.kind === "patch") {
 					if (pendingOps === null) pendingOps = [];
 					for (const op of push.ops) pendingOps.push(op);
@@ -489,15 +426,13 @@ export function useConnection(): { retry: () => void } {
 			document.addEventListener("visibilitychange", onVisibilityChange);
 
 			// Don't mark connected until the init RPC resolves — the WS being
-			// open is necessary, not sufficient. State stays connecting/
-			// reconnecting until init succeeds (→ connected) or fails (→ init_failed).
+			// open is necessary, not sufficient.
 			void initDaemonInfo(client);
 		};
 
 		ws.onclose = () => {
 			// Tear down this connection's coalescing state + visibility listener
-			// before the early-return below skips reconnect. Prevents leaked
-			// listeners and stray flushes on a dead/superseded socket.
+			// before the early-return below skips reconnect.
 			connectionCleanup?.();
 			connectionCleanup = null;
 
@@ -523,8 +458,6 @@ export function useConnection(): { retry: () => void } {
 			}
 			store.getState().setConnectionState(next);
 
-			// Toast only once we've been connected (or after the threshold on a
-			// first-load failure) — avoid spamming a normal first-attempt.
 			if (wasConnected || unreachable) {
 				const msg = unreachable ? "Can't reach pi-bridge — retrying" : "Reconnecting…";
 				store.getState().pushToast(CONNECTION_TOAST_ID, msg);
