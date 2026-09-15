@@ -6,6 +6,7 @@
 
 import { useCallback, useMemo } from "react";
 import type {
+	GitShowReply,
 	ImageContent,
 	InstanceInfo,
 	ListFilesReply,
@@ -287,5 +288,22 @@ export async function listFilesRpc(prefix: string): Promise<Array<{ path: string
 		return (r.entries as Array<{ path: string; isDirectory: boolean }>) ?? [];
 	} catch {
 		return [];
+	}
+}
+
+/** ADR 10 v2: fetch `git show --stat` output for a recorded commit. Returns
+ * null on any failure (no client, ok:false, throw) — the caller renders a
+ * graceful "not available" state; no toast, the failure is expected for
+ * rebased-away commits. */
+export async function gitShowRpc(commit: string): Promise<{ output: string; truncated: boolean } | null> {
+	const client = getGlobalClient();
+	if (!client) return null;
+	try {
+		const reply = await client.gitShow(commit);
+		if (!reply.ok) return null;
+		const r = reply as unknown as GitShowReply;
+		return { output: r.output, truncated: r.truncated };
+	} catch {
+		return null;
 	}
 }

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { createServer, type Server as HttpServer, type ServerResponse } from "node:http";
@@ -240,6 +241,8 @@ export class Daemon {
 		},
 
 		readFile: (path: string, cwd?: string) => readHostFile(path, cwd ?? this.cwd),
+
+		gitShow: (commit: string, cwd?: string) => runGitShow(commit, cwd ?? this.cwd),
 
 		getDaemonInfo: () => {
 			const runtime = this.modelRuntime;
@@ -590,6 +593,52 @@ export function readHostFile(
 		truncated: st.size > MAX_READ_FILE_BYTES,
 		bytes: st.size,
 	};
+}
+
+// ── Git show (ADR 10 v2 change-card expansion) ──────────────────────────
+
+/** Byte cap for `git show` output. Same rationale as MAX_READ_FILE_BYTES:
+ a human reading surface, not a data channel. */
+export const MAX_GIT_SHOW_BYTES = 128 * 1024;
+
+/** Hard lifetime for the `git show` spawn, so a hanging git (interactive
+ * hooks, exotic filters) cannot stall the RPC. */
+const GIT_SHOW_TIMEOUT_MS = 5000;
+
+/** Strict commit-id check before any spawn — the value arrives from the
+ * wire, and `execFile` passes it as one argv entry, but it is also
+ * interpolated into a git revision expression, so only a known-shape
+ * object id is acceptable. */
+const GIT_COMMIT_RE = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
+
+/** Run `git show --stat --no-color <commit>` in `cwd`. Exported for
+ * Connection-level tests (the DaemonVerbs seam takes the same function).
+ * Throws on non-hex commits, spawn failures, timeouts, and exit-nonzero
+ * (unreachable commits — rebased/reset away — included), so the Connection
+ * converts the message into an `ok:false` reply. */
+export async function runGitShow(commit: string, cwd: string): Promise<{ output: string; truncated: boolean }> {
+	if (!GIT_COMMIT_RE.test(commit)) throw new Error("Invalid commit id");
+	return new Promise((resolve, reject) => {
+		const child = execFile(
+			"git",
+			["show", "--stat", "--no-color", commit],
+			{ cwd, timeout: GIT_SHOW_TIMEOUT_MS, maxBuffer: MAX_GIT_SHOW_BYTES * 2, windowsHide: true },
+			(err, stdout) => {
+				if (err) {
+					reject(err instanceof Error ? err : new Error(String(err)));
+					return;
+				}
+				const buf = Buffer.from(stdout, "utf8");
+				resolve({
+					output: buf.subarray(0, MAX_GIT_SHOW_BYTES).toString("utf8"),
+					truncated: buf.length > MAX_GIT_SHOW_BYTES,
+				});
+			},
+		);
+		// execFile's timeout kills the child; the callback still fires with
+		// an error, so no extra bookkeeping is needed.
+		void child;
+	});
 }
 
 // ── File path completion ─────────────────────────────────────────────────
