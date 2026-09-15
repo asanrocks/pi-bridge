@@ -2,6 +2,7 @@ import type { WebSocket } from "ws";
 import type {
 	ClientMessage,
 	GetDaemonInfoReply,
+	GitShowRequest,
 	ImageContent,
 	InstanceInfo,
 	JsonValue,
@@ -57,6 +58,9 @@ export interface DaemonVerbs {
 	/** Read a file for the web viewer. Throws on missing/unreadable paths
 	 * (converted to an ok:false reply). Relative paths resolve against cwd. */
 	readFile: (path: string, cwd?: string) => { path: string; content: string; truncated: boolean; bytes: number };
+	/** Show a commit (`git show --stat`) for an ADR 10 change card. Throws on
+	 * invalid commits and spawn failures (converted to an ok:false reply). */
+	gitShow: (commit: string, cwd?: string) => Promise<{ output: string; truncated: boolean }>;
 	listInstances: () => InstanceInfo[];
 	switchInstance: (
 		instanceId: string,
@@ -337,6 +341,16 @@ export class Connection {
 					// its cwd, so an unattached read has no authoritative base.
 					if (!this._attachedManager) throw new Error("no instance attached");
 					const result = this.daemonVerbs.readFile(m.path, this._attachedManager.cwd);
+					this.send({ id, ok: true, ...result });
+					break;
+				}
+				case "gitShow": {
+					const m = msg as unknown as GitShowRequest;
+					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
+					// Requires an attached instance: the recorded commit belongs to
+					// that instance's repository, so its cwd is the query base.
+					if (!this._attachedManager) throw new Error("no instance attached");
+					const result = await this.daemonVerbs.gitShow(m.commit, this._attachedManager.cwd);
 					this.send({ id, ok: true, ...result });
 					break;
 				}

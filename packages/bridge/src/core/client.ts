@@ -248,6 +248,10 @@ export class BridgeClient {
 		return this.call({ verb: "readFile", path });
 	}
 
+	gitShow(commit: string): Promise<RpcReply> {
+		return this.call({ verb: "gitShow", commit });
+	}
+
 	console(level: "log" | "warn" | "error", args: JsonValue[]): Promise<RpcReply> {
 		return this.call({ verb: "console", level, args });
 	}

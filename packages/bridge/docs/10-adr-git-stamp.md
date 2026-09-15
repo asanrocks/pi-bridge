@@ -317,8 +317,15 @@ item is not sent to the LLM. The renderer may abbreviate the commit in compact
 layouts but uses the stored full value as its source.
 
 Rebases, resets, and force-pushes may make a stored commit unreachable from the
-current repository. Renderers display the stored hash and subject without
-resolving them against the live checkout.
+current repository. Automatic rendering never resolves the stored hash
+against the live checkout. The one sanctioned resolution is explicit user
+expansion of a change card: the client sends a `gitShow` RPC
+(`{ verb: "gitShow", commit }`), the Connection routes it to the daemon with
+the attached instance's cwd (like `readFile`), and the daemon runs
+`git show --stat --no-color <commit>` — commit strictly validated as a hex
+object id before spawn, with a timeout and output cap. Unreachable commits
+reply `ok:false` and the card renders a graceful "not available" state; the
+stored labels stand regardless.
 
 ## Bridge Integration
 
@@ -352,6 +359,15 @@ including between an assistant tool-call entry and its later tool result when
 the observation is tool-anchored. Neither is mistaken for a user or assistant
 message, and wording stays neutral ("Git state observed") rather than claiming
 that a particular tool caused the change when tools were concurrent.
+
+Both cards reuse the tool-card skeleton (the read tool / user bash anatomy):
+a tinted `.actionStep` band in the git family hue, a fold row whose summary
+is the commit subject with the branch and short hash docked right (muted,
+monospace), and an expanded details card whose identity line restores the
+full truth (full hash, anchor, timestamp) above the content region. Expanding
+a card with a resolvable commit fetches `git show --stat` on demand (see
+"Git query and consistency" above); cards without a commit (unborn or
+unknown identities) are static.
 
 Plain pi TUI sessions do not enable the bridge extension and therefore do not
 write new stamps. Existing stamps remain inert there unless the same extension
@@ -470,8 +486,9 @@ silently incorrect repository metadata.
 - A rejected or failed observation cannot poison the serialization queue.
 - The session sequence provides only a best-effort link between a stamp and
   nearby tool or bash entries; no causal attribution is guaranteed.
-- Stored hashes and subjects are historical labels and are never validated
-  against the current repository after persistence.
+- Stored hashes and subjects are historical labels; automatic rendering never
+  validates them against the current repository. Explicit user expansion of a
+  change card may consult the live repository via the `gitShow` verb.
 
 ## Test Plan
 
