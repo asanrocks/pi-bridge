@@ -17,38 +17,29 @@
 // ============================================================================
 
 import { useEffect, useRef } from "react";
-import type { ClientStore } from "./store.ts";
 import { getStore, useStore } from "./store.tsx";
 
 const DRAFT_PREFIX = "pi-bridge:draft:";
 
-/** Select the attached session id from the (fresh) instances list. */
-function selectAttachedSessionId(s: ClientStore): string | null {
-	const id = s.attachedInstanceId;
-	if (id === null) return null;
-	const inst = s.instances.find((i) => i.instanceId === id);
-	return inst ? inst.sessionId : null;
-}
-
 export function useDraftGuard(): void {
-	const attachedInstanceId = useStore((s) => s.attachedInstanceId);
-	const attachedSessionId = useStore(selectAttachedSessionId);
+	const hasSession = useStore((s) => s.currentStem !== null);
+	const activeSessionId = useStore((s) => s.activeSessionId);
 
-	// The localStorage key for the currently-attached session, or null when
-	// unattached. Set by the restore effect before any draft write so the
-	// persist subscriber always targets the correct slot.
+	// The localStorage key for the currently-open session, or null when none.
+	// Set by the restore effect before any draft write so the persist
+	// subscriber always targets the correct slot.
 	const keyRef = useRef<string | null>(null);
 
-	// ── Restore on attach / switch ──────────────────────────────────────
+	// ── Restore on open / switch ────────────────────────────────────────
 	// Loads the saved compose draft (dormant — composer stays collapsed
 	// until the user focuses it) or clears a stale draft from the previous
 	// session. Edit drafts are session-live and never restored here.
 	useEffect(() => {
-		if (!attachedInstanceId || !attachedSessionId) {
+		if (!hasSession || !activeSessionId) {
 			keyRef.current = null;
 			return;
 		}
-		const key = DRAFT_PREFIX + attachedSessionId;
+		const key = DRAFT_PREFIX + activeSessionId;
 		keyRef.current = key;
 		const store = getStore().getState();
 		let saved: string | null = null;
@@ -62,13 +53,13 @@ export function useDraftGuard(): void {
 		} else {
 			store.clearDraft();
 		}
-	}, [attachedInstanceId, attachedSessionId]);
+	}, [hasSession, activeSessionId]);
 
 	// ── Persist compose-draft text on change ────────────────────────────
 	// Subscribed once. Filters to compose-text changes; edit drafts are not
-	// persisted (session-live). keyRef gates writes until a session is
-	// attached, so pre-attach typing (impossible in practice — the composer
-	// only mounts when attached) is a no-op.
+	// persisted (session-live). keyRef gates writes until a session is open,
+	// so pre-attach typing (impossible in practice — the composer only mounts
+	// for an open session) is a no-op.
 	useEffect(() => {
 		const unsub = getStore().subscribe((state, prev) => {
 			const key = keyRef.current;

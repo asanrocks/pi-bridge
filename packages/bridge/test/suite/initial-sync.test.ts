@@ -10,9 +10,13 @@ import {
 	type Document,
 	initFromEntries,
 	reconcile,
+	type SessionRef,
 	seedDocument,
 	validateCursor,
 } from "../../src/core/index.ts";
+
+/** Synthetic session address for the initial-sync frames. */
+const REF: SessionRef = { projectId: "p", sessionId: "s", stem: "2026-01-01_s" };
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -143,10 +147,10 @@ describe("validateCursor", () => {
 describe("buildInitialSync: full replacement", () => {
 	it("sends every committed entry with ord, lazy fields null, plus provisionals, status, and scoped models", () => {
 		const { doc, piEntries } = midTurnDoc();
-		const frame = buildInitialSync(doc, piEntries, "s", null);
+		const frame = buildInitialSync(doc, piEntries, REF, null);
 		expect(frame.kind).toBe("replace");
 		if (frame.kind !== "replace") return;
-		expect(frame.sessionId).toBe("s");
+		expect(frame.session?.sessionId).toBe("s");
 
 		const entries = frame.document.entries;
 		expect(entries.a?.ord).toBe(0);
@@ -185,7 +189,7 @@ describe("buildInitialSync: full replacement", () => {
 
 		// The current turn's user message is committed in the file mid-turn.
 		const piEntries = [...settled, userEntry("u3", "b")];
-		const frame = buildInitialSync(doc, piEntries, "s", null);
+		const frame = buildInitialSync(doc, piEntries, REF, null);
 		if (frame.kind !== "replace") throw new Error("expected replace");
 		expect(frame.document.entries.a1?.ord).toBe(1);
 		expect(frame.document.entries.b?.ord).toBe(2);
@@ -196,7 +200,7 @@ describe("buildInitialSync: full replacement", () => {
 	it("includes silently-appended entries the canonical Document does not know yet", () => {
 		const doc = initFromEntries([userEntry("a")]);
 		const piEntries = [userEntry("a"), labelEntry("silent", "a"), userEntry("c", "silent")];
-		const frame = buildInitialSync(doc, piEntries, "s", null);
+		const frame = buildInitialSync(doc, piEntries, REF, null);
 		if (frame.kind !== "replace") throw new Error("expected replace");
 		expect(frame.document.entries.silent?.ord).toBe(1);
 		expect(frame.document.entries.c?.ord).toBe(2);
@@ -223,7 +227,7 @@ describe("buildInitialSync: full replacement", () => {
 				},
 			} as unknown as SessionEntry,
 		]);
-		const frame = buildInitialSync(doc, [se("message", { id: "a1", role: "assistant" })], "s", null);
+		const frame = buildInitialSync(doc, [se("message", { id: "a1", role: "assistant" })], REF, null);
 		if (frame.kind !== "replace") throw new Error("expected replace");
 		const content = frame.document.entries.a1 as unknown as { content: Array<Record<string, unknown>> };
 		expect(content.content[0]?.thinking).toBeNull();
@@ -232,7 +236,7 @@ describe("buildInitialSync: full replacement", () => {
 
 	it("falls back to replace when the cursor is invalid", () => {
 		const { doc, piEntries } = midTurnDoc();
-		const frame = buildInitialSync(doc, piEntries, "s", {
+		const frame = buildInitialSync(doc, piEntries, REF, {
 			sessionId: "s",
 			lastKnownId: "wrong-anchor",
 			entryCount: 2,
@@ -258,10 +262,10 @@ describe("buildInitialSync: delta patch", () => {
 	it("sends only the committed suffix plus status and scoped models", () => {
 		const doc = settledFixture();
 		const piEntries = [userEntry("a"), userEntry("b", "a"), labelEntry("l1", "b"), userEntry("c", "l1")];
-		const frame = buildInitialSync(doc, piEntries, "s", { sessionId: "s", lastKnownId: "b", entryCount: 2 });
+		const frame = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
 		expect(frame.kind).toBe("patch");
 		if (frame.kind !== "patch") return;
-		expect(frame.sessionId).toBe("s");
+		expect(frame.session?.sessionId).toBe("s");
 
 		const addPaths = frame.ops.filter((o) => o.op === "add").map((o) => o.path);
 		expect(addPaths).toEqual(["/entries/l1", "/entries/c"]);
@@ -275,7 +279,7 @@ describe("buildInitialSync: delta patch", () => {
 
 	it("includes provisional skeletons during a mid-turn reconnect", () => {
 		const { doc, piEntries } = midTurnDoc();
-		const frame = buildInitialSync(doc, piEntries, "s", { sessionId: "s", lastKnownId: "b", entryCount: 2 });
+		const frame = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
 		expect(frame.kind).toBe("patch");
 		if (frame.kind !== "patch") return;
 		const addPaths = frame.ops.filter((o) => o.op === "add").map((o) => o.path);
@@ -291,7 +295,7 @@ describe("buildInitialSync: delta patch", () => {
 		const piEntries = [userEntry("a")];
 		// Cursor covers the whole file: no committed adds, no provisionals —
 		// still two unconditional replaces.
-		const frame = buildInitialSync(doc, piEntries, "s", { sessionId: "s", lastKnownId: "a", entryCount: 1 });
+		const frame = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "a", entryCount: 1 });
 		if (frame.kind !== "patch") throw new Error("expected patch");
 		expect(frame.ops.length).toBeGreaterThanOrEqual(2);
 		expect(frame.ops.every((o) => o.op === "append")).toBe(false);
@@ -300,14 +304,14 @@ describe("buildInitialSync: delta patch", () => {
 	it("resets CompactCodec state in both frame forms", () => {
 		const codec = new CompactCodec();
 		const { doc, piEntries } = midTurnDoc();
-		const delta = buildInitialSync(doc, piEntries, "s", { sessionId: "s", lastKnownId: "b", entryCount: 2 });
+		const delta = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
 		const decodedDelta = codec.decodeIncoming(codec.encodeOutgoing(delta as unknown as Record<string, unknown>));
 		expect(decodedDelta).toEqual(delta);
 		// Codec state was reset: a compact bare-string frame has no remembered
 		// path to restore.
 		expect(() => codec.decodeIncoming(JSON.stringify("x"))).toThrow();
 
-		const replaceFrame = buildInitialSync(doc, piEntries, "s", null);
+		const replaceFrame = buildInitialSync(doc, piEntries, REF, null);
 		const decodedReplace = codec.decodeIncoming(
 			codec.encodeOutgoing(replaceFrame as unknown as Record<string, unknown>),
 		);
@@ -325,7 +329,7 @@ describe("initial sync convergence", () => {
 		const piEntries = [userEntry("a"), userEntry("b", "a"), labelEntry("l1", "b"), userEntry("c", "l1")];
 		const doc = initFromEntries(piEntries);
 
-		const full = buildInitialSync(doc, piEntries, "s", null);
+		const full = buildInitialSync(doc, piEntries, REF, null);
 		if (full.kind !== "replace") throw new Error("expected replace");
 
 		// Simulate a client that cached only the first two entries.
@@ -333,7 +337,7 @@ describe("initial sync convergence", () => {
 		const cursor = computeCursor(records);
 		expect(cursor).toEqual({ sessionId: "s", lastKnownId: "b", entryCount: 2 });
 
-		const delta = buildInitialSync(doc, piEntries, "s", cursor);
+		const delta = buildInitialSync(doc, piEntries, REF, cursor);
 		if (delta.kind !== "patch") throw new Error("expected patch");
 
 		const seeded = seedDocument(records);
@@ -362,7 +366,7 @@ describe("initial sync convergence", () => {
 		doc = applyPatch(doc, started.ops);
 		const piEntries = [...settled, userEntry("u3", "b")];
 
-		const full = buildInitialSync(doc, piEntries, "s", null);
+		const full = buildInitialSync(doc, piEntries, REF, null);
 		if (full.kind !== "replace") throw new Error("expected replace");
 		expect(full.document.entries.a1?.ord).toBe(1);
 
@@ -371,7 +375,7 @@ describe("initial sync convergence", () => {
 		const cursor = computeCursor(records);
 		expect(cursor).toEqual({ sessionId: "s", lastKnownId: "b", entryCount: 3 });
 
-		const delta = buildInitialSync(doc, piEntries, "s", cursor);
+		const delta = buildInitialSync(doc, piEntries, REF, cursor);
 		if (delta.kind !== "patch") throw new Error("expected patch");
 		const seeded = seedDocument(records);
 		expect(applyPatch(seeded, delta.ops)).toEqual(full.document);
@@ -380,7 +384,7 @@ describe("initial sync convergence", () => {
 	it("delta merge is idempotent", () => {
 		const piEntries = [userEntry("a"), userEntry("b", "a"), labelEntry("l1", "b"), userEntry("c", "l1")];
 		const doc = initFromEntries(piEntries);
-		const delta = buildInitialSync(doc, piEntries, "s", { sessionId: "s", lastKnownId: "b", entryCount: 2 });
+		const delta = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
 		if (delta.kind !== "patch") throw new Error("expected patch");
 
 		const seeded = seedDocument(committedRecords("s", doc).filter((r) => r.ord < 2));
@@ -397,7 +401,7 @@ describe("initial sync convergence", () => {
 		// seal assigns u3 ord 2 and the next snapshot's records stay contiguous.
 		const settled = reconcile(doc, [...piEntries, userEntry("c4", "u3")]);
 		const doc2 = settled ? applyPatch(doc, settled.ops) : doc;
-		const full = buildInitialSync(doc2, [...piEntries, userEntry("c4", "u3")], "s", null);
+		const full = buildInitialSync(doc2, [...piEntries, userEntry("c4", "u3")], REF, null);
 		if (full.kind !== "replace") throw new Error("expected replace");
 
 		const records = committedRecords("s", full.document);

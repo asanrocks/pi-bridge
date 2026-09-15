@@ -73,7 +73,6 @@ console.log(
 	typeof Client,
 	PROTOCOL_VERSION,
 	decodeCbor(encodeCbor({ browser: true })),
-	typeof InstanceInfo,
 	typeof BridgeClient,
 	typeof CompactCodec,
 	typeof applyEvent,

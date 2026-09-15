@@ -11,7 +11,7 @@
 //
 //   - Modifier combos (Ctrl/Cmd+P, Alt+Arrow, Alt+N) are global intents,
 //     NOT text input. They bypass the text-input bail so model-cycling and
-//     instance-switching work while the composer textarea is focused. The
+//     project-switching work while the composer textarea is focused. The
 //     one carve-out is Ctrl/Cmd+P: it bails in a text input because the
 //     Composer's textarea handler already owns it there (avoids double-
 //     firing — the document listener fires after React's root-delegated
@@ -38,8 +38,8 @@ export interface AppKeyHandlers {
 	onEditFocused: () => void;
 	onCopyFocused: () => void;
 	onBranchSibling: (direction: "prev" | "next") => void;
-	onCycleInstance: (direction: "prev" | "next") => void;
-	onNewInstance: () => void;
+	onCycleProject: (direction: "prev" | "next") => void;
+	onNewSession: () => void;
 	onToggleSidebar: () => void;
 	onToggleHistory: () => void;
 }
@@ -102,17 +102,17 @@ export function useAppKeybindings(handlers: AppKeyHandlers): void {
 			if (e.altKey && !e.ctrlKey && !e.metaKey) {
 				if (e.key === "ArrowUp") {
 					e.preventDefault();
-					h.onCycleInstance("prev");
+					h.onCycleProject("prev");
 					return;
 				}
 				if (e.key === "ArrowDown") {
 					e.preventDefault();
-					h.onCycleInstance("next");
+					h.onCycleProject("next");
 					return;
 				}
 				if (e.key === "n" || e.key === "N") {
 					e.preventDefault();
-					h.onNewInstance();
+					h.onNewSession();
 					return;
 				}
 			}

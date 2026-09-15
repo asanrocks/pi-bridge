@@ -9,10 +9,11 @@ import { createStore } from "zustand/vanilla";
 import {
 	type Document,
 	type ImageContent,
-	type InstanceInfo,
 	MAX_IMAGES_PER_MESSAGE,
 	type ModelInfo,
+	type ProjectInfo,
 	type SessionInfo,
+	type SessionListCursor,
 } from "../../../src/core/types.ts";
 
 // ---------------------------------------------------------------------------
@@ -67,13 +68,10 @@ export interface ClientStore {
 	activeSessionId: string | null;
 	connection: ConnectionState;
 
-	// Attachment state — which Manager (project) this tab is watching
-	attachedInstanceId: string | null;
-	/** True when the user explicitly returned to the Launcher (detach). A
-	 * reconnect must not auto-attach over that choice — the T1 sole-instance
-	 * resume is for tabs that didn't choose. Cleared on the next attach; not
-	 * persisted, so a reload resumes normal auto-attach. */
-	launcherPinned: boolean;
+	// Attachment state — the address this tab is watching (ADR 11)
+	currentProjectId: string | null;
+	/** Relative stem of the open session, or null on the Project home. */
+	currentStem: string | null;
 
 	/** Composer draft — the single source of truth for the textarea content.
 	    Discriminated by kind: idle (nothing), compose (new message), edit
@@ -119,10 +117,12 @@ export interface ClientStore {
 	pullTick: number;
 	sessions: SessionInfo[];
 	sessionsHasMore: boolean;
-	/** Alive instances. */
-	instances: InstanceInfo[];
-	/** Allowed project cwds (from getDaemonInfo). */
-	cwdAllowlist: string[];
+	/** Compound cursor for the last returned session page (ADR 11). */
+	sessionsNextCursor: SessionListCursor | null;
+	/** Static Project configuration (ADR 11). */
+	projects: ProjectInfo[];
+	/** Active/streaming sessions across all Projects (ADR 11). */
+	activeSessions: SessionInfo[];
 	models: ModelInfo[];
 	thinkingLevels: string[];
 	/** Dev mode — when true, browser console.* calls are relayed to server. */
@@ -153,30 +153,28 @@ export interface ClientStore {
 	setConnectionState: (state: ConnectionState) => void;
 	/** Set the active durable session id (from initial-sync frames). */
 	setActiveSessionId: (sessionId: string | null) => void;
-	/** Sync manager list + attached manager id. */
-	syncInstances: (partial: { instances?: InstanceInfo[]; attachedInstanceId?: string | null }) => void;
-	/** Clear instance state (on instance_exit or initial state). */
-	clearInstance: () => void;
-	/** User detach (back to the instance list): clear instance state and pin
-	 * the Launcher against reconnect auto-attach. */
-	detachInstance: () => void;
+	/** Set the static Project list (from getDaemonInfo). */
+	setProjects: (projects: ProjectInfo[]) => void;
+	/** Set the global active/streaming snapshot. */
+	setActiveSessions: (sessions: SessionInfo[]) => void;
+	/** Commit the address this tab is watching (ADR 11). */
+	setCurrentSession: (projectId: string, stem: string | null) => void;
+	/** Unbind from the current Project/session (Launcher, open failure). */
+	clearCurrentSession: () => void;
 	/**
-	 * Append a page of sessions from load-more. Upserts by id: new entries
+	 * Append a page of sessions from load-more. Upserts by sessionId: new entries
 	 * are added, existing entries are updated with fresh metadata. Keeps
-	 * sessions not in the incoming page (partial view). Call with hasMore
-	 * from the server reply.
+	 * sessions not in the incoming page (partial view).
 	 */
-	appendSessions: (incoming: SessionInfo[], hasMore: boolean) => void;
+	appendSessions: (incoming: SessionInfo[], hasMore: boolean, nextCursor?: SessionListCursor | null) => void;
 	/**
-	 * Replace the entire sessions list. Used on instance switch / new instance
-	 * where the session pool belongs to a different cwd and should not merge
-	 * with the previous cwd's sessions.
+	 * Replace the entire sessions list. Used on Project switch, where the pool
+	 * belongs to a different Project and should not merge with the previous one.
 	 */
-	replaceSessions: (incoming: SessionInfo[], hasMore: boolean) => void;
+	replaceSessions: (incoming: SessionInfo[], hasMore: boolean, nextCursor?: SessionListCursor | null) => void;
 	setModels: (models: ModelInfo[], thinkingLevels: string[]) => void;
 	setDevMode: (mode: boolean) => void;
 	applyReplace: (doc: Document) => void;
-	setCwdAllowlist: (list: string[]) => void;
 	/** Toggle a group and freeze it against streaming auto-expand.
 	 * Passing the group's step card keys also resets those steps to folded
 	 * (the header is the master toggle — reopening shows all descendants
@@ -244,15 +242,17 @@ function emptyDocument(): Document {
 	};
 }
 
-/** Fields reset whenever the tab leaves its attached instance — instance
- * death (clearInstance) and user detach both leave no session state behind. */
-function detachedInstanceState() {
+/** Fields reset whenever the tab leaves its open session — a Project switch,
+ * an open failure, and the Launcher all leave no session state behind. */
+function clearedSessionState() {
 	return {
-		attachedInstanceId: null as string | null,
+		currentProjectId: null as string | null,
+		currentStem: null as string | null,
 		activeSessionId: null as string | null,
 		document: emptyDocument(),
 		sessions: [] as SessionInfo[],
 		sessionsHasMore: false,
+		sessionsNextCursor: null as SessionListCursor | null,
 		expandedActionGroups: new Set<string>(),
 		expandedSteps: new Set<string>(),
 		uncappedDetails: new Set<string>(),
@@ -341,8 +341,8 @@ export function createClientStore() {
 		document: emptyDocument(),
 		activeSessionId: null,
 		connection: { kind: "connecting" },
-		attachedInstanceId: null,
-		launcherPinned: false,
+		currentProjectId: null,
+		currentStem: null,
 		draft: { kind: "idle" },
 		composerExpanded: false,
 		focusedTurnId: null,
@@ -357,8 +357,9 @@ export function createClientStore() {
 		pullTick: 0,
 		sessions: [],
 		sessionsHasMore: false,
-		instances: [],
-		cwdAllowlist: [],
+		sessionsNextCursor: null,
+		projects: [],
+		activeSessions: [],
 		models: [],
 		thinkingLevels: [],
 		devMode: false,
@@ -390,20 +391,15 @@ export function createClientStore() {
 
 		setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
 
-		syncInstances: (partial) =>
-			set((s) => ({
-				instances: partial.instances ?? s.instances,
-				attachedInstanceId: "attachedInstanceId" in partial ? partial.attachedInstanceId! : s.attachedInstanceId,
-				// Attaching again clears the launcher pin (the user chose an instance).
-				launcherPinned:
-					"attachedInstanceId" in partial && partial.attachedInstanceId !== null ? false : s.launcherPinned,
-			})),
+		setProjects: (projects) => set({ projects }),
 
-		clearInstance: () => set(detachedInstanceState()),
+		setActiveSessions: (activeSessions) => set({ activeSessions }),
 
-		detachInstance: () => set({ ...detachedInstanceState(), launcherPinned: true }),
+		setCurrentSession: (currentProjectId, currentStem) => set({ currentProjectId, currentStem }),
 
-		appendSessions: (incoming, hasMore) =>
+		clearCurrentSession: () => set(clearedSessionState()),
+
+		appendSessions: (incoming, hasMore, nextCursor) =>
 			set((s) => {
 				// Upsert by sessionId: update existing, append new, preserve unmatched
 				const incomingMap = new Map(incoming.map((x) => [x.sessionId, x]));
@@ -420,10 +416,15 @@ export function createClientStore() {
 				for (const x of incomingMap.values()) merged.push(x);
 				// Stable sort by timestamp desc
 				merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-				return { sessions: merged, sessionsHasMore: hasMore };
+				return {
+					sessions: merged,
+					sessionsHasMore: hasMore,
+					sessionsNextCursor: nextCursor ?? s.sessionsNextCursor,
+				};
 			}),
 
-		replaceSessions: (incoming, hasMore) => set({ sessions: incoming, sessionsHasMore: hasMore }),
+		replaceSessions: (incoming, hasMore, nextCursor) =>
+			set({ sessions: incoming, sessionsHasMore: hasMore, sessionsNextCursor: nextCursor ?? null }),
 
 		setModels: (models, thinkingLevels) => set({ models, thinkingLevels }),
 
@@ -434,8 +435,6 @@ export function createClientStore() {
 
 		openFileViewer: (path) => set({ fileViewerPath: path }),
 		closeFileViewer: () => set({ fileViewerPath: null }),
-
-		setCwdAllowlist: (cwdAllowlist) => set({ cwdAllowlist }),
 
 		applyReplace: (document) => set({ document }),
 

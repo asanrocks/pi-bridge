@@ -1,16 +1,12 @@
 # ADR 11: Projects and Sessions
 
-**Status:** Proposed. Reworks the daemon's session domain model and the client
-protocol around two client-facing concepts: a static `Project` configuration
-and a `Session`. Sessions are addressed by `(projectId, stem)`. A session may
-be *active* (the daemon holds a live runtime and canonical Document for it)
-and carries that as metadata. The activation itself — the runtime object, its
-lifecycle, and its identifier — is an internal daemon implementation detail
-and never appears on the wire.
+**Status:** Accepted. Implemented on `dev-bridge` (protocol v2): the daemon
+serves Projects, sessions are addressed by `(projectId, stem)`, activations
+are daemon-internal and idle-collected, and the web client navigates by URL.
+See "Implementation notes" for the choices this ADR left open.
 
-This ADR does not introduce project archival, project migration, or a generic
-object-kernel protocol. It keeps pi's existing session storage and the bridge's
-Document sync model, while replacing the instance-centric navigation surface.
+The rest of this document is the design as proposed; the notes at the end
+record where the implementation had to decide.
 
 ## Context
 
@@ -787,3 +783,33 @@ list filtering as the exclusivity mechanism.
 - **ADR 10:** unchanged. Git stamps remain entries in the active session.
 - **PRD 04:** its instance/session sidebar is replaced by a project launcher:
   a Project/Session browser with active/streaming session indicators.
+
+## Implementation notes
+
+Decisions this ADR left open, as implemented:
+
+- **GC delays.** `idleGcMs` = 5 minutes (durable or empty sessions),
+  `unflushedIdleGcMs` = 30 minutes (entry-bearing unflushed sessions). Both are
+  injectable through `DaemonOptions` as a test seam only; the policy itself is
+  not user-configurable, per the ADR.
+- **`--allow` option name.** `DaemonOptions.allow` accepts the ADR's
+  `<path>` / `<id>=<path>` entries. The old `cwdAllowlist` option and the
+  `getDaemonInfo.cwdAllowlist` field are gone.
+- **Client address → session id.** The URL carries only `(projectId, stem)`,
+  while the ADR 09 cache is keyed by `sessionId`. A small client-local
+  localStorage map (`web/src/infra/addressIndex.ts`) records
+  `(projectId, stem) → sessionId` from every initial-sync `SessionRef` and
+  every session row, so a cold load can still derive a cache cursor. A miss
+  means "open without a cursor", i.e. a full replace — never incorrect.
+- **No attached-activation failure channel.** `instance_exit` is removed and
+  nothing replaced it, per the ADR's "no activation lifecycle crosses the
+  wire". The daemon never collects an activation while a Connection is
+  attached, so this only matters if the pi runtime dies under an attached
+  socket (extension/runtime error). Such a Connection sits on a frozen
+  attachment until reconnect resolves the address again. This is the one known
+  gap; a follow-up could add a per-attachment failure push without exposing
+  activation identity.
+- **Streaming-state broadcasts.** `active_sessions_changed` is published on
+  activation creation, collection, and settle, and on an `isStreaming` flip
+  observed via the activation's patch listener. No batching of broadcasts in
+  v1.

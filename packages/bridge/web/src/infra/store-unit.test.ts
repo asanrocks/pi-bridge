@@ -1,74 +1,82 @@
-// Unit tests for the store's detach/pin semantics: detachInstance is the
-// user's "back to the instance list" action — it must clear all session
-// state AND pin the Launcher, and the pin must survive reconnect syncs
-// (attachedInstanceId: null rollbacks) until a real attach clears it.
+// Unit tests for the store's address/detach semantics (ADR 11). A session
+// address is `(projectId, stem)`; `clearCurrentSession` is the single teardown
+// used by detach, a Project switch, and an open failure. There is no pin flag:
+// the URL is the navigation source of truth, so `/launcher` is simply an
+// address with no Project.
 
 import { describe, expect, it } from "vitest";
-import type { InstanceInfo } from "../../../src/core/index.ts";
+import type { SessionInfo } from "../../../src/core/index.ts";
 import { createClientStore } from "./store.ts";
 
-function inst(id: string): InstanceInfo {
-	return { instanceId: id, sessionId: `sess-${id}`, cwd: "/proj", name: id, isStreaming: false };
+function session(stem: string): SessionInfo {
+	return {
+		projectId: "proj",
+		sessionId: `sess-${stem}`,
+		stem,
+		active: false,
+		isStreaming: false,
+		timestamp: new Date(0).toISOString(),
+	};
 }
 
-function attachAndDirty(store: ReturnType<typeof createClientStore>) {
-	store.getState().syncInstances({ instances: [inst("a")], attachedInstanceId: "a" });
+function openAndDirty(store: ReturnType<typeof createClientStore>) {
+	store.getState().setCurrentSession("proj", "2024-01-01_x");
 	store.getState().setActiveSessionId("sess-a");
 	store.getState().setFocusedTurnId("turn-1");
 	store.getState().setDraft({ kind: "compose", text: "unsent" });
 }
 
-describe("detachInstance", () => {
-	it("clears instance state and pins the launcher", () => {
+describe("clearCurrentSession", () => {
+	it("clears the address and all session state", () => {
 		const store = createClientStore();
-		attachAndDirty(store);
-		expect(store.getState().attachedInstanceId).toBe("a");
+		openAndDirty(store);
+		expect(store.getState().currentStem).toBe("2024-01-01_x");
 
-		store.getState().detachInstance();
+		store.getState().clearCurrentSession();
 
 		const s = store.getState();
-		expect(s.attachedInstanceId).toBeNull();
+		expect(s.currentProjectId).toBeNull();
+		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
 		expect(s.sessions).toEqual([]);
+		expect(s.sessionsNextCursor).toBeNull();
 		expect(s.focusedTurnId).toBeNull();
 		expect(s.draft).toEqual({ kind: "idle" });
 		expect(s.document.entries).toEqual({});
-		expect(s.launcherPinned).toBe(true);
 	});
 
-	it("the pin survives an attachedInstanceId: null sync (switch rollback)", () => {
+	it("keeps the static Project list and the global active snapshot", () => {
 		const store = createClientStore();
-		store.getState().detachInstance();
+		store.getState().setProjects([{ id: "proj", cwd: "/proj" }]);
+		store.getState().setActiveSessions([session("a")]);
+		openAndDirty(store);
 
-		// Rollback path in useRpc.switchInstance failure.
-		store.getState().syncInstances({ attachedInstanceId: null });
-		expect(store.getState().launcherPinned).toBe(true);
+		store.getState().clearCurrentSession();
+
+		expect(store.getState().projects).toEqual([{ id: "proj", cwd: "/proj" }]);
+		expect(store.getState().activeSessions).toHaveLength(1);
+	});
+});
+
+describe("session pages", () => {
+	it("appendSessions upserts by sessionId and keeps the cursor when omitted", () => {
+		const store = createClientStore();
+		store.getState().replaceSessions([session("a")], true, { sortTimeMs: 10, stem: "a" });
+		store.getState().appendSessions([session("b")], false);
+
+		const s = store.getState();
+		expect(s.sessions.map((x) => x.stem).sort()).toEqual(["a", "b"]);
+		expect(s.sessionsHasMore).toBe(false);
+		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 10, stem: "a" });
 	});
 
-	it("the pin survives an instances-only sync (launcher poll)", () => {
+	it("replaceSessions resets the cursor (page-1 refresh)", () => {
 		const store = createClientStore();
-		store.getState().detachInstance();
+		store.getState().replaceSessions([session("a")], true, { sortTimeMs: 10, stem: "a" });
+		store.getState().replaceSessions([session("b")], true, { sortTimeMs: 20, stem: "b" });
 
-		store.getState().syncInstances({ instances: [inst("a"), inst("b")] });
-		expect(store.getState().launcherPinned).toBe(true);
-		expect(store.getState().attachedInstanceId).toBeNull();
-	});
-
-	it("attaching clears the pin", () => {
-		const store = createClientStore();
-		store.getState().detachInstance();
-
-		store.getState().syncInstances({ attachedInstanceId: "a" });
-		expect(store.getState().launcherPinned).toBe(false);
-	});
-
-	it("instance_exit (clearInstance) does not pin — death is not a user choice", () => {
-		const store = createClientStore();
-		attachAndDirty(store);
-
-		store.getState().clearInstance();
-
-		expect(store.getState().attachedInstanceId).toBeNull();
-		expect(store.getState().launcherPinned).toBe(false);
+		const s = store.getState();
+		expect(s.sessions.map((x) => x.stem)).toEqual(["b"]);
+		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 20, stem: "b" });
 	});
 });

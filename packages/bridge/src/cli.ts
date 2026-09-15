@@ -1,5 +1,5 @@
 // pi-bridge CLI entrypoint.
-// Usage: pi-bridge [--port <port>] [--log <path>] [--dev] [--allow <dir>]... [--web-root <dir>]
+// Usage: pi-bridge [--port <port>] [--log <path>] [--dev] [--allow <[id=]dir>]... [--web-root <dir>]
 
 import { Daemon, type DaemonOptions } from "./host/index.ts";
 import { commit, date, version } from "./version.ts";
@@ -8,7 +8,7 @@ async function main() {
 	process.title = "pi-bridge";
 	const args = process.argv.slice(2);
 	const options: DaemonOptions = {};
-	const allowlist: string[] = [];
+	const allow: string[] = [];
 
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
@@ -22,7 +22,7 @@ async function main() {
 				options.dev = true;
 				break;
 			case "--allow":
-				allowlist.push(args[++i]);
+				allow.push(args[++i]);
 				break;
 			case "--web-root":
 				options.webRoot = args[++i];
@@ -35,15 +35,15 @@ async function main() {
 			case "--help":
 			case "-h":
 				console.log(
-					"Usage: pi-bridge [--port <port>] [--log <path>] [--dev] [--allow <dir>...] [--web-root <dir>]",
+					"Usage: pi-bridge [--port <port>] [--log <path>] [--dev] [--allow <[id=]dir>...] [--web-root <dir>]",
 				);
 				process.exit(0);
 		}
 	}
 
-	// Pass allowlist entries directly; defaults to [process.cwd()] in Daemon.start().
-	if (allowlist.length > 0) {
-		options.cwdAllowlist = allowlist;
+	// Pass allow entries directly; defaults to [process.cwd()] in Daemon.start().
+	if (allow.length > 0) {
+		options.allow = allow;
 	}
 
 	const daemon = new Daemon();

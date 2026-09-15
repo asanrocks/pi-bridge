@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import { Connection, type DaemonVerbs } from "../../src/host/connection.ts";
 import { runGitShow } from "../../src/host/daemon.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, waitForFrame } from "./conn-helpers.ts";
+import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -38,7 +38,7 @@ describe("gitShow verb", () => {
 		const { serverWs, clientWs } = await createWsPair();
 		const frames = collectFrames(clientWs);
 		const conn = new Connection(serverWs, gitShowVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 		await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		try {
@@ -102,7 +102,7 @@ describe("gitShow verb", () => {
 			unknown
 		>;
 		expect(reply.ok).toBe(false);
-		expect(reply.error as string).toContain("no instance attached");
+		expect(reply.error as string).toContain("no session attached");
 		serverWs.close();
 		clientWs.close();
 	});

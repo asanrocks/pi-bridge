@@ -2,7 +2,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, waitForFrame } from "./conn-helpers.ts";
+import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -30,7 +30,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		const replace = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 		expect(replace).toBeDefined();
@@ -57,7 +57,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		// Wait for initial replace
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
@@ -90,7 +90,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		const images = Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => ({
@@ -118,7 +118,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		const images = [{ type: "image", data: "a".repeat(MAX_IMAGE_BASE64_LENGTH + 1), mimeType: "image/png" }];
@@ -144,12 +144,12 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		// Wait for replace
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
-		clientWs.send(JSON.stringify({ id: "2", verb: "listSessions" }));
+		clientWs.send(JSON.stringify({ id: "2", verb: "listSessions", projectId: "proj" }));
 
 		const reply = await waitForFrame(clientFrames, (f) => {
 			const r = f as Record<string, unknown>;
@@ -172,7 +172,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -203,7 +203,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -240,7 +240,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -271,7 +271,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -298,7 +298,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -337,7 +337,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
 		// Wait for replace push (proves Connection listener is attached)
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
@@ -363,9 +363,9 @@ describe("Connection + Daemon", () => {
 		clientWs.close();
 	});
 
-	// ── instance_exit push (onExit callback) ─────────────────────────────
+	// ── initial-sync address (ADR 11) ────────────────────────────────────
 
-	it("manager.dispose() sends instance_exit push as the last frame", async () => {
+	it("the initial-sync replace carries the session reference", async () => {
 		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
 		harnesses.push(bh);
 
@@ -373,26 +373,13 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attach(bh.manager, "test-mgr");
+		conn.attach(bh.manager, mockSessionRef);
 
-		// Wait for initial replace
-		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
-
-		// Dispose the Manager — this triggers: await abort → emit onExit (instance_exit) → runtime.dispose
-		await bh.manager.dispose();
-
-		// The instance_exit should be the last frame
-		const exitFrame = await waitForFrame(
-			clientFrames,
-			(f) => (f as Record<string, unknown>).kind === "instance_exit",
-		);
-		expect(exitFrame).toBeDefined();
-		expect((exitFrame as Record<string, unknown>).instanceId).toBe("test-mgr");
-
-		// Verify instance_exit is the last frame (no frames after it)
-		await new Promise((r) => setTimeout(r, 100));
-		const exitIndex = clientFrames.indexOf(exitFrame);
-		expect(clientFrames.slice(exitIndex + 1).length).toBe(0);
+		const replace = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
+		const session = (replace as { session: Record<string, unknown> }).session;
+		expect(session.projectId).toBe("proj");
+		expect(session.stem).toBe("2024-01-01_s1");
+		expect(session.sessionId).toBe(mockSessionRef.sessionId);
 
 		serverWs.close();
 		clientWs.close();
