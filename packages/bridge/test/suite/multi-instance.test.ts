@@ -115,6 +115,7 @@ function makeStubManager(opts: { cwd: string; liveSessionId: string; name?: stri
 			connectionHandles.delete(handle);
 		},
 		async prompt() {},
+		async executeBash() {},
 		async abort() {},
 		async discardSteer() {},
 		async setModel() {},

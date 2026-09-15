@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GIT_STAMP_CUSTOM_TYPE } from "../../src/core/git-stamp.ts";
 import {
 	createGitStampExtension,
+	createGitStampExtensionWithTrigger,
 	type GitRunner,
 	type GitRunOptions,
 	type GitRunResult,
@@ -50,17 +51,26 @@ const ok = (stdout: string): GitRunResult => ({ code: 0, stdout, killed: false }
 const exit = (code: number): GitRunResult => ({ code, stdout: "", killed: false });
 const killed = (): GitRunResult => ({ code: null, stdout: "", killed: true });
 
-/** Scripted runner: `git rev-parse` and `git symbolic-ref` responses in order. */
+/** Scripted runner: `git rev-parse`, `git symbolic-ref`, and `git log`
+ * responses in order. */
 function scriptedRunner(calls: GitRunResult[]): GitRunner {
 	let i = 0;
 	return async () => calls[i++] ?? exit(128);
 }
 
-/** Identity pair helper: [rev-parse result, symbolic-ref result]. */
-const identity = (commit: GitRunResult, branch: GitRunResult): GitRunResult[] => [commit, branch];
+/** Observation helper: [rev-parse, symbolic-ref, subject] results. */
+const identity = (
+	commit: GitRunResult,
+	branch: GitRunResult,
+	subject: GitRunResult = ok("a subject"),
+): GitRunResult[] => [commit, branch, subject];
 
 async function runPrompt(handlers: Map<string, Handler>, ctx: ExtensionContext) {
 	await handlers.get("message_start")!({ message: { role: "user" } } as never, ctx);
+}
+
+async function runToolEnd(handlers: Map<string, Handler>, ctx: ExtensionContext) {
+	await handlers.get("tool_execution_end")!({ toolCallId: "t1", toolName: "bash" } as never, ctx);
 }
 
 async function runTurnEnd(handlers: Map<string, Handler>, ctx: ExtensionContext) {
@@ -79,7 +89,7 @@ describe("createGitStampExtension", () => {
 		expect(appended).toEqual([
 			{
 				customType: GIT_STAMP_CUSTOM_TYPE,
-				data: { v: 1, anchor: "prompt", commit: SHA1, branch: "main" },
+				data: { v: 2, anchor: "prompt", commit: SHA1, branch: "main", commitSubject: "a subject" },
 			},
 		]);
 	});
@@ -102,9 +112,50 @@ describe("createGitStampExtension", () => {
 		expect(appended).toEqual([
 			{
 				customType: GIT_STAMP_CUSTOM_TYPE,
-				data: { v: 1, anchor: "turn_end", commit: SHA1_B, branch: "main" },
+				data: { v: 2, anchor: "turn_end", commit: SHA1_B, branch: "main", commitSubject: "a subject" },
 			},
 		]);
+	});
+
+	it("writes a tool_end transition when an agent tool changed the identity", async () => {
+		const { pi, handlers, appended } = fakePi();
+		const runner = scriptedRunner(identity(ok(SHA1_B), ok("main")));
+		createGitStampExtension({ runGit: runner })(pi);
+		const ctx = fakeCtx([stampEntry({ v: 2, anchor: "prompt", commit: SHA1, branch: "main", commitSubject: "old" })]);
+		await runToolEnd(handlers, ctx);
+		expect(appended).toEqual([
+			{
+				customType: GIT_STAMP_CUSTOM_TYPE,
+				data: { v: 2, anchor: "tool_end", commit: SHA1_B, branch: "main", commitSubject: "a subject" },
+			},
+		]);
+	});
+
+	it("a subject lookup failure preserves the identity transition with a null subject", async () => {
+		const { pi, handlers, appended } = fakePi();
+		const runner = scriptedRunner(identity(ok(SHA1), ok("main"), exit(128)));
+		createGitStampExtension({ runGit: runner })(pi);
+		await runPrompt(handlers, fakeCtx());
+		expect(appended).toHaveLength(1);
+		expect(appended[0]!.data).toMatchObject({ commit: SHA1, branch: "main", commitSubject: null });
+	});
+
+	it("an invalid subject output clears the subject but keeps the identity", async () => {
+		const { pi, handlers, appended } = fakePi();
+		const runner = scriptedRunner(identity(ok(SHA1), ok("main"), ok("two\nlines\n")));
+		createGitStampExtension({ runGit: runner })(pi);
+		await runPrompt(handlers, fakeCtx());
+		expect(appended).toHaveLength(1);
+		expect(appended[0]!.data).toMatchObject({ commit: SHA1, commitSubject: null });
+	});
+
+	it("an unborn HEAD records a null commit and a null subject", async () => {
+		const { pi, handlers, appended } = fakePi();
+		const runner = scriptedRunner(identity(exit(1), ok("main")));
+		createGitStampExtension({ runGit: runner })(pi);
+		await runPrompt(handlers, fakeCtx());
+		expect(appended).toHaveLength(1);
+		expect(appended[0]!.data).toMatchObject({ commit: null, branch: "main", commitSubject: null });
 	});
 
 	it("writes when only the branch changes", async () => {
@@ -167,8 +218,14 @@ describe("createGitStampExtension", () => {
 		await runPrompt(handlers, fakeCtx());
 		await runTurnEnd(handlers, fakeCtx([stampEntry({ v: 1, anchor: "prompt", commit: null, branch: "main" })]));
 		expect(appended).toEqual([
-			{ customType: GIT_STAMP_CUSTOM_TYPE, data: { v: 1, anchor: "prompt", commit: null, branch: "main" } },
-			{ customType: GIT_STAMP_CUSTOM_TYPE, data: { v: 1, anchor: "turn_end", commit: SHA1, branch: null } },
+			{
+				customType: GIT_STAMP_CUSTOM_TYPE,
+				data: { v: 2, anchor: "prompt", commit: null, branch: "main", commitSubject: null },
+			},
+			{
+				customType: GIT_STAMP_CUSTOM_TYPE,
+				data: { v: 2, anchor: "turn_end", commit: SHA1, branch: null, commitSubject: "a subject" },
+			},
 		]);
 	});
 
@@ -275,7 +332,7 @@ describe("createGitStampExtension", () => {
 		const p2 = handlers.get("turn_end")!({ turnIndex: 0 } as never, ctx);
 		await Promise.all([p1, p2]);
 		expect(appended).toHaveLength(1);
-		expect(seen).toEqual(["rev-parse", "symbolic-ref", "rev-parse", "symbolic-ref"]);
+		expect(seen).toEqual(["rev-parse", "symbolic-ref", "log", "rev-parse", "symbolic-ref", "log"]);
 	});
 
 	it("awaits the observation before the handler resolves (stamp precedes message persistence)", async () => {
@@ -311,5 +368,70 @@ describe("createGitStampExtension", () => {
 		createGitStampExtension({ runGit: runner, timeoutMs: 250 })(pi);
 		await runPrompt(handlers, fakeCtx([], controller.signal));
 		expect(seen[0]).toMatchObject({ cwd: "/repo", timeoutMs: 250, signal: controller.signal });
+	});
+});
+
+describe("host trigger (user_bash_end)", () => {
+	/** Wait until the fire-and-forget trigger observation settles. */
+	async function settle(appended: unknown[], n: number) {
+		for (let i = 0; i < 50 && appended.length < n; i++) {
+			await new Promise((r) => setTimeout(r, 1));
+		}
+	}
+
+	it("queues a user_bash_end observation through the shared serialized stream", async () => {
+		const { pi, appended } = fakePi();
+		const { factory, trigger } = createGitStampExtensionWithTrigger({
+			runGit: scriptedRunner(identity(ok(SHA1), ok("main"))),
+		});
+		factory(pi);
+		trigger.observe("user_bash_end", fakeCtx());
+		await settle(appended, 1);
+		expect(appended).toEqual([
+			{
+				customType: GIT_STAMP_CUSTOM_TYPE,
+				data: { v: 2, anchor: "user_bash_end", commit: SHA1, branch: "main", commitSubject: "a subject" },
+			},
+		]);
+	});
+
+	it("is a no-op before the factory has bound a session", async () => {
+		const { appended } = fakePi();
+		const { trigger } = createGitStampExtensionWithTrigger({
+			runGit: scriptedRunner(identity(ok(SHA1), ok("main"))),
+		});
+		trigger.observe("user_bash_end", fakeCtx());
+		await new Promise((r) => setTimeout(r, 5));
+		expect(appended).toHaveLength(0);
+	});
+
+	it("serializes with extension-event observations (order preserved)", async () => {
+		const { pi, handlers, appended } = fakePi();
+		// The first observation's three git commands block until released; the
+		// trigger's observation must queue behind the whole first observation,
+		// not interleave its commands.
+		let releaseFirst: (() => void) | null = null;
+		const firstCall = new Promise<void>((r) => {
+			releaseFirst = r;
+		});
+		let calls = 0;
+		const runner: GitRunner = async () => {
+			calls++;
+			if (calls <= 3) await firstCall;
+			return ok(SHA1);
+		};
+		const { factory, trigger } = createGitStampExtensionWithTrigger({ runGit: runner });
+		factory(pi);
+		const ctx = fakeCtx(() => appended.map((a) => stampEntry(a.data)));
+		const pending = runPrompt(handlers, ctx);
+		trigger.observe("user_bash_end", ctx);
+		await new Promise((r) => setTimeout(r, 1));
+		expect(appended).toHaveLength(0);
+		releaseFirst!();
+		await pending;
+		await settle(appended, 1);
+		// Same identity → suppressed by the baseline the prompt observation set.
+		expect(appended).toHaveLength(1);
+		expect(appended[0]!.data).toMatchObject({ anchor: "prompt" });
 	});
 });

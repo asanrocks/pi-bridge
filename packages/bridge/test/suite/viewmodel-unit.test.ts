@@ -1950,8 +1950,9 @@ describe("git identity fold", () => {
 	}
 
 	function userTurnAt(vm: ReturnType<typeof computeViewModel>, i: number) {
-		const t = vm.turns[i];
-		if (t?.kind !== "user") throw new Error(`turn ${i} is not a user turn`);
+		const users = vm.turns.filter((t) => t.kind === "user");
+		const t = users[i];
+		if (t?.kind !== "user") throw new Error(`user turn ${i} not found`);
 		return t;
 	}
 
@@ -2009,9 +2010,9 @@ describe("git identity fold", () => {
 
 	it("unknown versions, malformed payloads, and foreign custom types are invisible", () => {
 		const doc = emptyDoc();
-		appendEntry(doc, stampEntry("s1", null, { v: 2, commit: SHA1, branch: "main" }));
+		appendEntry(doc, stampEntry("s1", null, { v: 3, anchor: "prompt", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
-		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "prompt", commit: "garbage", branch: "main" }));
+		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "tool_end", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
 		appendEntry(
 			doc,
@@ -2023,7 +2024,7 @@ describe("git identity fold", () => {
 
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
 		for (let i = 0; i < 4; i++) expect(userTurnAt(vm, i).gitIdentity).toBeUndefined();
-		expect(vm.turns).toHaveLength(4); // stamps never produce turns
+		expect(vm.turns).toHaveLength(4); // invalid stamps never produce turns
 	});
 
 	it("no stamps means unknown (undefined), never an error", () => {
@@ -2050,7 +2051,108 @@ describe("git identity fold", () => {
 		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
-		expect(vm.turns).toHaveLength(2); // u2 is off-path
+		// u2 and s2 are off-path: user turns + on-path stamps only
+		expect(vm.turns).toHaveLength(4);
+	});
+
+	it("v2 stamps emit ordered gitChange items; the first is an initial recording", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: SHA1, branch: "main", commitSubject: "init" }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			stampEntry("s2", "u1", {
+				v: 2,
+				anchor: "tool_end",
+				commit: SHA1_B,
+				branch: "main",
+				commitSubject: "agent commit",
+			}),
+		);
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const changes = vm.turns.filter((t) => t.kind === "gitChange");
+		expect(changes).toHaveLength(2);
+		const [c1, c2] = changes as Extract<(typeof vm.turns)[number], { kind: "gitChange" }>[];
+		expect(c1).toMatchObject({
+			entryId: "s1",
+			identity: { commit: SHA1, branch: "main" },
+			commitSubject: "init",
+			anchor: "prompt",
+			isInitial: true,
+		});
+		expect(c2).toMatchObject({
+			entryId: "s2",
+			identity: { commit: SHA1_B, branch: "main" },
+			commitSubject: "agent commit",
+			anchor: "tool_end",
+			isInitial: false,
+		});
+		// Ordered at path position: card, user, card, user.
+		expect(vm.turns.map((t) => t.kind)).toEqual(["gitChange", "user", "gitChange", "user"]);
+	});
+
+	it("v1 stamps emit gitChange items without a subject", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "turn_end", commit: SHA1, branch: "main" }));
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const c = vm.turns.find((t) => t.kind === "gitChange");
+		expect(c).toMatchObject({
+			entryId: "s1",
+			commitSubject: null,
+			anchor: "turn_end",
+			isInitial: true,
+		});
+	});
+
+	it("a mid-run stamp splits the run's visual grouping but not its contents", () => {
+		// Path: user → assistant(toolCall) → stamp → tool_result → assistant(text)
+		const doc = emptyDoc();
+		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:02Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: { command: "git commit" } }],
+			}),
+		);
+		appendEntry(
+			doc,
+			stampEntry("s1", "a1", {
+				v: 2,
+				anchor: "tool_end",
+				commit: SHA1_B,
+				branch: "main",
+				commitSubject: "agent commit",
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("tr1", "s1", "2024-01-01T00:00:03Z", "tool_result", { toolCallId: "tc1", isError: false }),
+		);
+		appendEntry(
+			doc,
+			makeEntry("a2", "tr1", "2024-01-01T00:00:04Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "committed" }],
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant", "gitChange", "assistant"]);
+		// The tool result still joins its tool call across the split.
+		const first = vm.turns[1];
+		if (first?.kind !== "assistant") throw new Error("expected assistant");
+		const step = first.blocks[0];
+		if (step?.blockType !== "tool") throw new Error("expected tool step");
+		expect(step.status).toBe("done");
+		expect(step.result).toMatchObject({ entryId: "tr1", isError: false });
 	});
 });
 

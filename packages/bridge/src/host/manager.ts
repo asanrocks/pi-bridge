@@ -34,7 +34,7 @@ import {
 	type ScopedModelInfo,
 	setAtPath,
 } from "../core/index.ts";
-import { createGitStampExtension } from "./git-stamp-extension.ts";
+import { createGitStampExtensionWithTrigger, type GitStampTrigger } from "./git-stamp-extension.ts";
 
 // ============================================================================
 // Helpers
@@ -126,6 +126,10 @@ export interface Manager {
 	// ── Session verbs ─────────────────────────────────────────────────────
 
 	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	/** Run a user `!` command in the instance cwd. Recorded as a
+	 * `bashExecution` entry — also an ADR 10 user_bash_end observation
+	 * boundary. */
+	executeBash(command: string, options?: { excludeFromContext?: boolean }): Promise<void>;
 	abort(): Promise<void>;
 	/** Clear all pending steer/follow-up messages from the session queue. */
 	discardSteer(): Promise<void>;
@@ -161,12 +165,20 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const settledListeners = new Set<() => void>();
 	const exitListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
+	// ADR 10: one bundle shared by every runtime bind (initial + rebinds), so
+	// the host trigger always points at the currently-bound session's queue.
+	const gitStampBundle = createGitStampExtensionWithTrigger();
 
 	// ADR 09: the switch verb records the initiating Connection's cursor so
 	// the rebind emission can send it a delta while every other Connection
 	// receives a full replace.
 	let pendingSwitchCursor: PrefixCursor | null = null;
 	let pendingSwitchInitiator: ConnectionHandle | null = null;
+
+	// ADR 10 v2: host-side user-bash observations. The trigger enqueues into
+	// the extension's serialized stream; null until the runtime binds (the
+	// factory sets its target) or when stamps are disabled.
+	let gitStampTrigger: GitStampTrigger | null = null;
 
 	// ── Event processing (captured in closure; rebound on session switch) ──
 
@@ -218,6 +230,20 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		}
 
 		for (const p of patches) emitPatch(p);
+
+		// ADR 10 v2: a persisted user bash entry (a `!`/`!!` command) is a Git
+		// observation boundary. Fired after the entry is applied and published,
+		// so the resulting stamp normally parents onto the bash entry. Deferred
+		// bash (queued while streaming, flushed after the turn) is observed at
+		// its actual persistence boundary here too.
+		if (
+			gitStampTrigger &&
+			event.type === "entry_appended" &&
+			event.entry.type === "message" &&
+			event.entry.message.role === "bashExecution"
+		) {
+			gitStampTrigger.observe("user_bash_end", { cwd, sessionManager });
+		}
 	};
 
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager: sm }) => {
@@ -235,7 +261,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 							extensionFactories: [
 								{
 									name: GIT_STAMP_CUSTOM_TYPE,
-									factory: createGitStampExtension(),
+									factory: gitStampBundle.factory,
 									hidden: true,
 								},
 							],
@@ -259,6 +285,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		agentDir,
 		sessionManager,
 	});
+	// The trigger is live from here on — the factory already bound during
+	// runtime creation, so its enqueue target is set. Null when disabled.
+	gitStampTrigger = options.gitStamps === false ? null : gitStampBundle.trigger;
 
 	let session = runtime.session;
 	await session.bindExtensions({});
@@ -445,6 +474,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				preflightResult: () => {},
 				...(images && images.length > 0 ? { images } : {}),
 			});
+		},
+
+		async executeBash(command: string, options?: { excludeFromContext?: boolean }) {
+			await session.executeBash(command, undefined, options);
 		},
 
 		async abort() {
