@@ -1,10 +1,11 @@
 # ADR 10: Git Identity Stamps
 
-**Status:** Decided. The initial prompt/turn implementation is in place and
-currently writes v1 payloads. This revision defines v2 as an additive extension
-for event-level observations and visible Git change cards. It remains
-bridge-scoped and uses existing pi extension and session primitives. There are
-no changes to pi-core, the pi session format, or the wire protocol.
+**Status:** Decided. Implemented — the writer extension (`src/host/git-stamp-extension.ts`)
+writes v2 payloads at all four boundaries, the shared payload module
+(`src/core/git-stamp.ts`) reads v1 and v2, the viewmodel emits `GitChange`
+items plus the identity fold, and the web client renders change cards. It
+remains bridge-scoped and uses existing pi extension and session primitives.
+There are no changes to pi-core, the pi session format, or the wire protocol.
 
 ## Context
 
@@ -291,10 +292,18 @@ stamp set means unknown, not an error.
 A valid stamp is also represented as a `GitChange` item in the existing
 ordered viewmodel sequence. The item carries the stamp entry id, timestamp,
 identity, subject, and anchor. It participates in transcript ordering and
-scrolling, but is not a user or assistant turn: it does not close or merge
-assistant runs, participate in sibling navigation or editing, or join with
-assistant tool results. User and assistant turn indexes retain their existing
-editing semantics.
+scrolling, but is not a user or assistant turn: it does not merge assistant
+runs, participate in sibling navigation or editing, or join with assistant
+tool results. User and assistant turn indexes retain their existing editing
+semantics.
+
+A stamp that falls mid-run splits the run's visual grouping at that point —
+the sequence must show the card between the entries it sits between (for a
+tool-anchored stamp, between the committing tool's call and its result), so
+the run renders as two consecutive assistant groups around the card. This is
+placement, not restructuring: the run's blocks, tool-result joins, and turn
+keys are unchanged, and only the grouping breaks. Stamps at run boundaries
+(next to a user message, compaction, or turn end) leave the run intact.
 
 A stamp with no prior valid identity is rendered as an initial state recording;
 a stamp with a changed identity is rendered as a Git change card. The card
@@ -366,6 +375,10 @@ documented current-leaf race. The stamp is emitted through the same existing
 custom-entry event path. This requires no change to pi-core's extension API. If
 that event is unavailable for a particular entry path, the next prompt or tool
 boundary remains the fallback observation.
+
+The v1 producer of user bash entries is the `Manager.executeBash` verb (a thin
+mapping to pi's `AgentSession.executeBash`); a composer `!`/`!!` feature can
+reuse it as-is over the wire.
 
 ## Alternatives Considered
 
@@ -490,8 +503,8 @@ provider:
 - custom-entry patches arrive in the expected order around prompt, tool-end,
   user-bash, and turn-end events;
 - Git-change items carry stable entry ids, appear in path order, and do not
-  alter user/assistant editing indexes, assistant-run merging, or tool-result
-  joining;
+  alter user/assistant editing indexes, assistant-run contents, or tool-result
+  joining (a mid-run stamp splits the run's visual grouping only);
 
 ## Relationship to Other ADRs
 

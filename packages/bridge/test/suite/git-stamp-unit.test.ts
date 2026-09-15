@@ -3,6 +3,7 @@ import {
 	GIT_STAMP_CUSTOM_TYPE,
 	isValidBranchName,
 	isValidCommitId,
+	parseCommitSubject,
 	parseGitIdentity,
 	parseGitStampData,
 	parseGitStampEntry,
@@ -15,6 +16,10 @@ const SHA256 = "a".repeat(64);
 
 function stamp(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return { v: 1, anchor: "prompt", commit: SHA1, branch: "main", ...overrides };
+}
+
+function stampV2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return { v: 2, anchor: "tool_end", commit: SHA1, branch: "main", commitSubject: "a subject", ...overrides };
 }
 
 describe("isValidCommitId", () => {
@@ -77,6 +82,30 @@ describe("parseGitStampData", () => {
 		expect(parseGitStampData(stamp({ anchor: "turn_end" }))).toMatchObject({ anchor: "turn_end" });
 	});
 
+	it("accepts a well-formed v2 stamp with any v2 anchor", () => {
+		for (const anchor of ["prompt", "tool_end", "turn_end", "user_bash_end"]) {
+			expect(parseGitStampData(stampV2({ anchor }))).toEqual({
+				v: 2,
+				anchor,
+				commit: SHA1,
+				branch: "main",
+				commitSubject: "a subject",
+			});
+		}
+	});
+
+	it("accepts null commitSubject and a missing commitSubject field", () => {
+		expect(parseGitStampData(stampV2({ commitSubject: null }))).toMatchObject({ commitSubject: null });
+		const { commitSubject: _omit, ...without } = stampV2() as Record<string, unknown>;
+		expect(parseGitStampData(without)).toMatchObject({ commitSubject: null });
+	});
+
+	it("clears an invalid commitSubject but keeps the stamp (subject is best-effort)", () => {
+		expect(parseGitStampData(stampV2({ commitSubject: 42 }))).toMatchObject({ commitSubject: null });
+		expect(parseGitStampData(stampV2({ commitSubject: "two\nlines" }))).toMatchObject({ commitSubject: null });
+		expect(parseGitStampData(stampV2({ commitSubject: "" }))).toMatchObject({ commitSubject: null });
+	});
+
 	it("accepts null commit and null branch combinations", () => {
 		expect(parseGitStampData(stamp({ commit: null }))).toMatchObject({ commit: null });
 		expect(parseGitStampData(stamp({ branch: null }))).toMatchObject({ branch: null });
@@ -95,9 +124,15 @@ describe("parseGitStampData", () => {
 	});
 
 	it("rejects unknown versions and anchors", () => {
-		expect(parseGitStampData(stamp({ v: 2 }))).toBeNull();
+		expect(parseGitStampData(stamp({ v: 3 }))).toBeNull();
 		expect(parseGitStampData(stamp({ v: "1" }))).toBeNull();
 		expect(parseGitStampData(stamp({ anchor: "session_start" }))).toBeNull();
+		// v1 predates the tool/user-bash boundaries — those anchors are v2-only.
+		expect(parseGitStampData(stamp({ anchor: "tool_end" }))).toBeNull();
+		// v2 without an anchor is malformed.
+		const { anchor: _omit, ...noAnchor } = stampV2() as Record<string, unknown>;
+		expect(parseGitStampData(noAnchor)).toBeNull();
+		expect(parseGitStampData(stampV2({ anchor: "session_start" }))).toBeNull();
 		expect(parseGitStampData({ ...stamp(), extra: "field" })).toEqual({
 			v: 1,
 			anchor: "prompt",
@@ -144,5 +179,19 @@ describe("sameGitIdentity", () => {
 		expect(sameGitIdentity({ commit: SHA1, branch: "main" }, { commit: SHA1_B, branch: "main" })).toBe(false);
 		expect(sameGitIdentity({ commit: SHA1, branch: "main" }, { commit: SHA1, branch: "dev" })).toBe(false);
 		expect(sameGitIdentity({ commit: null, branch: null }, { commit: null, branch: null })).toBe(true);
+	});
+});
+
+describe("parseCommitSubject", () => {
+	it("accepts a single-line subject", () => {
+		expect(parseCommitSubject("fix: handle empty input")).toBe("fix: handle empty input");
+		expect(parseCommitSubject("a".repeat(200))).toBe("a".repeat(200));
+	});
+
+	it("rejects empty, multi-line, and control-character subjects", () => {
+		expect(parseCommitSubject("")).toBeNull();
+		expect(parseCommitSubject("two\nlines")).toBeNull();
+		expect(parseCommitSubject("trailing\r")).toBeNull();
+		expect(parseCommitSubject("bell\u0007")).toBeNull();
 	});
 });
