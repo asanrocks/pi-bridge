@@ -103,6 +103,9 @@ export interface UserTurn {
 	 * last valid stamp on the path at or before this user message, carried
 	 * forward. Undefined when the path has no stamps (unknown). */
 	gitIdentity?: GitIdentity;
+	/** Subject of that effective identity's commit (v2 stamps only); shown as
+	 * the identity chip's tooltip. Null/undefined when unknown. */
+	gitCommitSubject?: string | null;
 }
 
 export interface UserBashTurn {
@@ -348,9 +351,10 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// first one just carries no delta.
 	let prevReading: { percent: number; model: string } | null = null;
 	// ADR 10 fold state: the effective git identity carried forward from the
-	// last valid stamp on the leaf path. Stamps are transitions, so every
+	// last valid stamp on the leaf path, with that commit's subject (the
+	// tooltip on a user turn's identity chip). Stamps are transitions, so every
 	// user turn after a stamp inherits it until the next transition.
-	let carriedGit: GitIdentity | null = null;
+	let carriedGit: { identity: GitIdentity; subject: string | null } | null = null;
 	// True once any valid stamp has been seen on the path — the next stamp is
 	// a transition rather than an initial state recording.
 	let seenGitStamp = false;
@@ -452,7 +456,15 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				} else {
 					flushSwitchRun();
 					flushPending();
-					const t = buildUserTurn(entry, turns.length, doc.entries, prevTurns, asstSeals, carriedGit ?? undefined);
+					const t = buildUserTurn(
+						entry,
+						turns.length,
+						doc.entries,
+						prevTurns,
+						asstSeals,
+						carriedGit?.identity,
+						carriedGit?.subject,
+					);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
 				}
@@ -491,30 +503,33 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				// ADR 10: a valid git stamp updates the carried identity. Mid-run
 				// stamps (tool_end/turn_end while a run is open) fold into the run
 				// — the run does NOT split; the mark rides the pending refs and
-				// renders inside its action group. Boundary stamps (prompt,
-				// user_bash_end, or no open run) render as standalone cards at
-				// their path position, flushing the run first so the order holds.
+				// renders inside its action group. A prompt-anchored stamp renders
+				// nothing on its own: its identity is the next user message's
+				// header chip. Other boundary stamps (user_bash_end, or a run
+				// anchor with no open run) render as standalone cards at their
+				// path position, flushing the run first so the order holds.
 				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
 					const stamp = parseGitStampEntry(entry);
 					if (stamp) {
 						const identity = { commit: stamp.commit, branch: stamp.branch };
+						const subject = stamp.v === 2 ? stamp.commitSubject : null;
 						if (pending.length > 0 && (stamp.anchor === "tool_end" || stamp.anchor === "turn_end")) {
 							const last = pending[pending.length - 1]!;
 							pendingGitMarks.push({
 								entryId: entry.id,
 								timestamp: entry.timestamp,
 								identity,
-								commitSubject: stamp.v === 2 ? stamp.commitSubject : null,
+								commitSubject: subject,
 								anchor: stamp.anchor,
 								isInitial: !seenGitStamp,
 								afterBlockKey: `${last.entry.id}:b${last.blockIndex}`,
 							});
-						} else {
+						} else if (stamp.anchor !== "prompt") {
 							flushSwitchRun();
 							flushPending();
 							turns.push(buildGitChangeTurn(entry, turns.length, identity, stamp, !seenGitStamp, prevTurns));
 						}
-						carriedGit = identity;
+						carriedGit = { identity, subject };
 						seenGitStamp = true;
 					}
 				}
@@ -625,6 +640,7 @@ function buildUserTurn(
 	prevTurns: Map<string, TurnVM>,
 	asstSeals: string[],
 	gitIdentity?: GitIdentity,
+	gitCommitSubject?: string | null,
 ): UserTurn {
 	const text = entry.content
 		.filter((c) => c.type === "text")
@@ -659,6 +675,7 @@ function buildUserTurn(
 		timestamp: entry.timestamp,
 		thoughtForMs,
 		gitIdentity,
+		gitCommitSubject,
 	};
 
 	const prev = prevTurns.get(`user:${entry.id}`);
@@ -676,6 +693,7 @@ function buildUserTurn(
 		prev.currentSiblingIndex === turn.currentSiblingIndex &&
 		prev.thoughtForMs === turn.thoughtForMs &&
 		sameStringArray(prev.siblings, turn.siblings) &&
+		prev.gitCommitSubject === turn.gitCommitSubject &&
 		((prev.gitIdentity === undefined && gitIdentity === undefined) ||
 			(prev.gitIdentity !== undefined &&
 				gitIdentity !== undefined &&
@@ -1879,22 +1897,31 @@ export interface GroupGitChanges {
 }
 
 /** Assign a turn's mid-run git marks to its action groups: a mark renders
- * inside the group containing its `afterBlockKey` block; when that block is
- * text (a trailing turn_end stamp after a closing text block, say), the
- * mark attaches to the last group of the turn. */
+ * inside the group owning its `afterBlockKey` step; when that block is text
+ * (a turn_end stamp after a closing text block, say), it attaches to the
+ * nearest group *before* that text. Both resolutions are prefix-stable —
+ * everything preceding the anchor is immutable — so a mark keeps its group
+ * (and therefore its DOM parent) as the run grows. Resolving against the
+ * turn's last group instead would let a mark hop groups mid-stream, which
+ * remounts its card. */
 export function assignGroupGitChanges(segments: TurnSegment[], marks: GitChangeMark[]): GroupGitChanges {
 	const byGroup = new Map<string, GitChangeMark[]>();
 	const unattached: GitChangeMark[] = [];
 	if (marks.length === 0) return { byGroup, unattached };
-	const owner = new Map<string, string>();
+	const groupOfStep = new Map<string, string>();
+	// Text block key → the group preceding it (absent when no group is before).
+	const groupBeforeText = new Map<string, string>();
 	let lastGroupKey: string | null = null;
 	for (const seg of segments) {
-		if (seg.kind !== "group") continue;
-		lastGroupKey = seg.key;
-		for (const s of seg.steps) owner.set(`${s.entryId}:b${s.blockIndex}`, seg.key);
+		if (seg.kind === "group") {
+			lastGroupKey = seg.key;
+			for (const s of seg.steps) groupOfStep.set(`${s.entryId}:b${s.blockIndex}`, seg.key);
+		} else if (lastGroupKey !== null) {
+			groupBeforeText.set(`${seg.block.entryId}:b${seg.block.blockIndex}`, lastGroupKey);
+		}
 	}
 	for (const mark of marks) {
-		const key = owner.get(mark.afterBlockKey) ?? lastGroupKey;
+		const key = groupOfStep.get(mark.afterBlockKey) ?? groupBeforeText.get(mark.afterBlockKey) ?? null;
 		if (key === null) {
 			unattached.push(mark);
 		} else {
