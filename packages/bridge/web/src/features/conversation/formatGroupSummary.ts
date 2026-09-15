@@ -3,11 +3,13 @@
 // collapsed label grouped by tool kind. Categories appear in a fixed
 // precedence order that matches the group's family dots (edit+write
 // collapse to the mutate family):
-//   edit > write > bash-family > read  →  mutate > bash > read
-//   edit: a.ts, b.ts, c.ts · run 2 tools · read 3 files
+//   git > edit > write > bash-family > read
+//   git: ae02c151 · edit: a.ts, b.ts, c.ts · run 2 tools · read 3 files
 // Only edit/write carry file names — the named outcomes of the group, listed
 // together under one "edit:" category (edit vs write stays visible in the
-// expanded step rows and card identities); every other tool (bash, grep, …)
+// expanded step rows and card identities); mid-run git marks (ADR 10 v2)
+// surface as a "git:" hash list first — the highest-precedence category;
+// every other tool (bash, grep, …)
 // is a count under "run N tools", so the header needs no arguments beyond
 // edit/write paths. Thinking steps are not summarized — the header surfaces
 // tool actions only — except when thinking is all a group holds, where a
@@ -21,13 +23,46 @@ export interface StepSummaryItem {
 	basename: string | null;
 }
 
+/** Identity slice formatGroupSummary needs from a git mark. */
+export interface GitSummaryItem {
+	commit: string | null;
+	branch: string | null;
+}
+
+/** Short label for one observed identity: the 8-char commit hash, else the
+ * branch (unborn HEAD), else "?". */
+function gitMarkLabel(item: GitSummaryItem): string {
+	if (item.commit) return item.commit.slice(0, 8);
+	if (item.branch) return item.branch;
+	return "?";
+}
+
+/** "git: ae02c151, 9f2b01c4 +1" — deduped by identity key, truncated. */
+function formatGitGroup(items: GitSummaryItem[]): string | null {
+	if (items.length === 0) return null;
+	const seen = new Set<string>();
+	const labels: string[] = [];
+	for (const item of items) {
+		const key = `${item.commit ?? ""}|${item.branch ?? ""}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		labels.push(gitMarkLabel(item));
+	}
+	const shown = labels.slice(0, 2);
+	const rest = labels.length - shown.length;
+	if (rest > 0) shown.push(`+${rest}`);
+	return `git: ${shown.join(", ")}`;
+}
+
 /**
  * Build a categorized group label from step items. Each category appears at
  * most once, with dedup and truncation inside it. Edit and write share the
  * "edit:" category — modify-existing vs create-new stays visible in the
  * expanded rows; the collapsed header cares only about which files changed.
+ * Mid-run git marks (ADR 10 v2) surface as a "git:" segment first, before
+ * all tool categories.
  */
-export function formatGroupSummary(items: StepSummaryItem[]): string {
+export function formatGroupSummary(items: StepSummaryItem[], gitChanges: GitSummaryItem[] = []): string {
 	const editMap = new Map<string, number>(); // basename → count
 	let readCount = 0;
 	let otherToolCount = 0;
@@ -49,6 +84,10 @@ export function formatGroupSummary(items: StepSummaryItem[]): string {
 	}
 
 	const groups: string[] = [];
+
+	// --- git (mid-run identity transitions — highest precedence) ---
+	const gitGroup = formatGitGroup(gitChanges);
+	if (gitGroup) groups.push(gitGroup);
 
 	// --- edit (edit + write basenames, one list) ---
 	const editGroup = formatPathGroup("edit", editMap);
