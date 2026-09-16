@@ -181,14 +181,8 @@ const ProjectFolder = memo(function ProjectFolder({
 							</div>
 						))}
 					{page?.kind === "ready" && page.hasMore && (
-						<button
-							type="button"
-							className={styles.sidebarLoadMore}
-							onClick={() => onLoadMore(project.id)}
-							aria-label="Load more sessions"
-							title="Load more sessions"
-						>
-							↻
+						<button type="button" className={styles.sidebarLoadMore} onClick={() => onLoadMore(project.id)}>
+							Load more
 						</button>
 					)}
 				</div>
@@ -204,6 +198,7 @@ const ProjectFolder = memo(function ProjectFolder({
 export const Sidebar = memo(function Sidebar({
 	projects,
 	currentProjectId,
+	currentStem,
 	activeSessions,
 	sessionPages,
 	isBusy,
@@ -217,6 +212,8 @@ export const Sidebar = memo(function Sidebar({
 }: {
 	projects: ProjectInfo[];
 	currentProjectId: string | null;
+	/** Open session's stem, or null on the Project home / launcher. */
+	currentStem: string | null;
 	/** Global active/streaming snapshot (ADR 11) — the authority for the
 	 * pinned section at the top of each folder. */
 	activeSessions: SessionInfo[];
@@ -264,10 +261,15 @@ export const Sidebar = memo(function Sidebar({
 		}
 		return new Set();
 	});
+	// Landing on a Project's home (no session attached) opens its folder — the
+	// browse-this-project stance. Opening a session must not unfold anything:
+	// a pinned row is already visible regardless of folding, and dumping the
+	// history open on a switch is noise. Adds, never removes — manual collapse
+	// stays respected.
 	useEffect(() => {
-		if (currentProjectId === null) return;
+		if (currentProjectId === null || currentStem !== null) return;
 		setExpanded((s) => (s.has(currentProjectId) ? s : new Set(s).add(currentProjectId)));
-	}, [currentProjectId]);
+	}, [currentProjectId, currentStem]);
 	const toggleFolder = useCallback((projectId: string) => {
 		setExpanded((s) => {
 			const next = new Set(s);
