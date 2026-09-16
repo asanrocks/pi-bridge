@@ -1,9 +1,9 @@
 // ============================================================================
 // sessionCandidate — the ADR 09 candidate mirror for live session switches.
 //
-// While a switchSession/switchInstance RPC is in flight, the connection is
+// While an openSession/newSession RPC is in flight, the connection is
 // still subscribed to the old session: old-session patches (including
-// teardown finals) may arrive before the rebind. The client therefore seeds
+// teardown finals) may arrive before the switch. The client therefore seeds
 // the target session into a candidate document instead of the active mirror;
 // old-session patches keep updating the active mirror, and the target
 // initial-sync frame (identified by its sessionId) updates the candidate.
