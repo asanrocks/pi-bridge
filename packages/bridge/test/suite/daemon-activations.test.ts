@@ -4,7 +4,8 @@
 // activation sharing, detach-before-attach, idle GC, session queries, and the
 // address/identity rules, not pi itself.
 
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +19,10 @@ import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from 
 
 interface StubHandles {
 	emitPatch: (patch: Patch) => void;
+	/** Flip the stub document's streaming flag and emit the matching patch —
+	 * exercises both the daemon's onPatch listener and the GC eligibility
+	 * check, which reads `document.status.isStreaming`. */
+	setStreaming: (streaming: boolean) => void;
 	patchListenerCount: () => number;
 	disposed: () => boolean;
 }
@@ -66,6 +71,8 @@ function makeStubManager(opts: {
 	agentDir?: string;
 	sessionPath?: string;
 	sessionId?: string;
+	/** Pre-populated document entries — an entry-bearing unflushed session. */
+	entries?: Document["entries"];
 }): StubManager {
 	const cwd = opts.cwd ?? "";
 	const agentDir = opts.agentDir ?? "";
@@ -73,6 +80,7 @@ function makeStubManager(opts: {
 	const sessionFile =
 		opts.sessionPath ?? join(sessionDirFor(cwd, agentDir), `2026-01-01T00-00-00-000Z_${sessionId}.jsonl`);
 	const document = emptyStubDocument();
+	document.entries = opts.entries ?? {};
 	const patchListeners = new Set<(patch: Patch) => void>();
 	const settledListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
@@ -114,10 +122,16 @@ function makeStubManager(opts: {
 		},
 	};
 
+	const emit = (patch: Patch) => {
+		for (const l of patchListeners) l(patch);
+		for (const h of connectionHandles) h.onPatch(patch);
+	};
+
 	const handles: StubHandles = {
-		emitPatch: (patch: Patch) => {
-			for (const l of patchListeners) l(patch);
-			for (const h of connectionHandles) h.onPatch(patch);
+		emitPatch: emit,
+		setStreaming: (streaming: boolean) => {
+			document.status.isStreaming = streaming;
+			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
 		},
 		patchListenerCount: () => patchListenerCount(patchListeners, connectionHandles),
 		disposed: () => wasDisposed,
@@ -264,6 +278,27 @@ function writeSessionFile(cwd: string, agentDir: string, sessionId: string, stem
 	const name = stem ?? `2026-01-01T00-00-00-000Z_${sessionId}`;
 	writeSessionAt(join(dir, `${name}.jsonl`), sessionId, cwd);
 	return name;
+}
+
+/** Raw HTTP/1.1 GET over a plain socket — bypasses client-side path
+ * normalization so a literal `..` request reaches the server verbatim. */
+function rawHttpRequest(port: number, path: string): Promise<{ status: number; body: string }> {
+	return new Promise((resolvePromise, reject) => {
+		const socket = createConnection({ port, host: "127.0.0.1" }, () => {
+			socket.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+		});
+		const chunks: Buffer[] = [];
+		socket.on("data", (d) => chunks.push(d));
+		socket.on("end", () => {
+			const raw = Buffer.concat(chunks).toString("utf8");
+			const sep = raw.indexOf("\r\n\r\n");
+			resolvePromise({
+				status: Number(raw.split(" ", 3)[1]),
+				body: sep >= 0 ? raw.slice(sep + 4) : "",
+			});
+		});
+		socket.on("error", reject);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +619,8 @@ describe("daemon: idle GC", () => {
 		const listId = send(ws, { verb: "listActiveSessions" });
 		const list = (await waitForReply(frames, listId)) as unknown as { sessions: unknown[] };
 		expect(list.sessions).toEqual([]);
+		// GC disposes the runtime; it never deletes the session file.
+		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
 
 		// Reopening rebuilds the activation from the file.
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
@@ -680,6 +717,150 @@ describe("daemon: idle GC", () => {
 
 		ws.close();
 	});
+
+	it("collects an entry-bearing unflushed activation only after the longer cap", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			idleGcMs: 40,
+			unflushedIdleGcMs: 300,
+			// Entry-bearing document: the stub session file is never written, so
+			// the activation holds non-durable entries only the long cap protects.
+			managerFactory: async (opts) =>
+				makeStubManager({
+					...(opts ?? {}),
+					entries: {
+						m1: {
+							id: "m1",
+							parentId: null,
+							timestamp: "2026-01-01T00:00:00Z",
+							kind: "message",
+							role: "user",
+							content: [],
+						},
+					},
+				}).manager,
+		});
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		expect((await waitForReply(frames, send(ws, { verb: "newSession", projectId }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
+
+		// Past the short idle delay: the longer unflushed cap still holds.
+		await settle(150);
+		let list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+			sessions: unknown[];
+		};
+		expect(list.sessions).toHaveLength(1);
+
+		// Past the longer cap: collected (entries were never durable).
+		await settle(400);
+		list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+			sessions: unknown[];
+		};
+		expect(list.sessions).toEqual([]);
+
+		ws.close();
+	});
+
+	it("does not collect a streaming activation; collects it once it settles", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const stubRef: { current: StubManager | null } = { current: null };
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			idleGcMs: 40,
+			unflushedIdleGcMs: 40,
+			managerFactory: async (opts) => {
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "gc-stream");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		await waitForPush(frames, "replace");
+
+		const stub = stubRef.current;
+		if (!stub) throw new Error("stub not created");
+		stub.handles.setStreaming(true);
+		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
+
+		// The idle timer fires but re-arms while the session is streaming.
+		await settle(150);
+		const list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+			sessions: Array<{ stem: string; isStreaming: boolean }>;
+		};
+		expect(list.sessions).toHaveLength(1);
+		expect(list.sessions[0].isStreaming).toBe(true);
+		expect(stub.handles.disposed()).toBe(false);
+
+		// Settling releases the re-armed timer.
+		stub.handles.setStreaming(false);
+		await settle(150);
+		const settled = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+			sessions: unknown[];
+		};
+		expect(settled.sessions).toEqual([]);
+		expect(stub.handles.disposed()).toBe(true);
+
+		ws.close();
+	});
+
+	it("does not pin an activation when the socket closes mid-open", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let signalFactory!: () => void;
+		const factoryCalled = new Promise<void>((r) => {
+			signalFactory = r;
+		});
+		let releaseFactory!: () => void;
+		const factoryGate = new Promise<void>((r) => {
+			releaseFactory = r;
+		});
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			idleGcMs: 40,
+			unflushedIdleGcMs: 40,
+			managerFactory: async (opts) => {
+				signalFactory();
+				await factoryGate;
+				return makeStubManager(opts ?? {}).manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "gc-dead");
+
+		const ws = await openClient(port);
+		send(ws, { verb: "openSession", projectId, stem });
+		await factoryCalled;
+
+		// Close while the activation is still being created. The close handler
+		// runs before the open resumes, so the attach must be skipped rather
+		// than pin the activation with a dead Connection forever.
+		const closed = new Promise<void>((r) => ws.on("close", r));
+		ws.close();
+		await closed;
+		await settle(50);
+		releaseFactory();
+		await settle(250);
+
+		const ws2 = await openClient(port);
+		const frames2 = collectFrames(ws2);
+		const list = (await waitForReply(frames2, send(ws2, { verb: "listActiveSessions" }))) as unknown as {
+			sessions: unknown[];
+		};
+		expect(list.sessions).toEqual([]);
+
+		ws2.close();
+	});
 });
 
 describe("daemon: session listing", () => {
@@ -730,6 +911,41 @@ describe("daemon: session listing", () => {
 		ws.close();
 	});
 
+	it("paginates equal-mtime files by the stem tiebreak without skipping or repeating", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const dir = sessionDirFor(a, agentDir);
+		const stemA = writeSessionFile(a, agentDir, "eq-a-id", "eq-a");
+		const stemB = writeSessionFile(a, agentDir, "eq-b-id", "eq-b");
+		// Force identical ordering values so only the stem tiebreak separates
+		// the two rows (ADR 11 compound cursor).
+		const t = new Date(1_700_000_000_000);
+		utimesSync(join(dir, `${stemA}.jsonl`), t, t);
+		utimesSync(join(dir, `${stemB}.jsonl`), t, t);
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const page1 = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId, max: 1 }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+			hasMore: boolean;
+			nextCursor?: { sortTimeMs: number; stem: string };
+		};
+		expect(page1.sessions.map((s) => s.stem)).toEqual([stemB]); // stem descending
+		expect(page1.hasMore).toBe(true);
+		expect(page1.nextCursor?.stem).toBe(stemB);
+
+		const page2 = (await waitForReply(
+			frames,
+			send(ws, { verb: "listSessions", projectId, max: 1, cursor: page1.nextCursor }),
+		)) as unknown as { sessions: Array<{ stem: string }>; hasMore: boolean };
+		expect(page2.sessions.map((s) => s.stem)).toEqual([stemA]);
+		expect(page2.hasMore).toBe(false);
+
+		ws.close();
+	});
+
 	it("broadcasts sessions_changed for the Project and a global active snapshot", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
@@ -757,5 +973,29 @@ describe("daemon: session listing", () => {
 
 		ws.close();
 		launcher.close();
+	});
+});
+
+describe("daemon: http static serving", () => {
+	it("rejects a literal ../ request that resolves outside webRoot", async () => {
+		const { root, agentDir, a } = makeProjectRoots();
+		const webRoot = join(root, "web");
+		mkdirSync(webRoot, { recursive: true });
+		writeFileSync(join(webRoot, "index.html"), "<html></html>");
+		// A sibling directory sharing webRoot's string prefix — exactly what a
+		// non-boundary `startsWith` containment check would let through once
+		// join() resolves the `..` component.
+		mkdirSync(join(root, "webx"), { recursive: true });
+		writeFileSync(join(root, "webx", "secret.txt"), "secret");
+
+		const { port } = await startDaemon({ agentDir, allow: [a], webRoot, managerFactory: stubMediator() });
+
+		const rejected = await rawHttpRequest(port, "/../webx/secret.txt");
+		expect(rejected.status).toBe(403);
+		expect(rejected.body).not.toContain("secret");
+
+		// Sanity: a real asset still serves.
+		const ok = await rawHttpRequest(port, "/index.html");
+		expect(ok.status).toBe(200);
 	});
 });
