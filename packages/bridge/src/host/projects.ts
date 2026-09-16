@@ -118,8 +118,11 @@ function realpathOrSelf(path: string): string {
 	}
 }
 
-/** Boundary-aware containment (path-prefix, not string-prefix). */
-function isContained(parent: string, child: string): boolean {
+/** Boundary-aware containment (path-prefix, not string-prefix: a plain
+ * `startsWith` passes `/root-x/...` against parent `/root`). Exported for
+ * the daemon's HTTP static server, which must apply the same rule to
+ * request paths after `join()` resolves any `..` components. */
+export function isContained(parent: string, child: string): boolean {
 	if (child === parent) return true;
 	const base = parent.endsWith(sep) ? parent : parent + sep;
 	return child.startsWith(base);
