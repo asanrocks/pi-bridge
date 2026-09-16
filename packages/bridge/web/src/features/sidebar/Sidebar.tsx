@@ -104,7 +104,6 @@ const ProjectFolder = memo(function ProjectFolder({
 		[page, activeIds],
 	);
 	const groups = useMemo(() => groupSessions(history), [history]);
-	const showHeaders = groups.length > 1;
 
 	const rowCls = [styles.sidebarFolderRow, isCurrent ? styles.sidebarItemActive : ""].filter(Boolean).join(" ");
 
@@ -152,7 +151,9 @@ const ProjectFolder = memo(function ProjectFolder({
 					{page?.kind === "ready" &&
 						groups.map((group) => (
 							<div key={group.label}>
-								{showHeaders && <div className={styles.sidebarGroupHeader}>{group.label}</div>}
+								{/* Always labeled: a lone bucket still needs its header to
+								 * distinguish history rows from the pinned section above. */}
+								<div className={styles.sidebarGroupHeader}>{group.label}</div>
 								{group.items.map((s) => (
 									<SessionRow key={`${s.projectId}/${s.stem}`} session={s} dot="idle" onOpen={onOpen} />
 								))}
@@ -238,12 +239,17 @@ export const Sidebar = memo(function Sidebar({
 		return new Set();
 	});
 	// Landing on a Project's home (no session attached) opens its folder — the
-	// browse-this-project stance. Opening a session must not unfold anything:
-	// a pinned row is already visible regardless of folding, and dumping the
-	// history open on a switch is noise. Adds, never removes — manual collapse
-	// stays respected.
+	// browse-this-project stance. The same holds at boot for a session URL: the
+	// first non-null current Project expands even when a stem is attached —
+	// first-paint context, unlike a live session switch, where unfolding is
+	// noise (a pinned row is already visible regardless of folding). Adds,
+	// never removes — manual collapse stays respected.
+	const didBootExpandRef = useRef(false);
 	useEffect(() => {
-		if (currentProjectId === null || currentStem !== null) return;
+		if (currentProjectId === null) return;
+		const isBoot = !didBootExpandRef.current;
+		didBootExpandRef.current = true;
+		if (!isBoot && currentStem !== null) return;
 		setExpanded((s) => (s.has(currentProjectId) ? s : new Set(s).add(currentProjectId)));
 	}, [currentProjectId, currentStem]);
 	const toggleFolder = useCallback((projectId: string) => {
