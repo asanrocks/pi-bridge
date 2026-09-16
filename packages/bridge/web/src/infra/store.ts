@@ -56,6 +56,18 @@ export type ConnectionState =
 	| { kind: "init_failed"; error: string };
 
 // ---------------------------------------------------------------------------
+// Sidebar folder pages — lazily fetched per-Project session lists for the
+// sidebar's folder tree (ADR 11). Distinct from the `sessions` slice (the
+// current Project's page, which feeds the Project-home path): folder pages
+// are pure UI cache, keyed by projectId, fetched on first expand.
+// ---------------------------------------------------------------------------
+
+export type SessionFolderPage =
+	| { kind: "loading" }
+	| { kind: "error" }
+	| { kind: "ready"; sessions: SessionInfo[]; hasMore: boolean; nextCursor: SessionListCursor | null };
+
+// ---------------------------------------------------------------------------
 // Store shape
 // ---------------------------------------------------------------------------
 
@@ -120,6 +132,9 @@ export interface ClientStore {
 	sessionsHasMore: boolean;
 	/** Compound cursor for the last returned session page (ADR 11). */
 	sessionsNextCursor: SessionListCursor | null;
+	/** Sidebar folder pages (ADR 11), keyed by projectId. Absent = never
+	 * expanded (fetch on expand); reset on reconnect. */
+	sessionPages: Record<string, SessionFolderPage>;
 	/** Static Project configuration (ADR 11). */
 	projects: ProjectInfo[];
 	/** Active/streaming sessions across all Projects (ADR 11). */
@@ -175,6 +190,27 @@ export interface ClientStore {
 	 * belongs to a different Project and should not merge with the previous one.
 	 */
 	replaceSessions: (incoming: SessionInfo[], hasMore: boolean, nextCursor?: SessionListCursor | null) => void;
+	/** Mark a sidebar folder page as fetching (expand / retry). */
+	beginSessionPage: (projectId: string) => void;
+	/** Commit a sidebar folder page (fetch success or sessions_changed). */
+	setSessionPage: (
+		projectId: string,
+		sessions: SessionInfo[],
+		hasMore: boolean,
+		nextCursor: SessionListCursor | null,
+	) => void;
+	/** Mark a sidebar folder page as failed (fetch failure / offline expand). */
+	setSessionPageError: (projectId: string) => void;
+	/** Append a sidebar folder page from load-more. Upserts by sessionId like
+	 * `appendSessions`; a no-op unless the page is ready. */
+	appendSessionPage: (
+		projectId: string,
+		incoming: SessionInfo[],
+		hasMore: boolean,
+		nextCursor?: SessionListCursor | null,
+	) => void;
+	/** Drop all sidebar folder pages (reconnect — the daemon may have restarted). */
+	resetSessionPages: () => void;
 	setModels: (models: ModelInfo[], thinkingLevels: string[]) => void;
 	setDevMode: (mode: boolean) => void;
 	applyReplace: (doc: Document) => void;
@@ -361,6 +397,7 @@ export function createClientStore() {
 		sessions: [],
 		sessionsHasMore: false,
 		sessionsNextCursor: null,
+		sessionPages: {},
 		projects: [],
 		activeSessions: [],
 		models: [],
@@ -428,6 +465,45 @@ export function createClientStore() {
 
 		replaceSessions: (incoming, hasMore, nextCursor) =>
 			set({ sessions: incoming, sessionsHasMore: hasMore, sessionsNextCursor: nextCursor ?? null }),
+
+		beginSessionPage: (projectId) =>
+			set((s) => ({ sessionPages: { ...s.sessionPages, [projectId]: { kind: "loading" } } })),
+
+		setSessionPage: (projectId, sessions, hasMore, nextCursor) =>
+			set((s) => ({
+				sessionPages: { ...s.sessionPages, [projectId]: { kind: "ready", sessions, hasMore, nextCursor } },
+			})),
+
+		setSessionPageError: (projectId) =>
+			set((s) => ({ sessionPages: { ...s.sessionPages, [projectId]: { kind: "error" } } })),
+
+		appendSessionPage: (projectId, incoming, hasMore, nextCursor) =>
+			set((s) => {
+				const page = s.sessionPages[projectId];
+				if (page?.kind !== "ready") return s;
+				// Upsert by sessionId: update existing, append new, preserve unmatched
+				const incomingMap = new Map(incoming.map((x) => [x.sessionId, x]));
+				const merged: SessionInfo[] = [];
+				for (const cur of page.sessions) {
+					const upd = incomingMap.get(cur.sessionId);
+					if (upd) {
+						merged.push(upd);
+						incomingMap.delete(cur.sessionId);
+					} else {
+						merged.push(cur);
+					}
+				}
+				for (const x of incomingMap.values()) merged.push(x);
+				merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+				return {
+					sessionPages: {
+						...s.sessionPages,
+						[projectId]: { kind: "ready", sessions: merged, hasMore, nextCursor: nextCursor ?? page.nextCursor },
+					},
+				};
+			}),
+
+		resetSessionPages: () => set({ sessionPages: {} }),
 
 		setModels: (models, thinkingLevels) => set({ models, thinkingLevels }),
 
