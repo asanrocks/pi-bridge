@@ -194,15 +194,18 @@
 	margin-left: 8px;
 }
 
+/* Load-more row: same quiet language as .sidebarFolderMsg (sentence-case,
+   small, muted) but interactive — hover darkens like a row. Sits inside
+   .sidebarFolderChildren, so it inherits the leaves' indent. */
 .sidebarLoadMore {
 	display: block;
 	width: 100%;
 	text-align: left;
-	margin-top: 8px;
-	padding: 6px 10px 6px 13px;
+	margin-top: 2px;
+	padding: 4px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
-	color: var(--color-secondary);
+	color: var(--color-muted-foreground);
 	background: none;
 	border: none;
 	cursor: pointer;
