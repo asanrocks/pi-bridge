@@ -3,7 +3,7 @@
 // Wires Zustand store + computeViewModel + useConnection.
 // ============================================================================
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { Document, ImageContent } from "../../../src/core/index.ts";
 import {
 	computeViewModel,
@@ -21,7 +21,7 @@ import { ConversationArea } from "../features/conversation/ConversationArea.tsx"
 import { copyToClipboard } from "../features/conversation/clipboard.ts";
 import { HistoryPane } from "../features/history/HistoryPane.tsx";
 import { Launcher } from "../features/launcher/Launcher.tsx";
-import { Sidebar } from "../features/sidebar/Sidebar.tsx";
+import { Sidebar, type SidebarMode } from "../features/sidebar/Sidebar.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
 import { FileViewer } from "../features/viewer/FileViewer.tsx";
 import { useDraftGuard } from "../infra/draftPersistence.ts";
@@ -191,6 +191,12 @@ function AppInner() {
 	    and surface the project picker. Driven by Alt+N when more than one
 	    Project is configured (==1 starts a session directly). */
 	const newSessionRef = useRef<() => void>(() => {});
+
+	// ── Sidebar shell state. The Sidebar owns its mode and the peek drawer;
+	// the App mirrors the mode for cross-component chrome (TopBar hamburger
+	// visibility) and forwards the hamburger's raw hover signal down. ──
+	const [sidebarMode, setSidebarMode] = useState<SidebarMode>("hidden");
+	const [sidebarHover, setSidebarHover] = useState(false);
 
 	const isBusy = isStreaming || isCompacting;
 	const hasOpenSession = currentStem !== null;
@@ -495,7 +501,9 @@ function AppInner() {
 			<TopBar
 				name={statusName}
 				connection={connection}
+				showSidebarToggle={sidebarMode === "hidden"}
 				onSidebarToggle={() => sidebarToggleRef.current()}
+				onSidebarHover={setSidebarHover}
 				onHistory={() => setHistoryOpen(!historyOpen)}
 				onRename={async (name) => {
 					await rpc.renameSession(name);
@@ -519,6 +527,8 @@ function AppInner() {
 					onLoadMoreFolder={handleLoadMoreFolder}
 					toggleRef={sidebarToggleRef}
 					newSessionRef={newSessionRef}
+					onModeChange={setSidebarMode}
+					hamburgerHover={sidebarHover}
 				/>
 
 				{/* Conversation or the Project home */}

@@ -5,10 +5,14 @@
 // capture) rewrites the pane's width live; everything that binds the pane's
 // CSS var (TopBar edges, .body gutters) follows automatically because the
 // same var is the single source of truth. Widths persist per pane in
-// localStorage; double-click restores the default width.
+// localStorage; double-click restores the default width. Overshoot is
+// opt-in and previewed live: `onOvershootChange` snaps the pane into its
+// overshoot state mid-drag when it crosses below `min` or above `max` (and
+// back when dragged within bounds — the on-screen state always matches what
+// a release at that moment would do), and `onOvershoot` decides the release.
 // ============================================================================
 
-import { type CSSProperties, memo, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import styles from "./ResizeHandle.module.css";
 
 /** Hit-strip width. The visible indicator (2px) centers inside it. */
@@ -138,27 +142,64 @@ export const ResizeHandle = memo(function ResizeHandle({
 	controller,
 	edge,
 	label,
+	onOvershoot,
+	onOvershootChange,
 }: {
 	controller: PaneResizeController;
 	edge: "left" | "right";
 	label: string;
+	/** Release-time overshoot (opt-in): fired instead of the width commit
+	 *  when the released drag wanted a width beyond min/max — e.g. dragging
+	 *  the Sidebar below its min collapses it, past its max fullscreens it.
+	 *  `raw` decides — the latest unclamped desired width. HistoryPane
+	 *  passes nothing and keeps pure clamping. */
+	onOvershoot?: (dir: "min" | "max") => void;
+	/** Live overshoot preview (opt-in, pairs with onOvershoot): fired on
+	 *  change while dragging — `"min"`/`"max"` when the drag crosses below
+	 *  `min` / above `max`, `null` when back within bounds. The owner snaps
+	 *  the pane into (or out of) its overshoot state mid-gesture, so the
+	 *  on-screen state always matches what a release at that moment would
+	 *  do. Reset (null) on release, before onOvershoot/commit. */
+	onOvershootChange?: (dir: "min" | "max" | null) => void;
 }) {
 	const [dragging, setDragging] = useState(false);
-	// Anchor of the live drag: pointer x + pane width at pointerdown.
-	const dragStart = useRef<{ x: number; w: number } | null>(null);
+	const [overshoot, setOvershoot] = useState<"min" | "max" | null>(null);
+	// Anchor of the live drag: pointer x + pane width at pointerdown, plus
+	// the latest *unclamped* desired width (for release-time overshoot).
+	const dragStart = useRef<{ x: number; w: number; raw: number } | null>(null);
+	// Live-preview latch: mirrors `overshoot` without re-render churn (the
+	// pane width can sit still at a bound while the pointer keeps moving).
+	const overshootRef = useRef<"min" | "max" | null>(null);
+
+	// Unmount insurance: if the handle is unmounted mid-drag (mode switch,
+	// breakpoint crossing) its pointerup never fires and the class would
+	// strand the page in the resize cursor / no-selection state.
+	useEffect(
+		() => () => {
+			document.documentElement.classList.remove("pane-resizing");
+		},
+		[],
+	);
 
 	const onPointerDown = useCallback(
 		(e: React.PointerEvent<HTMLElement>) => {
 			if (e.button !== 0) return;
 			e.preventDefault();
-			dragStart.current = { x: e.clientX, w: controller.width };
+			// A previous drag can end without pointerup/cancel (capture stolen);
+			// never let a stale overshoot preview outlive its gesture.
+			if (overshootRef.current !== null) {
+				overshootRef.current = null;
+				setOvershoot(null);
+				onOvershootChange?.(null);
+			}
+			dragStart.current = { x: e.clientX, w: controller.width, raw: controller.width };
 			setDragging(true);
 			// Capture keeps move/up flowing to the handle when the pointer
 			// travels off it (over the conversation, off-window edges).
 			e.currentTarget.setPointerCapture(e.pointerId);
 			document.documentElement.classList.add("pane-resizing");
 		},
-		[controller.width],
+		[controller.width, onOvershootChange],
 	);
 
 	const onPointerMove = useCallback(
@@ -166,14 +207,27 @@ export const ResizeHandle = memo(function ResizeHandle({
 			const start = dragStart.current;
 			if (!start) return;
 			const dx = e.clientX - start.x;
-			controller.setWidth(start.w + (edge === "right" ? dx : -dx));
+			const raw = start.w + (edge === "right" ? dx : -dx);
+			start.raw = raw;
+			controller.setWidth(raw);
+			// Live snap: the visual width clamps at the bounds, but crossing
+			// beyond one previews the release decision — same predicate, so the
+			// preview never lies. The owner snaps the pane into its overshoot
+			// state (collapsed / fullscreen) and back when within bounds.
+			const over = raw < controller.min ? "min" : raw > controller.max ? "max" : null;
+			if (over !== overshootRef.current) {
+				overshootRef.current = over;
+				setOvershoot(over);
+				onOvershootChange?.(over);
+			}
 		},
-		[controller, edge],
+		[controller, edge, onOvershootChange],
 	);
 
 	const endDrag = useCallback(
 		(e: React.PointerEvent<HTMLElement>) => {
-			if (!dragStart.current) return;
+			const start = dragStart.current;
+			if (!start) return;
 			dragStart.current = null;
 			setDragging(false);
 			document.documentElement.classList.remove("pane-resizing");
@@ -182,9 +236,25 @@ export const ResizeHandle = memo(function ResizeHandle({
 			if (e.currentTarget.hasPointerCapture(e.pointerId)) {
 				e.currentTarget.releasePointerCapture(e.pointerId);
 			}
-			controller.commitCurrent();
+			// Reset the live preview first — the release decision below is final.
+			if (overshootRef.current !== null) {
+				overshootRef.current = null;
+				setOvershoot(null);
+				onOvershootChange?.(null);
+			}
+			// Overshoot beats commit when the drag released beyond the bounds.
+			// `raw` is exact even if the last pointermove's state update hasn't
+			// flushed — it lives in the dragStart ref. Both overshoots restore
+			// the pre-drag width first: the release switches modes, it doesn't
+			// resize — reopening / backing off is an undo of the whole gesture.
+			if (onOvershoot && (start.raw < controller.min || start.raw > controller.max)) {
+				controller.setWidth(start.w);
+				onOvershoot(start.raw < controller.min ? "min" : "max");
+			} else {
+				controller.commitCurrent();
+			}
 		},
-		[controller],
+		[controller, onOvershoot, onOvershootChange],
 	);
 
 	// Keyboard: arrows move the separator (16px steps, toward the pane's
@@ -235,6 +305,7 @@ export const ResizeHandle = memo(function ResizeHandle({
 			className={styles.handle}
 			style={style}
 			data-dragging={dragging || undefined}
+			data-overshoot={overshoot ?? undefined}
 			onPointerDown={onPointerDown}
 			onPointerMove={onPointerMove}
 			onPointerUp={endDrag}
