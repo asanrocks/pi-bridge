@@ -1,11 +1,22 @@
 // ============================================================================
-// Sidebar — dual-mode collapsible panel (ADR 11). A folder tree: each Project
-// (static allowlisted cwd configuration) is a foldable folder; its sessions
-// are the leaves. Active sessions pin below the folder row from the global
-// snapshot (the authority for live state) and stay visible regardless of the
-// fold — folding hides only the lazily fetched history. Inline column
-// ≥768px, slide-in overlay below. Open/close and folder expansion persist in
-// localStorage.
+// Sidebar — tri-mode panel (ADR 11): hidden / rail / fullscreen. Desktop
+// (≥768px) supports all three: a resizable rail whose drag snaps live at
+// both bounds — crossing below the min snaps it shut (dragging back wider
+// snaps it open), crossing above the max snaps the fullscreen overlay in
+// (dragging back snaps it out) — and the release decides with the same
+// predicate, so the on-screen state never lies. Fullscreen is a pure
+// overlay above the TopBar (close button + Esc). While hidden on desktop,
+// the TopBar hamburger hover-peeks this same content as a temporary
+// drawer, and a left edge-drag strip reveals the rail pointer-absolute
+// (visible only once the pointer passes the min width). Mobile has only
+// hidden / fullscreen (full-screen width).
+//
+// A folder tree: each Project (static allowlisted cwd configuration) is a
+// foldable folder; its sessions are the leaves. Active sessions pin below the folder
+// row from the global snapshot (the authority for live state) and stay
+// visible regardless of the fold — folding hides only the lazily fetched
+// history. Desktop rail visibility persists in localStorage, independent of
+// the rail's width (the resize controller's own persistence).
 //
 // Selection model: the Project header is a disclosure control, never a
 // selection target — the folder toggles folding and nothing else. Selection
@@ -23,8 +34,17 @@ import styles from "./Sidebar.module.css";
 import { groupSessions, relativeTime } from "./timeUtils.ts";
 
 const SIDEBAR_BREAKPOINT = "(min-width: 768px)";
+
+/** Sidebar display mode. `rail` (docked, resizable column) is desktop-only;
+ *  mobile offers just hidden / fullscreen. */
+export type SidebarMode = "hidden" | "rail" | "fullscreen";
+
 const LS_KEY = "pi-bridge:sidebar-open";
 const LS_FOLDERS_KEY = "pi-bridge:sidebar-folders";
+
+/** Grace delay before an un-hovered peek drawer hides, so the pointer can
+ *  cross the hamburger → drawer gap without a flicker. */
+const PEEK_CLOSE_MS = 200;
 
 /* Desktop width bounds for the resizable rail. Default matches the
    historical fixed width; min keeps section headers + rows readable,
@@ -294,6 +314,8 @@ export const Sidebar = memo(function Sidebar({
 	onLoadMoreFolder,
 	toggleRef,
 	newSessionRef,
+	onModeChange,
+	hamburgerHover,
 }: {
 	projects: ProjectInfo[];
 	currentProjectId: string | null;
@@ -317,21 +339,31 @@ export const Sidebar = memo(function Sidebar({
 	    this: with one project it starts directly; with several it opens the
 	    sidebar (if closed) and surfaces the project picker the [+] owns. */
 	newSessionRef: React.MutableRefObject<() => void>;
+	/** Mode report for the App shell (TopBar hamburger visibility). Called
+	    on every mode change after mount. */
+	onModeChange?: (mode: SidebarMode) => void;
+	/** Raw hover signal from the TopBar hamburger (the App just forwards
+	    it): true while the pointer is over the hamburger. The Sidebar owns
+	    the peek drawer this drives, including the grace-delayed hide. */
+	hamburgerHover: boolean;
 }) {
 	const isWide = useMediaQuery(SIDEBAR_BREAKPOINT);
 
-	const [open, setOpen] = useState(() => {
-		try {
-			const stored = localStorage.getItem(LS_KEY);
-			if (stored !== null) return stored === "true";
-		} catch {
-			/* ignore */
+	const [mode, setMode] = useState<SidebarMode>(() => {
+		if (isWide) {
+			try {
+				const stored = localStorage.getItem(LS_KEY);
+				if (stored !== null) return stored === "true" ? "rail" : "hidden";
+			} catch {
+				/* ignore */
+			}
+			return "rail";
 		}
-		return isWide;
+		return "hidden";
 	});
 	const [projectPopoverAnchor, setProjectPopoverAnchor] = useState<DOMRect | null>(null);
 	const newSessionBtnRef = useRef<HTMLButtonElement>(null);
-	// Set by Alt+N when the sidebar is closed: open() renders the [+] button,
+	// Set by Alt+N while hidden: opening the panel renders the [+] button,
 	// then the pending effect below triggers the new-session flow once it's
 	// mounted. Avoids a detached popover anchored to a non-existent button.
 	const [pendingNewSession, setPendingNewSession] = useState(false);
@@ -387,61 +419,215 @@ export const Sidebar = memo(function Sidebar({
 
 	useEffect(() => {
 		newSessionRef.current = () => {
-			if (open) {
-				triggerNewSession();
-			} else {
-				setOpen(true);
+			if (mode === "hidden") {
+				setMode(isWide ? "rail" : "fullscreen");
 				setPendingNewSession(true);
+			} else {
+				triggerNewSession();
 			}
 		};
-	}, [open, triggerNewSession, newSessionRef]);
+	}, [mode, isWide, triggerNewSession, newSessionRef]);
 
 	// After opening, trigger the deferred new-session once the [+] button
-	// has mounted (the desktop/mobile panels return null when !open).
+	// has mounted (the panels return null while hidden).
 	useEffect(() => {
-		if (pendingNewSession && open && newSessionBtnRef.current) {
+		if (pendingNewSession && mode !== "hidden" && newSessionBtnRef.current) {
 			setPendingNewSession(false);
 			triggerNewSession();
 		}
-	}, [pendingNewSession, open, triggerNewSession]);
+	}, [pendingNewSession, mode, triggerNewSession]);
 
+	// Mobile has no rail: crossing to narrow collapses a rail to hidden
+	// (hidden/fullscreen stay valid). Crossing back to wide preserves the
+	// mode — a deliberately hidden sidebar must not reopen on breakpoint
+	// changes.
 	useEffect(() => {
-		setOpen(isWide);
+		if (!isWide) setMode((m) => (m === "rail" ? "hidden" : m));
 	}, [isWide]);
 	useEffect(() => {
-		toggleRef.current = () => setOpen((v) => !v);
-	}, [toggleRef]);
+		toggleRef.current = () => {
+			setMode((m) => {
+				// Desktop: hidden ↔ rail; fullscreen backs off to the rail (the
+				// toggle dismisses the overlay). Mobile: hidden ↔ fullscreen.
+				if (isWide) return m === "hidden" ? "rail" : m === "rail" ? "hidden" : "rail";
+				return m === "hidden" ? "fullscreen" : "hidden";
+			});
+		};
+	}, [isWide, toggleRef]);
+	// Desktop rail visibility only — fullscreen is transient, and a mobile
+	// session must not leak its fullscreen into the desktop preference.
 	useEffect(() => {
-		localStorage.setItem(LS_KEY, String(open));
-	}, [open]);
+		try {
+			if (isWide) localStorage.setItem(LS_KEY, String(mode !== "hidden"));
+		} catch {
+			/* ignore */
+		}
+	}, [mode, isWide]);
+	useEffect(() => {
+		onModeChange?.(mode);
+	}, [mode, onModeChange]);
+
+	// Fullscreen dismissal: close button, Esc, session open, All-projects.
+	// Desktop returns to the rail (the mode it was dragged from); mobile
+	// returns to hidden (its only other mode).
+	const dismissOverlay = useCallback(() => {
+		setMode((m) => (m === "fullscreen" ? (isWide ? "rail" : "hidden") : m));
+	}, [isWide]);
+	useEffect(() => {
+		if (mode !== "fullscreen") return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") dismissOverlay();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [mode, dismissOverlay]);
+
+	// ── Hover-peek drawer (desktop, hidden mode): same content as the rail,
+	// a full-height overlay above the TopBar (it covers the hamburger too)
+	// while the pointer is over the hamburger or the drawer. Shown
+	// immediately; hidden on a grace delay. The delay exists because the
+	// drawer mounts directly over the hamburger, so the hamburger's
+	// mouseleave fires while the pointer hasn't moved at all — and the
+	// ordering of that leave vs the drawer's mouseenter is not something we
+	// can rely on. So the hide never trusts events alone: when the timer
+	// fires it asks the browser where the pointer is (:hover) and keeps the
+	// drawer if it's still over it. Any mode change cancels it outright.
+	const [peekOpen, setPeekOpen] = useState(false);
+	const peekTimerRef = useRef<number | undefined>(undefined);
+	const peekDrawerRef = useRef<HTMLElement | null>(null);
+	const showPeek = useCallback((show: boolean) => {
+		if (peekTimerRef.current !== undefined) {
+			window.clearTimeout(peekTimerRef.current);
+			peekTimerRef.current = undefined;
+		}
+		if (show) setPeekOpen(true);
+		else
+			peekTimerRef.current = window.setTimeout(() => {
+				peekTimerRef.current = undefined;
+				if (!peekDrawerRef.current?.matches(":hover")) setPeekOpen(false);
+			}, PEEK_CLOSE_MS);
+	}, []);
+	useEffect(() => {
+		showPeek(hamburgerHover);
+	}, [hamburgerHover, showPeek]);
+	useEffect(() => {
+		if (mode !== "hidden") {
+			if (peekTimerRef.current !== undefined) {
+				window.clearTimeout(peekTimerRef.current);
+				peekTimerRef.current = undefined;
+			}
+			setPeekOpen(false);
+		}
+	}, [mode]);
+	useEffect(
+		() => () => {
+			if (peekTimerRef.current !== undefined) window.clearTimeout(peekTimerRef.current);
+		},
+		[],
+	);
+
+	// Live overshoot preview from the rail's resize handle: crossing below
+	// min snaps the rail shut (and back open when dragged wider); crossing
+	// above max snaps the fullscreen overlay in (and back out) — the on-screen
+	// state always matches what a release at that moment would do. The handle
+	// stays mounted through both previews (only the rail div swaps out), so
+	// the drag keeps its pointer capture even under the fullscreen overlay.
+	// The "min" side is also driven by the edge-reveal drag.
+	const [dragPreview, setDragPreview] = useState<"min" | "max" | null>(null);
+	const handleOvershootPreview = useCallback((dir: "min" | "max" | null) => setDragPreview(dir), []);
+	// dragPreview is only meaningful mid-drag in rail mode; any mode change
+	// clears it so an interrupted gesture can't leave the rail invisibly
+	// "open" (the entry drags reset it too — belt and braces).
+	useEffect(() => {
+		if (mode !== "rail" && dragPreview !== null) setDragPreview(null);
+	}, [mode, dragPreview]);
 
 	// Resizable rail (desktop): owns the width, persists it, and publishes
 	// --sidebar-w so .body and the TopBar clear the gutter. useLayoutEffect
-	// inside the hook runs before paint (no one-frame flash); 0 when closed
-	// or on mobile (overlay drawer, off-canvas).
+	// inside the hook runs before paint (no one-frame flash); 0 unless the
+	// desktop rail is up — fullscreen and the peek drawer are overlays (the
+	// conversation keeps full width underneath), and mobile is off-canvas.
+	// An overshoot preview takes the rail off-canvas the same way (collapsed
+	// or fullscreened): active goes false so the gutter snaps to 0 with it.
 	const resize = usePaneResize({
 		cssVar: "--sidebar-w",
 		storageKey: "pi-bridge:sidebar-w",
 		defaultWidth: SIDEBAR_DEFAULT_W,
 		min: SIDEBAR_MIN_W,
 		max: SIDEBAR_MAX_W,
-		active: isWide && open,
+		active: isWide && mode === "rail" && dragPreview === null,
 	});
 
-	const panelRef = useRef<HTMLDivElement>(null);
+	// Drag overshoot release on the rail's resize handle: below min hides,
+	// above max fullscreens. The handle restores the pre-drag width first
+	// (both directions), so backing out of either state is an undo.
+	const handleOvershoot = useCallback((dir: "min" | "max") => {
+		setMode(dir === "min" ? "hidden" : "fullscreen");
+	}, []);
+
+	// Edge-reveal strip (desktop, hidden): pointer-absolute drag — the
+	// implied width is the pointer's x position (the bar's right edge chases
+	// the pointer), and the rail appears only once that width exceeds min;
+	// before that the drag previews closed, same snap semantics as the rail's
+	// handle. A release below min keeps it hidden with the pre-drag stored
+	// width restored. revealDragging keeps the strip mounted for the whole
+	// gesture: its pointerdown flips mode to "rail", and unmounting the
+	// strip would silently release the capture mid-drag.
+	const [revealDragging, setRevealDragging] = useState(false);
+	// Watchdog: the strip adds pane-resizing on pointerdown and normally
+	// removes it on pointerup — but if it unmounts mid-drag (breakpoint
+	// crossing), clear it whenever no reveal drag is active. Idempotent.
 	useEffect(() => {
-		if (isWide || !open) return;
-		const handler = (e: MouseEvent) => {
-			if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-				setOpen(false);
+		if (!revealDragging) document.documentElement.classList.remove("pane-resizing");
+	}, [revealDragging]);
+	const revealBaseWidth = useRef<number | null>(null);
+	const revealOnPointerDown = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (e.button !== 0) return;
+			e.preventDefault();
+			e.currentTarget.setPointerCapture(e.pointerId);
+			revealBaseWidth.current = resize.width;
+			setRevealDragging(true);
+			setMode("rail");
+			// At the far-left edge the implied width is already below min — start
+			// snapped shut so the rail is never shown more eagerly than the drag.
+			setDragPreview(e.clientX < resize.min ? "min" : null);
+			document.documentElement.classList.add("pane-resizing");
+		},
+		[resize],
+	);
+	const revealOnPointerMove = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (revealBaseWidth.current === null || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+			const raw = e.clientX;
+			resize.setWidth(raw);
+			setDragPreview(raw < resize.min ? "min" : null);
+		},
+		[resize],
+	);
+	const revealOnPointerEnd = useCallback(
+		(e: React.PointerEvent<HTMLDivElement>) => {
+			if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+			const base = revealBaseWidth.current;
+			revealBaseWidth.current = null;
+			e.currentTarget.releasePointerCapture(e.pointerId);
+			document.documentElement.classList.remove("pane-resizing");
+			setRevealDragging(false);
+			setDragPreview(null);
+			if (base === null) return;
+			// Release decides on the pointer's position (exact even if the last
+			// pointermove's state update hasn't flushed): below min → hide with
+			// the pre-drag stored width restored; at/above → commit the dragged
+			// width.
+			if (e.clientX < resize.min) {
+				resize.setWidth(base);
+				setMode("hidden");
+			} else {
+				resize.commitCurrent();
 			}
-		};
-		const id = setTimeout(() => document.addEventListener("click", handler), 0);
-		return () => {
-			clearTimeout(id);
-			document.removeEventListener("click", handler);
-		};
-	}, [isWide, open]);
+		},
+		[resize],
+	);
 
 	// Opening a session is an attach (ADR 11): the daemon resolves-or-creates
 	// the activation and rebinds this connection — no isBusy guard, the old
@@ -451,9 +637,20 @@ export const Sidebar = memo(function Sidebar({
 			// Passing the id lets the client seed a cache cursor (ADR 09) instead
 			// of falling back to a full replace on every UI session switch.
 			onOpenSession(session.projectId, session.stem, session.sessionId);
-			if (!isWide) setOpen(false);
+			// Selection dismisses overlays: mobile fullscreen and the desktop
+			// peek drawer close outright; desktop fullscreen backs off to the
+			// rail so the picked conversation is visible.
+			if (!isWide) setMode("hidden");
+			else if (mode === "fullscreen") setMode("rail");
+			else if (peekOpen || peekTimerRef.current !== undefined) {
+				if (peekTimerRef.current !== undefined) {
+					window.clearTimeout(peekTimerRef.current);
+					peekTimerRef.current = undefined;
+				}
+				setPeekOpen(false);
+			}
 		},
-		[isWide, onOpenSession],
+		[isWide, mode, onOpenSession, peekOpen],
 	);
 
 	const handleCloseSession = useCallback(
@@ -485,7 +682,7 @@ export const Sidebar = memo(function Sidebar({
 							className={styles.sidebarAddBtn}
 							onClick={() => {
 								onShowLauncher();
-								if (!isWide) setOpen(false);
+								if (!isWide || mode === "fullscreen") dismissOverlay();
 							}}
 							title="All projects"
 							aria-label="All projects"
@@ -564,32 +761,129 @@ export const Sidebar = memo(function Sidebar({
 		</>
 	);
 
+	// Pure overlay above the whole shell (TopBar included): the conversation
+	// keeps its full width — --sidebar-w stays 0. Used both for the real
+	// fullscreen mode and, rendered inside the desktop fragment, for the
+	// live max-overshoot drag preview — the snap-in is the honest feedback
+	// for crossing the threshold.
+	const fullscreenPane = (
+		<div className={styles.sidebarFullscreen}>
+			<div className={styles.overlayHeader}>
+				<button
+					type="button"
+					className={styles.sidebarAddBtn}
+					onClick={dismissOverlay}
+					aria-label="Close sidebar"
+					title="Close (Esc)"
+				>
+					<svg
+						viewBox="0 0 20 20"
+						width="18"
+						height="18"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.5"
+						strokeLinecap="round"
+						aria-hidden="true"
+					>
+						<path d="M5 5l10 10M15 5L5 15" />
+					</svg>
+				</button>
+			</div>
+			{sidebarContent}
+		</div>
+	);
+
+	if (mode === "fullscreen") {
+		return fullscreenPane;
+	}
+
 	if (isWide) {
-		if (!open) return null;
-		// The handle is a fixed-position sibling (not a child) so the pane's
-		// overflow: hidden can't clip it; it centers on the pane border.
 		return (
 			<>
-				<div className={styles.sidebar} style={{ width: resize.width }}>
-					{sidebarContent}
-				</div>
-				<ResizeHandle controller={resize} edge="right" label="Resize sidebar" />
+				{/* Max-overshoot preview: the fullscreen overlay snaps in
+				    mid-drag. It MUST render inside this fragment — an early
+				    return would unmount the ResizeHandle, silently releasing
+				    the drag's pointer capture (stuck overlay + stuck
+				    pane-resizing cursor). The handle stays mounted beneath
+				    the overlay and keeps receiving the drag's moves. */}
+				{dragPreview === "max" && fullscreenPane}
+				{/* Hover-peek drawer: same content as the rail, overlaid below
+				    the TopBar hamburger. Hides (grace-delayed) when the pointer
+				    leaves the hamburger or the drawer. */}
+				{mode === "hidden" && peekOpen && (
+					<nav
+						ref={peekDrawerRef}
+						className={styles.sidebarPeek}
+						style={{ width: resize.width }}
+						onMouseEnter={() => showPeek(true)}
+						onMouseLeave={() => showPeek(false)}
+					>
+						{/* Overlay toggle row: the hamburger at its TopBar position.
+					    Clicking it pins the rail open — the same corner toggle as
+					    everywhere else, and the escape hatch from hover-only. */}
+						<div className={styles.overlayHeader}>
+							<button
+								type="button"
+								className={styles.sidebarAddBtn}
+								onClick={() => setMode("rail")}
+								aria-label="Open sidebar"
+								title="Open sidebar"
+							>
+								<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+									<rect x="3" y="6" width="18" height="2" />
+									<rect x="3" y="11" width="18" height="2" />
+									<rect x="3" y="16" width="18" height="2" />
+								</svg>
+							</button>
+						</div>
+						{sidebarContent}
+					</nav>
+				)}
+				{/* Edge-reveal strip: drag from the left edge to open + resize
+				    the rail. Pointer-only affordance — keyboard users have the
+				    TopBar hamburger. Skipped while the peek drawer is open so its
+				    resize cursor doesn't sit on the drawer's left edge; kept
+				    mounted during its own drag (revealDragging) because its
+				    pointerdown flips the mode to "rail" — unmounting would
+				    silently release the pointer capture mid-gesture. */}
+				{((mode === "hidden" && !peekOpen) || revealDragging) && (
+					<div
+						className={styles.sidebarRevealStrip}
+						aria-hidden="true"
+						title="Drag to open sidebar"
+						onPointerDown={revealOnPointerDown}
+						onPointerMove={revealOnPointerMove}
+						onPointerUp={revealOnPointerEnd}
+						onPointerCancel={revealOnPointerEnd}
+					/>
+				)}
+				{/* The rail. Unmounted during either overshoot preview — a min
+				    preview snaps it shut for real (pane and gutter disappear
+				    together); a max preview replaces it with the fullscreen
+				    overlay, so the folder tree renders once. */}
+				{mode === "rail" && dragPreview === null && (
+					<div className={styles.sidebar} style={{ width: resize.width }}>
+						{sidebarContent}
+					</div>
+				)}
+				{/* The handle is a fixed-position sibling (not a child) so the
+				    pane's overflow: hidden can't clip it; it centers on the pane
+				    border. Stays mounted through both overshoot previews — it
+				    owns the drag's pointer capture, even under the fullscreen
+				    overlay of a max preview (pointer capture ignores hit-testing). */}
+				{mode === "rail" && (
+					<ResizeHandle
+						controller={resize}
+						edge="right"
+						label="Resize sidebar"
+						onOvershoot={handleOvershoot}
+						onOvershootChange={handleOvershootPreview}
+					/>
+				)}
 			</>
 		);
 	}
 
-	if (!open) return null;
-	return (
-		<>
-			<button
-				type="button"
-				className={styles.sidebarBackdrop}
-				onClick={() => setOpen(false)}
-				aria-label="Close sidebar"
-			/>
-			<div className={styles.sidebarOverlay} ref={panelRef}>
-				{sidebarContent}
-			</div>
-		</>
-	);
+	return null;
 });
