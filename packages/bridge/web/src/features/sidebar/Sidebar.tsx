@@ -1,19 +1,24 @@
 // ============================================================================
-// Sidebar — dual-mode collapsible panel (ADR 11). Two sections: Projects
-// (static allowlisted cwd configuration) above, Sessions (the current
-// Project's history) below. Inline column ≥768px, slide-in overlay below.
-// Open/close persists in localStorage.
+// Sidebar — dual-mode collapsible panel (ADR 11). A folder tree: each Project
+// (static allowlisted cwd configuration) is a foldable folder; its sessions
+// are the leaves. Active sessions pin below the folder row from the global
+// snapshot (the authority for live state) and stay visible regardless of the
+// fold — folding hides only the lazily fetched history. Inline column
+// ≥768px, slide-in overlay below. Open/close and folder expansion persist in
+// localStorage.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ProjectInfo } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import type { SessionFolderPage } from "../../infra/store.ts";
 import { useMediaQuery } from "../../infra/useMediaQuery.ts";
 import { ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
 import styles from "./Sidebar.module.css";
-import { groupSessions, relativeTime, type SidebarSession } from "./timeUtils.ts";
+import { groupSessions, relativeTime } from "./timeUtils.ts";
 
 const SIDEBAR_BREAKPOINT = "(min-width: 768px)";
 const LS_KEY = "pi-bridge:sidebar-open";
+const LS_FOLDERS_KEY = "pi-bridge:sidebar-folders";
 
 /* Desktop width bounds for the resizable rail. Default matches the
    historical fixed width; min keeps section headers + rows readable,
@@ -22,31 +27,208 @@ const SIDEBAR_DEFAULT_W = 220;
 const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 360;
 
+/** Stable empty array so memoized folders without active rows don't churn. */
+const NO_SESSIONS: SessionInfo[] = [];
+
+// ---------------------------------------------------------------------------
+// SessionRow — one leaf: liveness dot + label + relative time.
+// ---------------------------------------------------------------------------
+
+const SessionRow = memo(function SessionRow({
+	session,
+	dot,
+	disabled,
+	onOpen,
+}: {
+	session: SessionInfo;
+	/** Green = active, orange + pulse = streaming, muted = dormant history. */
+	dot: "active" | "streaming" | "idle";
+	disabled: boolean;
+	onOpen: (session: SessionInfo) => void;
+}) {
+	const label = (session.name || session.firstMessageText || session.stem) ?? "";
+	const dotCls = [
+		styles.sidebarLiveDot,
+		dot === "streaming" ? styles.sidebarLiveDotStreaming : dot === "idle" ? styles.sidebarDotIdle : "",
+	]
+		.filter(Boolean)
+		.join(" ");
+	return (
+		<button
+			type="button"
+			className={styles.sidebarItem}
+			onClick={() => onOpen(session)}
+			disabled={disabled}
+			title={label}
+		>
+			<span className={dotCls} aria-hidden="true" />
+			<span className={styles.sidebarItemRow}>
+				<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
+				<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
+			</span>
+		</button>
+	);
+});
+
+// ---------------------------------------------------------------------------
+// ProjectFolder — one branch: foldable Project row + its session leaves.
+// ---------------------------------------------------------------------------
+
+const ProjectFolder = memo(function ProjectFolder({
+	project,
+	isCurrent,
+	expanded,
+	activeRows,
+	page,
+	isBusy,
+	onToggle,
+	onOpen,
+	onLoad,
+	onLoadMore,
+}: {
+	project: ProjectInfo;
+	isCurrent: boolean;
+	expanded: boolean;
+	/** Active sessions from the global snapshot, pinned below the folder row
+	 * and always visible — the fold hides only the history. */
+	activeRows: SessionInfo[];
+	page: SessionFolderPage | undefined;
+	isBusy: boolean;
+	onToggle: (projectId: string) => void;
+	onOpen: (session: SessionInfo) => void;
+	onLoad: (projectId: string) => void;
+	onLoadMore: (projectId: string) => void;
+}) {
+	// Lazy first page: fetch on expand when no page is cached. Re-fires after
+	// a reconnect reset (sessionPages cleared → undefined again).
+	useEffect(() => {
+		if (expanded && page === undefined) onLoad(project.id);
+	}, [expanded, page, project.id, onLoad]);
+
+	const activeIds = useMemo(() => new Set(activeRows.map((r) => r.sessionId)), [activeRows]);
+	// The active snapshot is the authority (ADR 11): snapshot rows render in
+	// the pinned section; a scanned row claiming activity but absent from the
+	// snapshot renders as dormant history.
+	const history = useMemo(
+		() => (page?.kind === "ready" ? page.sessions.filter((s) => !activeIds.has(s.sessionId)) : []),
+		[page, activeIds],
+	);
+	const groups = useMemo(() => groupSessions(history), [history]);
+	const showHeaders = groups.length > 1;
+
+	const rowCls = [styles.sidebarFolderRow, isCurrent ? styles.sidebarItemActive : ""].filter(Boolean).join(" ");
+
+	return (
+		<div>
+			<button
+				type="button"
+				className={rowCls}
+				onClick={() => onToggle(project.id)}
+				title={project.cwd}
+				aria-expanded={expanded}
+			>
+				<svg
+					viewBox="0 0 16 16"
+					width="12"
+					height="12"
+					className={expanded ? styles.sidebarChevronOpen : styles.sidebarChevron}
+					fill="currentColor"
+					aria-hidden="true"
+				>
+					<path d="M6 3l5 5-5 5z" />
+				</svg>
+				<span className={styles.sidebarItemName}>{project.id}</span>
+			</button>
+			{/* Pinned active sessions: always visible — folding hides only the
+			    history. The live dot is the signal; no other chrome. */}
+			<div className={styles.sidebarFolderChildren}>
+				{activeRows.map((s) => (
+					<SessionRow
+						key={s.sessionId}
+						session={s}
+						dot={s.isStreaming ? "streaming" : "active"}
+						disabled={isBusy}
+						onOpen={onOpen}
+					/>
+				))}
+			</div>
+			{expanded && (
+				<div className={styles.sidebarFolderChildren}>
+					{(page === undefined || page.kind === "loading") && (
+						<div className={styles.sidebarFolderMsg}>Loading…</div>
+					)}
+					{page?.kind === "error" && (
+						<button type="button" className={styles.sidebarFolderRetry} onClick={() => onLoad(project.id)}>
+							Load failed — retry
+						</button>
+					)}
+					{page?.kind === "ready" && history.length === 0 && activeRows.length === 0 && (
+						<div className={styles.sidebarFolderMsg}>No sessions yet</div>
+					)}
+					{page?.kind === "ready" &&
+						groups.map((group) => (
+							<div key={group.label}>
+								{showHeaders && <div className={styles.sidebarGroupHeader}>{group.label}</div>}
+								{group.items.map((s) => (
+									<SessionRow
+										key={`${s.projectId}/${s.stem}`}
+										session={s}
+										dot="idle"
+										disabled={isBusy}
+										onOpen={onOpen}
+									/>
+								))}
+							</div>
+						))}
+					{page?.kind === "ready" && page.hasMore && (
+						<button
+							type="button"
+							className={styles.sidebarLoadMore}
+							onClick={() => onLoadMore(project.id)}
+							aria-label="Load more sessions"
+							title="Load more sessions"
+						>
+							↻
+						</button>
+					)}
+				</div>
+			)}
+		</div>
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
 export const Sidebar = memo(function Sidebar({
 	projects,
 	currentProjectId,
-	sessions,
+	activeSessions,
+	sessionPages,
 	isBusy,
-	sessionsHasMore,
-	onOpenProject,
 	onOpenSession,
 	onNewSession,
 	onShowLauncher,
-	onLoadMore,
+	onLoadFolder,
+	onLoadMoreFolder,
 	toggleRef,
 	newSessionRef,
 }: {
 	projects: ProjectInfo[];
 	currentProjectId: string | null;
-	sessions: SidebarSession[];
+	/** Global active/streaming snapshot (ADR 11) — the authority for the
+	 * pinned section at the top of each folder. */
+	activeSessions: SessionInfo[];
+	/** Per-Project lazily fetched history pages, keyed by projectId. */
+	sessionPages: Record<string, SessionFolderPage>;
 	isBusy: boolean;
-	sessionsHasMore: boolean;
-	onOpenProject: (projectId: string) => void;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	onNewSession: (projectId: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
 	onShowLauncher: () => void;
-	onLoadMore: () => void;
+	onLoadFolder: (projectId: string) => void;
+	onLoadMoreFolder: (projectId: string) => void;
 	toggleRef: React.MutableRefObject<() => void>;
 	/** Imperative new-session trigger populated by the Sidebar. Alt+N calls
 	    this: with one project it starts directly; with several it opens the
@@ -70,6 +252,37 @@ export const Sidebar = memo(function Sidebar({
 	// then the pending effect below triggers the new-session flow once it's
 	// mounted. Avoids a detached popover anchored to a non-existent button.
 	const [pendingNewSession, setPendingNewSession] = useState(false);
+
+	// ── Folder expansion (persisted). The current Project always auto-expands
+	// (the effect adds, never removes — manual collapse stays respected).
+	const [expanded, setExpanded] = useState<Set<string>>(() => {
+		try {
+			const stored = localStorage.getItem(LS_FOLDERS_KEY);
+			if (stored !== null) return new Set(JSON.parse(stored) as string[]);
+		} catch {
+			/* ignore */
+		}
+		return new Set();
+	});
+	useEffect(() => {
+		if (currentProjectId === null) return;
+		setExpanded((s) => (s.has(currentProjectId) ? s : new Set(s).add(currentProjectId)));
+	}, [currentProjectId]);
+	const toggleFolder = useCallback((projectId: string) => {
+		setExpanded((s) => {
+			const next = new Set(s);
+			if (next.has(projectId)) next.delete(projectId);
+			else next.add(projectId);
+			return next;
+		});
+	}, []);
+	useEffect(() => {
+		try {
+			localStorage.setItem(LS_FOLDERS_KEY, JSON.stringify([...expanded]));
+		} catch {
+			/* ignore */
+		}
+	}, [expanded]);
 
 	const triggerNewSession = useCallback(() => {
 		if (projects.length === 1) {
@@ -137,23 +350,29 @@ export const Sidebar = memo(function Sidebar({
 		};
 	}, [isWide, open]);
 
-	const handleOpenProject = (projectId: string) => {
-		onOpenProject(projectId);
-		if (!isWide) setOpen(false);
-	};
+	const handleOpenSession = useCallback(
+		(session: SessionInfo) => {
+			if (isBusy) return;
+			// Passing the id lets the client seed a cache cursor (ADR 09) instead
+			// of falling back to a full replace on every UI session switch.
+			onOpenSession(session.projectId, session.stem, session.sessionId);
+			if (!isWide) setOpen(false);
+		},
+		[isBusy, isWide, onOpenSession],
+	);
 
-	const handleOpenSession = (session: SidebarSession) => {
-		if (isBusy) return;
-		onOpenSession(session.projectId, session.stem, session.sessionId);
-		if (!isWide) setOpen(false);
-	};
-
-	const groups = useMemo(() => groupSessions(sessions), [sessions]);
-	const showHeaders = groups.length > 1;
+	const activeByProject = useMemo(() => {
+		const map = new Map<string, SessionInfo[]>();
+		for (const s of activeSessions) {
+			const arr = map.get(s.projectId);
+			if (arr) arr.push(s);
+			else map.set(s.projectId, [s]);
+		}
+		return map;
+	}, [activeSessions]);
 
 	const sidebarContent = (
 		<>
-			{/* Projects section */}
 			<div className={styles.sidebarSectionHeader}>
 				<span>Projects</span>
 				<span className={styles.headerActions}>
@@ -222,78 +441,23 @@ export const Sidebar = memo(function Sidebar({
 				</>
 			)}
 			{projects.length === 0 && <div className={styles.sidebarEmpty}>No projects configured</div>}
-			<div className={styles.sidebarInstanceList}>
-				{projects.map((project) => {
-					const isCurrent = project.id === currentProjectId;
-					const rowCls = [styles.sidebarInstanceRow, isCurrent ? styles.sidebarItemActive : ""]
-						.filter(Boolean)
-						.join(" ");
-					return (
-						<div key={project.id} className={rowCls}>
-							<button
-								type="button"
-								className={styles.sidebarInstanceBtn}
-								onClick={() => handleOpenProject(project.id)}
-								title={project.cwd}
-							>
-								<span className={styles.sidebarItemName}>{project.id}</span>
-							</button>
-						</div>
-					);
-				})}
-			</div>
-			<div className={styles.sidebarSectionHeader}>
-				<span>Sessions</span>
-			</div>
-			{sessions.length === 0 && !sessionsHasMore && (
-				<div className={styles.sidebarEmpty}>
-					{currentProjectId ? "No sessions yet" : "Select a project to see sessions"}
-				</div>
-			)}
 			<div className={styles.sidebarList}>
-				{groups.map((group) => (
-					<div key={group.label}>
-						{showHeaders && <div className={styles.sidebarGroupHeader}>{group.label}</div>}
-						{group.items.map((s) => {
-							const label = (s.name || s.firstMessageText || s.stem) ?? "";
-							// Green = active, orange + pulse = streaming, muted = dormant history.
-							const dotCls = [
-								styles.sidebarLiveDot,
-								s.isStreaming ? styles.sidebarLiveDotStreaming : s.active ? "" : styles.sidebarDotIdle,
-							]
-								.filter(Boolean)
-								.join(" ");
-							return (
-								<button
-									type="button"
-									key={`${s.projectId}/${s.stem}`}
-									className={styles.sidebarItem}
-									onClick={() => handleOpenSession(s)}
-									disabled={isBusy}
-									title={label}
-								>
-									<span className={dotCls} aria-hidden="true" />
-									<span className={styles.sidebarItemRow}>
-										<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
-										<span className={styles.sidebarItemTime}>{relativeTime(s.timestamp)}</span>
-									</span>
-								</button>
-							);
-						})}
-					</div>
+				{projects.map((project) => (
+					<ProjectFolder
+						key={project.id}
+						project={project}
+						isCurrent={project.id === currentProjectId}
+						expanded={expanded.has(project.id)}
+						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
+						page={sessionPages[project.id]}
+						isBusy={isBusy}
+						onToggle={toggleFolder}
+						onOpen={handleOpenSession}
+						onLoad={onLoadFolder}
+						onLoadMore={onLoadMoreFolder}
+					/>
 				))}
 			</div>
-			{sessionsHasMore && (
-				<button
-					type="button"
-					className={styles.sidebarLoadMore}
-					onClick={onLoadMore}
-					aria-label="Load more sessions"
-					title="Load more sessions"
-				>
-					↻
-				</button>
-			)}
 		</>
 	);
 
