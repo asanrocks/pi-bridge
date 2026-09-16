@@ -86,23 +86,37 @@ becomes kill-eligible at this boundary.
 Rollback: a failed switch (unknown project, invalid stem, session-id
 conflict, creation failure) sends `ok: false` and leaves the previous
 attachment to X and the client's mirror completely untouched. The no-push
-guarantee is global, not per-Connection: no initial-sync frame, no
-`active_sessions_changed`, and no `sessions_changed` reaches any client.
-This is the guarantee the client currently emulates, extended to the
-broadcasts.
+guarantee is transaction-scoped: the switch itself sends no push of any
+kind to any client — no initial-sync frame, and none of the
+`active_sessions_changed`/`sessions_changed` broadcasts its own steps
+could generate. Broadcasts from concurrent, unrelated lifecycle events (a
+settle in another session, another activation's collection) still flow:
+they carry true state, and suppressing them would drop real updates to
+other tabs. The client rollback emulation this replaces was about the
+mirror and the address, which no concurrent broadcast touches.
 
 The ordering that makes this implementable: every fallible step — resolving
 or creating Y, the session-id conflict check — runs before the first
 mutation of X. Commit order is reserve Y, detach X, attach Y (initial-sync
-push), reply. Nothing after the Y push may fail; once it is emitted, the
-reply is `ok: true`.
+push), reply. The commit point is the transport, not the code path: the
+transaction commits when the initial-sync frame is accepted by the socket.
+A socket that dies between the push and the reply leaves the daemon
+attached to a dead Connection — harmless; the close handler releases it
+and the boundary evaluation runs — while the client reconnects by URL, so
+`send()` swallowing socket errors can only convert a committed transaction
+into one the client never learned about. A synchronous throw while
+attaching Y, before any frame was emitted, is the one post-detach failure:
+re-attach X, then reply `ok: false`.
 
 A created-but-not-yet-committed Y is *staged*: it is resolvable by address
 (concurrent opens of the same address share it, per the ADR 11 reservation)
 but is not yet part of the publicly projected activation set, and its
 registration broadcasts are deferred until the transaction commits.
 Publishing at registration — the ADR 11 behavior — would leak a target that
-a later step can still fail out of, breaking the global no-push guarantee.
+a later step can still fail out of, breaking the transaction-scoped
+no-push guarantee. A staged activation that fails out is disposed silently:
+it was never part of the publicly projected set, so neither its creation
+nor its disposal broadcasts anything.
 
 `openSession` for the address already attached is a reattach: the Connection
 re-receives a fresh initial sync (useful for cache repair), and no refcount
@@ -118,18 +132,25 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   verbs (`openSession`, `newSession`, `detach`) plus the
   attached-session verbs that act on the current attachment (`prompt`,
   `abort`, `discardSteer`, `setModel`, `setThinkingLevel`, `renameSession`,
-  `navigate`). Two state transitions on one socket must not interleave their
-  reservations and attachments; the state machine makes an interleaving
+  `navigate`), plus `pull` (see below). Two state transitions on one
+  socket must not interleave their reservations and attachments; the
+  state machine makes an interleaving
   meaningless, and the daemon enforces it rather than relying on client
   discipline. Query verbs (`listSessions`, `listActiveSessions`,
-  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`, `pull`) run outside
-  the lane: they are read-only against the current attachment, and a slow
-  one (a timed `gitShow` spawn, a 256 KB `readFile`) must not block
-  navigation. The lane holds `prompt` only until admission (see Reply
-  semantics), never for a whole turn, and attached-session verbs act on the
-  activation captured when the lane was entered — so an admitted turn and a
-  navigation on the same socket are linearized rather than racing the
-  attachment swap.
+  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) run outside the
+  lane: they are read-only against the current attachment, and a slow one
+  (a timed `gitShow` spawn, a 256 KB `readFile`) must not block
+  navigation. `pull` is the exception: fast (a synchronous in-memory
+  read) but not read-only — it mutates the Connection's lazy-subscription
+  set, which attach clears, so a pull racing a switch could install
+  old-session subscriptions after the new initial sync. `readFile` and
+  `gitShow` capture the attached Manager when they start and resolve
+  against it, so a reply landing after a switch describes the repository
+  the requester asked under. The lane holds `prompt` only until admission
+  (see Reply semantics), never for a whole turn, and attached-session
+  verbs act on the activation captured when the lane was entered — so an
+  admitted turn and a navigation on the same socket are linearized rather
+  than racing the attachment swap.
 - Cross-Connection races keep the ADR 11 rule: resolution, creation, and
   disposal of an activation all run under its address reservation.
   `pendingActivations` still serializes concurrent opens of the same address.
@@ -153,7 +174,8 @@ work continues; completion-style verbs are short by construction.
 | `detach` | The Connection was removed from its activation. |
 | `executeBash` | The command completed. |
 | `setModel` / `setThinkingLevel` / `renameSession` / `navigate` / `discardSteer` | The operation completed (synchronous throws reply `ok: false` immediately). |
-| Queries (`listSessions`, `listActiveSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`, `pull`) | The query completed. |
+| Queries (`listSessions`, `listActiveSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) | The query completed. |
+| `pull` | The query completed (lane-serialized despite query semantics — see Concurrency). |
 
 `prompt` is admission-style, not completion-style: pi's `preflightResult`
 callback fires immediately before the agent run starts, and that is the
@@ -198,15 +220,40 @@ under the activation reservation:
    continuation). A premature `turn_end` is harmless because the boundary
    re-checks the predicate; `agent_settled` fires again once compaction
    ends. Within the bridge, compaction is always turn-internal
-   (auto-compaction runs before the next assistant response inside a run,
-   and pi's manual `compact()` has no bridge verb), so `isCompacting` never
-   transitions on its own — but the predicate re-check keeps that an
+   (auto-compaction runs before the next assistant response inside a run),
+   and pi's manual `compact()` has no bridge verb — but pi's extension API
+   exposes `context.compact()` (fire-and-forget) and summarizing
+   `navigateTree()`, and the bridge loads extensions into every runtime.
+   Both are declared out of scope for bridge-loaded extensions: manual
+   compaction emits no `agent_settled`, so the settle boundary never fires
+   after it — a zero-refcount activation that defers during compaction
+   would never be re-evaluated — and the compaction-start edge has the
+   same pre-observable window as an admitted prompt. The document's
+   `isCompacting` flag still holds an activation once `compaction_start`
+   has been observed; the exposure is the start edge and the missing
+   settle signal. The predicate re-check keeps turn-internal compaction an
    optimization, not a correctness assumption.
 
 Boundary 2 gives the model its best property: a client that disconnects
 mid-turn does not abort it. The paid response completes, flushes, and makes
 the session durable; the activation dies when the turn settles; a reopen
 shows the finished turn.
+
+**Admitted-work window.** pi invokes `preflightResult(true)` before the
+agent run starts, and the Document reports `isStreaming` only at the later
+`agent_start` event; an admitted prompt can also complete without ever
+starting a run (a handled extension command). In that window an activation
+can show zero connections and no streaming flag while a just-admitted
+prompt is starting — exactly the state both kill boundaries act on, and
+the window applies to `prompt` on an attached session just as much as to
+`newSession`'s first turn. Both boundaries therefore also treat *admitted
+work* as in-flight: a prompt whose admission succeeded and whose dispatch
+has not yet settled into observable state (the document streaming, or the
+dispatch completed). The Manager exposes this as a single daemon-internal
+boolean (admission succeeded on a pending dispatch); it never crosses the
+wire and does not join the client-visible state projection. When admitted
+work settles without ever producing a stream, that settle itself
+triggers the refcount→0 evaluation — otherwise the activation would leak.
 
 ### User-facing session states
 
@@ -309,11 +356,17 @@ newSession({ projectId, text, images?, model?, thinkingLevel? })
 - The client does not navigate by hand on success: the initial-sync
   `replace` push already commits the address and writes the route, so the
   URL and store update as a consequence of the server commit.
-- `model`/`thinkingLevel` are optional pre-session picks — draft state held
-  client-side (per Project) and applied when the daemon builds the runtime.
-  They are deliberately not daemon-side configuration: a shared,
-  lifetime-bearing per-Project settings object would reintroduce the
-  floating-session problem in miniature.
+- `model`/`thinkingLevel` are optional *overrides*. When absent, the
+  daemon builds the runtime with its existing resolution (settings /
+  modelRuntime defaults) — exactly what pi itself would use for a new
+  session in the Project cwd — so the common case sends neither, and a
+  user who wants a different model sets it after attach (`setModel`; one
+  click, no loss). A pre-session pick is convenience, deliberately
+  deferred from the first implementation; if it lands, it is client-side
+  per-Project state (a localStorage map, the addressIndex pattern), never
+  daemon-side configuration: a shared, lifetime-bearing per-Project
+  settings object would reintroduce the floating-session problem in
+  miniature.
 
 ### Pre-send composer needs
 
@@ -380,9 +433,13 @@ that never flushed broadcasts.
 - The candidate-mirror registry becomes the client's "transaction pending"
   state keyed by the in-flight verb, rather than a workaround for
   non-transactional switching.
-- The floating draft needs no new store concept: the composer renders the
-  same draft field, keyed per Project while no stem is set, and every
-  "New" control navigates instead of sending an RPC.
+- The floating draft needs no new store concept, but two real client
+  changes: the composer mounts at the Project home (Project set, no stem)
+  with its commit path branching to `newSession`, and the draft-persistence
+  key becomes address-derived — the session-id slot while a stem is set,
+  `project:<projectId>` when not — with the same save-before-clear ordering
+  the session slot's restore already guards against. Every "New" control
+  navigates instead of sending an RPC.
 
 ## What gets deleted
 
@@ -423,13 +480,17 @@ Connection state machine:
 - `openSession` while attached commits: attached to Y, initial sync precedes
   the reply, X lost the refcount;
 - a failed `openSession` while attached rolls back: attachment to X intact,
-  mirror untouched, no pushes sent;
+  mirror untouched, no switch-generated pushes sent;
+- a staged activation that fails out is disposed silently (no registration
+  or collection broadcast);
 - `openSession` for the attached address reattaches with a fresh initial
   sync and no refcount change;
 - `openSession` behaves identically from both states — no client-side state
   mirroring to pick a verb;
 - two state transitions on one Connection cannot interleave (serial lane),
   and a slow query verb (`gitShow`) does not block navigation;
+- a `pull` issued before a switch cannot install old-session subscriptions
+  after the new initial sync (lane serialization);
 - a prompt admission does not hold the lane — `openSession`/`abort` on the
   same socket proceed while the admitted turn is still streaming;
 - switching away from a streaming session does not abort the turn.
@@ -444,12 +505,16 @@ Lifetime:
 - a kill-boundary check racing a concurrent `openSession` does not dispose a
   reattached activation (reservation invariant, carried from ADR 11);
 - an attach completing after socket close does not pin the activation;
+- socket death between prompt admission and `agent_start` does not dispose
+  the activation (admitted-work window);
 - a second attached Connection blocks disposal.
 
 Drafts:
 
 - "New" sends nothing; the project session list is unchanged;
 - `newSession` without text is rejected;
+- `newSession` without `model`/`thinkingLevel` builds the runtime from
+  daemon defaults;
 - `newSession` with text materializes exactly one session whose first message
   is the sent text;
 - the `newSession` initial-sync push already reflects the first user
@@ -488,9 +553,12 @@ Drafts:
 - Reopening a worked-on session pays cold-open latency (deferred warmth).
 - The one accepted loss: aborted/errored first turns are not durable.
 - Protocol v2 and the client move together (as with ADR 11).
-- The daemon needs a per-Connection state-transition lane and the
-  settle-boundary sweep — the "daemon must be smart" cost, judged manageable
-  against the deleted timer machinery.
+- The daemon needs a per-Connection state-transition lane, the
+  settle-boundary sweep, and an admitted-work signal on the Manager — the
+  "daemon must be smart" cost, judged manageable against the deleted timer
+  machinery.
+- The web client mounts the composer at the Project home and re-keys draft
+  persistence by address — no new store concept, but not a free change.
 - Project-scoped queries need per-Project resource loaders (the daemon's
   current extension loading reads `process.cwd()`).
 
