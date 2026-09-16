@@ -42,3 +42,12 @@
 .handle[data-dragging="true"]::after {
 	opacity: 0.6;
 }
+
+/* While an overshoot-preview drag has the pane snapped into its overshoot
+   state (shut below min, or fullscreened above max), the accent stays
+   hidden too — the pane state is the feedback, and a strip floating at the
+   old border would be a dangling affordance. Equal specificity, later rule
+   wins over the drag/hover reveals above. */
+.handle[data-overshoot]::after {
+	opacity: 0;
+}
