@@ -6,6 +6,12 @@
 // fold — folding hides only the lazily fetched history. Inline column
 // ≥768px, slide-in overlay below. Open/close and folder expansion persist in
 // localStorage.
+//
+// Selection model: the Project header is a disclosure control, never a
+// selection target — the folder toggles folding and nothing else. Selection
+// lives only on session rows: exactly one row (the attached (projectId,
+// stem)) wears the accent tint; the folder shows accent text solely at a
+// Project home, where nothing is selected.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -37,12 +43,17 @@ const NO_SESSIONS: SessionInfo[] = [];
 const SessionRow = memo(function SessionRow({
 	session,
 	dot,
+	selected,
 	onOpen,
 	onClose,
 }: {
 	session: SessionInfo;
 	/** Green = active, orange + pulse = streaming, muted = dormant history. */
 	dot: "active" | "streaming" | "idle";
+	/** Attached session ("you are here"): the one row wearing the accent
+	 * tint. Matched on (projectId, stem) — rows always carry stems, so no
+	 * sessionId fallback is needed. */
+	selected?: boolean;
 	onOpen: (session: SessionInfo) => void;
 	/** Present only on rows with a live instance (the pinned active section):
 	 * opens the row menu whose Close item terminates it. No confirmation —
@@ -59,7 +70,13 @@ const SessionRow = memo(function SessionRow({
 		.join(" ");
 	return (
 		<div className={styles.sidebarItemWrap}>
-			<button type="button" className={styles.sidebarItem} onClick={() => onOpen(session)} title={label}>
+			<button
+				type="button"
+				className={[styles.sidebarItem, selected ? styles.sidebarItemSelected : ""].filter(Boolean).join(" ")}
+				onClick={() => onOpen(session)}
+				title={label}
+				aria-current={selected ? "page" : undefined}
+			>
 				<span className={dotCls} aria-hidden="true" />
 				<span className={styles.sidebarItemRow}>
 					<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
@@ -132,7 +149,8 @@ const SessionRow = memo(function SessionRow({
 
 const ProjectFolder = memo(function ProjectFolder({
 	project,
-	isCurrent,
+	currentProjectId,
+	currentStem,
 	expanded,
 	activeRows,
 	page,
@@ -143,7 +161,9 @@ const ProjectFolder = memo(function ProjectFolder({
 	onLoadMore,
 }: {
 	project: ProjectInfo;
-	isCurrent: boolean;
+	/** The attached (projectId, stem) pair — session-row selection input. */
+	currentProjectId: string | null;
+	currentStem: string | null;
 	expanded: boolean;
 	/** Active sessions from the global snapshot, pinned below the folder row
 	 * and always visible — the fold hides only the history. */
@@ -173,7 +193,12 @@ const ProjectFolder = memo(function ProjectFolder({
 	);
 	const groups = useMemo(() => groupSessions(history), [history]);
 
-	const rowCls = [styles.sidebarFolderRow, isCurrent ? styles.sidebarItemActive : ""].filter(Boolean).join(" ");
+	// Disclosure header, not a selection target: accent text only at a
+	// Project home (browsed without an attached session) — folder-exclusive
+	// chrome that cannot be misread as row selection.
+	const isHome = currentProjectId === project.id && currentStem === null;
+	const rowCls = [styles.sidebarFolderRow, isHome ? styles.sidebarFolderCurrent : ""].filter(Boolean).join(" ");
+	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
 
 	return (
 		<div>
@@ -204,6 +229,7 @@ const ProjectFolder = memo(function ProjectFolder({
 						key={s.sessionId}
 						session={s}
 						dot={s.isStreaming ? "streaming" : "active"}
+						selected={isSelected(s)}
 						onOpen={onOpen}
 						onClose={onClose}
 					/>
@@ -229,7 +255,13 @@ const ProjectFolder = memo(function ProjectFolder({
 								 * distinguish history rows from the pinned section above. */}
 								<div className={styles.sidebarGroupHeader}>{group.label}</div>
 								{group.items.map((s) => (
-									<SessionRow key={`${s.projectId}/${s.stem}`} session={s} dot="idle" onOpen={onOpen} />
+									<SessionRow
+										key={`${s.projectId}/${s.stem}`}
+										session={s}
+										dot="idle"
+										selected={isSelected(s)}
+										onOpen={onOpen}
+									/>
 								))}
 							</div>
 						))}
@@ -516,7 +548,8 @@ export const Sidebar = memo(function Sidebar({
 					<ProjectFolder
 						key={project.id}
 						project={project}
-						isCurrent={project.id === currentProjectId}
+						currentProjectId={currentProjectId}
+						currentStem={currentStem}
 						expanded={expanded.has(project.id)}
 						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
