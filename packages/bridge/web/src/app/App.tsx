@@ -301,6 +301,15 @@ function AppInner() {
 		[rpc],
 	);
 
+	// Row-menu Close: terminates the live instance with no confirmation. If it
+	// was the viewed session, useRpc falls back to the Project home.
+	const handleCloseSession = useCallback(
+		(projectId: string, stem: string) => {
+			rpc.closeSession(projectId, stem);
+		},
+		[rpc],
+	);
+
 	const handleOpenProject = useCallback(
 		(projectId: string) => {
 			rpc.openProject(projectId);
@@ -504,6 +513,7 @@ function AppInner() {
 					sessionPages={sessionPages}
 					onOpenSession={handleOpenSession}
 					onNewSession={handleNewSession}
+					onCloseSession={handleCloseSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={handleLoadFolder}
 					onLoadMoreFolder={handleLoadMoreFolder}

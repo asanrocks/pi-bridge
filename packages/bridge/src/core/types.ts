@@ -499,6 +499,17 @@ export interface DetachRequest {
 	verb: "detach";
 }
 
+/** Terminate the live instance for a session address. Disposes the
+ * daemon-side activation immediately — aborting and flushing any in-flight
+ * turn — regardless of idle GC policy or attached Connections; the session
+ * file survives and re-opening resumes it. Destructive and unconfirmed by
+ * design: the client sends it only on explicit user action. */
+export interface CloseSessionRequest {
+	verb: "closeSession";
+	projectId: string;
+	stem: string;
+}
+
 /** Union of all RPC request shapes (for type-safe verb methods). */
 export type RpcRequestBody =
 	| PromptRequest
@@ -518,7 +529,8 @@ export type RpcRequestBody =
 	| ReadFileRequest
 	| GitShowRequest
 	| ConsoleRequest
-	| DetachRequest;
+	| DetachRequest
+	| CloseSessionRequest;
 
 // ── Verb-specific reply shapes ───────────────────────────────────────────
 
