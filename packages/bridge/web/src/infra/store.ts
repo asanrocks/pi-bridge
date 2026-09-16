@@ -43,8 +43,9 @@ export type ComposerDraft =
 // full-panel down states. A discriminated union so renderers switch on kind.
 // `connecting` = first attempt, never yet connected. `reconnecting` = dropped
 // after a successful connect, attempt < threshold. `unreachable` = attempts
-// exhausted (still auto-retrying, but loud). `init_failed` = WS opened but the
-// init RPC (getDaemonInfo/listInstances) failed — distinct from unreachable.
+// exhausted (still auto-retrying, but loud). `init_failed` = WS opened but
+// the init RPC (getDaemonInfo + listActiveSessions) failed — distinct from
+// unreachable.
 // ---------------------------------------------------------------------------
 
 export type ConnectionState =

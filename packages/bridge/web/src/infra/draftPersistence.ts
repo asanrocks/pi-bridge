@@ -2,12 +2,10 @@
 // useDraftGuard — durable composer drafts: localStorage persistence scoped
 // per session + beforeunload warning on unsent text.
 //
-// Why session id (not instance id): an instance's *current* session changes
-// on switchSession/newSession, so an instance-keyed slot would conflate
-// drafts across sessions of the same project. Session ids are globally
-// unique, so the draft slot is the conversation identity. The session id is
-// derived from the (fresh) instances list — switchSession/newSession refresh
-// listInstances so the derived id tracks the server's current session.
+// Why session id: session ids are globally unique, so the draft slot is the
+// conversation identity (the address `(projectId, stem)` would work too, but
+// the id is what the ADR 09 cache and the initial-sync SessionRef already
+// carry). It is set on every openSession/newSession, before any draft write.
 //
 // Persistence is imperative (store.subscribe), not a reactive effect: a
 // reactive persist effect would race the restore effect on session switch

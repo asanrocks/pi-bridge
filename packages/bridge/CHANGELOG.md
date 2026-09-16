@@ -105,6 +105,8 @@
 
 ### Fixed
 
+- ADR 11 activation leak: a WebSocket that closed while its `openSession`/`newSession` RPC was still creating the pi runtime still got attached once creation finished, and nothing could ever release the dead Connection — the activation's GC never armed and the runtime leaked for the daemon's lifetime. `Connection` now tracks disposal and the daemon skips the attach (arming normal idle GC for the orphaned activation instead).
+- HTTP static serving used a string-prefix containment check (`filePath.startsWith(root)`); because `join()` resolves literal `..` components, a raw request like `GET /../web-x/secret.txt` (curl `--path-as-is`) escaped into sibling directories of `webRoot` sharing its name prefix. The check is now the same path-boundary `isContained` rule the session scanner uses.
 - Markdown typography no longer escapes shrunken host contexts: Streamdown hardcodes rem-absolute `text-*` utilities (inline code, table cells, `sup`/`sub`, `h1`–`h6`) calibrated for the 16px document baseline, so in 12px contexts (thinking prose, tool-card `.md` prose) inline code rendered at 14px inside 12px paragraphs and an `h1` at 30px. One global block of em-equivalent overrides (`web/src/app/index.css`) now scales them with the host — the 16px document is pixel-identical, mobile (14px body) follows the shrunken baseline — replacing the per-surface `.markdownContent code` / `.thinkBody code` ratios (ADR 07 styling invariants #2/#4).
 
 - Tool failures now display: the skeleton's error strip renders the tool-result error text for every card kind (previously failed `edit` calls rendered the attempted diff with no indication of failure — the body never read the result).
