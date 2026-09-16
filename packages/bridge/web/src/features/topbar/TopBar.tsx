@@ -1,7 +1,8 @@
 // ============================================================================
 // TopBar — spans only the middle column (between the left Sidebar and the
 // right HistoryPane), so it shares the viewport width with both side panes
-// instead of overlaying them. Left edge: hamburger (toggles left Sidebar).
+// instead of overlaying them. Left edge: hamburger (toggles left Sidebar;
+// mobile or desktop-with-sidebar-hidden — hover peeks the drawer there).
 // Right edge: history toggle (toggles right HistoryPane) — symmetric with the
 // hamburger so each side pane has its toggle on its own side. Between them:
 // inline-edit session name and a connection chip (down states only).
@@ -14,14 +15,25 @@ import styles from "./TopBar.module.css";
 export function TopBar({
 	name,
 	connection,
+	showSidebarToggle,
 	onSidebarToggle,
+	onSidebarHover,
 	onHistory,
 	onRename,
 	onRetry,
 }: {
 	name: string;
 	connection: ConnectionState;
+	/** Hamburger visibility: mobile, or desktop with the sidebar hidden
+	 *  (the Sidebar reports its mode to the App, which owns this flag). In
+	 *  desktop rail mode the rail's own edge is the close affordance. */
+	showSidebarToggle: boolean;
 	onSidebarToggle: () => void;
+	/** Hover signal for the peek drawer (desktop, sidebar hidden):
+	 *  true = pointer entered the hamburger, false = left it. Forwarded
+	 *  raw to the Sidebar, which owns the peek drawer and the grace timer
+	 *  bridging the hamburger → drawer gap. */
+	onSidebarHover?: (inside: boolean) => void;
 	onHistory: () => void;
 	onRename: (name: string) => Promise<void>;
 	onRetry: () => void;
@@ -40,13 +52,22 @@ export function TopBar({
 
 	return (
 		<div className={styles.topBar}>
-			<button type="button" className={styles.topBarBtn} onClick={onSidebarToggle} aria-label="Toggle sidebar">
-				<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" role="img" aria-label="Menu">
-					<rect x="3" y="6" width="18" height="2" />
-					<rect x="3" y="11" width="18" height="2" />
-					<rect x="3" y="16" width="18" height="2" />
-				</svg>
-			</button>
+			{showSidebarToggle && (
+				<button
+					type="button"
+					className={styles.topBarBtn}
+					onClick={onSidebarToggle}
+					onMouseEnter={() => onSidebarHover?.(true)}
+					onMouseLeave={() => onSidebarHover?.(false)}
+					aria-label="Toggle sidebar"
+				>
+					<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" role="img" aria-label="Menu">
+						<rect x="3" y="6" width="18" height="2" />
+						<rect x="3" y="11" width="18" height="2" />
+						<rect x="3" y="16" width="18" height="2" />
+					</svg>
+				</button>
+			)}
 			{editing ? (
 				<input
 					ref={inputRef}

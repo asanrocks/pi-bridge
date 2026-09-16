@@ -92,8 +92,10 @@ with the document (see Composer section).
 └────────────────────────────────────────────────────────────┘
 ```
 
-Below 768px both side panes become slide-over drawers (left/right
-respectively) with a dismiss backdrop; the top bar spans the full width.
+Below 768px both side panes become overlays: the Sidebar covers the
+full screen (its only two mobile modes are hidden / fullscreen); the
+HistoryPane stays a right slide-over drawer with a dismiss backdrop. The
+top bar spans the full width.
 
 ### Top bar
 
@@ -106,14 +108,42 @@ HistoryPane gutter on the right):
 
 Session name is editable (click to type, Enter to save, Escape to cancel).
 Each side pane's toggle sits on its own edge of the top bar (hamburger left,
-history right) — symmetric with the pane it controls.
+history right) — symmetric with the pane it controls. The hamburger is
+shown in mobile mode, or in desktop mode with the sidebar hidden. Desktop:
+click toggles the rail; hovering it peeks a temporary drawer — a
+full-height overlay above the top bar with the same content — that hides
+when the pointer leaves it, and whose hamburger button (at the top-bar
+hamburger's own position) pins the rail open — the same corner toggle as
+the fullscreen overlay's close button. Mobile: click opens the
+full-screen sidebar. With the sidebar open on desktop, the rail's own right
+edge is the close affordance (drag past the min width), so no hamburger is
+shown.
 
 ### Sidebar
 
-Dual-mode collapsible panel: inline column ≥768px (full viewport height,
-left rail), slide-in overlay below. The overlay is a fixed left-attached
-panel over a dimmed, click-to-close backdrop; open/close persists in
-localStorage. Two sections: **Instances** (running pi instances) above,
+Tri-mode panel: **hidden**, **rail** (inline column ≥768px, full viewport
+height, resizable), and **fullscreen** (pure overlay above the whole shell,
+close button at the hamburger's corner position, so the same screen corner
+toggles the overlay, + Esc). Desktop supports all three; mobile only hidden /
+fullscreen. The rail's resize handle doubles as a mode switch with live
+snap previews at both bounds — the on-screen state always matches what a
+release at that moment would do: dragging below the min width snaps the
+sidebar fully shut **mid-drag** (the width clamps at the min until the
+threshold, then the pane and its gutter disappear at once; dragging back
+wider within the same gesture snaps it back open), and dragging past the
+max width snaps the fullscreen overlay in (dragging back under the max
+snaps it out). The release decides with the same predicate — below the min
+hides the sidebar, past the max fullscreens it — and both overshoot
+releases restore the pre-drag width first, so backing out of either state
+is an undo. While hidden on desktop, dragging from a
+12px strip at the far left edge reveals the rail pointer-absolute — the
+implied width is the pointer's x position, and the rail appears only once
+that exceeds the min width (below it, the drag previews closed), while
+hovering the top-bar hamburger
+peeks the drawer. Rail visibility persists in localStorage, independently
+of the rail width (which the resize controller persists on its own);
+selecting a session dismisses any overlay. Inside each Project folder:
+pinned active sessions (running pi instances) above,
 **Sessions** (dormant conversation files for the attached instance's cwd)
 below.
 
