@@ -490,6 +490,7 @@ function AppInner() {
 				<Sidebar
 					projects={projects}
 					currentProjectId={currentProjectId}
+					currentStem={currentStem}
 					activeSessions={activeSessions}
 					sessionPages={sessionPages}
 					isBusy={isBusy}
