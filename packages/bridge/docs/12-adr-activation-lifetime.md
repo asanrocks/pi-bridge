@@ -28,20 +28,22 @@ implementation revealed four problems with that model.
    have no content, and an abandoned one holds a runtime (and non-durable
    entries) for the 30-minute cap.
 
-One implementation defect compounds all of these: a Connection whose socket
-closes while its `openSession` reservation is pending is still attached when
-the reservation resolves, pinning the runtime forever. Under any grace-free
-lifetime this becomes a permanent leak, so fixing it is a prerequisite of this
-ADR, not an adjunct.
+One implementation detail must move in lockstep: `attachConnection` already
+guards a socket that closed while its `openSession`/`newSession` reservation
+was pending (`conn.isDisposed` — no attach happens), but its fallback is
+`armGc`, which this ADR deletes. That fallback must become the refcount→0
+evaluation, or the orphaned activation leaks permanently under a grace-free
+lifetime. The re-pointing is a prerequisite, not an adjunct.
 
 ## Decision
 
-Three coordinated changes, all internal to the existing wire model except for
-two verb additions:
+Three coordinated changes, all internal to the existing wire model — no new
+verbs, one verb-shape change:
 
 1. **Connection state machine.** The daemon tracks each Connection as
    `detached → attached(X)`, with switching to another session as one
-   first-class transaction (`switch`), not detach-then-open.
+   first-class transaction (`openSession` while attached), not
+   detach-then-open.
 2. **Refcount lifetime.** An activation lives exactly while a client is
    attached or a turn is unsettled. No timers, no filesystem checks.
 3. **Drafts at first message.** `newSession` folds in the first prompt; an
@@ -53,22 +55,24 @@ Each Connection is one of:
 
 ```text
 detached ──openSession(X)──► attached(X)
-attached(X) ──switch(Y)──► attached(Y)
+attached(X) ──openSession(Y)──► attached(Y)
 attached(X) ──detach()──► detached
 ```
 
-- `openSession` is valid only when detached (cold boot, reconnect, returning
-  to a URL). It resolves-or-creates as in ADR 11 and attaches.
-- `switch(Y)` is valid only when attached. It is one transaction: detach from
-  X, resolve-or-create Y, attach to Y — under the address reservations of both
-  activations.
+- `openSession` is the single attach verb, valid in both states. Detached
+  (cold boot, reconnect, returning to a URL), it resolves-or-creates as in
+  ADR 11 and attaches. Attached, it is one transaction: detach from X,
+  resolve-or-create Y, attach to Y — under the address reservations of both
+  activations. One verb, not two state-dependent ones: the client is
+  URL-driven and must not mirror daemon-side state (which drifts after
+  reconnects and failed ops) just to pick a verb.
 - `detach` unambiguously means "leaving." There is no grace period, so nothing
   about the word needs disambiguation.
 
-### switch semantics
+### Switch semantics (`openSession` while attached)
 
 ```ts
-switch({ projectId, stem, cursor? })
+openSession({ projectId, stem, cursor? })    // while attached
   → { ok, session: SessionRef }
 ```
 
@@ -78,28 +82,48 @@ and the initial-sync push (replace, or cursor-aware patch carrying
 loses one refcount; if that drops it to zero and no turn is in flight, X
 becomes kill-eligible at this boundary.
 
-Rollback: a failed `switch` (unknown project, invalid stem, session-id
+Rollback: a failed switch (unknown project, invalid stem, session-id
 conflict, creation failure) sends `ok: false` and leaves the previous
 attachment to X and the client's mirror completely untouched. No push of any
 kind is sent. This is the guarantee the client currently emulates.
 
-`switch` to the address already attached is valid and is a reattach: the
-Connection re-receives a fresh initial sync (useful for cache repair), and no
-refcount changes.
+The ordering that makes this implementable: every fallible step — resolving
+or creating Y, the session-id conflict check — runs before the first
+mutation of X. Commit order is reserve Y, detach X, attach Y (initial-sync
+push), reply. Nothing after the Y push may fail; once it is emitted, the
+reply is `ok: true`.
 
-A `switch` away from a streaming session never aborts the turn. X keeps
+`openSession` for the address already attached is a reattach: the Connection
+re-receives a fresh initial sync (useful for cache repair), and no refcount
+changes.
+
+Switching away from a streaming session never aborts the turn. X keeps
 running it with zero clients and stays alive until the turn settles (see
 lifetime rule). This is the same behavior as a socket dying mid-turn.
 
 ### Concurrency
 
-- Per-Connection, RPC frames are handled serially. Two navigation verbs on one
-  socket must not interleave their reservations and attachments; the state
-  machine makes an interleaving meaningless, and the daemon enforces it
-  rather than relying on client discipline.
+- Per-Connection, a state-transition lane is handled serially: the navigation
+  verbs (`openSession`, `newSession`, `detach`) plus the
+  attached-session verbs that act on the current attachment (`prompt`,
+  `abort`, `discardSteer`, `setModel`, `setThinkingLevel`, `renameSession`,
+  `navigate`). Two state transitions on one socket must not interleave their
+  reservations and attachments; the state machine makes an interleaving
+  meaningless, and the daemon enforces it rather than relying on client
+  discipline. Query verbs (`listSessions`, `listActiveSessions`,
+  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`, `pull`) run outside
+  the lane: they are read-only against the current attachment, and a slow
+  one (a timed `gitShow` spawn, a 256 KB `readFile`) must not block
+  navigation. (`prompt` resolves at dispatch under `streamingBehavior:
+  "steer"`, so the lane is never held for a whole turn; if that ever
+  changes, the lane rule needs revisiting.)
 - Cross-Connection races keep the ADR 11 rule: resolution, creation, and
   disposal of an activation all run under its address reservation.
   `pendingActivations` still serializes concurrent opens of the same address.
+  The switch transaction's "reservations of both activations" means reusing
+  this per-address await-and-retry loop — never holding two reservations as
+  locks across the transaction, which would deadlock on opposing switches
+  (A: X→Y while B: Y→X).
 
 ## Lifetime rule
 
@@ -121,12 +145,23 @@ The rule is enforced at two event boundaries; both re-check the predicate
 under the activation reservation:
 
 1. **Refcount→0 boundary** — last `detach`, socket close of the last attached
-   Connection, or a `switch` commit that drops the old activation to zero. If
-   no turn is in flight, dispose immediately.
+   Connection, or an `openSession` switch that drops the old activation to
+   zero. If no turn is in flight, dispose immediately.
 2. **Settle boundary** — a turn ends (`isStreaming`/`isCompacting` go false)
    while the refcount is zero. Dispose at that point. Without this, the
    "socket dies mid-turn" case would leak: the refcount boundary already
    passed while the turn was in flight.
+
+   The settle signal is the existing `manager.onSettled` (fires on
+   `turn_end` and `agent_settled`; `agent_settled` is pi's full-idle
+   predicate — no agent run, compaction, branch summary, retry, or queued
+   continuation). A premature `turn_end` is harmless because the boundary
+   re-checks the predicate; `agent_settled` fires again once compaction
+   ends. Within the bridge, compaction is always turn-internal
+   (auto-compaction runs before the next assistant response inside a run,
+   and pi's manual `compact()` has no bridge verb), so `isCompacting` never
+   transitions on its own — but the predicate re-check keeps that an
+   optimization, not a correctness assumption.
 
 Boundary 2 gives the model its best property: a client that disconnects
 mid-turn does not abort it. The paid response completes, flushes, and makes
@@ -142,18 +177,22 @@ deletes a session file.
 
 An attach that completes after its Connection's socket has closed must not
 count toward the refcount. Connection liveness is checked at attach time
-(both `openSession` and `switch`); a dead Connection is not attached, and the
-activation it would have pinned is evaluated as if the attach never happened.
+(every attach path — `openSession` and `newSession`, either state); a dead
+Connection is not attached, and the activation it would have pinned is
+evaluated as if the attach never happened.
 
 ### Accepted loss
 
 One case loses data, by decision: a first turn that ends without producing
 any assistant message (user abort, provider error) and then hits a kill
-boundary. The user message was never durable — pi flushes on the first
-assistant message — and dies with the runtime. This matches intent: the user
-cancelled the turn that would have made the session real. It is the only
-data-loss case in the model, and it replaces ADR 11's 30-minute cap, which
-bounded but did not remove the same exposure.
+boundary. The user message was never durable — pi's `_persist` flushes the
+file on the first persist after an assistant entry exists, and an aborted
+turn with partial assistant content still flushes, so only a turn with no
+assistant output at all leaves nothing on disk — and the entries die with
+the runtime. This matches intent: the user cancelled the turn that would
+have made the session real. It is the only data-loss case in the model, and
+it replaces ADR 11's 30-minute cap, which bounded but did not remove the
+same exposure.
 
 ## Drafts at first message
 
@@ -172,7 +211,9 @@ newSession({ projectId, text, images? })
 
   Create and first prompt are one atomic verb. `ok` means the session was
   created, the prompt was accepted, and the Connection is attached; the
-  initial-sync push precedes the reply, as with `openSession`/`switch`. The
+  initial-sync push precedes the reply, as with `openSession`. While
+  attached, `newSession` is a transactional switch into the new session —
+  same rule, old attachment untouched on failure. The
   turn's outcome arrives through the document like any other turn. If
   creation or prompt dispatch itself fails, the activation is disposed, the
   reply is `ok: false`, and nothing is materialized — the message stays in
@@ -190,27 +231,36 @@ composer states; they do not exist at the daemon until sent.
 ## Protocol changes
 
 ```text
-+ switch({ projectId, stem, cursor? })        navigation, attached only
-~ newSession({ projectId, text, images? })    was ({ projectId })
+~ openSession({ projectId, stem, cursor? })   same shape; while attached, a
+                                              transactional switch (was:
+                                              implicit detach+open)
+~ newSession({ projectId, text, images? })    was ({ projectId }); same
+                                              transactional rule while
+                                              attached
 ~ detach()                                    same shape, immediate semantics
-- openSession while attached                  was: implicit detach+open
 ```
 
-`openSession` while attached returns an error (the client uses `switch`);
-`switch` while detached returns an error (the client uses `openSession`). The
-state machine is enforced server-side.
+The state machine is enforced server-side and is invisible on the wire: one
+attach verb serves both states, so the client never mirrors daemon-side
+state to choose a verb. What folding costs: the traffic log no longer
+distinguishes a switch from a cold open by verb — the initial-sync frame's
+`SessionRef` still shows the address change.
 
 Everything else is unchanged: push shapes, `SessionRef` on initial sync,
 compaction rules (frames carrying `session` are never compacted;
 `Connection.attach` resets the codec), ADR 09 cursor semantics, `pull`,
-attached-session verbs. A `sessions_changed` broadcast on activation
-collection replaces the current settle-only/rename-only triggers, so other
-tabs' project lists drop collected unflushed rows promptly.
+attached-session verbs. The settle and rename `sessions_changed` triggers
+are retained — the first settle after a flush still reorders the list
+(header-creation time → mtime) and surfaces file metadata — and activation
+collection adds a third, so other tabs drop collected unflushed rows
+promptly. The collection trigger is scoped: a durable session's collection
+does not change the list (its file row persists), so only an activation
+that never flushed broadcasts.
 
 ### Client simplifications
 
 - The optimistic address commit and manual restore in `openSession` are
-  deleted; a failed `switch` needs no client-side repair.
+  deleted; a failed attach in either state needs no client-side repair.
 - The candidate-mirror registry becomes the client's "transaction pending"
   state keyed by the in-flight verb, rather than a workaround for
   non-transactional switching.
@@ -232,8 +282,9 @@ The lifetime rule above is the *correctness* predicate — the state that cannot
 be reconstructed from disk. Warmth (keeping recently-worked runtimes for fast
 reopening) is a *performance* layer and is deliberately not in this ADR:
 
-- The `switch` transaction already provides the one window that matters
-  without extra machinery: X stays alive for the duration of the transaction.
+- The `openSession` switch transaction already provides the one window that
+  matters without extra machinery: X stays alive for the duration of the
+  transaction.
 - Any longer warmth needs an eviction policy (most-recently-worked per
   project, or an LRU) — a bounded cache, never a lifetime rule. Reuse by
   rebinding a Manager across sessions additionally conflicts with ADR 11's
@@ -250,15 +301,17 @@ reopening) is a *performance* layer and is deliberately not in this ADR:
 
 Connection state machine:
 
-- `switch` commits: attached to Y, initial sync precedes the reply, X lost
-  the refcount;
-- failed `switch` rolls back: attachment to X intact, mirror untouched, no
-  pushes sent;
-- `switch` to the attached address reattaches with a fresh initial sync and
-  no refcount change;
-- `openSession` while attached and `switch` while detached are errors;
-- two navigation verbs on one Connection cannot interleave (serial handling);
-- `switch` away from a streaming session does not abort the turn.
+- `openSession` while attached commits: attached to Y, initial sync precedes
+  the reply, X lost the refcount;
+- a failed `openSession` while attached rolls back: attachment to X intact,
+  mirror untouched, no pushes sent;
+- `openSession` for the attached address reattaches with a fresh initial
+  sync and no refcount change;
+- `openSession` behaves identically from both states — no client-side state
+  mirroring to pick a verb;
+- two state transitions on one Connection cannot interleave (serial lane),
+  and a slow query verb (`gitShow`) does not block navigation;
+- switching away from a streaming session does not abort the turn.
 
 Lifetime:
 
@@ -283,7 +336,11 @@ Drafts:
   accepted loss — the test asserts the loss, not a recovery);
 - a colleague can open an unflushed session by stem while its first turn is
   in flight;
-- activation collection broadcasts `sessions_changed` for the project.
+- activation collection of an unflushed session broadcasts
+  `sessions_changed` for the project; collecting a durable session does
+  not (its file row is unchanged);
+- the first settle after a flush still broadcasts `sessions_changed` (list
+  reorders from header-creation time to mtime, metadata appears);
 
 ## Consequences
 
@@ -302,20 +359,21 @@ Drafts:
 - Reopening a worked-on session pays cold-open latency (deferred warmth).
 - The one accepted loss: aborted/errored first turns are not durable.
 - Protocol v2 and the client move together (as with ADR 11).
-- The daemon needs per-Connection message serialization and the settle-
-  boundary sweep — the "daemon must be smart" cost, judged manageable against
-  the deleted timer machinery.
+- The daemon needs a per-Connection state-transition lane and the
+  settle-boundary sweep — the "daemon must be smart" cost, judged manageable
+  against the deleted timer machinery.
 
 ## Relationship to other ADRs
 
 - **ADR 11:** amended. Activation lifecycle (idle collection, GC timers,
   durable/empty check, 30-minute cap) is replaced by the refcount rule;
-  unflushed sessions shrink to the first-turn window; the navigation verb
-  list gains `switch` and a prompt-bearing `newSession`. Everything else —
+  unflushed sessions shrink to the first-turn window; the navigation
+  verbs gain a prompt-bearing `newSession`, and `openSession` gains
+  transactional switch semantics while attached. Everything else —
   Project/Session domain, addresses, containment, reservation, wire shapes —
   is retained.
 - **ADR 02 / ADR 09:** unchanged. Cursor semantics and cache identity are
-  untouched; `switch` carries the cursor the way `openSession` does.
+  untouched; the cursor travels on `openSession` in both states.
 - **ADR 10:** unchanged, *because* reuse-by-rebind is deferred. If rebind
   ever lands, ADR 10's per-Manager stamp bundle needs a rebind story.
 - **ADR 06 / ADR 08:** unaffected; this ADR stays within the typed domain
