@@ -210,6 +210,11 @@ export function useConnection(): { retry: () => void } {
 				for (const row of activeSessions) rememberAddress(row.projectId, row.stem, row.sessionId);
 				store.getState().setActiveSessions(activeSessions);
 
+				// Sidebar folder pages are connection-scoped: a reconnect may be
+				// talking to a restarted daemon, so drop them. Expanded folders see
+				// the reset (new record object) and refetch through their effects.
+				store.getState().resetSessionPages();
+
 				// Route-driven open (ADR 11). The URL is read at boot and after
 				// every reconnect; it is not a second live navigation machine.
 				const route = parseRoute(window.location.pathname);
@@ -386,6 +391,14 @@ export function useConnection(): { retry: () => void } {
 					for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
 					if (push.projectId === store.getState().currentProjectId) {
 						store.getState().replaceSessions(push.sessions, push.hasMore, push.nextCursor ?? null);
+					}
+					// Sidebar folder cache: refresh a page that is already cached;
+					// never load one just because the push arrived (folders fetch on
+					// expand). Loading pages heal via their in-flight fetch.
+					if (store.getState().sessionPages[push.projectId]?.kind === "ready") {
+						store
+							.getState()
+							.setSessionPage(push.projectId, push.sessions, push.hasMore === true, push.nextCursor ?? null);
 					}
 					return;
 				}

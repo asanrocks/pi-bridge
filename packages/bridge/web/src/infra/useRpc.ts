@@ -21,7 +21,7 @@ import { getGlobalClient } from "./client.ts";
 import { prepareSwitch } from "./entryCache.ts";
 import { projectPath, sessionPath, writeRoute } from "./routes.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
-import { loadProjectHome, SESSION_PAGE_SIZE } from "./sessionList.ts";
+import { loadProjectHome, projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
 import { getStore } from "./store.tsx";
 
 // ---------------------------------------------------------------------------
@@ -200,6 +200,48 @@ export function useRpc() {
 		}
 	}, []);
 
+	/** Fetch a sidebar folder's first session page (lazy, on expand). Also the
+	 * retry path: an existing error page is re-fetched, a ready/loading one is
+	 * left alone. A missing client (offline expand) lands in the error state
+	 * without a toast — the folder shows Retry and heals on reconnect. */
+	const loadFolderSessions = useCallback(async (projectId: string) => {
+		const store = getStore();
+		const existing = store.getState().sessionPages[projectId];
+		if (existing && existing.kind !== "error") return;
+		store.getState().beginSessionPage(projectId);
+		const reply = await rpc(
+			() => getGlobalClient()?.listSessions(projectId, SESSION_PAGE_SIZE),
+			"load sessions failed",
+		);
+		// Superseded (reconnect reset or a concurrent retry re-began the load):
+		// leave the newer state alone.
+		if (store.getState().sessionPages[projectId]?.kind !== "loading") return;
+		const page = projectPageFromReply(reply);
+		if (page) {
+			store.getState().setSessionPage(projectId, page.sessions, page.hasMore, page.nextCursor);
+		} else {
+			store.getState().setSessionPageError(projectId);
+		}
+	}, []);
+
+	/** Load the next page of a sidebar folder's history. */
+	const loadMoreFolderSessions = useCallback(async (projectId: string) => {
+		const page = getStore().getState().sessionPages[projectId];
+		if (!page || page.kind !== "ready") return;
+		const reply = await rpc(
+			() => getGlobalClient()?.listSessions(projectId, SESSION_PAGE_SIZE, page.nextCursor),
+			"load more sessions failed",
+		);
+		if (reply?.ok) {
+			const r = reply as unknown as ListSessionsReply;
+			const sessions = (r.sessions as SessionInfo[] | undefined) ?? [];
+			rememberRows(sessions);
+			getStore()
+				.getState()
+				.appendSessionPage(projectId, sessions, r.hasMore === true, r.nextCursor ?? null);
+		}
+	}, []);
+
 	const listFiles = useCallback(async (prefix: string) => {
 		return listFilesRpc(prefix);
 	}, []);
@@ -219,6 +261,8 @@ export function useRpc() {
 			detach,
 			refreshActiveSessions,
 			loadMoreSessions,
+			loadFolderSessions,
+			loadMoreFolderSessions,
 			listFiles,
 		}),
 		[
@@ -235,6 +279,8 @@ export function useRpc() {
 			detach,
 			refreshActiveSessions,
 			loadMoreSessions,
+			loadFolderSessions,
+			loadMoreFolderSessions,
 			listFiles,
 		],
 	);
