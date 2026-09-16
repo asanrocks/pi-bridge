@@ -589,10 +589,12 @@ turn with siblings — the same affordance as the inline `◀ X/Y ▶`, repointi
 focus across the async navigate so consecutive switches keep their place.
 - **Turn actions:** `Enter` toggles the focused turn's first action group,
 `e` edit-to-forks the focused user turn, `y` copies it.
-- **Switch layer (named, not positional):** `Alt+↑`/`Alt+↓` cycle attached
-instances; `Alt+N` creates one (direct when the cwd allowlist has one entry,
-surfaces the sidebar's cwd picker otherwise). Sessions are dormant history —
-no positional key; the history pane and the sidebar own them.
+- **Switch layer (named, not positional):** `Alt+↑`/`Alt+↓` cycle the
+active sessions (global snapshot, newest first — the sidebar's pinned
+order; cyclic, and from the launcher both directions open the newest);
+`Alt+N` creates one (direct when the cwd allowlist has one entry,
+surfaces the sidebar's cwd picker otherwise). Dormant history has no
+positional key; the history pane and the sidebar folders own it.
 
 | Key | Action |
 |---|---|
@@ -602,7 +604,7 @@ no positional key; the history pane and the sidebar own them.
 | `e` | edit-to-fork focused user turn |
 | `y` | copy focused turn |
 | `h` / `l` | prev / next branch sibling (focused user turn w/ siblings) |
-| `Alt+↑` / `Alt+↓` | prev / next attached instance |
+| `Alt+↑` / `Alt+↓` | prev / next active session (cyclic, newest first) |
 | `Alt+N` | new instance |
 | `/` | expand composer + focus textarea |
 | `Ctrl+P` / `Ctrl+Shift+P` | cycle model forward / backward |
@@ -614,9 +616,14 @@ modifier combos (`Ctrl+P`, `Alt+…`) pass through so they work while typing
 double-cycle). The HistoryPane is non-modal — app keys stay live while it's
 open (interactive-target guard prevents `Enter` from hijacking a focused
 graph row). Pane toggles (`Ctrl+B`, `Ctrl+H`) are global, like `Alt+…`, so
-they work while typing. Branch nav (`h`/`l` for branch siblings) and
-session/instance verbs are blocked mid-stream; the history pane's on-path
-nodes go look-only during streaming (see History pane). Turn nav (`j`/`k`)
+they work while typing. Branch nav (`h`/`l` for branch siblings) and other
+in-session verbs (navigate, edit-to-fork) are blocked mid-stream — they
+retarget the streaming instance. Session *switches* (sidebar rows,
+`Alt+↑`/`↓`, `Alt+N`) stay live: attaching is the daemon's job (it
+resolves-or-creates the activation and rebinds the connection; the previous
+session keeps streaming headless), so client-side streaming state is no
+reason to reject one. The history pane's on-path nodes go look-only during
+streaming (see History pane). Turn nav (`j`/`k`)
 stays live for reading. Touch keeps tap + scroll — keyboard shortcuts are
 desktop-only.
 
