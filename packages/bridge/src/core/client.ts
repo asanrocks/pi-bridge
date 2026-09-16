@@ -229,6 +229,11 @@ export class BridgeClient {
 		return this.call({ verb: "detach" });
 	}
 
+	/** Terminate the live instance for a session address (closeSession verb). */
+	closeSession(projectId: string, stem: string): Promise<RpcReply> {
+		return this.call({ verb: "closeSession", projectId, stem });
+	}
+
 	listFiles(prefix: string): Promise<RpcReply> {
 		return this.call({ verb: "listFiles", prefix });
 	}

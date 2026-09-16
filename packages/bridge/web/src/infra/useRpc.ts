@@ -170,6 +170,25 @@ export function useRpc() {
 		}
 	}, []);
 
+	/** Terminate a session's live instance (closeSession verb). Destructive
+	 * and unconfirmed by design — the daemon disposes the activation now
+	 * (aborting + flushing any in-flight turn); the history file survives, so
+	 * the row simply drops from the active snapshot. */
+	const closeSession = useCallback(
+		async (projectId: string, stem: string) => {
+			const reply = await rpc(() => getGlobalClient()?.closeSession(projectId, stem), "close session failed");
+			if (!reply?.ok) return;
+			const store = getStore();
+			if (store.getState().currentProjectId === projectId && store.getState().currentStem === stem) {
+				// The viewed session died: the server-side attachment is severed, so
+				// detach the stale binding and land on the Project home with a fresh
+				// history page (openProject does both).
+				await openProject(projectId);
+			}
+		},
+		[openProject],
+	);
+
 	/** Refresh the global active/streaming snapshot without side effects. */
 	const refreshActiveSessions = useCallback(async () => {
 		const reply = await getGlobalClient()?.listActiveSessions();
@@ -259,6 +278,7 @@ export function useRpc() {
 			openProject,
 			newSession,
 			detach,
+			closeSession,
 			refreshActiveSessions,
 			loadMoreSessions,
 			loadFolderSessions,
@@ -277,6 +297,7 @@ export function useRpc() {
 			openProject,
 			newSession,
 			detach,
+			closeSession,
 			refreshActiveSessions,
 			loadMoreSessions,
 			loadFolderSessions,

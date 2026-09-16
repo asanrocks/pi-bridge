@@ -863,6 +863,111 @@ describe("daemon: idle GC", () => {
 	});
 });
 
+describe("daemon: closeSession", () => {
+	it("terminates the activation (even mid-stream), drops it from the active snapshot, and allows a fresh open", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let factoryCalls = 0;
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				factoryCalls++;
+				const stub = makeStubManager(opts ?? {});
+				stubs.set(stub.sessionId, stub);
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "kill-1");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		const stub = [...stubs.values()][stubs.size - 1];
+		expect(stub).toBeDefined();
+
+		// A close is a kill, not a GC: mid-stream must not defer it.
+		stub!.handles.setStreaming(true);
+		const closeId = send(ws, { verb: "closeSession", projectId, stem });
+		expect((await waitForReply(frames, closeId)).ok).toBe(true);
+		expect(stub!.handles.disposed()).toBe(true);
+
+		// The global snapshot drops the row; the history file survives.
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "active_sessions_changed" &&
+				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+		);
+		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
+
+		// Closing again fails (nothing is active) and re-opening resumes fresh.
+		expect((await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem }))).ok).toBe(false);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		await waitForPush(frames, "replace");
+		expect(factoryCalls).toBe(2);
+
+		ws.close();
+	});
+
+	it("rejects unknown projects and never-active sessions", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		writeSessionFile(a, agentDir, "kill-2");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const unknownProject = (await waitForReply(
+			frames,
+			send(ws, { verb: "closeSession", projectId: "nope", stem: "anything" }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(unknownProject.ok).toBe(false);
+		expect(unknownProject.error).toContain("Unknown project");
+
+		const inactive = await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem: "kill-2" }));
+		expect(inactive.ok).toBe(false);
+
+		ws.close();
+	});
+
+	it("severs attached connections without stalling the registry", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem1 = writeSessionFile(a, agentDir, "kill-3");
+		const stem2 = writeSessionFile(a, agentDir, "kill-4");
+
+		// Two connections share one activation; one kills it.
+		const killer = await openClient(port);
+		const killerFrames = collectFrames(killer);
+		expect((await waitForReply(killerFrames, send(killer, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(
+			true,
+		);
+		const victim = await openClient(port);
+		const victimFrames = collectFrames(victim);
+		expect((await waitForReply(victimFrames, send(victim, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(
+			true,
+		);
+
+		expect(
+			(await waitForReply(killerFrames, send(killer, { verb: "closeSession", projectId, stem: stem1 }))).ok,
+		).toBe(true);
+
+		// The still-"attached" victim can navigate away and detach afterwards:
+		// the severed mapping must not arm GC on the disposed activation or
+		// reject the switch.
+		expect((await waitForReply(victimFrames, send(victim, { verb: "openSession", projectId, stem: stem2 }))).ok).toBe(
+			true,
+		);
+		await waitForPush(victimFrames, "replace");
+		expect((await waitForReply(victimFrames, send(victim, { verb: "detach" }))).ok).toBe(true);
+
+		killer.close();
+		victim.close();
+	});
+});
+
 describe("daemon: session listing", () => {
 	it("paginates by the compound cursor and reports the unflushed active session", async () => {
 		const { agentDir, a } = makeProjectRoots();

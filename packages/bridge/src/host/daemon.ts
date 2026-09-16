@@ -524,25 +524,48 @@ export class Daemon {
 			this.armGc(activation);
 			return;
 		}
-		activation.collecting = (async () => {
-			// Dispose first, then release the address. Releasing it before disposal
-			// would let a concurrent openSession create a second activation for a
-			// session whose first Manager is still shutting down, violating the
-			// ADR 11 exclusivity invariant. The address (and its pending-open
-			// promise) stays reserved for the whole disposal.
-			await activation.manager.dispose();
-			this.activations.delete(activation.id);
-			const key = addressKey(activation.ref.projectId, activation.ref.stem);
-			if (this.activationByAddress.get(key) === activation.id) this.activationByAddress.delete(key);
-			const owner = this.sessionOwnerById.get(activation.ref.sessionId);
-			if (owner && owner.projectId === activation.ref.projectId && owner.stem === activation.ref.stem) {
-				this.sessionOwnerById.delete(activation.ref.sessionId);
-			}
-		})().finally(() => {
+		await this.collectActivation(activation);
+	}
+
+	/** Dispose `activation` under its `collecting` reservation. Shared by idle
+	 * GC (via maybeCollect, after eligibility checks) and the explicit
+	 * closeSession verb (no eligibility checks — a close is a user-initiated
+	 * kill, so streaming state and attachments do not defer it). */
+	private async collectActivation(activation: Activation): Promise<void> {
+		if (activation.collecting !== null) {
+			await activation.collecting;
+			return;
+		}
+		this.cancelGc(activation);
+		activation.collecting = this.disposeActivation(activation).finally(() => {
 			activation.collecting = null;
 			this.broadcastActiveSessions();
 		});
 		await activation.collecting;
+	}
+
+	private async disposeActivation(activation: Activation): Promise<void> {
+		// Dispose first, then release the address. Releasing it before disposal
+		// would let a concurrent openSession create a second activation for a
+		// session whose first Manager is still shutting down, violating the
+		// ADR 11 exclusivity invariant. The address (and its pending-open
+		// promise) stays reserved for the whole disposal.
+		await activation.manager.dispose();
+		this.activations.delete(activation.id);
+		const key = addressKey(activation.ref.projectId, activation.ref.stem);
+		if (this.activationByAddress.get(key) === activation.id) this.activationByAddress.delete(key);
+		const owner = this.sessionOwnerById.get(activation.ref.sessionId);
+		if (owner && owner.projectId === activation.ref.projectId && owner.stem === activation.ref.stem) {
+			this.sessionOwnerById.delete(activation.ref.sessionId);
+		}
+		// Sever the Connection→activation mappings so a later detach/release on
+		// a still-attached Connection cannot arm GC on the disposed activation.
+		// The Connections keep their last-received document (ADR 11 defers a
+		// per-attachment death push) until they navigate or reconnect.
+		for (const conn of activation.connections) {
+			this.connectionActivation.delete(conn);
+		}
+		activation.connections.clear();
 	}
 
 	private attachConnection(conn: Connection, activation: Activation, cursor: PrefixCursor | null): void {
@@ -652,6 +675,26 @@ export class Daemon {
 		detach: (conn) => {
 			this.releaseConnection(conn);
 			conn.detach();
+		},
+
+		closeSession: async (projectId, stem) => {
+			try {
+				const project = this.projects.get(projectId);
+				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
+				const normalized = normalizeStem(stem);
+				const activationId = this.activationByAddress.get(addressKey(projectId, normalized));
+				const activation = activationId !== undefined ? this.activations.get(activationId) : undefined;
+				if (!activation || activation.collecting !== null) {
+					return { ok: false, error: `Session is not active: ${normalized}` };
+				}
+				await this.collectActivation(activation);
+				// Refresh the Project's first page everywhere: the kill's flush
+				// (and an unflushed session's disappearance) reorders history.
+				this.broadcastSessionsChanged(projectId);
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
 		},
 
 		sessionsChanged: (projectId) => this.broadcastSessionsChanged(projectId),

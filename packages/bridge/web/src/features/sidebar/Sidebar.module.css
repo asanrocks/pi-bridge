@@ -161,6 +161,79 @@
 	background: var(--color-muted);
 }
 
+/* Row wrapper: positioning context for the hover-revealed row-menu
+   button. Wraps the row button (a button cannot contain the menu button). */
+.sidebarItemWrap {
+	position: relative;
+}
+
+/* Row-menu (hamburger) button — revealed on row hover / keyboard focus,
+   overlaying the timestamp slot. Solid muted background matches the row's
+   hover surface so the time beneath doesn't bleed through. pointer-events
+   track visibility so a hidden button never swallows row clicks. */
+.sidebarMenuBtn {
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 22px;
+	height: 22px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	background: var(--color-muted);
+	color: var(--color-muted-foreground);
+	border: none;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.sidebarItemWrap:hover .sidebarMenuBtn,
+.sidebarMenuBtn:focus-visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Touch devices have no hover, and a tap never triggers :focus-visible — the
+   hover reveal would make the menu unreachable. Always show it instead, and
+   reserve its slot in the row layout so name + time never run underneath. */
+@media (hover: none) {
+	.sidebarMenuBtn {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.sidebarItem {
+		padding-right: 32px;
+	}
+}
+
+.sidebarMenuBtn:hover {
+	color: var(--color-foreground);
+}
+
+/* Destructive row-menu item: red — Close terminates the live instance. */
+.sidebarMenuClose {
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	font-family: inherit;
+	background: none;
+	color: var(--color-error);
+	border: none;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	text-align: left;
+	user-select: none;
+}
+
+.sidebarMenuClose:hover {
+	background: var(--color-muted);
+	color: var(--color-error-hover);
+}
+
 /* Group label: a quiet sentence-case sub-label under its section, flush
    with the rows. No hairlines — hierarchy is gap + weight only (bold
    uppercase section header above, regular sentence-case label here). */
