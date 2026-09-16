@@ -37,13 +37,11 @@ const NO_SESSIONS: SessionInfo[] = [];
 const SessionRow = memo(function SessionRow({
 	session,
 	dot,
-	disabled,
 	onOpen,
 }: {
 	session: SessionInfo;
 	/** Green = active, orange + pulse = streaming, muted = dormant history. */
 	dot: "active" | "streaming" | "idle";
-	disabled: boolean;
 	onOpen: (session: SessionInfo) => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
@@ -54,13 +52,7 @@ const SessionRow = memo(function SessionRow({
 		.filter(Boolean)
 		.join(" ");
 	return (
-		<button
-			type="button"
-			className={styles.sidebarItem}
-			onClick={() => onOpen(session)}
-			disabled={disabled}
-			title={label}
-		>
+		<button type="button" className={styles.sidebarItem} onClick={() => onOpen(session)} title={label}>
 			<span className={dotCls} aria-hidden="true" />
 			<span className={styles.sidebarItemRow}>
 				<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
@@ -80,7 +72,6 @@ const ProjectFolder = memo(function ProjectFolder({
 	expanded,
 	activeRows,
 	page,
-	isBusy,
 	onToggle,
 	onOpen,
 	onLoad,
@@ -93,7 +84,6 @@ const ProjectFolder = memo(function ProjectFolder({
 	 * and always visible — the fold hides only the history. */
 	activeRows: SessionInfo[];
 	page: SessionFolderPage | undefined;
-	isBusy: boolean;
 	onToggle: (projectId: string) => void;
 	onOpen: (session: SessionInfo) => void;
 	onLoad: (projectId: string) => void;
@@ -143,13 +133,7 @@ const ProjectFolder = memo(function ProjectFolder({
 			    history. The live dot is the signal; no other chrome. */}
 			<div className={styles.sidebarFolderChildren}>
 				{activeRows.map((s) => (
-					<SessionRow
-						key={s.sessionId}
-						session={s}
-						dot={s.isStreaming ? "streaming" : "active"}
-						disabled={isBusy}
-						onOpen={onOpen}
-					/>
+					<SessionRow key={s.sessionId} session={s} dot={s.isStreaming ? "streaming" : "active"} onOpen={onOpen} />
 				))}
 			</div>
 			{expanded && (
@@ -170,13 +154,7 @@ const ProjectFolder = memo(function ProjectFolder({
 							<div key={group.label}>
 								{showHeaders && <div className={styles.sidebarGroupHeader}>{group.label}</div>}
 								{group.items.map((s) => (
-									<SessionRow
-										key={`${s.projectId}/${s.stem}`}
-										session={s}
-										dot="idle"
-										disabled={isBusy}
-										onOpen={onOpen}
-									/>
+									<SessionRow key={`${s.projectId}/${s.stem}`} session={s} dot="idle" onOpen={onOpen} />
 								))}
 							</div>
 						))}
@@ -201,7 +179,6 @@ export const Sidebar = memo(function Sidebar({
 	currentStem,
 	activeSessions,
 	sessionPages,
-	isBusy,
 	onOpenSession,
 	onNewSession,
 	onShowLauncher,
@@ -219,7 +196,6 @@ export const Sidebar = memo(function Sidebar({
 	activeSessions: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
-	isBusy: boolean;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	onNewSession: (projectId: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
@@ -352,15 +328,17 @@ export const Sidebar = memo(function Sidebar({
 		};
 	}, [isWide, open]);
 
+	// Opening a session is an attach (ADR 11): the daemon resolves-or-creates
+	// the activation and rebinds this connection — no isBusy guard, the old
+	// attachment keeps streaming headless.
 	const handleOpenSession = useCallback(
 		(session: SessionInfo) => {
-			if (isBusy) return;
 			// Passing the id lets the client seed a cache cursor (ADR 09) instead
 			// of falling back to a full replace on every UI session switch.
 			onOpenSession(session.projectId, session.stem, session.sessionId);
 			if (!isWide) setOpen(false);
 		},
-		[isBusy, isWide, onOpenSession],
+		[isWide, onOpenSession],
 	);
 
 	const activeByProject = useMemo(() => {
@@ -452,7 +430,6 @@ export const Sidebar = memo(function Sidebar({
 						expanded={expanded.has(project.id)}
 						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
-						isBusy={isBusy}
 						onToggle={toggleFolder}
 						onOpen={handleOpenSession}
 						onLoad={onLoadFolder}
