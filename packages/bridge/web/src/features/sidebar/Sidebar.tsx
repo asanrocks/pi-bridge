@@ -38,13 +38,19 @@ const SessionRow = memo(function SessionRow({
 	session,
 	dot,
 	onOpen,
+	onClose,
 }: {
 	session: SessionInfo;
 	/** Green = active, orange + pulse = streaming, muted = dormant history. */
 	dot: "active" | "streaming" | "idle";
 	onOpen: (session: SessionInfo) => void;
+	/** Present only on rows with a live instance (the pinned active section):
+	 * opens the row menu whose Close item terminates it. No confirmation —
+	 * the kill is the point. */
+	onClose?: (session: SessionInfo) => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
+	const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
 	const dotCls = [
 		styles.sidebarLiveDot,
 		dot === "streaming" ? styles.sidebarLiveDotStreaming : dot === "idle" ? styles.sidebarDotIdle : "",
@@ -52,13 +58,71 @@ const SessionRow = memo(function SessionRow({
 		.filter(Boolean)
 		.join(" ");
 	return (
-		<button type="button" className={styles.sidebarItem} onClick={() => onOpen(session)} title={label}>
-			<span className={dotCls} aria-hidden="true" />
-			<span className={styles.sidebarItemRow}>
-				<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
-				<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
-			</span>
-		</button>
+		<div className={styles.sidebarItemWrap}>
+			<button type="button" className={styles.sidebarItem} onClick={() => onOpen(session)} title={label}>
+				<span className={dotCls} aria-hidden="true" />
+				<span className={styles.sidebarItemRow}>
+					<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
+					<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
+				</span>
+			</button>
+			{onClose && (
+				<button
+					type="button"
+					className={styles.sidebarMenuBtn}
+					aria-label="Session menu"
+					aria-haspopup="menu"
+					aria-expanded={menuAnchor !== null}
+					onClick={(e) => {
+						e.stopPropagation();
+						setMenuAnchor(e.currentTarget.getBoundingClientRect());
+					}}
+				>
+					<svg
+						viewBox="0 0 16 16"
+						width="14"
+						height="14"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="1.5"
+						strokeLinecap="round"
+						aria-hidden="true"
+					>
+						<path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+					</svg>
+				</button>
+			)}
+			{menuAnchor && (
+				<>
+					<button
+						type="button"
+						aria-label="Close menu"
+						className={styles.portalOverlay}
+						onClick={() => setMenuAnchor(null)}
+					/>
+					<div
+						className={styles.cwdPopover}
+						style={{
+							position: "fixed",
+							top: menuAnchor.bottom + 4,
+							left: Math.max(8, Math.min(menuAnchor.right - 130, window.innerWidth - 130 - 8)),
+							width: 130,
+						}}
+					>
+						<button
+							type="button"
+							className={styles.sidebarMenuClose}
+							onClick={() => {
+								setMenuAnchor(null);
+								onClose?.(session);
+							}}
+						>
+							Close
+						</button>
+					</div>
+				</>
+			)}
+		</div>
 	);
 });
 
@@ -74,6 +138,7 @@ const ProjectFolder = memo(function ProjectFolder({
 	page,
 	onToggle,
 	onOpen,
+	onClose,
 	onLoad,
 	onLoadMore,
 }: {
@@ -86,6 +151,9 @@ const ProjectFolder = memo(function ProjectFolder({
 	page: SessionFolderPage | undefined;
 	onToggle: (projectId: string) => void;
 	onOpen: (session: SessionInfo) => void;
+	/** Terminate a live instance (row menu Close). Passed only to the pinned
+	 * active rows — dormant history has no instance to kill. */
+	onClose: (session: SessionInfo) => void;
 	onLoad: (projectId: string) => void;
 	onLoadMore: (projectId: string) => void;
 }) {
@@ -132,7 +200,13 @@ const ProjectFolder = memo(function ProjectFolder({
 			    history. The live dot is the signal; no other chrome. */}
 			<div className={styles.sidebarFolderChildren}>
 				{activeRows.map((s) => (
-					<SessionRow key={s.sessionId} session={s} dot={s.isStreaming ? "streaming" : "active"} onOpen={onOpen} />
+					<SessionRow
+						key={s.sessionId}
+						session={s}
+						dot={s.isStreaming ? "streaming" : "active"}
+						onOpen={onOpen}
+						onClose={onClose}
+					/>
 				))}
 			</div>
 			{expanded && (
@@ -182,6 +256,7 @@ export const Sidebar = memo(function Sidebar({
 	sessionPages,
 	onOpenSession,
 	onNewSession,
+	onCloseSession,
 	onShowLauncher,
 	onLoadFolder,
 	onLoadMoreFolder,
@@ -199,6 +274,8 @@ export const Sidebar = memo(function Sidebar({
 	sessionPages: Record<string, SessionFolderPage>;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	onNewSession: (projectId: string) => void;
+	/** Terminate a session's live instance (row menu Close, no confirmation). */
+	onCloseSession: (projectId: string, stem: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
 	onShowLauncher: () => void;
 	onLoadFolder: (projectId: string) => void;
@@ -347,6 +424,13 @@ export const Sidebar = memo(function Sidebar({
 		[isWide, onOpenSession],
 	);
 
+	const handleCloseSession = useCallback(
+		(session: SessionInfo) => {
+			onCloseSession(session.projectId, session.stem);
+		},
+		[onCloseSession],
+	);
+
 	const activeByProject = useMemo(() => {
 		const map = new Map<string, SessionInfo[]>();
 		for (const s of activeSessions) {
@@ -438,6 +522,7 @@ export const Sidebar = memo(function Sidebar({
 						page={sessionPages[project.id]}
 						onToggle={toggleFolder}
 						onOpen={handleOpenSession}
+						onClose={handleCloseSession}
 						onLoad={onLoadFolder}
 						onLoadMore={onLoadMoreFolder}
 					/>

@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import type {
 	ClientMessage,
+	CloseSessionRequest,
 	GetDaemonInfoReply,
 	GitShowRequest,
 	ImageContent,
@@ -71,6 +72,10 @@ export interface DaemonVerbs {
 	newSession: (projectId: string, conn: Connection) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Release this Connection's attachment (activation stays alive for GC). */
 	detach: (conn: Connection) => void;
+	/** Terminate the live instance for `(projectId, stem)` — a kill, not a
+	 * GC: disposes the activation now, ignoring idle policy, streaming state,
+	 * and attached Connections. */
+	closeSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
 	/** Broadcast a Project's refreshed first page (rename, settle). */
 	sessionsChanged: (projectId: string) => void;
 	listFiles: (prefix: string, cwd?: string) => Array<{ path: string; isDirectory: boolean }>;
@@ -278,6 +283,15 @@ export class Connection {
 				case "detach": {
 					this.daemonVerbs.detach(this);
 					this.sendReply(id, true);
+					break;
+				}
+				case "closeSession": {
+					const m = msg as unknown as CloseSessionRequest;
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
+					const result = await this.daemonVerbs.closeSession(m.projectId, m.stem);
+					if (result.ok) this.sendReply(id, true);
+					else this.sendReply(id, false, result.error);
 					break;
 				}
 
