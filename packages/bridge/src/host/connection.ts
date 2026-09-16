@@ -96,6 +96,7 @@ export class Connection {
 	private handle: ConnectionHandle;
 	private _attachedManager: Manager | null = null;
 	private _attachedSession: SessionRef | null = null;
+	private _disposed = false;
 
 	constructor(ws: WebSocket, daemonVerbs: DaemonVerbs, logger: TrafficLogger | null, devMode: boolean) {
 		this.ws = ws;
@@ -143,6 +144,13 @@ export class Connection {
 		return this._attachedSession;
 	}
 
+	/** True once the socket closed and the Connection was disposed. A disposed
+	 * Connection must never be attached: nothing would ever release it, so the
+	 * daemon skips the attach and lets the activation idle-collect instead. */
+	get isDisposed(): boolean {
+		return this._disposed;
+	}
+
 	attach(manager: Manager, session: SessionRef, cursor?: PrefixCursor | null): void {
 		this.detach();
 		this._attachedManager = manager;
@@ -161,6 +169,7 @@ export class Connection {
 	}
 
 	dispose(): void {
+		this._disposed = true;
 		this.detach();
 	}
 

@@ -25,6 +25,7 @@ import { createManager, type Manager } from "./manager.ts";
 import {
 	buildProjects,
 	containedSessionFile,
+	isContained,
 	normalizeStem,
 	type ProjectConfig,
 	resolveStemPath,
@@ -545,6 +546,15 @@ export class Daemon {
 	}
 
 	private attachConnection(conn: Connection, activation: Activation, cursor: PrefixCursor | null): void {
+		// A socket that closed while its openSession/newSession RPC was in
+		// flight: the close handler already ran (and released nothing — the
+		// connection was not yet attached), so attaching now would pin the
+		// activation forever with an unreleasable Connection. Arm GC instead;
+		// the orphaned activation collects on the normal idle path.
+		if (conn.isDisposed) {
+			this.armGc(activation);
+			return;
+		}
 		this.releaseConnection(conn);
 		conn.attach(activation.manager, activation.ref, cursor);
 		activation.connections.add(conn);
@@ -722,7 +732,11 @@ export class Daemon {
 
 			const filePath = join(root, path);
 
-			if (!filePath.startsWith(root)) {
+			// Path-boundary containment: `join()` resolves literal `..`
+			// components, and a plain string-prefix check would pass
+			// `<parentOfRoot>/root-x/...` against root `/.../root` — exposing
+			// sibling directories of webRoot (ADR 11 security boundary rule).
+			if (!isContained(root, filePath)) {
 				res.writeHead(403);
 				res.end("Forbidden");
 				return;
