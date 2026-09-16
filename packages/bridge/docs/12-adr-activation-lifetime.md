@@ -39,7 +39,9 @@ lifetime. The re-pointing is a prerequisite, not an adjunct.
 
 Three coordinated changes, all internal to the existing wire model — no new
 verbs, three verb changes (`openSession` gains switch semantics, `newSession`
-gains a required first message, `listFiles` is re-addressed to the Project):
+gains a required first message, `listFiles` is re-addressed to the Project),
+plus one new push (`session_closed`, so a `closeSession` kill notifies
+attached viewers instead of freezing their tabs):
 
 1. **Connection state machine.** The daemon tracks each Connection as
    `detached → attached(X)`, with switching to another session as one
@@ -58,6 +60,7 @@ Each Connection is one of:
 detached ──openSession(X)──► attached(X)
 attached(X) ──openSession(Y)──► attached(Y)
 attached(X) ──detach()──► detached
+attached(X) ──session_closed(X)──► detached   (server-pushed)
 ```
 
 - `openSession` is the single attach verb, valid in both states. Detached
@@ -81,7 +84,10 @@ Commit: the Connection is attached to Y, its lazy subscriptions are cleared,
 and the initial-sync push (replace, or cursor-aware patch carrying
 `SessionRef`) is sent before the successful RPC reply. The old activation X
 loses one refcount; if that drops it to zero and no turn is in flight, X
-becomes kill-eligible at this boundary.
+becomes kill-eligible at this boundary — an evaluation the switch itself
+owns (see below). A newly created Y registers at commit, after the
+initial-sync push and before the reply, so its registration broadcast
+follows the transaction instead of crossing it.
 
 Rollback: a failed switch (unknown project, invalid stem, session-id
 conflict, creation failure) sends `ok: false` and leaves the previous
@@ -108,15 +114,28 @@ into one the client never learned about. A synchronous throw while
 attaching Y, before any frame was emitted, is the one post-detach failure:
 re-attach X, then reply `ok: false`.
 
-A created-but-not-yet-committed Y is *staged*: it is resolvable by address
-(concurrent opens of the same address share it, per the ADR 11 reservation)
-but is not yet part of the publicly projected activation set, and its
-registration broadcasts are deferred until the transaction commits.
-Publishing at registration — the ADR 11 behavior — would leak a target that
-a later step can still fail out of, breaking the transaction-scoped
-no-push guarantee. A staged activation that fails out is disposed silently:
-it was never part of the publicly projected set, so neither its creation
-nor its disposal broadcasts anything.
+That rollback must not race X's own kill boundary: detaching X drops its
+refcount to zero — exactly the state the refcount→0 boundary acts on — and
+the transaction may not hold X's reservation as a lock to prevent it. So
+the switch *owns* X's refcount→0 evaluation for its duration: deferred
+while the transaction is pending, run at commit (re-checking the predicate
+under X's reservation, so a Connection that attached in the interim keeps
+X alive), cancelled at rollback. The re-attach cannot race a disposal.
+
+A created-but-not-yet-committed Y is *staged*: it exists only as the
+address's `pendingActivations` reservation — held from creation until the
+transaction commits or rolls back, never registered in the public
+activation index — and its registration (and registration broadcasts) is
+deferred to commit. Publishing at registration — the ADR 11 behavior —
+would leak a target that a later step can still fail out of, breaking the
+transaction-scoped no-push guarantee. A concurrent open of the same address
+does not share the staged activation; it awaits the reservation's outcome:
+on commit it attaches to the now-public activation, on rollback it
+re-resolves as if the staged activation never existed (create from file,
+or fail). An activation is therefore either pending — invisible to everyone
+but its creating transaction — or public; there is no third state to
+protect. A staged activation that fails out is disposed silently: it was
+never public, so neither its creation nor its disposal broadcasts anything.
 
 `openSession` for the address already attached is a reattach: the Connection
 re-receives a fresh initial sync (useful for cache repair), and no refcount
@@ -137,16 +156,24 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   state machine makes an interleaving
   meaningless, and the daemon enforces it rather than relying on client
   discipline. Query verbs (`listSessions`, `listActiveSessions`,
-  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) run outside the
-  lane: they are read-only against the current attachment, and a slow one
-  (a timed `gitShow` spawn, a 256 KB `readFile`) must not block
-  navigation. `pull` is the exception: fast (a synchronous in-memory
-  read) but not read-only — it mutates the Connection's lazy-subscription
-  set, which attach clears, so a pull racing a switch could install
-  old-session subscriptions after the new initial sync. `readFile` and
-  `gitShow` capture the attached Manager when they start and resolve
-  against it, so a reply landing after a switch describes the repository
-  the requester asked under. The lane holds `prompt` only until admission
+  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) and `executeBash`
+  run outside the lane: a slow one (a timed `gitShow` spawn, a 256 KB
+  `readFile`, a user `!` command that runs for minutes) must not block
+  navigation. The queries are read-only against the current attachment;
+  `readFile`, `gitShow`, and `executeBash` capture the attached Manager
+  when they start and resolve against it, so a reply landing after a
+  switch describes the repository the requester asked under.
+  `executeBash` is the mutating exception: its `bash_execution` entry
+  lands in the captured session's document even if the requester switched
+  away — the same "switching away never aborts work" rule as a streaming
+  turn — and an in-flight command counts as admitted work (see Lifetime
+  rule), because it is neither streaming nor compacting and would
+  otherwise leave the activation kill-eligible mid-command. `pull` is the
+  reverse exception: fast (a synchronous in-memory read) like a query,
+  but lane-serialized because it is not read-only — it mutates the
+  Connection's lazy-subscription set, which attach clears, so a pull
+  racing a switch could install old-session subscriptions after the new
+  initial sync. The lane holds `prompt` only until admission
   (see Reply semantics), never for a whole turn, and attached-session
   verbs act on the activation captured when the lane was entered — so an
   admitted turn and a navigation on the same socket are linearized rather
@@ -158,6 +185,25 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   this per-address await-and-retry loop — never holding two reservations as
   locks across the transaction, which would deadlock on opposing switches
   (A: X→Y while B: Y→X).
+
+### closeSession
+
+`closeSession` is unchanged as a verb — a user-initiated kill that ignores
+the lifetime predicate, streaming state, admitted work, and attachments —
+but it no longer silently severs the Connections attached to the killed
+activation (ADR 11's frozen-attachment gap). Each attached Connection
+receives a push before the severing:
+
+```text
+{ kind: "session_closed", projectId, stem }
+```
+
+and transitions to `detached`. The client clears its mirror and returns to
+the Project home — the same fallback the killer's own tab already uses, so
+one code path serves killer and viewers. The push is scoped to explicit
+kills: a runtime that dies on its own under an attached socket (an
+extension crash) remains ADR 11's known gap, because detecting that is
+separate machinery.
 
 ### Reply semantics
 
@@ -249,9 +295,12 @@ the window applies to `prompt` on an attached session just as much as to
 `newSession`'s first turn. Both boundaries therefore also treat *admitted
 work* as in-flight: a prompt whose admission succeeded and whose dispatch
 has not yet settled into observable state (the document streaming, or the
-dispatch completed). The Manager exposes this as a single daemon-internal
-boolean (admission succeeded on a pending dispatch); it never crosses the
-wire and does not join the client-visible state projection. When admitted
+dispatch completed), and an `executeBash` whose command has not yet
+appended its entry — ADR 11's idle delay bounded the mid-command detach;
+the admitted-work flag bounds it instead. The Manager exposes this as a
+single daemon-internal boolean (admission succeeded on a pending dispatch);
+it never crosses the wire and does not join the client-visible state
+projection. When admitted
 work settles without ever producing a stream, that settle itself
 triggers the refcount→0 evaluation — otherwise the activation would leak.
 
@@ -275,7 +324,11 @@ it does not mean "someone is viewing this now".
 Disposal always holds the address reservation from check through completion
 (the ADR 11 dispose-race invariant — now the only locking rule, since there is
 no timer to race). Disposal is the normal Manager disposal path and never
-deletes a session file.
+deletes a session file. Ordering at the settle boundary: the Manager
+notifies settled listeners before the turn's reconcile/seal patches are
+emitted, so the boundary's disposal — asynchronous by construction, since
+the predicate re-check awaits the reservation — cannot preempt them; the
+seal patches reach the attached Connections first, disposal starts after.
 
 ### Dead-connection guard
 
@@ -406,19 +459,31 @@ composer states; they do not exist at the daemon until sent.
                                               paths belong to the attached
                                               session's repository
 ~ detach()                                    same shape, immediate semantics
++ session_closed { projectId, stem }          new push: `closeSession` sends
+                                              it to each Connection attached
+                                              to the killed activation; the
+                                              Connection transitions to
+                                              detached and the client falls
+                                              back to the Project home
 ```
 
-The state machine is enforced server-side and is invisible on the wire: one
-attach verb serves both states, so the client never mirrors daemon-side
-state to choose a verb. What folding costs: the traffic log no longer
+The state machine is enforced server-side and is invisible on the wire —
+one attach verb serves both states, so the client never mirrors
+daemon-side state to choose a verb — with one visible edge: `closeSession`'s
+forced detach arrives as the `session_closed` push, not as a verb the
+client had to pick. What folding costs: the traffic log no longer
 distinguishes a switch from a cold open by verb — the initial-sync frame's
 `SessionRef` still shows the address change.
 
-Everything else is unchanged: push shapes, `SessionRef` on initial sync,
-compaction rules (frames carrying `session` are never compacted;
-`Connection.attach` resets the codec), ADR 09 cursor semantics, `pull`,
-and the attached-session verbs other than the `listFiles` re-addressing
-above. The settle and rename `sessions_changed` triggers
+Everything else is unchanged: `SessionRef` on initial sync, compaction
+rules (frames carrying `session` are never compacted; `Connection.attach`
+resets the codec), ADR 09 cursor semantics, `pull`, and the
+attached-session verbs other than the `listFiles` re-addressing
+above. `session_closed` is the only wire addition beyond the three verb
+changes; existing push shapes are untouched. (`executeBash` moving out of
+the lane is internal — its reply shape is unchanged.)
+
+The settle and rename `sessions_changed` triggers
 are retained — the first settle after a flush still reorders the list
 (header-creation time → mtime) and surfaces file metadata — and activation
 collection adds a third, so other tabs drop collected unflushed rows
@@ -430,6 +495,14 @@ that never flushed broadcasts.
 
 - The optimistic address commit and manual restore in `openSession` are
   deleted; a failed attach in either state needs no client-side repair.
+  The client does not write the route on click either: the initial-sync
+  push commits the address and writes the route, for `openSession` exactly
+  as for `newSession`. A failed open therefore leaves the URL, mirror, and
+  previous attachment untouched — there is nothing to restore. The cost is
+  click-to-push latency on navigation, accepted.
+- A `session_closed` push clears the current session and returns to the
+  Project home — the killer's own tab and every other viewer share one
+  fallback path.
 - The candidate-mirror registry becomes the client's "transaction pending"
   state keyed by the in-flight verb, rather than a workaround for
   non-transactional switching.
@@ -467,9 +540,11 @@ reopening) is a *performance* layer and is deliberately not in this ADR:
   never-rebind invariant and ADR 10's per-Manager stamp bundle ("the host
   trigger never rebinds"), and would reopen the rebind race that invariant
   closed.
-- Decision gate: measure cold `openSession` (file load, context rebuild,
-  extension bind) against steady-state attach. Only if the delta is user-
-  noticeable does warmth earn its complexity. If reuse-by-rebind ever lands,
+- Decision gate: measure the dominant path — a switch while browsing
+  history (kill X, cold-open Y: file load, context rebuild, extension
+  bind) — against steady-state attach; a single cold open understates what
+  users actually pay. Only if the delta is user-noticeable does warmth
+  earn its complexity. If reuse-by-rebind ever lands,
   ADR 10 needs a rebind story and this ADR's lifetime rule is unchanged —
   rebind is a cache hit, not a lifetime extension.
 
@@ -480,20 +555,33 @@ Connection state machine:
 - `openSession` while attached commits: attached to Y, initial sync precedes
   the reply, X lost the refcount;
 - a failed `openSession` while attached rolls back: attachment to X intact,
-  mirror untouched, no switch-generated pushes sent;
+  mirror untouched, no switch-generated pushes sent — and the rollback
+  cannot race X's refcount→0 kill evaluation (the switch owns it; commit
+  runs it, rollback cancels it);
 - a staged activation that fails out is disposed silently (no registration
   or collection broadcast);
+- a concurrent `openSession` for a staged (pending) address awaits the
+  transaction outcome — attaching to the public activation on commit,
+  re-resolving on rollback — and never observes the staged activation;
 - `openSession` for the attached address reattaches with a fresh initial
   sync and no refcount change;
+- navigation commits on the initial-sync push — a click writes no route
+  until the push lands, and a failed open leaves the URL untouched;
 - `openSession` behaves identically from both states — no client-side state
   mirroring to pick a verb;
 - two state transitions on one Connection cannot interleave (serial lane),
-  and a slow query verb (`gitShow`) does not block navigation;
+  and slow out-of-lane verbs (`gitShow`, a long-running `executeBash`) do
+  not block navigation;
+- an `executeBash` issued before a switch appends its entry to the
+  captured session's document; its reply may land after the switch;
 - a `pull` issued before a switch cannot install old-session subscriptions
   after the new initial sync (lane serialization);
 - a prompt admission does not hold the lane — `openSession`/`abort` on the
   same socket proceed while the admitted turn is still streaming;
-- switching away from a streaming session does not abort the turn.
+- switching away from a streaming session does not abort the turn;
+- `closeSession` pushes `session_closed` to every attached Connection and
+  transitions them to detached; the client falls back to the Project home —
+  killer and viewers share the path.
 
 Lifetime:
 
@@ -507,6 +595,13 @@ Lifetime:
 - an attach completing after socket close does not pin the activation;
 - socket death between prompt admission and `agent_start` does not dispose
   the activation (admitted-work window);
+- a detach during an in-flight `executeBash` defers disposal until the
+  entry is appended (admitted work);
+- a steer-queued prompt admitted while streaming keeps the activation
+  alive through the queue drain — `agent_settled` does not fire with
+  queued work;
+- a settle-boundary disposal starts only after the turn's seal patches
+  have reached the attached Connections;
 - a second attached Connection blocks disposal.
 
 Drafts:
@@ -547,6 +642,8 @@ Drafts:
   emulation and shrinks the candidate-mirror machinery.
 - Drafts are invisible, so the session list contains only sessions that exist.
 - Mid-turn disconnects finish the paid turn instead of aborting it.
+- A `closeSession` kill notifies attached viewers instead of leaving them
+  on a frozen tab.
 
 ### Costs
 
@@ -554,9 +651,11 @@ Drafts:
 - The one accepted loss: aborted/errored first turns are not durable.
 - Protocol v2 and the client move together (as with ADR 11).
 - The daemon needs a per-Connection state-transition lane, the
-  settle-boundary sweep, and an admitted-work signal on the Manager — the
-  "daemon must be smart" cost, judged manageable against the deleted timer
-  machinery.
+  settle-boundary sweep, an admitted-work signal on the Manager, and the
+  `session_closed` push on explicit kills — the "daemon must be smart"
+  cost, judged manageable against the deleted timer machinery.
+- Navigation commits on the initial-sync push, so a click waits for the
+  open — no optimistic URL write.
 - The web client mounts the composer at the Project home and re-keys draft
   persistence by address — no new store concept, but not a free change.
 - Project-scoped queries need per-Project resource loaders (the daemon's
@@ -569,9 +668,11 @@ Drafts:
   unflushed sessions shrink to the first-turn window; the navigation
   verbs gain a prompt-bearing `newSession`, `openSession` gains
   transactional switch semantics while attached, and `listFiles` moves from
-  the attached-session list to the Project-scoped query list. Everything
-  else — Project/Session domain, addresses, containment, reservation —
-  is retained.
+  the attached-session list to the Project-scoped query list.
+  `closeSession` gains a `session_closed` push to attached viewers,
+  closing ADR 11's frozen-attachment gap for explicit kills (spontaneous
+  runtime death remains the known gap). Everything else — Project/Session
+  domain, addresses, containment, reservation — is retained.
 - **ADR 02 / ADR 09:** unchanged. Cursor semantics and cache identity are
   untouched; the cursor travels on `openSession` in both states.
 - **ADR 10:** unchanged, *because* reuse-by-rebind is deferred. If rebind
