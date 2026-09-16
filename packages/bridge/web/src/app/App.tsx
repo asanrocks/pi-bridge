@@ -279,22 +279,26 @@ function AppInner() {
 		[isBusy],
 	);
 
+	// Attach, don't retarget: opening a session resolves-or-creates an
+	// activation on the daemon and rebinds this connection (ADR 11) — the
+	// previously attached session keeps running headless. No isBusy guard:
+	// streaming on the old attachment is not a reason to reject a switch.
+	// (The serial-switch rule in useRpc still rejects a second open while one
+	// is in flight — that one is a real candidate-promotion race.)
 	const handleOpenSession = useCallback(
 		(projectId: string, stem: string, sessionId?: string) => {
-			if (isBusy) return;
 			// Passing the id lets the client seed a cache cursor (ADR 09) instead of
 			// falling back to a full replace on every UI session switch.
 			rpc.openSession(projectId, stem, sessionId);
 		},
-		[isBusy, rpc],
+		[rpc],
 	);
 
 	const handleNewSession = useCallback(
 		(projectId: string) => {
-			if (isBusy) return;
 			rpc.newSession(projectId);
 		},
-		[isBusy, rpc],
+		[rpc],
 	);
 
 	const handleOpenProject = useCallback(
@@ -426,20 +430,25 @@ function AppInner() {
 		[vm, isBusy, handleNavigate],
 	);
 
-	const handleCycleProject = useCallback(
+	// Alt+↑/↓ — cycle the active sessions (global snapshot, newest first —
+	// the sidebar's pinned order). Cyclic; from the launcher (nothing
+	// attached) both directions open the newest. Live mid-stream: switching is
+	// an attach (ADR 11), not a retarget of the streaming instance.
+	const handleCycleActiveSession = useCallback(
 		(direction: "prev" | "next") => {
 			const s = getStore().getState();
-			const { projects, currentProjectId } = s;
-			if (projects.length === 0) return;
-			let idx = projects.findIndex((p) => p.id === currentProjectId);
-			if (idx === -1) idx = 0;
-			const len = projects.length;
-			const nextIdx = direction === "next" ? (idx + 1) % len : (idx - 1 + len) % len;
-			const next = projects[nextIdx];
-			if (next.id === currentProjectId) return;
-			handleOpenProject(next.id);
+			const list = s.activeSessions;
+			if (list.length === 0) return;
+			const idx = list.findIndex(
+				(r) =>
+					(r.projectId === s.currentProjectId && r.stem === s.currentStem) || r.sessionId === s.activeSessionId,
+			);
+			const len = list.length;
+			const target = idx === -1 ? list[0] : list[direction === "next" ? (idx + 1) % len : (idx - 1 + len) % len];
+			if (target.projectId === s.currentProjectId && target.stem === s.currentStem) return;
+			handleOpenSession(target.projectId, target.stem, target.sessionId);
 		},
-		[handleOpenProject],
+		[handleOpenSession],
 	);
 
 	const handleNewSessionShortcut = useCallback(() => {
@@ -461,7 +470,7 @@ function AppInner() {
 		onEditFocused: handleEditFocused,
 		onCopyFocused: handleCopyFocused,
 		onBranchSibling: handleBranchSibling,
-		onCycleProject: handleCycleProject,
+		onCycleActiveSession: handleCycleActiveSession,
 		onNewSession: handleNewSessionShortcut,
 		onToggleSidebar: () => sidebarToggleRef.current(),
 		onToggleHistory: () => {
@@ -493,7 +502,6 @@ function AppInner() {
 					currentStem={currentStem}
 					activeSessions={activeSessions}
 					sessionPages={sessionPages}
-					isBusy={isBusy}
 					onOpenSession={handleOpenSession}
 					onNewSession={handleNewSession}
 					onShowLauncher={handleShowLauncher}
