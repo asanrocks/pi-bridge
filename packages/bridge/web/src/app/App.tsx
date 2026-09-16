@@ -22,7 +22,6 @@ import { copyToClipboard } from "../features/conversation/clipboard.ts";
 import { HistoryPane } from "../features/history/HistoryPane.tsx";
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { Sidebar } from "../features/sidebar/Sidebar.tsx";
-import { mergeActiveState } from "../features/sidebar/timeUtils.ts";
 import { TopBar } from "../features/topbar/TopBar.tsx";
 import { FileViewer } from "../features/viewer/FileViewer.tsx";
 import { useDraftGuard } from "../infra/draftPersistence.ts";
@@ -74,9 +73,7 @@ function AppInner() {
 	const projects = useStore((s) => s.projects);
 	const activeSessions = useStore((s) => s.activeSessions);
 	const sessions = useStore((s) => s.sessions);
-	// Project rows come from a directory scan and the active snapshot is the
-	// authority for live/streaming state (ADR 11); overlay it for the sidebar.
-	const sidebarSessions = useMemo(() => mergeActiveState(sessions, activeSessions), [sessions, activeSessions]);
+	const sessionPages = useStore((s) => s.sessionPages);
 	const models = useStore((s) => s.models);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 	const scopedModels = useStore((s) => s.document.scopedModels);
@@ -311,9 +308,19 @@ function AppInner() {
 		void rpc.detach();
 	}, [rpc]);
 
-	const handleLoadMoreSessions = useCallback(() => {
-		rpc.loadMoreSessions();
-	}, [rpc]);
+	const handleLoadFolder = useCallback(
+		(projectId: string) => {
+			rpc.loadFolderSessions(projectId);
+		},
+		[rpc],
+	);
+
+	const handleLoadMoreFolder = useCallback(
+		(projectId: string) => {
+			rpc.loadMoreFolderSessions(projectId);
+		},
+		[rpc],
+	);
 
 	// ── Keyboard navigation (document-level, via useAppKeybindings) ──────────
 	// Handlers read fresh store state at event time (getStore().getState())
@@ -479,18 +486,18 @@ function AppInner() {
 			/>
 
 			<div className={styles.body}>
-				{/* Sidebar */}
+				{/* Sidebar — Project folders with their sessions (ADR 11) */}
 				<Sidebar
 					projects={projects}
 					currentProjectId={currentProjectId}
-					sessions={sidebarSessions}
+					activeSessions={activeSessions}
+					sessionPages={sessionPages}
 					isBusy={isBusy}
-					sessionsHasMore={useStore((s) => s.sessionsHasMore)}
-					onOpenProject={handleOpenProject}
 					onOpenSession={handleOpenSession}
 					onNewSession={handleNewSession}
 					onShowLauncher={handleShowLauncher}
-					onLoadMore={handleLoadMoreSessions}
+					onLoadFolder={handleLoadFolder}
+					onLoadMoreFolder={handleLoadMoreFolder}
 					toggleRef={sidebarToggleRef}
 					newSessionRef={newSessionRef}
 				/>
