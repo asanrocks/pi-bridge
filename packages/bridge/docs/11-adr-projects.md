@@ -5,6 +5,12 @@ serves Projects, sessions are addressed by `(projectId, stem)`, activations
 are daemon-internal and idle-collected, and the web client navigates by URL.
 See "Implementation notes" for the choices this ADR left open.
 
+**Amended by [ADR 12](12-adr-activation-lifetime.md) (Proposed):** the idle
+GC model in "Activation lifecycle" would be replaced by a refcount lifetime
+rule, the unflushed-session model shrinks to drafts-at-first-message, and a
+first-class `switch` transaction is added. ADR 12 is not implemented; until
+it is, this document describes the shipped behavior.
+
 The rest of this document is the design as proposed; the notes at the end
 record where the implementation had to decide.
 
@@ -231,6 +237,10 @@ only returns regular `.jsonl` files under the canonical session directory.
 
 ### Unflushed sessions
 
+> Amended by ADR 12 (Proposed) — an empty session becomes client state
+> ("drafts at first message"); this section's scope shrinks to the
+> first-turn window. The text below describes the shipped behavior.
+
 A session created by `newSession` has an allocated filename but no file until
 pi flushes it (on the first assistant message). Until then it exists only
 inside its activation. The address is unchanged: the client uses the allocated
@@ -255,6 +265,10 @@ Activations are internal and have no client-visible lifecycle. The daemon
 creates one activation per active session and disposes it when it is idle.
 
 ### Idle collection
+
+> Amended by ADR 12 (Proposed) — see that ADR's "Lifetime rule". The section
+> below describes the shipped behavior.
+
 
 When the last Connection detaches from an activation, the daemon starts a
 delayed GC timer. The timer is cancelled when the activation is reattached or
