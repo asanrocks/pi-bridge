@@ -52,29 +52,8 @@ export function relativeTime(iso: string): string {
 	return MONTH_DAY.format(d);
 }
 
-/** The sidebar renders `SessionInfo` rows directly (ADR 11). */
-export type SidebarSession = SessionInfo;
-
-/**
- * Overlay the global active/streaming snapshot onto Project session rows.
- * The Project page comes from a directory scan, which cannot observe runtime
- * state, and `sessions_changed` is not pushed on every streaming transition.
- * The active snapshot is therefore the authority: rows absent from it are
- * inactive, even if the scan (or a stale page) still says otherwise.
- */
-export function mergeActiveState(sessions: SidebarSession[], active: SessionInfo[]): SidebarSession[] {
-	const byId = new Map(active.map((s) => [s.sessionId, s]));
-	return sessions.map((s) => {
-		const live = byId.get(s.sessionId);
-		const isStreaming = live?.isStreaming === true;
-		const isActive = live !== undefined;
-		if (s.active === isActive && s.isStreaming === isStreaming) return s;
-		return { ...s, active: isActive, isStreaming };
-	});
-}
-
-export function groupSessions(sessions: SidebarSession[]): { label: GroupLabel; items: SidebarSession[] }[] {
-	const buckets = new Map<GroupLabel, SidebarSession[]>();
+export function groupSessions(sessions: SessionInfo[]): { label: GroupLabel; items: SessionInfo[] }[] {
+	const buckets = new Map<GroupLabel, SessionInfo[]>();
 	for (const s of sessions) {
 		const g = sessionGroup(s.timestamp);
 		const arr = buckets.get(g) ?? [];

@@ -94,3 +94,60 @@ describe("session pages", () => {
 		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 20, stem: "b" });
 	});
 });
+
+describe("sidebar folder pages", () => {
+	it("begin/set cycle commits a ready page and error marks failure", () => {
+		const store = createClientStore();
+		store.getState().beginSessionPage("proj");
+		expect(store.getState().sessionPages.proj).toEqual({ kind: "loading" });
+
+		store.getState().setSessionPageError("proj");
+		expect(store.getState().sessionPages.proj).toEqual({ kind: "error" });
+
+		store.getState().setSessionPage("proj", [session("a")], true, { sortTimeMs: 10, stem: "a" });
+		expect(store.getState().sessionPages.proj).toEqual({
+			kind: "ready",
+			sessions: [session("a")],
+			hasMore: true,
+			nextCursor: { sortTimeMs: 10, stem: "a" },
+		});
+	});
+
+	it("appendSessionPage upserts by sessionId and keeps the cursor when omitted", () => {
+		const store = createClientStore();
+		store.getState().setSessionPage("proj", [session("a")], true, { sortTimeMs: 10, stem: "a" });
+		store.getState().appendSessionPage("proj", [session("b")], false);
+
+		const page = store.getState().sessionPages.proj;
+		expect(page?.kind).toBe("ready");
+		if (page?.kind !== "ready") return;
+		expect(page.sessions.map((x) => x.stem).sort()).toEqual(["a", "b"]);
+		expect(page.hasMore).toBe(false);
+		expect(page.nextCursor).toEqual({ sortTimeMs: 10, stem: "a" });
+	});
+
+	it("appendSessionPage is a no-op without a ready page", () => {
+		const store = createClientStore();
+		store.getState().beginSessionPage("proj");
+		store.getState().appendSessionPage("proj", [session("a")], false);
+		expect(store.getState().sessionPages.proj).toEqual({ kind: "loading" });
+	});
+
+	it("folder pages are per-Project and reset only wholesale", () => {
+		const store = createClientStore();
+		store.getState().setSessionPage("proj", [session("a")], false, null);
+		store.getState().setSessionPage("other", [], false, null);
+		expect(Object.keys(store.getState().sessionPages).sort()).toEqual(["other", "proj"]);
+
+		store.getState().resetSessionPages();
+		expect(store.getState().sessionPages).toEqual({});
+	});
+
+	it("survives clearCurrentSession (pure UI cache, not session state)", () => {
+		const store = createClientStore();
+		store.getState().setSessionPage("proj", [session("a")], false, null);
+		openAndDirty(store);
+		store.getState().clearCurrentSession("proj");
+		expect(store.getState().sessionPages.proj?.kind).toBe("ready");
+	});
+});
