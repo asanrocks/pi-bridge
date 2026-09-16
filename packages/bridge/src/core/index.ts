@@ -44,6 +44,7 @@ export type {
 	AppendOp,
 	BranchSummaryEntry,
 	ClientMessage,
+	CloseSessionRequest,
 	CompactionEntry,
 	ConsoleRequest,
 	Content,
