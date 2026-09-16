@@ -9,9 +9,10 @@ See "Implementation notes" for the choices this ADR left open.
 GC model in "Activation lifecycle" would be replaced by a refcount lifetime
 rule, the unflushed-session model shrinks to drafts-at-first-message,
 `openSession` becomes a transactional switch while attached, `newSession`
-gains a required first message, and `listFiles` is re-addressed to the
-Project. ADR 12 is not implemented; until it is, this document describes
-the shipped behavior.
+gains a required first message, `listFiles` is re-addressed to the Project,
+and `closeSession` gains a `session_closed` push to attached viewers. ADR 12
+is not implemented; until it is, this document describes the shipped
+behavior.
 
 The rest of this document is the design as proposed; the notes at the end
 record where the implementation had to decide.
