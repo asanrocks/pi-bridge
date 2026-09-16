@@ -7,9 +7,11 @@ See "Implementation notes" for the choices this ADR left open.
 
 **Amended by [ADR 12](12-adr-activation-lifetime.md) (Proposed):** the idle
 GC model in "Activation lifecycle" would be replaced by a refcount lifetime
-rule, the unflushed-session model shrinks to drafts-at-first-message, and a
-first-class `switch` transaction is added. ADR 12 is not implemented; until
-it is, this document describes the shipped behavior.
+rule, the unflushed-session model shrinks to drafts-at-first-message,
+`openSession` becomes a transactional switch while attached, `newSession`
+gains a required first message, and `listFiles` is re-addressed to the
+Project. ADR 12 is not implemented; until it is, this document describes
+the shipped behavior.
 
 The rest of this document is the design as proposed; the notes at the end
 record where the implementation had to decide.
@@ -453,6 +455,11 @@ because pi's runtime exposes it and is expected to be removed once it is
 demonstrably unused.
 
 ### Attached session operations
+
+> Amended by ADR 12 (Proposed) — `listFiles` becomes Project-scoped
+> (`projectId` + prefix, resolved against the Project cwd) so a floating
+> draft can complete paths before any session exists. The list below
+> describes the shipped behavior.
 
 These operations target the session attached to the requesting Connection:
 
