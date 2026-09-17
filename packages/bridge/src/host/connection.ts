@@ -41,8 +41,9 @@ import type { ConnectionHandle, Manager } from "./manager.ts";
 
 export interface DaemonVerbs {
 	/** Static Project configuration (ADR 11). Never a cwd allowlist: clients
-	 * address sessions by `(projectId, stem)`. */
-	getDaemonInfo: () => {
+	 * address sessions by `(projectId, stem)`. Async because per-Project
+	 * default-model resolution may check auth. */
+	getDaemonInfo: () => Promise<{
 		projects: ProjectInfo[];
 		models: {
 			provider: string;
@@ -53,7 +54,7 @@ export interface DaemonVerbs {
 		}[];
 		thinkingLevels: string[];
 		devMode: boolean;
-	};
+	}>;
 	/** Paginated history query for one Project. */
 	listSessions: (
 		projectId: string,
@@ -339,7 +340,7 @@ export class Connection {
 					break;
 				}
 				case "getDaemonInfo": {
-					const info = this.daemonVerbs.getDaemonInfo();
+					const info = await this.daemonVerbs.getDaemonInfo();
 					const reply: GetDaemonInfoReply = { id, ok: true, ...info };
 					this.send(reply as unknown as Record<string, unknown>);
 					break;

@@ -47,13 +47,13 @@ describe("clearCurrentSession", () => {
 
 	it("keeps the static Project list and the global active snapshot", () => {
 		const store = createClientStore();
-		store.getState().setProjects([{ id: "proj", cwd: "/proj" }]);
+		store.getState().setProjects([{ id: "proj", cwd: "/proj", defaultModel: null }]);
 		store.getState().setActiveSessions([session("a")]);
 		openAndDirty(store);
 
 		store.getState().clearCurrentSession();
 
-		expect(store.getState().projects).toEqual([{ id: "proj", cwd: "/proj" }]);
+		expect(store.getState().projects).toEqual([{ id: "proj", cwd: "/proj", defaultModel: null }]);
 		expect(store.getState().activeSessions).toHaveLength(1);
 	});
 
