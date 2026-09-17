@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
 import { isModelSelected } from "../../../../src/viewmodel/index.ts";
 import { displayProviderName } from "../../render/modelNames.ts";
-import styles from "./Composer.module.css";
+import styles from "./ComposeCard.module.css";
 
 export function ModelPickerPortal({
 	models,

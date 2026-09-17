@@ -1,0 +1,28 @@
+/* ==========================================================================
+   HomeCompose — the Project home's compose surface: the shared ComposeCard
+   centered in the launcher column ("compose first, browse second"), always
+   expanded. No dock layout — the card shell's own max-width + centering
+   (ComposeCard.module.css) does the work; this wraps it with the page
+   spacing and the hint line.
+   ========================================================================== */
+
+.home {
+	padding: 24px 8px 12px;
+}
+
+.hint {
+	margin: 0 auto;
+	width: 100%;
+	max-width: 48rem;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	user-select: none;
+}
+
+@media (max-width: 48rem) {
+	.hint {
+		/* Match the card shell's mobile gutter (ComposeCard.module.css). */
+		margin: 0 8px;
+		width: auto;
+	}
+}
