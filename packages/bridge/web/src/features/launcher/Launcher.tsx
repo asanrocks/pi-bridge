@@ -125,6 +125,7 @@ export const Launcher = memo(function Launcher({
 				<HomeCompose
 					projectId={projectId}
 					models={models}
+					defaultModel={scoped.find((p) => p.id === projectId)?.defaultModel ?? null}
 					connected={connection.kind === "connected"}
 					onNewSession={onNewSession}
 				/>
