@@ -20,10 +20,15 @@ import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./HomeCompose.module.css";
-import { useImageAttachments } from "./useImageAttachments.ts";
-import { usePathCompletion } from "./usePathCompletion.tsx";
+import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
+
+/** Path completion on the home is deferred: listFiles resolves against an
+ * attached session's Project cwd, and the home has no attachment yet (ADR
+ * 12 re-addresses the verb to the Project). Module-scope so the completion
+ * hook's `complete` dep stays stable across renders. */
+const NO_COMPLETIONS = async () => [];
 
 /** The persisted pre-session pick for one Project: a model plus an optional
  * thinking level. */
@@ -91,15 +96,7 @@ export const HomeCompose = memo(function HomeCompose({
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-	const attachments = useImageAttachments();
-	const completion = usePathCompletion({
-		value: text,
-		onChange: setDraftText,
-		textareaRef,
-		// Deferred: listFiles is attachment-bound; completion on the home
-		// waits for the ADR 12 re-address to the Project cwd.
-		complete: async () => [],
-	});
+	const capabilities = useComposeCapabilities({ textareaRef, complete: NO_COMPLETIONS });
 
 	// Landing on the Project home is a come-to-type gesture — focus the card.
 	useEffect(() => {
@@ -175,7 +172,7 @@ export const HomeCompose = memo(function HomeCompose({
 
 	const handleCommit = useCallback(async () => {
 		if (sending) return;
-		const images = attachments.images;
+		const images = capabilities.images;
 		if (!text.trim() && images.length === 0) return;
 		setSending(true);
 		let ok = false;
@@ -197,11 +194,12 @@ export const HomeCompose = memo(function HomeCompose({
 			// the textarea stays enabled through the send.
 			textareaRef.current?.focus();
 		}
-	}, [sending, text, attachments.images, model, pick, onNewSession, projectId, clearDraft]);
+	}, [sending, text, capabilities.images, model, pick, onNewSession, projectId, clearDraft]);
 
 	return (
 		<div className={styles.home}>
 			<ComposeCard
+				{...capabilities.cardProps}
 				value={text}
 				onChange={setDraftText}
 				onCommit={handleCommit}
@@ -209,12 +207,6 @@ export const HomeCompose = memo(function HomeCompose({
 				placeholder={`Send a prompt to ${projectId}…`}
 				sending={sending}
 				textareaRef={textareaRef}
-				images={attachments.images}
-				onRemoveImage={attachments.removeImage}
-				onFiles={attachments.addFiles}
-				onPaste={attachments.handlePaste}
-				isDragOver={attachments.isDragOver}
-				dragHandlers={attachments.dragHandlers}
 				model={effectiveModel}
 				models={models}
 				scopedModels={[]}
@@ -223,8 +215,6 @@ export const HomeCompose = memo(function HomeCompose({
 				onSetModel={handleSetModel}
 				onSetThinkingLevel={handleSetThinkingLevel}
 				onCycleModel={handleCycleModel}
-				completion={completion.node}
-				beforeKeyDown={completion.handleKeyDown}
 			/>
 			<div className={styles.hint}>Enter starts a new session · Shift+Enter for a new line</div>
 		</div>
