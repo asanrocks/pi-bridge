@@ -30,6 +30,8 @@ interface StubHandles {
 	admittedCalls: () => Array<{ text: string; images?: unknown[] }>;
 	/** Models passed to setModel, in order. */
 	setModelCalls: () => Array<{ provider: string; modelId: string }>;
+	/** Thinking levels passed to setThinkingLevel, in order. */
+	setThinkingLevelCalls: () => string[];
 	/** Flip the stub document's streaming flag and emit the matching patch —
 	 * exercises both the daemon's onPatch listener and the GC eligibility
 	 * check, which reads `document.status.isStreaming`. */
@@ -101,6 +103,7 @@ function makeStubManager(opts: {
 	const admittedTexts: string[] = [];
 	const admittedCalls: Array<{ text: string; images?: unknown[] }> = [];
 	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
+	const setThinkingLevelCalls: string[] = [];
 	const settledListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
@@ -144,7 +147,10 @@ function makeStubManager(opts: {
 			if (opts.setModelError) throw opts.setModelError;
 			setModelCalls.push({ provider, modelId });
 		},
-		async setThinkingLevel() {},
+		async setThinkingLevel(level: string) {
+			events.push("level");
+			setThinkingLevelCalls.push(level);
+		},
 		async renameSession() {},
 		async navigate() {},
 		async dispose() {
@@ -163,6 +169,7 @@ function makeStubManager(opts: {
 		admittedTexts: () => [...admittedTexts],
 		admittedCalls: () => [...admittedCalls],
 		setModelCalls: () => [...setModelCalls],
+		setThinkingLevelCalls: () => [...setThinkingLevelCalls],
 		setStreaming: (streaming: boolean) => {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
@@ -349,25 +356,28 @@ describe("daemon: projects", () => {
 		const id = send(ws, { verb: "getDaemonInfo" });
 		const reply = (await waitForReply(frames, id)) as unknown as {
 			ok: boolean;
-			projects: Array<{ id: string; cwd: string; defaultModel: unknown }>;
+			projects: Array<{ id: string; cwd: string; defaultModel: unknown; defaultThinkingLevel: unknown }>;
 			devMode: boolean;
 		};
 		expect(reply.ok).toBe(true);
 		expect(reply.projects.map((p) => p.id).sort()).toEqual([basename(a).toLowerCase(), basename(b).toLowerCase()]);
 		expect(reply.projects.find((p) => p.id === basename(a).toLowerCase())?.cwd).toBe(resolve(a));
-		// No configured auth → no available models → no default.
-		for (const p of reply.projects) expect(p.defaultModel).toBeNull();
+		// No configured auth → no available models → no default pair.
+		for (const p of reply.projects) {
+			expect(p.defaultModel).toBeNull();
+			expect(p.defaultThinkingLevel).toBeNull();
+		}
 
 		ws.close();
 	});
 
 	it("getDaemonInfo reports each project's resolved default model", async () => {
 		const { agentDir, root, a } = makeProjectRoots();
-		// Project settings pin a default model for project a.
+		// Project settings pin a default model and thinking level for project a.
 		mkdirSync(join(a, ".pi"), { recursive: true });
 		writeFileSync(
 			join(a, ".pi", "settings.json"),
-			JSON.stringify({ defaultProvider: "faux", defaultModel: "faux-2" }),
+			JSON.stringify({ defaultProvider: "faux", defaultModel: "faux-2", defaultThinkingLevel: "high" }),
 		);
 
 		const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
@@ -398,11 +408,17 @@ describe("daemon: projects", () => {
 
 		const id = send(ws, { verb: "getDaemonInfo" });
 		const reply = (await waitForReply(frames, id)) as unknown as {
-			projects: Array<{ id: string; defaultModel: { provider: string; modelId: string } | null }>;
+			projects: Array<{
+				id: string;
+				defaultModel: { provider: string; modelId: string } | null;
+				defaultThinkingLevel: string | null;
+			}>;
 		};
 		const pid = basename(a).toLowerCase();
 		const project = reply.projects.find((p) => p.id === pid);
 		expect(project?.defaultModel).toEqual({ provider: "faux", modelId: "faux-2" });
+		// The settings' level rides along with the same resolution.
+		expect(project?.defaultThinkingLevel).toBe("high");
 
 		// Without project settings the same runtime resolves to a per-provider
 		// default or the first available model — never null while models exist.
@@ -413,10 +429,16 @@ describe("daemon: projects", () => {
 		const frames2 = collectFrames(ws2);
 		const id2 = send(ws2, { verb: "getDaemonInfo" });
 		const reply2 = (await waitForReply(frames2, id2)) as unknown as {
-			projects: Array<{ id: string; defaultModel: { provider: string; modelId: string } | null }>;
+			projects: Array<{
+				id: string;
+				defaultModel: { provider: string; modelId: string } | null;
+				defaultThinkingLevel: string | null;
+			}>;
 		};
 		expect(reply2.projects[0]?.defaultModel?.provider).toBe("faux");
 		expect(["faux-1", "faux-2"]).toContain(reply2.projects[0]?.defaultModel?.modelId);
+		// No settings default: pi's DEFAULT_THINKING_LEVEL.
+		expect(reply2.projects[0]?.defaultThinkingLevel).toBe("medium");
 
 		ws2.close();
 		ws.close();
@@ -600,17 +622,19 @@ describe("daemon: session activation", () => {
 			text: "look at this",
 			images: [image],
 			model: { provider: "p", modelId: "m" },
+			thinkingLevel: "high",
 		});
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
 		expect(reply.ok).toBe(true);
 
 		const stub = stubRef.current!;
 		// The model is applied first (the first turn runs on it), then the
-		// prompt with its attachments is admitted, then the connection
-		// attaches into the already-streaming turn.
+		// thinking level, then the prompt with its attachments is admitted,
+		// then the connection attaches into the already-streaming turn.
 		expect(stub.handles.setModelCalls()).toEqual([{ provider: "p", modelId: "m" }]);
+		expect(stub.handles.setThinkingLevelCalls()).toEqual(["high"]);
 		expect(stub.handles.admittedCalls()).toEqual([{ text: "look at this", images: [image] }]);
-		expect(stub.handles.events()).toEqual(["model", "admit", "attach"]);
+		expect(stub.handles.events()).toEqual(["model", "level", "admit", "attach"]);
 
 		ws.close();
 	});
@@ -692,6 +716,7 @@ describe("daemon: session activation", () => {
 			[{ verb: "newSession", projectId, text: "hi", images: "nope" }, /Invalid `images`/],
 			[{ verb: "newSession", projectId, text: "hi", model: { provider: 1, modelId: "m" } }, /Invalid `model`/],
 			[{ verb: "newSession", projectId, text: "hi", model: "p/m" }, /Invalid `model`/],
+			[{ verb: "newSession", projectId, text: "hi", thinkingLevel: 42 }, /Invalid `thinkingLevel`/],
 		];
 		for (const [frame, errorRe] of badFrames) {
 			const reply = (await waitForReply(frames, send(ws, frame))) as unknown as { ok: boolean; error?: string };

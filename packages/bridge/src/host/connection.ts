@@ -81,8 +81,7 @@ export interface DaemonVerbs {
 		projectId: string,
 		conn: Connection,
 		text: string,
-		images?: ImageContent[],
-		model?: ModelRef,
+		options?: { images?: ImageContent[]; model?: ModelRef; thinkingLevel?: string },
 	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Release this Connection's attachment (activation stays alive for GC). */
 	detach: (conn: Connection) => void;
@@ -300,7 +299,14 @@ export class Connection {
 					) {
 						throw new Error("Invalid `model`");
 					}
-					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, m.images, m.model);
+					if (m.thinkingLevel !== undefined && typeof m.thinkingLevel !== "string") {
+						throw new Error("Invalid `thinkingLevel`");
+					}
+					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, {
+						images: m.images,
+						model: m.model,
+						thinkingLevel: m.thinkingLevel,
+					});
 					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
 					else this.sendReply(id, false, result.error);
 					break;

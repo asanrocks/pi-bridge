@@ -155,7 +155,11 @@ export function useRpc() {
 	 * client navigates into carries the in-flight turn. Returns true on
 	 * success so the caller can clear (or keep) its draft. */
 	const newSession = useCallback(
-		async (projectId: string, text: string, options?: { images?: ImageContent[]; model?: ModelRef }) => {
+		async (
+			projectId: string,
+			text: string,
+			options?: { images?: ImageContent[]; model?: ModelRef; thinkingLevel?: string },
+		) => {
 			const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text, options), "new session failed");
 			if (reply?.ok) {
 				const ref = (reply as unknown as { session?: SessionRef }).session;

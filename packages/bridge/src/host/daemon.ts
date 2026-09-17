@@ -684,7 +684,8 @@ export class Daemon {
 			}
 		},
 
-		newSession: async (projectId, conn, text, images, model) => {
+		newSession: async (projectId, conn, text, options) => {
+			const { images, model, thinkingLevel } = options ?? {};
 			try {
 				const project = this.projects.get(projectId);
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
@@ -711,16 +712,17 @@ export class Daemon {
 					key,
 				);
 				// Pre-session choices from the Project home (ADR 12 slice): apply the
-				// picked model, then admit the first prompt (with its attachments)
-				// before the attach — the client's initial sync carries the
-				// in-flight turn on the chosen model, and no empty session exists
-				// while the user types. A refused admission or unknown model (no
-				// model, no auth) disposes the fresh activation — nothing empty
-				// survives to idle-collect later. Patches streamed between
-				// admission and attach are covered by the initial sync (the
+				// picked model and thinking level, then admit the first prompt (with
+				// its attachments) before the attach — the client's initial sync
+				// carries the in-flight turn on the chosen model, and no empty
+				// session exists while the user types. A refused admission or
+				// unknown model (no model, no auth) disposes the fresh activation —
+				// nothing empty survives to idle-collect later. Patches streamed
+				// between admission and attach are covered by the initial sync (the
 				// Document is canonical).
 				try {
 					if (model) await manager.setModel(model.provider, model.modelId);
+					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
 					await manager.promptAdmitted(text, images);
 				} catch (err) {
 					await this.collectActivation(activation);
@@ -783,21 +785,26 @@ export class Daemon {
 				}));
 			}
 			const projects: ProjectInfo[] = await Promise.all(
-				[...this.projects.values()].map(async (p) => ({
-					id: p.id,
-					cwd: p.cwd,
-					defaultModel: await this.projectDefaultModel(p.id),
-				})),
+				[...this.projects.values()].map(async (p) => {
+					const defaults = await this.projectDefaults(p.id);
+					return {
+						id: p.id,
+						cwd: p.cwd,
+						defaultModel: defaults.model,
+						defaultThinkingLevel: defaults.thinkingLevel,
+					};
+				}),
 			);
 			return { projects, models, thinkingLevels: THINKING_LEVELS, devMode: this.devMode };
 		},
 	};
 
-	/** The model a fresh session in `projectId` resolves to — the same
-	 * `findInitialModel` call a fresh Manager's session performs (scopedModels
-	 * empty, not continuing, the Project's settings), so the reported default
-	 * matches what `newSession` without `model` actually runs on. */
-	private async projectDefaultModel(projectId: string): Promise<ModelRef | null> {
+	/** The model and thinking level a fresh session in `projectId` resolves
+	 * to — the same `findInitialModel` call a fresh Manager's session performs
+	 * (scopedModels empty, not continuing, the Project's settings), so the
+	 * reported defaults match what `newSession` without `model`/
+	 * `thinkingLevel` actually runs on. */
+	private async projectDefaults(projectId: string): Promise<{ model: ModelRef | null; thinkingLevel: string | null }> {
 		const settings = this.projectSettings.get(projectId);
 		const result = await findInitialModel({
 			scopedModels: [],
@@ -812,7 +819,10 @@ export class Daemon {
 				: {}),
 			modelRuntime: this.modelRuntime,
 		});
-		return result.model ? { provider: result.model.provider, modelId: result.model.id } : null;
+		return {
+			model: result.model ? { provider: result.model.provider, modelId: result.model.id } : null,
+			thinkingLevel: result.model ? result.thinkingLevel : null,
+		};
 	}
 
 	// ── Server ────────────────────────────────────────────────────────────
