@@ -50,11 +50,16 @@ function saveHomeModel(projectId: string, model: ModelRef | null): void {
 export const HomeCompose = memo(function HomeCompose({
 	projectId,
 	models,
+	defaultModel,
 	connected,
 	onNewSession,
 }: {
 	projectId: string;
 	models: ModelInfo[];
+	/** The model a fresh session resolves to (ProjectInfo.defaultModel from
+	 * getDaemonInfo) — display only. The send still omits `model` when unset,
+	 * so the daemon keeps resolving (settings/auth changes stay live). */
+	defaultModel: ModelRef | null;
 	connected: boolean;
 	/** Send the first prompt of a new session. Resolves true on success —
 	 * the draft is kept for retry on failure. */
@@ -98,7 +103,13 @@ export const HomeCompose = memo(function HomeCompose({
 		[projectId],
 	);
 
-	// Ctrl+P cycles the same provider-deduped list the session dock uses.
+	// Effective = the explicit pick, else the daemon-reported default (shown
+	// in the button and as the picker's selected row; "none" when nothing is
+	// available). Only the explicit pick is sent with newSession.
+	const effectiveModel = model ?? defaultModel;
+
+	// Ctrl+P cycles the same provider-deduped list the session dock uses;
+	// cycling from the (unpicked) default starts at the default's position.
 	const cycleModels = useMemo(() => {
 		const seen = new Set<string>();
 		return models.filter((m) => {
@@ -110,14 +121,16 @@ export const HomeCompose = memo(function HomeCompose({
 
 	const handleCycleModel = useCallback(
 		(direction: "forward" | "backward") => {
-			const current: ModelRef = model ?? {
+			const current: ModelRef = effectiveModel ?? {
 				provider: cycleModels[0]?.provider ?? "",
 				modelId: cycleModels[0]?.id ?? "",
 			};
 			const next = findNextModel(cycleModels, current, direction);
-			if (next) handleSetModel(next.provider, next.id);
+			if (next && !(next.provider === current.provider && next.id === current.modelId)) {
+				handleSetModel(next.provider, next.id);
+			}
 		},
-		[model, cycleModels, handleSetModel],
+		[effectiveModel, cycleModels, handleSetModel],
 	);
 
 	const handleCommit = useCallback(async () => {
@@ -156,7 +169,7 @@ export const HomeCompose = memo(function HomeCompose({
 				onPaste={attachments.handlePaste}
 				isDragOver={attachments.isDragOver}
 				dragHandlers={attachments.dragHandlers}
-				model={model}
+				model={effectiveModel}
 				models={models}
 				scopedModels={[]}
 				thinkingLevel=""
