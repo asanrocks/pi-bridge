@@ -45,7 +45,13 @@ export const Launcher = memo(function Launcher({
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	/** Send the first prompt of a new session. Resolves true on success —
 	 * the caller keeps its draft on failure. */
-	onNewSession: (projectId: string, text: string, images?: ImageContent[], model?: ModelRef) => Promise<boolean>;
+	onNewSession: (
+		projectId: string,
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+	) => Promise<boolean>;
 	onLoadMoreSessions: () => void;
 	retry: () => void;
 }) {
@@ -121,15 +127,20 @@ export const Launcher = memo(function Launcher({
 	// ── Connected ──────────────────────────────────────────────────────────
 	return (
 		<div className={styles.launcher}>
-			{projectId !== null && (
-				<HomeCompose
-					projectId={projectId}
-					models={models}
-					defaultModel={scoped.find((p) => p.id === projectId)?.defaultModel ?? null}
-					connected={connection.kind === "connected"}
-					onNewSession={onNewSession}
-				/>
-			)}
+			{projectId !== null &&
+				(() => {
+					const project = scoped.find((p) => p.id === projectId);
+					return (
+						<HomeCompose
+							projectId={projectId}
+							models={models}
+							defaultModel={project?.defaultModel ?? null}
+							defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
+							connected={connection.kind === "connected"}
+							onNewSession={onNewSession}
+						/>
+					);
+				})()}
 
 			{projectId === null && (
 				<>

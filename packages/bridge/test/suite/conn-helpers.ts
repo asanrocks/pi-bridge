@@ -86,7 +86,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [stubSession], hasMore: false }),
 	listActiveSessions: () => [],
 	getDaemonInfo: async () => ({
-		projects: [{ id: "proj", cwd: "/proj", defaultModel: null }],
+		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
 		thinkingLevels: ["off", "low", "medium", "high"],
 		devMode: false,
