@@ -115,11 +115,39 @@
    else, so it never competes with session rows for selection chrome.
    Quiet by construction — dimmed text, no fill at rest; hover darkens the
    text rather than painting a band. */
+.sidebarFolderRowGroup {
+	display: flex;
+	align-items: stretch;
+	width: 100%;
+}
+
+/* Chevron-only fold toggle: a square hit area matching the row's height,
+   so the fold and the navigation (the name button beside it) are separate
+   targets. Same spec role as the other square sidebar actions. */
+.sidebarFolderToggle {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	margin-left: 4px;
+	padding: 0;
+	background: none;
+	border: none;
+	cursor: pointer;
+	color: var(--color-muted-foreground);
+}
+
+.sidebarFolderToggle:hover {
+	color: var(--color-foreground);
+}
+
 .sidebarFolderRow {
 	display: flex;
 	align-items: center;
 	gap: 4px;
-	width: 100%;
+	flex: 1;
+	min-width: 0;
 	text-align: left;
 	padding: 6px 4px;
 	cursor: pointer;
