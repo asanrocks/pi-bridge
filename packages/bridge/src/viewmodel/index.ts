@@ -51,6 +51,12 @@ export interface ViewModel {
 	 * renderer gates auto-scroll on this with `isStreaming` so completed-turn
 	 * lazy pulls (also text/thinking-length changes) stay excluded. */
 	streamingKey: string;
+	/** Readable-text identity of the leaf path (see {@link leafTextKey}): only
+	 * user/assistant `text` blocks, not thinking, tool calls, or images. The
+	 * jump-to-bottom notifier uses this so thinking/tool churn below the
+	 * viewport does not raise the new-content dot — only text landing there
+	 * does. */
+	textKey: string;
 }
 
 export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn | GitChangeTurn;
@@ -540,7 +546,13 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	flushPending();
 	flushSwitchRun();
 
-	return { turns, leafEntryId: doc.status.leafId, pathKey: leafPathKey(doc), streamingKey: leafStreamingKey(doc) };
+	return {
+		turns,
+		leafEntryId: doc.status.leafId,
+		pathKey: leafPathKey(doc),
+		streamingKey: leafStreamingKey(doc),
+		textKey: leafTextKey(doc),
+	};
 }
 
 // ============================================================================
@@ -618,6 +630,37 @@ export function leafStreamingKey(doc: Document): string {
 			return "x"; // tool call — args stream via deltas but are lazy; height stays put
 		})
 		.join("|");
+}
+
+/**
+ * Readable-text identity of the leaf path: per-entry text length for user and
+ * assistant `text` blocks only — thinking, tool calls, and images are
+ * excluded. Distinct from {@link leafPathKey} (fires on any new block,
+ * including thinking/tool calls) and {@link leafStreamingKey} (fires on
+ * thinking growth too).
+ *
+ * Walks leaf->root and joins `id:len` for entries that carry text, so a new
+ * user message (id appears) and assistant text growth (len rises) both change
+ * it. Entries with no text yet are omitted, so an assistant entry that opens
+ * with a thinking or tool block does not change the key until its first text
+ * block lands.
+ */
+export function leafTextKey(doc: Document): string {
+	const parts: string[] = [];
+	let cursor: string | null = doc.status.leafId;
+	while (cursor) {
+		const entry = doc.entries[cursor];
+		if (!entry) break;
+		if (entry.kind === "message") {
+			let len = 0;
+			for (const block of entry.content) {
+				if (block.type === "text") len += block.text.length;
+			}
+			if (len > 0) parts.push(`${entry.id}:${len}`);
+		}
+		cursor = entry.parentId;
+	}
+	return parts.join("|");
 }
 
 /**
