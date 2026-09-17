@@ -11,6 +11,7 @@
 - Store fields `activeSessionId` and `liveSessionId` replaced by `attachedInstanceId` and `instances`.
 - Reconnect no longer auto-pushes a `replace` — the client drives re-attachment from its stored `attachedInstanceId`.
 - `Status.model` is now a `ModelRef` struct `{ provider: string; modelId: string }` instead of a bare id string. The provider was previously dropped at `deriveModel`/`reconcile`/manager boundaries, so same-id models from different providers collided. New `ModelRef` type exported; `ReconcileOptions.model` and the `currentProviderModel` picker prop (renamed `currentModelRef`) take the struct.
+- The `listFiles` verb is Project-scoped rather than attachment-scoped (ADR 12): `ListFilesRequest` gains a required `projectId`, `BridgeClient.listFiles(projectId, prefix)`, and `DaemonVerbs.listFiles(prefix, projectId)` resolve the prefix against the named Project's cwd. The verb no longer requires an attached session, so path completion works pre-send on the Project home; an unknown `projectId` is an error rather than a fallback to some other cwd.
 - `ViewModelInput.sessions` removed — `computeViewModel` never read it (the web client's last producer, the Project-home history slice, is gone). Callers pass `{ document, models }`.
 
 ### Added
@@ -69,6 +70,8 @@
 - Durable composer drafts: the textarea content is now a store-owned `ComposerDraft` (idle/compose/edit discriminated union) rather than Composer-local `useState`, so it survives composer collapse, blur, and page refresh. A `useDraftGuard` hook persists compose drafts to `localStorage` keyed by session id (globally unique — an instance's current session changes on `switchSession`/`newSession`, so instance id is not a stable conversation key) and restores on attach; a `beforeunload` listener warns when any non-empty draft would be lost.
 - Tab completion now works in edit mode (the previous `!isEditing` guard is dropped — editing a message often involves editing paths).
 - Pane-toggle keybindings: `Ctrl/Cmd+B` toggles the left Sidebar, `Ctrl/Cmd+H` toggles the right HistoryPane. Both are global (work while the composer textarea is focused); bare `h`/`l` branch-sibling navigation is unaffected (no-modifier keys).
+
+- Path completion (Tab) on the Project home: `listFiles` is now Project-addressed (ADR 12), so the home's compose card completes file paths against the Project cwd before any session exists. Previously the home passed a no-op completion source, so the feature was silently unavailable there.
 
 ### Changed
 
