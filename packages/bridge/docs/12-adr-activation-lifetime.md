@@ -2,15 +2,17 @@
 
 **Status:** Proposed. Amends ADR 11 (activation lifecycle, unflushed sessions,
 navigation verbs). Retains ADR 11's domain model, addresses, security rules,
-and the activation reservation. Two slices have shipped: (1) the
+and the activation reservation. Three slices have shipped: (1) the
 text-bearing `newSession` — `text` is required, and the daemon admits the
 first prompt (with optional `images`, and an optional `model`/
 `thinkingLevel` applied before admission) before attaching, disposing the
-fresh activation on refusal —
-and (2) the Project-home floating draft (client-side, persisted per
-project). Everything else — the refcount lifetime rule, transactional
-`openSession` switching, `session_closed`, the `listFiles` re-address to
-the Project, commit-on-push navigation —
+fresh activation on refusal — (2) the Project-home floating draft
+(client-side, persisted per project), and (3) the `listFiles` re-address to
+the Project — `listFiles(projectId, prefix)` resolves against the named
+Project's cwd, so path completion works pre-send with no attachment (the
+Project-addressed form is the only one; the attached-session cwd is never
+consulted). Everything else — the refcount lifetime rule, transactional
+`openSession` switching, `session_closed`, commit-on-push navigation —
 remains unimplemented; ADR 11 describes the shipped behavior for those.
 
 ## Context
@@ -165,7 +167,7 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   state machine makes an interleaving
   meaningless, and the daemon enforces it rather than relying on client
   discipline. Query verbs (`listSessions`, `listActiveSessions`,
-  `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) and `executeBash`
+  `getDaemonInfo`, `readFile`, `gitShow`) and `executeBash`
   run outside the lane: a slow one (a timed `gitShow` spawn, a 256 KB
   `readFile`, a user `!` command that runs for minutes) must not block
   navigation. The queries are read-only against the current attachment;

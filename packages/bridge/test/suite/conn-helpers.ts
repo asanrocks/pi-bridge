@@ -54,6 +54,13 @@ export function waitForFrame(frames: unknown[], pred: (f: unknown) => boolean, t
 	});
 }
 
+/** Resolve once the socket is open. Needed by tests that send without first
+ * awaiting a server-initiated frame (which otherwise gives the socket time). */
+export function waitForOpen(ws: WebSocket): Promise<void> {
+	if (ws.readyState === ws.OPEN) return Promise.resolve();
+	return new Promise((resolve) => ws.once("open", () => resolve()));
+}
+
 /** Poll a condition (manager-side state, not frames). */
 export function waitFor(cond: () => boolean, timeout = 5000, what = "condition"): Promise<void> {
 	return new Promise((resolve, reject) => {

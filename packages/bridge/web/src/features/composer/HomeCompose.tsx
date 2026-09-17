@@ -24,12 +24,6 @@ import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
 
-/** Path completion on the home is deferred: listFiles resolves against an
- * attached session's Project cwd, and the home has no attachment yet (ADR
- * 12 re-addresses the verb to the Project). Module-scope so the completion
- * hook's `complete` dep stays stable across renders. */
-const NO_COMPLETIONS = async () => [];
-
 /** The persisted pre-session pick for one Project: a model plus an optional
  * thinking level. */
 interface HomePick {
@@ -96,7 +90,7 @@ export const HomeCompose = memo(function HomeCompose({
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-	const capabilities = useComposeCapabilities({ textareaRef, complete: NO_COMPLETIONS });
+	const capabilities = useComposeCapabilities({ textareaRef });
 
 	// Landing on the Project home is a come-to-type gesture — focus the card.
 	useEffect(() => {

@@ -19,7 +19,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
-import { listFilesRpc } from "../../infra/useRpc.ts";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
 import cardStyles from "./ComposeCard.module.css";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -105,10 +104,9 @@ export const ComposeDock = memo(function ComposeDock({
 	const costBtnRef = useRef<HTMLButtonElement>(null);
 
 	// ── Shared compose capabilities (attachments + path completion) ──────
-	// listFiles resolves relative paths against the attached session's
-	// Project cwd — the dock is always attached. (The Project home defers
-	// completion until listFiles is re-addressed to the Project; ADR 12.)
-	const capabilities = useComposeCapabilities({ textareaRef, complete: listFilesRpc });
+	// Completion is Project-scoped (ADR 12) and the hook reads the current
+	// address from the store, so this is identical to the Project home's call.
+	const capabilities = useComposeCapabilities({ textareaRef });
 
 	// ── Auto-expand transitions ─────────────────────────────────────────
 	// Open when streaming or editing starts, or while steers are queued.
