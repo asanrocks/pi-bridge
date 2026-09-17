@@ -105,8 +105,8 @@ describe("createClientStore", () => {
 		const store = createClientStore();
 
 		const projects = [
-			{ id: "a", cwd: "/a", defaultModel: null },
-			{ id: "b", cwd: "/b", defaultModel: null },
+			{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null },
+			{ id: "b", cwd: "/b", defaultModel: null, defaultThinkingLevel: null },
 		];
 		store.getState().setProjects(projects);
 		expect(store.getState().projects).toEqual(projects);
@@ -128,7 +128,7 @@ describe("createClientStore", () => {
 	it("clearCurrentSession resets to initial state but keeps the registries", () => {
 		const store = createClientStore();
 
-		store.getState().setProjects([{ id: "a", cwd: "/a", defaultModel: null }]);
+		store.getState().setProjects([{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null }]);
 		store.getState().setCurrentSession("a", "2024-01-01_s1");
 		store.getState().toggleActionGroup("e1:0");
 
@@ -136,7 +136,7 @@ describe("createClientStore", () => {
 
 		const state = store.getState();
 		expect(state.currentProjectId).toBeNull();
-		expect(state.projects).toEqual([{ id: "a", cwd: "/a", defaultModel: null }]);
+		expect(state.projects).toEqual([{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null }]);
 		expect(state.expandedActionGroups).toEqual(new Set());
 		expect(state.loadingPaths).toEqual(new Set());
 	});
