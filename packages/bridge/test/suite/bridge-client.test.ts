@@ -285,10 +285,11 @@ describe("BridgeClient", () => {
 		client.abort();
 		expect(JSON.parse(transport.sent[0]).verb).toBe("abort");
 
-		client.newSession("proj");
+		client.newSession("proj", "hello");
 		const newSessionFrame = JSON.parse(transport.sent[1]);
 		expect(newSessionFrame.verb).toBe("newSession");
 		expect(newSessionFrame.projectId).toBe("proj");
+		expect(newSessionFrame.text).toBe("hello");
 
 		client.listSessions("proj", 10, { sortTimeMs: 42, stem: "a" });
 		const listFrame = JSON.parse(transport.sent[2]);
