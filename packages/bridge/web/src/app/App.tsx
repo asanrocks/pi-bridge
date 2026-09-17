@@ -528,6 +528,7 @@ function AppInner() {
 					activeSessions={activeSessions}
 					sessionPages={sessionPages}
 					onOpenSession={handleOpenSession}
+					onOpenProject={handleOpenProject}
 					onCloseSession={handleCloseSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={handleLoadFolder}
