@@ -413,6 +413,9 @@ export interface NewSessionRequest {
 	/** Optional model for the new session, applied before the prompt is
 	 * admitted — the Project home's pre-session model choice. */
 	model?: ModelRef;
+	/** Optional thinking level, applied after the model (pi clamps to the
+	 * model's supported levels). */
+	thinkingLevel?: string;
 }
 
 /** Paginated history query for one Project (ADR 11). */
@@ -483,6 +486,9 @@ export interface ProjectInfo {
 	 * model is available. The client still omits `model` on `newSession` when
 	 * unset, so this is display-only, not a pinned choice. */
 	defaultModel: ModelRef | null;
+	/** The thinking level that same resolution yields (settings default or
+	 * per-model override, else `medium`). Display-only like `defaultModel`. */
+	defaultThinkingLevel: string | null;
 }
 
 /** Client-facing session address: project id + relative stem within the
