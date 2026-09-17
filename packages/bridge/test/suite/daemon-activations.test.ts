@@ -371,6 +371,36 @@ describe("daemon: projects", () => {
 		ws.close();
 	});
 
+	it("listFiles resolves against a Project's cwd with no session attached", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(join(a, "src"), { recursive: true });
+		writeFileSync(join(a, "src", "alpha.ts"), "// a");
+		writeFileSync(join(a, "src", "beta.ts"), "// b");
+
+		const { port } = await startDaemon({ agentDir, allow: [a] });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		// Deliberately no openSession: pre-send completion on the Project home
+		// has no attachment (ADR 12).
+		const id = send(ws, { verb: "listFiles", projectId, prefix: "src/a" });
+		const reply = (await waitForReply(frames, id)) as unknown as {
+			ok: boolean;
+			entries: Array<{ path: string; isDirectory: boolean }>;
+		};
+		expect(reply.ok).toBe(true);
+		expect(reply.entries.map((e) => e.path)).toEqual(["src/alpha.ts"]);
+
+		// An unknown Project is an error, not a fallback to some other cwd.
+		const bad = send(ws, { verb: "listFiles", projectId: "nope", prefix: "" });
+		const badReply = await waitForReply(frames, bad);
+		expect(badReply.ok).toBe(false);
+		expect(String(badReply.error)).toContain("Unknown project");
+
+		ws.close();
+	});
+
 	it("getDaemonInfo reports each project's resolved default model", async () => {
 		const { agentDir, root, a } = makeProjectRoots();
 		// Project settings pin a default model and thinking level for project a.

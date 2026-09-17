@@ -2,7 +2,14 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
+import {
+	collectFrames,
+	createWsPair,
+	mockDaemonVerbs,
+	mockSessionRef,
+	waitForFrame,
+	waitForOpen,
+} from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -159,6 +166,55 @@ describe("Connection + Daemon", () => {
 		expect(r.ok).toBe(true);
 		expect(r.sessions).toBeDefined();
 		expect(Array.isArray(r.sessions)).toBe(true);
+
+		serverWs.close();
+		clientWs.close();
+	});
+
+	// ADR 12: listFiles is Project-addressed, not attachment-scoped — the
+	// Project home completes pre-send with nothing attached.
+	it("listFiles forwards projectId and needs no attachment", async () => {
+		const calls: Array<[string, string]> = [];
+		const verbs = {
+			...mockDaemonVerbs,
+			listFiles: (prefix: string, projectId: string) => {
+				calls.push([prefix, projectId]);
+				return [{ path: "src/index.ts", isDirectory: false }];
+			},
+		};
+
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+		// Deliberately never attach.
+		new Connection(serverWs, verbs, null, false);
+		await waitForOpen(clientWs);
+
+		clientWs.send(JSON.stringify({ id: "lf1", verb: "listFiles", prefix: "src/", projectId: "proj" }));
+		const reply = (await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "lf1")) as Record<
+			string,
+			unknown
+		>;
+		expect(reply.ok).toBe(true);
+		expect(reply.entries).toEqual([{ path: "src/index.ts", isDirectory: false }]);
+		expect(calls).toEqual([["src/", "proj"]]);
+
+		serverWs.close();
+		clientWs.close();
+	});
+
+	it("listFiles rejects a missing projectId", async () => {
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+		new Connection(serverWs, mockDaemonVerbs, null, false);
+		await waitForOpen(clientWs);
+
+		clientWs.send(JSON.stringify({ id: "lf2", verb: "listFiles", prefix: "src/" }));
+		const reply = (await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "lf2")) as Record<
+			string,
+			unknown
+		>;
+		expect(reply.ok).toBe(false);
+		expect(String(reply.error)).toContain("projectId");
 
 		serverWs.close();
 		clientWs.close();

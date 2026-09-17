@@ -242,8 +242,10 @@ export class BridgeClient {
 		return this.call({ verb: "closeSession", projectId, stem });
 	}
 
-	listFiles(prefix: string): Promise<RpcReply> {
-		return this.call({ verb: "listFiles", prefix });
+	/** Path completion (ADR 12): `prefix` is resolved against the Project's
+	 * cwd, so the Project home can complete before anything is attached. */
+	listFiles(projectId: string, prefix: string): Promise<RpcReply> {
+		return this.call({ verb: "listFiles", projectId, prefix });
 	}
 
 	readFile(path: string): Promise<RpcReply> {

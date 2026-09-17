@@ -91,7 +91,10 @@ export interface DaemonVerbs {
 	closeSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
 	/** Broadcast a Project's refreshed first page (rename, settle). */
 	sessionsChanged: (projectId: string) => void;
-	listFiles: (prefix: string, cwd?: string) => Array<{ path: string; isDirectory: boolean }>;
+	/** Path completion (ADR 12): resolved against `projectId`'s cwd, so it does
+	 * not require an attachment (the Project home completes pre-send). Throws
+	 * on an unknown Project. */
+	listFiles: (prefix: string, projectId: string) => Array<{ path: string; isDirectory: boolean }>;
 	/** Read a file for the web viewer. Throws on missing/unreadable paths
 	 * (converted to an ok:false reply). Relative paths resolve against cwd. */
 	readFile: (path: string, cwd?: string) => { path: string; content: string; truncated: boolean; bytes: number };
@@ -354,8 +357,11 @@ export class Connection {
 				case "listFiles": {
 					const m = msg as unknown as ListFilesRequest;
 					if (typeof m.prefix !== "string") throw new Error("Missing `prefix`");
-					if (!this._attachedManager) throw new Error("no session attached");
-					const entries = this.daemonVerbs.listFiles(m.prefix, this._attachedManager.cwd);
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					// Project-addressed, not attachment-scoped (ADR 12): relative
+					// paths resolve against the Project cwd, so the Project home's
+					// pre-send completion needs no attachment.
+					const entries = this.daemonVerbs.listFiles(m.prefix, m.projectId);
 					this.send({ id, ok: true, entries });
 					break;
 				}
