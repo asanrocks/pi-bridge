@@ -398,10 +398,16 @@ export interface OpenSessionRequest {
 	cursor?: PrefixCursor;
 }
 
-/** Create a new (initially unflushed) session in a Project (ADR 11). */
+/** Create a new (initially unflushed) session in a Project (ADR 11). The
+ * first prompt's `text` is required: it is admitted server-side before the
+ * Connection attaches (an ADR 12 slice), so the initial sync the client
+ * navigates into already carries the in-flight turn, and a refused prompt
+ * disposes the fresh activation — no empty session is ever created. */
 export interface NewSessionRequest {
 	verb: "newSession";
 	projectId: string;
+	/** First prompt text. Required, non-empty. */
+	text: string;
 }
 
 /** Paginated history query for one Project (ADR 11). */

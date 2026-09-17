@@ -200,9 +200,10 @@ export class BridgeClient {
 		);
 	}
 
-	/** Create a new unflushed session in a Project (ADR 11). */
-	newSession(projectId: string): Promise<RpcReply> {
-		return this.call({ verb: "newSession", projectId });
+	/** Create a new unflushed session in a Project (ADR 11). The first
+	 * prompt's text is admitted before attach (ADR 12 slice). */
+	newSession(projectId: string, text: string): Promise<RpcReply> {
+		return this.call({ verb: "newSession", projectId, text });
 	}
 
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<RpcReply> {
