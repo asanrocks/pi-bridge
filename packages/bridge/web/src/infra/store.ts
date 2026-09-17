@@ -38,6 +38,17 @@ export type ComposerDraft =
 	| { kind: "compose"; text: string; images?: ImageContent[] }
 	| { kind: "edit"; entryId: string; index: number; text: string; initialText: string };
 
+/** Stable empty attachment list — a selector returning a fresh `[]` on every
+ * call makes `useStore` (useSyncExternalStore) see the snapshot as changed
+ * after each render and loop to the max update depth. */
+const NO_IMAGES: ImageContent[] = [];
+
+/** Stable view of the active draft's attachments (empty for idle/edit —
+ * edit carries the edited entry's images implicitly). */
+export function selectDraftImages(state: { draft: ComposerDraft }): ImageContent[] {
+	return state.draft.kind === "compose" ? (state.draft.images ?? NO_IMAGES) : NO_IMAGES;
+}
+
 // ---------------------------------------------------------------------------
 // Connection state — drives the TopBar chip (always-on) and the Launcher's
 // full-panel down states. A discriminated union so renderers switch on kind.
