@@ -1,12 +1,12 @@
-// HTTP serving tests: SPA route fallback (`/launcher`, `/chat/...`) from both
-// the disk web root and the embedded (single-file binary) asset map, plus the
-// 404/403 boundaries. Regression coverage for the embedded path, where app
-// routes previously fell through to a non-existent dist/web and returned 404.
+// HTTP serving tests: SPA route fallback (`/<projectId>`, `/<projectId>/<stem>`)
+// from both the disk web root and the embedded (single-file binary) asset map,
+// plus the 404/403 boundaries. Regression coverage for the embedded path, where
+// app routes previously fell through to a non-existent dist/web and returned 404.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Daemon, type DaemonOptions } from "../../src/host/index.ts";
 
@@ -60,7 +60,9 @@ function request(port: number, path: string): Promise<Reply> {
 	});
 }
 
-const APP_ROUTES = ["/launcher", "/chat", "/chat/myproj", "/chat/myproj/2026-01-01T00-00-00-000Z_sess"];
+/** App routes for a project id: the Project home and one session, including a
+ * nested (multi-segment) stem. */
+const appRoutes = (pid: string) => [`/${pid}`, `/${pid}/2026-01-01T00-00-00-000Z_sess`, `/${pid}/nested/stem`];
 
 describe("HTTP serving", () => {
 	it("serves the SPA shell for app routes from the disk web root", async () => {
@@ -69,8 +71,9 @@ describe("HTTP serving", () => {
 		writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>DISK-SHELL</title>");
 		writeFileSync(join(webRoot, "app.js"), "console.log(1)");
 		const port = await startDaemon({ agentDir: makeTempDir("disk-agent"), allow: [project], webRoot });
+		const pid = basename(project).toLowerCase();
 
-		for (const path of APP_ROUTES) {
+		for (const path of appRoutes(pid)) {
 			const res = await request(port, path);
 			expect(res.status, path).toBe(200);
 			expect(res.contentType, path).toContain("text/html");
@@ -98,8 +101,9 @@ describe("HTTP serving", () => {
 			webRoot,
 			embeddedAssets,
 		});
+		const pid = basename(project).toLowerCase();
 
-		for (const path of ["/", ...APP_ROUTES]) {
+		for (const path of ["/", ...appRoutes(pid)]) {
 			const res = await request(port, path);
 			expect(res.status, path).toBe(200);
 			expect(res.contentType, path).toContain("text/html");
@@ -112,7 +116,7 @@ describe("HTTP serving", () => {
 		expect(asset.body).toBe("console.log(2)");
 	});
 
-	it("returns 404 for unknown assets and 403 for path escapes", async () => {
+	it("returns 404 for unknown paths and non-project first segments, 403 for path escapes", async () => {
 		const project = makeTempDir("bound-proj");
 		const rootParent = makeTempDir("bound-parent");
 		const webRoot = join(rootParent, "web");
@@ -126,6 +130,9 @@ describe("HTTP serving", () => {
 		});
 
 		expect((await request(port, "/missing.js")).status).toBe(404);
+		// The first segment is not a configured Project id: not an app route.
+		expect((await request(port, "/not-a-project")).status).toBe(404);
+		expect((await request(port, "/not-a-project/some/stem")).status).toBe(404);
 		// Literal `..` resolves outside the web root — containment must reject
 		// it before any read (ADR 11 security boundary).
 		expect((await request(port, "/../secret.txt")).status).toBe(403);

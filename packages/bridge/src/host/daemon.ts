@@ -133,9 +133,20 @@ export class Daemon {
 		this.idleGcMs = options.idleGcMs ?? DEFAULT_IDLE_GC_MS;
 		this.unflushedIdleGcMs = options.unflushedIdleGcMs ?? DEFAULT_UNFLUSHED_IDLE_GC_MS;
 
+		// Injectable embedded assets (test seam); otherwise the bundled web
+		// assets serve when no --web-root is given (single-file distribution).
+		// Computed before Projects: reserved project-id derivation reads the
+		// asset surface.
+		if (options.embeddedAssets) {
+			this.embeddedAssets = options.embeddedAssets;
+		} else if (!options.webRoot && Object.keys(embeddedAssets).length > 0) {
+			this.embeddedAssets = embeddedAssets as Record<string, string>;
+		}
+
 		// Projects are static daemon configuration (ADR 11). Invalid ids,
-		// duplicate ids, and shared session storage fail startup.
-		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir);
+		// duplicate ids, shared session storage, and web-asset collisions fail
+		// startup.
+		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir, this.reservedProjectIds());
 		this.projects = new Map(projects.map((p) => [p.id, p]));
 		// Duplicate session ids are unsupported input: fail startup rather than
 		// serve two addresses that would collide in the activation registry.
@@ -143,14 +154,6 @@ export class Daemon {
 
 		if (options.logPath) {
 			this.logger = TrafficLogger.open(options.logPath);
-		}
-
-		// Injectable embedded assets (test seam); otherwise the bundled web
-		// assets serve when no --web-root is given (single-file distribution).
-		if (options.embeddedAssets) {
-			this.embeddedAssets = options.embeddedAssets;
-		} else if (!this.webRoot && Object.keys(embeddedAssets).length > 0) {
-			this.embeddedAssets = embeddedAssets as Record<string, string>;
 		}
 
 		// Injectable deps (test seam)
@@ -205,6 +208,27 @@ export class Daemon {
 	 * modelRuntime so extension-registered providers are visible in
 	 * getDaemonInfo before any session exists.
 	 */
+	/** First path segments a Project id must not collide with: real files win
+	 * over routes in the HTTP server, so a same-named Project's page would be
+	 * unreachable (`/assets/...` serves the file, never the shell). Derived
+	 * from the actual asset surface — the web root's entries when serving
+	 * from disk, the embedded asset keys otherwise — plus `assets` (vite's
+	 * output dir, present in every build). */
+	private reservedProjectIds(): Set<string> {
+		const reserved = new Set<string>(["assets"]);
+		const root = this.webRoot ?? join(import.meta.dirname, "../../dist/web");
+		try {
+			for (const name of readdirSync(root)) reserved.add(name);
+		} catch {
+			// No web root on disk (embedded-only distribution) — the embedded
+			// keys below are the surface.
+		}
+		if (this.embeddedAssets) {
+			for (const key of Object.keys(this.embeddedAssets)) reserved.add(key.split("/")[0]);
+		}
+		return reserved;
+	}
+
 	private async loadExtensions(): Promise<void> {
 		try {
 			const cwd = process.cwd();
@@ -643,7 +667,7 @@ export class Daemon {
 			}
 		},
 
-		newSession: async (projectId, conn) => {
+		newSession: async (projectId, conn, text) => {
 			try {
 				const project = this.projects.get(projectId);
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
@@ -669,6 +693,19 @@ export class Daemon {
 					{ projectId, sessionId: manager.liveSessionId, stem },
 					key,
 				);
+				// Admit the first prompt before the attach (ADR 12 slice): the
+				// client's initial sync carries the in-flight turn, and no empty
+				// session exists while the user types. A refused admission (no
+				// model, no auth) disposes the fresh activation — nothing empty
+				// survives to idle-collect later. Patches streamed between
+				// admission and attach are covered by the initial sync (the
+				// Document is canonical).
+				try {
+					await manager.promptAdmitted(text);
+				} catch (err) {
+					await this.collectActivation(activation);
+					throw err;
+				}
 				this.attachConnection(conn, activation, null);
 				return { ok: true, session: activation.ref };
 			} catch (err) {
@@ -764,10 +801,16 @@ export class Daemon {
 		});
 	}
 
-	/** Known application routes `/launcher` and `/chat/...` serve index.html
-	 * (ADR 11); unknown assets stay 404. */
+	/** Known application routes serve index.html (ADR 11): `/<projectId>` is
+	 * the Project's home and `/<projectId>/<stem...>` one session. The first
+	 * segment must be a configured Project id — ids match `[a-z0-9-]`, so no
+	 * percent-decoding is needed and an encoded segment simply doesn't match.
+	 * Real files win over routes (assets are tried first), which is why ids
+	 * colliding with root asset names are rejected at startup; unknown paths
+	 * stay 404. */
 	private isAppRoute(path: string): boolean {
-		return path === "/launcher" || path === "/chat" || path.startsWith("/chat/");
+		const first = path.replace(/^\//, "").split("/")[0];
+		return first !== "" && this.projects.has(first);
 	}
 
 	private async startServer(): Promise<void> {

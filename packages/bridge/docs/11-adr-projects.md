@@ -242,7 +242,9 @@ only returns regular `.jsonl` files under the canonical session directory.
 
 > Amended by ADR 12 (Proposed) — an empty session becomes client state
 > ("drafts at first message"); this section's scope shrinks to the
-> first-turn window. The text below describes the shipped behavior.
+> first-turn window. The text-bearing `newSession` slice of that design has
+> shipped: `text` is required and admitted before attach, so no empty session
+> is ever created. The text below describes the shipped behavior.
 
 A session created by `newSession` has an allocated filename but no file until
 pi flushes it (on the first assistant message). Until then it exists only
@@ -251,7 +253,7 @@ stem from the start.
 
 An unflushed session is resolvable only while its activation lives. If the
 daemon restarts before a flush, the stem no longer resolves and the client
-falls back to `/chat/<projectId>`. That is the same behavior as a session file
+falls back to `/<projectId>`. That is the same behavior as a session file
 that has been deleted, so no separate route or metadata is needed.
 
 Multiple unflushed sessions per Project are allowed. There is no single
@@ -375,7 +377,7 @@ listActiveSessions()
 openSession({ projectId, stem, cursor? })
   → { ok, session: SessionInfo }
 
-newSession({ projectId })
+newSession({ projectId, text })
   → { ok, session: SessionInfo }
 
 detach()
@@ -431,7 +433,11 @@ whose session resolves to that stem, otherwise creates one from the file.
 
 `newSession` creates a new unflushed session and returns its metadata. The
 client addresses it by the returned stem. There is no single "current" new
-session per Project.
+session per Project. `text` (the first prompt) is required: the daemon
+admits it before attaching the Connection (an ADR 12 slice), so the initial
+sync carries the in-flight turn, and a refused admission disposes the fresh
+activation instead of leaving an empty session to idle-collect. There is no
+empty-session creation path.
 
 `detach` removes the Connection's attachment but leaves the activation alive
 for later reattachment or internal GC. Activation termination is not a
@@ -546,7 +552,7 @@ A reconnect is resolved by `openSession(projectId, stem, cursor?)`, not by
 reviving an activation id. If a live activation for the session still exists,
 the daemon reattaches to it; otherwise it creates one from the file. An
 unflushed session resolves only while its activation lives; after a daemon
-restart the client falls back to `/chat/<projectId>`.
+restart the client falls back to `/<projectId>`.
 
 ### Registry and session updates
 
@@ -623,17 +629,23 @@ supported. The client percent-encodes each stem segment and the server decodes
 the path once; a stem containing a literal `%2F` round-trips as `%252F`:
 
 ```text
-/launcher                           project picker + active sessions across Projects
-/chat/<projectId>                   the Project's launcher: session browser + New
-/chat/<projectId>/<relative-stem>   one session
+/                                 project picker + active sessions across Projects
+/<projectId>                       the Project's home: prompt input + sessions
+/<projectId>/<relative-stem>       one session
 ```
 
-`/chat/<projectId>` is the Project's home, the same launcher surface as
-`/launcher` scoped to one Project: it lists the Project's sessions, shows
-active/streaming state, and hosts the New-session action. There is no separate
-empty-session route. A new session is just a session with an unflushed stem,
-and the client navigates to `/chat/<projectId>/<stem>` as soon as `newSession`
-returns.
+`/<projectId>` is the Project's home: a prompt input that starts a new session
+on send, plus the Project's active and recent sessions. There is no separate
+empty-session route and no create button. `newSession` takes the first
+prompt's `text` (required): the daemon admits the prompt before attaching the Connection
+(an ADR 12 slice), so the initial sync the client navigates into already
+carries the in-flight turn, and a refused admission (no model, no auth)
+disposes the fresh activation — no empty session survives. The client
+navigates to `/<projectId>/<stem>` as soon as `newSession` returns.
+
+Because a Project id is the first URL path segment and real files win over
+routes in the HTTP server, ids colliding with root web-asset names (`assets`,
+build outputs) are rejected at daemon startup.
 
 The URL is read at boot to select an initial session and is written with
 `replaceState`. It is not consulted as a second live navigation state machine.
@@ -641,11 +653,13 @@ The URL is read at boot to select an initial session and is written with
 A session URL survives daemon restart while the file and Project configuration
 still exist. An unflushed session's URL survives only while its activation
 remains live in the same daemon; otherwise the client falls back to
-`/chat/<projectId>`.
+`/<projectId>`.
 
-The HTTP server serves `index.html` for the known application routes. Static
-assets are served by exact path; unknown assets remain 404. Route segments are
-decoded and validated before use.
+The HTTP server serves `index.html` for the known application routes: `/` and
+any path whose first segment is a configured Project id. Static assets are
+served by exact path and win over routes; unknown paths (including non-project
+first segments) remain 404. Route segments are decoded and validated before
+use.
 
 ## Exclusivity and races
 

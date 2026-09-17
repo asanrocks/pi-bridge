@@ -289,6 +289,7 @@ describe("initial sync: subscription reset", () => {
 				handles.delete(handle);
 			},
 			prompt: async () => {},
+			promptAdmitted: async () => {},
 			executeBash: async () => {},
 			abort: async () => {},
 			discardSteer: async () => {},

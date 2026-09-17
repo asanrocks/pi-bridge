@@ -19,6 +19,10 @@ import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from 
 
 interface StubHandles {
 	emitPatch: (patch: Patch) => void;
+	/** Ordered lifecycle events ("admit" / "attach") — ordering assertions. */
+	events: () => string[];
+	/** Texts passed to promptAdmitted. */
+	admittedTexts: () => string[];
 	/** Flip the stub document's streaming flag and emit the matching patch —
 	 * exercises both the daemon's onPatch listener and the GC eligibility
 	 * check, which reads `document.status.isStreaming`. */
@@ -73,6 +77,8 @@ function makeStubManager(opts: {
 	sessionId?: string;
 	/** Pre-populated document entries — an entry-bearing unflushed session. */
 	entries?: Document["entries"];
+	/** Makes promptAdmitted reject — a refused first-prompt admission. */
+	admitError?: Error;
 }): StubManager {
 	const cwd = opts.cwd ?? "";
 	const agentDir = opts.agentDir ?? "";
@@ -82,6 +88,8 @@ function makeStubManager(opts: {
 	const document = emptyStubDocument();
 	document.entries = opts.entries ?? {};
 	const patchListeners = new Set<(patch: Patch) => void>();
+	const events: string[] = [];
+	const admittedTexts: string[] = [];
 	const settledListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
@@ -103,6 +111,7 @@ function makeStubManager(opts: {
 			return () => settledListeners.delete(listener);
 		},
 		addConnection(handle, session: SessionRef) {
+			events.push("attach");
 			connectionHandles.add(handle);
 			handle.onInitialSync({ kind: "replace", session, document });
 		},
@@ -110,6 +119,11 @@ function makeStubManager(opts: {
 			connectionHandles.delete(handle);
 		},
 		async prompt() {},
+		async promptAdmitted(text: string) {
+			events.push("admit");
+			if (opts.admitError) throw opts.admitError;
+			admittedTexts.push(text);
+		},
 		async executeBash() {},
 		async abort() {},
 		async discardSteer() {},
@@ -129,6 +143,8 @@ function makeStubManager(opts: {
 
 	const handles: StubHandles = {
 		emitPatch: emit,
+		events: () => [...events],
+		admittedTexts: () => [...admittedTexts],
 		setStreaming: (streaming: boolean) => {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
@@ -328,6 +344,9 @@ describe("daemon: projects", () => {
 	it("rejects duplicate ids and shared session storage at startup", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		await expect(new Daemon().start({ agentDir, allow: [a, a] })).rejects.toThrow(/Duplicate project id/);
+		// A Project id is the first URL path segment; a root asset of the same
+		// name would win over the route and make the page unreachable.
+		await expect(new Daemon().start({ agentDir, allow: [`assets=${a}`] })).rejects.toThrow(/reserved/);
 		await expect(new Daemon().start({ agentDir, allow: [`x=${a}`, `y=${a}`] })).rejects.toThrow(
 			/share a session storage directory/,
 		);
@@ -392,7 +411,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId });
+		const id = send(ws, { verb: "newSession", projectId, text: "hello" });
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
 		expect(reply.ok).toBe(true);
 		expect(reply.session.projectId).toBe(projectId);
@@ -425,16 +444,113 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const first = (await waitForReply(frames, send(ws, { verb: "newSession", projectId }))) as unknown as {
+		const first = (await waitForReply(
+			frames,
+			send(ws, { verb: "newSession", projectId, text: "one" }),
+		)) as unknown as {
 			session: SessionRef;
 		};
-		const second = (await waitForReply(frames, send(ws, { verb: "newSession", projectId }))) as unknown as {
+		const second = (await waitForReply(
+			frames,
+			send(ws, { verb: "newSession", projectId, text: "two" }),
+		)) as unknown as {
 			session: SessionRef;
 		};
 
 		expect(first.session.stem).not.toBe(second.session.stem);
 		expect(first.session.sessionId).not.toBe(second.session.sessionId);
 		expect(factoryCalls).toBe(2);
+
+		ws.close();
+	});
+
+	it("newSession admits the first prompt before the attach", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const stubRef: { current: StubManager | null } = { current: null };
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				return stub.manager;
+			},
+		});
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "newSession", projectId, text: "hello world" });
+		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
+		expect(reply.ok).toBe(true);
+		// The initial sync the client navigates into follows the attach.
+		await waitForPush(frames, "replace");
+
+		const stub = stubRef.current;
+		expect(stub).not.toBeNull();
+		expect(stub!.handles.admittedTexts()).toEqual(["hello world"]);
+		// Admission precedes the attach (ADR 12 slice): the daemon admits the
+		// prompt, then attaches the connection.
+		expect(stub!.handles.events()).toEqual(["admit", "attach"]);
+
+		ws.close();
+	});
+
+	it("a refused admission disposes the fresh activation", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let refuseAdmission = true;
+		const { port, daemon } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) =>
+				makeStubManager({
+					...(opts ?? {}),
+					admitError: refuseAdmission ? new Error("no model selected") : undefined,
+				}).manager,
+		});
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "newSession", projectId, text: "hello" });
+		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; error?: string };
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("no model selected");
+		// No empty session survives: the activation was disposed, not left for
+		// idle GC.
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+
+		// A later retry works (the address was released cleanly).
+		refuseAdmission = false;
+		const ws2 = await openClient(port);
+		const frames2 = collectFrames(ws2);
+		const retry = (await waitForReply(
+			frames2,
+			send(ws2, { verb: "newSession", projectId, text: "hello" }),
+		)) as unknown as { ok: boolean };
+		expect(retry.ok).toBe(true);
+		ws2.close();
+
+		ws.close();
+	});
+
+	it("rejects newSession without text", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port, daemon } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		for (const frame of [
+			{ verb: "newSession", projectId },
+			{ verb: "newSession", projectId, text: "  " },
+		]) {
+			const reply = (await waitForReply(frames, send(ws, frame))) as unknown as { ok: boolean; error?: string };
+			expect(reply.ok).toBe(false);
+			expect(reply.error).toContain("text");
+		}
+		// Nothing was created — text is a precondition, not an option.
+		expect(daemon.listActiveSessions()).toHaveLength(0);
 
 		ws.close();
 	});
@@ -746,7 +862,7 @@ describe("daemon: idle GC", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		expect((await waitForReply(frames, send(ws, { verb: "newSession", projectId }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "newSession", projectId, text: "hello" }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
 
 		// Past the short idle delay: the longer unflushed cap still holds.
@@ -1002,7 +1118,7 @@ describe("daemon: session listing", () => {
 		expect(page2.hasMore).toBe(false);
 
 		// An unflushed active session is included as a normal row.
-		const newId = send(ws, { verb: "newSession", projectId });
+		const newId = send(ws, { verb: "newSession", projectId, text: "hello" });
 		const created = (await waitForReply(frames, newId)) as unknown as { session: SessionRef };
 		const allId = send(ws, { verb: "listSessions", projectId });
 		const all = (await waitForReply(frames, allId)) as unknown as {

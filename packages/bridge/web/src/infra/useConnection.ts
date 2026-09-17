@@ -3,7 +3,7 @@
 // Owns the transport and the connection state machine: connecting → connected
 // | init_failed, and on drop → reconnecting → unreachable (after threshold).
 // The URL (ADR 11) is the navigation source of truth: boot and every reconnect
-// re-resolve `/launcher`, `/chat/<projectId>`, or `/chat/<projectId>/<stem>`.
+// re-resolves `/`, `/<projectId>`, or `/<projectId>/<stem>`.
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";

@@ -255,6 +255,53 @@ describe("Manager verbs", () => {
 		expect(content.some((c) => c.type === "image" && c.data === "aGk=" && c.mimeType === "image/png")).toBe(true);
 	});
 
+	it("promptAdmitted resolves at admission, while the turn is still streaming", async () => {
+		const h = await createVerbHarness(false); // fresh session: empty history
+		harnesses.push(h);
+
+		// A gated faux response: the turn cannot settle until the test releases it.
+		let releaseTurn: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		h.faux.setResponses([() => gate.then(() => fauxAssistantMessage("done"))]);
+
+		await h.manager.promptAdmitted("hello");
+
+		// Admission resolved while the gated turn runs: the user message is
+		// recorded once the turn's events begin to flow…
+		const rolesOf = () =>
+			Object.values(h.manager.document.entries)
+				.filter((e) => e.kind === "message")
+				.map((e) => (e.kind === "message" ? e.role : ""));
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (rolesOf().includes("user")) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+		const roles = rolesOf();
+		// …but the assistant reply cannot arrive while the gate holds — the
+		// resolution really did precede turn completion.
+		expect(roles).not.toContain("assistant");
+
+		releaseTurn!();
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (!h.manager.document.status.isStreaming) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+		const settled = Object.values(h.manager.document.entries)
+			.filter((e) => e.kind === "message")
+			.map((e) => (e.kind === "message" ? e.role : ""));
+		expect(settled).toContain("assistant");
+	});
+
 	// ── idle-state reconcile ─────────────────────────────────────────────
 
 	it("setModel reconciles immediately when idle", async () => {

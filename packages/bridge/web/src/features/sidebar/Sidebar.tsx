@@ -307,7 +307,6 @@ export const Sidebar = memo(function Sidebar({
 	activeSessions,
 	sessionPages,
 	onOpenSession,
-	onNewSession,
 	onCloseSession,
 	onShowLauncher,
 	onLoadFolder,
@@ -327,7 +326,6 @@ export const Sidebar = memo(function Sidebar({
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
-	onNewSession: (projectId: string) => void;
 	/** Terminate a session's live instance (row menu Close, no confirmation). */
 	onCloseSession: (projectId: string, stem: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
@@ -335,9 +333,9 @@ export const Sidebar = memo(function Sidebar({
 	onLoadFolder: (projectId: string) => void;
 	onLoadMoreFolder: (projectId: string) => void;
 	toggleRef: React.MutableRefObject<() => void>;
-	/** Imperative new-session trigger populated by the Sidebar. Alt+N calls
-	    this: with one project it starts directly; with several it opens the
-	    sidebar (if closed) and surfaces the project picker the [+] owns. */
+	/** Imperative open-sidebar handle populated by the Sidebar. Alt+N calls
+	    this with several Projects configured — the project list lives here;
+	    a session is started by sending a prompt from a Project's home. */
 	newSessionRef: React.MutableRefObject<() => void>;
 	/** Mode report for the App shell (TopBar hamburger visibility). Called
 	    on every mode change after mount. */
@@ -361,12 +359,6 @@ export const Sidebar = memo(function Sidebar({
 		}
 		return "hidden";
 	});
-	const [projectPopoverAnchor, setProjectPopoverAnchor] = useState<DOMRect | null>(null);
-	const newSessionBtnRef = useRef<HTMLButtonElement>(null);
-	// Set by Alt+N while hidden: opening the panel renders the [+] button,
-	// then the pending effect below triggers the new-session flow once it's
-	// mounted. Avoids a detached popover anchored to a non-existent button.
-	const [pendingNewSession, setPendingNewSession] = useState(false);
 
 	// ── Folder expansion (persisted). The current Project always auto-expands
 	// (the effect adds, never removes — manual collapse stays respected).
@@ -409,33 +401,13 @@ export const Sidebar = memo(function Sidebar({
 		}
 	}, [expanded]);
 
-	const triggerNewSession = useCallback(() => {
-		if (projects.length === 1) {
-			onNewSession(projects[0].id);
-		} else if (projects.length > 1) {
-			setProjectPopoverAnchor(newSessionBtnRef.current?.getBoundingClientRect() ?? null);
-		}
-	}, [projects, onNewSession]);
-
+	// Alt+N with several Projects: ensure the sidebar is open so its project
+	// list is reachable (a session is started from a Project's home prompt).
 	useEffect(() => {
 		newSessionRef.current = () => {
-			if (mode === "hidden") {
-				setMode(isWide ? "rail" : "fullscreen");
-				setPendingNewSession(true);
-			} else {
-				triggerNewSession();
-			}
+			if (mode === "hidden") setMode(isWide ? "rail" : "fullscreen");
 		};
-	}, [mode, isWide, triggerNewSession, newSessionRef]);
-
-	// After opening, trigger the deferred new-session once the [+] button
-	// has mounted (the panels return null while hidden).
-	useEffect(() => {
-		if (pendingNewSession && mode !== "hidden" && newSessionBtnRef.current) {
-			setPendingNewSession(false);
-			triggerNewSession();
-		}
-	}, [pendingNewSession, mode, triggerNewSession]);
+	}, [mode, isWide, newSessionRef]);
 
 	// Mobile has no rail: crossing to narrow collapses a rail to hidden
 	// (hidden/fullscreen stay valid). Crossing back to wide preserves the
@@ -692,53 +664,8 @@ export const Sidebar = memo(function Sidebar({
 							</svg>
 						</button>
 					)}
-					<button
-						ref={newSessionBtnRef}
-						type="button"
-						className={styles.sidebarAddBtn}
-						onClick={triggerNewSession}
-						disabled={projects.length === 0}
-						title="New session"
-						aria-label="New session"
-					>
-						+
-					</button>
 				</span>
 			</div>
-			{projectPopoverAnchor && projects.length > 1 && (
-				<>
-					<button
-						type="button"
-						aria-label="Close project picker"
-						className={styles.portalOverlay}
-						onClick={() => setProjectPopoverAnchor(null)}
-					/>
-					<div
-						className={styles.cwdPopover}
-						style={{
-							position: "fixed",
-							top: projectPopoverAnchor.bottom + 4,
-							left: Math.max(8, Math.min(projectPopoverAnchor.left, window.innerWidth - 240 - 8)),
-							width: 240,
-						}}
-					>
-						{projects.map((project) => (
-							<button
-								type="button"
-								key={project.id}
-								className={styles.cwdPopoverItem}
-								onClick={() => {
-									setProjectPopoverAnchor(null);
-									onNewSession(project.id);
-								}}
-								title={project.cwd}
-							>
-								{project.id}
-							</button>
-						))}
-					</div>
-				</>
-			)}
 			{projects.length === 0 && <div className={styles.sidebarEmpty}>No projects configured</div>}
 			<div className={styles.sidebarList}>
 				{projects.map((project) => (
