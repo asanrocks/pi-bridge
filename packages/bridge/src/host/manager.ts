@@ -133,6 +133,12 @@ export interface Manager {
 	// ── Session verbs ─────────────────────────────────────────────────────
 
 	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	/** Admit a prompt without awaiting the turn: resolves once pi's preflight
+	 * accepts it (model/auth validated, message enqueued — the turn runs on in
+	 * the background), rejects if admission fails. A rejection *after*
+	 * admission never surfaces here; it becomes document state. Used by the
+	 * daemon's text-bearing `newSession` (ADR 12 slice). */
+	promptAdmitted(text: string, images?: ImageContent[]): Promise<void>;
 	/** Run a user `!` command in the instance cwd. Recorded as a
 	 * `bashExecution` entry — also an ADR 10 user_bash_end observation
 	 * boundary. */
@@ -391,6 +397,37 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				streamingBehavior: "steer",
 				preflightResult: () => {},
 				...(images && images.length > 0 ? { images } : {}),
+			});
+		},
+
+		promptAdmitted(text: string, images?: ImageContent[]) {
+			// pi's preflightResult fires exactly once before the turn starts (or
+			// rethrows after preflightResult(false) on refusal), so it is the
+			// admission signal. After admission the turn's own rejection is
+			// document state, not this promise's — swallow it so the
+			// fire-and-forget turn never leaks an unhandled rejection.
+			return new Promise<void>((resolve, reject) => {
+				let admitted = false;
+				session
+					.prompt(text, {
+						source: "rpc",
+						streamingBehavior: "steer",
+						preflightResult: (success) => {
+							admitted = success;
+							if (success) resolve();
+						},
+						...(images && images.length > 0 ? { images } : {}),
+					})
+					.then(
+						() => {
+							// Belt for a resolution path pi takes without calling preflight —
+							// resolve instead of hanging.
+							if (!admitted) resolve();
+						},
+						(err) => {
+							if (!admitted) reject(err instanceof Error ? err : new Error(String(err)));
+						},
+					);
 			});
 		},
 

@@ -148,8 +148,12 @@ export function useRpc() {
 		});
 	}, []);
 
-	const newSession = useCallback(async (projectId: string) => {
-		const reply = await rpc(() => getGlobalClient()?.newSession(projectId), "new session failed");
+	/** Create a session in a Project by sending its first prompt. The prompt
+	 * is admitted server-side before the attach (ADR 12 slice) — the initial
+	 * sync the client navigates into carries the in-flight turn. Returns
+	 * true on success so the caller can clear (or keep) its input box. */
+	const newSession = useCallback(async (projectId: string, text: string) => {
+		const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text), "new session failed");
 		if (reply?.ok) {
 			const ref = (reply as unknown as { session?: SessionRef }).session;
 			if (ref) {
@@ -158,6 +162,7 @@ export function useRpc() {
 				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
 			}
 		}
+		return reply?.ok === true;
 	}, []);
 
 	/** Back to the Launcher: unbind server-side, then clear local state. */

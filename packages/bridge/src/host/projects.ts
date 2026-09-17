@@ -51,13 +51,15 @@ export function deriveProjectId(cwd: string): string {
 
 /**
  * Materialize the daemon's Project list from `--allow` entries. Rejects
- * invalid or empty derived ids, invalid explicit ids, duplicate ids, and two
- * Projects resolving to the same pi session storage namespace.
+ * invalid or empty derived ids, invalid explicit ids, duplicate ids, ids
+ * colliding with reserved web-asset path segments, and two Projects
+ * resolving to the same pi session storage namespace.
  */
-export function buildProjects(entries: string[], agentDir: string): ProjectConfig[] {
+export function buildProjects(entries: string[], agentDir: string, reservedIds?: Iterable<string>): ProjectConfig[] {
 	const projects: ProjectConfig[] = [];
 	const ids = new Set<string>();
 	const sessionDirs = new Map<string, string>();
+	const reserved = reservedIds ? new Set(reservedIds) : null;
 
 	for (const entry of entries) {
 		const { id: explicitId, path } = parseAllowEntry(entry);
@@ -72,6 +74,11 @@ export function buildProjects(entries: string[], agentDir: string): ProjectConfi
 		}
 		if (ids.has(id)) throw new Error(`Duplicate project id: ${id}`);
 		ids.add(id);
+		// A Project id is also the first URL path segment, and real files win
+		// over routes — a colliding id would make the Project's page unreachable.
+		if (reserved?.has(id)) {
+			throw new Error(`Project id "${id}" is reserved (collides with a web asset path)`);
+		}
 
 		const sessionDir = getDefaultSessionDir(cwd, agentDir);
 		const owner = sessionDirs.get(sessionDir);
