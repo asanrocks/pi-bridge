@@ -65,7 +65,7 @@ function appendEntry(doc: Document, entry: Record<string, unknown>): Document {
 describe("computeViewModel", () => {
 	it("returns empty turns list for empty document", () => {
 		const doc = emptyDoc();
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toEqual([]);
 		expect(vm.leafEntryId).toBeNull();
 	});
@@ -91,7 +91,7 @@ describe("computeViewModel", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(3);
 		expect(vm.turns[0].kind).toBe("user");
 		expect(vm.turns[1].kind).toBe("system");
@@ -113,7 +113,7 @@ describe("computeViewModel", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "pending:message";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2);
 		expect(vm.turns[0].kind).toBe("user");
 		expect(vm.turns[1].kind).toBe("assistant");
@@ -133,7 +133,7 @@ describe("computeViewModel", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u = vm.turns[0];
 		expect(u.kind).toBe("user");
 		if (u.kind === "user") expect(u.text).toBe("Hello\nWorld");
@@ -152,7 +152,7 @@ describe("computeViewModel", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u = vm.turns[0];
 		expect(u.kind).toBe("user");
 		if (u.kind === "user") {
@@ -171,7 +171,7 @@ describe("computeViewModel", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u = vm.turns[0];
 		expect(u.kind).toBe("user");
 		if (u.kind === "user") {
@@ -199,7 +199,7 @@ describe("computeViewModel", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		expect(a.kind).toBe("assistant");
 		if (a.kind === "assistant") {
@@ -251,7 +251,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + merged assistant run
 		const run = vm.turns[1];
 		expect(run.kind).toBe("assistant");
@@ -286,7 +286,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged run turn
 		const run = vm.turns[1];
 		expect(run.kind).toBe("assistant");
@@ -312,7 +312,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
 		const run = vm.turns[1];
 		if (run.kind === "assistant") {
@@ -341,7 +341,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
 		const run = vm.turns[1];
 		if (run.kind === "assistant") {
@@ -366,7 +366,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2);
 		const turn = vm.turns[1];
 		if (turn.kind === "assistant") {
@@ -455,7 +455,7 @@ describe("turn separation by text", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + merged assistant run
 		const t = vm.turns[1];
 		if (t.kind === "assistant") {
@@ -493,7 +493,7 @@ describe("cross-entry merge", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + merged assistant
 		const a = vm.turns[1];
 		expect(a.kind).toBe("assistant");
@@ -531,7 +531,7 @@ describe("cross-entry merge", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "pending:a2";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// user + one merged run turn (both entries text-final → merged)
 		expect(vm.turns).toHaveLength(2);
 		const a = vm.turns[1];
@@ -575,7 +575,7 @@ describe("cross-entry merge", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// user + merged assistant (no separate tool_result turn)
 		expect(vm.turns).toHaveLength(2);
 		const a = vm.turns[1];
@@ -608,7 +608,7 @@ describe("cross-entry merge", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(4);
 		expect(vm.turns[0].kind).toBe("user");
 		expect(vm.turns[1].kind).toBe("assistant");
@@ -626,7 +626,7 @@ describe("system turns", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("c1", null, "2024-01-01T00:00:00Z", "compaction", { summary: "Compacted context" }));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1);
 		const st = vm.turns[0];
 		expect(st.kind).toBe("system");
@@ -643,7 +643,7 @@ describe("system turns", () => {
 			makeEntry("m1", null, "2024-01-01T00:00:00Z", "model_change", { provider: "faux", modelId: "gpt-7" }),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const st = vm.turns[0];
 		expect(st.kind).toBe("system");
 		if (st.kind === "system") {
@@ -677,7 +677,7 @@ describe("system turns", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1);
 		const st = vm.turns[0];
 		expect(st.kind).toBe("system");
@@ -700,7 +700,7 @@ describe("system turns", () => {
 			makeEntry("t2", "t1", "2024-01-01T00:01:00Z", "thinking_level_change", { thinkingLevel: "high" }),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1);
 		const st = vm.turns[0];
 		expect(st.kind).toBe("system");
@@ -720,7 +720,7 @@ describe("system turns", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const st = vm.turns[0];
 		expect(st.kind).toBe("system");
 		if (st.kind === "system") {
@@ -746,7 +746,7 @@ describe("system turns", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(3);
 		const kinds = vm.turns.map((t) => (t.kind === "system" ? t.type : t.kind));
 		expect(kinds).toEqual(["model_switch", "user", "model_switch"]);
@@ -781,7 +781,7 @@ describe("tool result join", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "tr1";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		expect(a.kind).toBe("assistant");
 		if (a.kind === "assistant") {
@@ -818,7 +818,7 @@ describe("tool result join", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "tr1";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		if (a.kind === "assistant" && a.blocks[0].blockType === "tool") {
 			expect(a.blocks[0].status).toBe("error");
@@ -837,7 +837,7 @@ describe("tool result join", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		if (a.kind === "assistant" && a.blocks[0].blockType === "tool") {
 			expect(a.blocks[0].status).toBe("running");
@@ -856,7 +856,7 @@ describe("tool result join", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		if (a.kind === "assistant" && a.blocks[0].blockType === "tool") {
 			expect(a.blocks[0].status).toBe("pending");
@@ -889,7 +889,7 @@ describe("tool result join", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "pending:tc1";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		if (a.kind === "assistant" && a.blocks[0].blockType === "tool") {
 			expect(a.blocks[0].status).toBe("running");
@@ -918,7 +918,7 @@ describe("tool step summaries", () => {
 	}
 
 	function summary(args: Record<string, unknown> | null): string {
-		const vm = computeViewModel({ document: docWithTool(args), sessions: [], models: [] });
+		const vm = computeViewModel({ document: docWithTool(args), models: [] });
 		const h = vm.turns[0];
 		if (h.kind === "assistant" && h.blocks[0].blockType === "tool") return h.blocks[0].summary;
 		return "";
@@ -939,7 +939,7 @@ describe("tool step summaries", () => {
 			content: [{ type: "toolCall", id: "tc1", name: "edit", arguments: { filePath: "src/foo.ts" } }],
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const h = vm.turns[0];
 		if (h.kind === "assistant" && h.blocks[0].blockType === "tool") {
 			expect(h.blocks[0].summary).toBe("edit: src/foo.ts");
@@ -957,7 +957,7 @@ describe("tool step summaries", () => {
 			content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: { command: "npm test" } }],
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const h = vm.turns[0];
 		if (h.kind === "assistant" && h.blocks[0].blockType === "tool") {
 			expect(h.blocks[0].summary).toBe("bash: npm test");
@@ -1000,7 +1000,7 @@ describe("user bash turns", () => {
 	}
 
 	it("bash_execution becomes its own turn between user turns", () => {
-		const vm = computeViewModel({ document: docWithBash(), sessions: [], models: [] });
+		const vm = computeViewModel({ document: docWithBash(), models: [] });
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "userBash", "user"]);
 		const bashTurn = vm.turns[1];
 		if (bashTurn.kind !== "userBash") throw new Error("unreachable");
@@ -1025,7 +1025,7 @@ describe("user bash turns", () => {
 				excludeFromContext: true,
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const t = vm.turns[0];
 		if (t.kind !== "userBash") throw new Error("unreachable");
 		expect(t.exitCode).toBe(1);
@@ -1252,7 +1252,7 @@ describe("sibling pager", () => {
 		}) as unknown as Document["entries"][string];
 		doc.status.leafId = "asst-b";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// root → child-b → asst-b = 3 turns (user, user, assistant)
 		expect(vm.turns).toHaveLength(3);
 
@@ -1272,7 +1272,7 @@ describe("sibling pager", () => {
 		}) as unknown as Document["entries"][string];
 		doc.status.leafId = "only";
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u = vm.turns[0];
 		if (u.kind === "user") {
 			expect(u.siblings).toEqual(["only"]);
@@ -1327,7 +1327,7 @@ describe("turn context usage", () => {
 	const models = [{ provider: "p", id: "m1", name: "M1", reasoning: false, contextWindow: 100_000 }];
 
 	it("reports cumulative occupancy and a delta above the threshold", () => {
-		const vm = computeViewModel({ document: ctxDoc(), sessions: [], models });
+		const vm = computeViewModel({ document: ctxDoc(), models });
 		const t1 = vm.turns[1];
 		const t2 = vm.turns[3];
 		if (t1.kind === "assistant" && t2.kind === "assistant") {
@@ -1363,7 +1363,7 @@ describe("turn context usage", () => {
 				usage: usageIn(12_000),
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models });
+		const vm = computeViewModel({ document: doc, models });
 		const t3 = vm.turns[5];
 		const t4 = vm.turns[7];
 		if (t3.kind === "assistant" && t4.kind === "assistant") {
@@ -1399,7 +1399,7 @@ describe("turn context usage", () => {
 				usage: usageIn(55_000),
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models });
+		const vm = computeViewModel({ document: doc, models });
 		const t3 = vm.turns[5];
 		const t4 = vm.turns[7];
 		if (t3.kind === "assistant" && t4.kind === "assistant") {
@@ -1410,7 +1410,7 @@ describe("turn context usage", () => {
 	});
 
 	it("no contextWindow in the model list → no percent; model switch → no delta", () => {
-		const vm = computeViewModel({ document: ctxDoc(), sessions: [], models: [] });
+		const vm = computeViewModel({ document: ctxDoc(), models: [] });
 		const t1 = vm.turns[1];
 		if (t1.kind === "assistant") expect(t1.contextPercent).toBeUndefined();
 
@@ -1432,7 +1432,7 @@ describe("turn context usage", () => {
 				usage: usageIn(30_000),
 			}),
 		);
-		const vm2 = computeViewModel({ document: doc, sessions: [], models: models2 });
+		const vm2 = computeViewModel({ document: doc, models: models2 });
 		const t3 = vm2.turns[5];
 		if (t3.kind === "assistant") {
 			expect(t3.contextPercent).toBeCloseTo(60, 5); // 30k of m2's 50k window
@@ -1456,7 +1456,7 @@ describe("turn context usage", () => {
 				usage: usageIn(25_000),
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models });
+		const vm = computeViewModel({ document: doc, models });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
 		const run = vm.turns[1];
 		if (run.kind === "assistant") {
@@ -1473,7 +1473,7 @@ describe("turn timing", () => {
 	it("omits thoughtForMs on the first user turn (no previous turn)", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u = vm.turns[0];
 		if (u.kind === "user") expect(u.thoughtForMs).toBeUndefined();
 	});
@@ -1489,7 +1489,7 @@ describe("turn timing", () => {
 			}),
 		);
 		appendEntry(doc, makeEntry("u2", "a1", "2024-01-01T00:01:15Z", "message", { role: "user", content: [] }));
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u2 = vm.turns[2];
 		expect(u2.kind).toBe("user");
 		if (u2.kind === "user") expect(u2.thoughtForMs).toBe(45_000);
@@ -1520,7 +1520,7 @@ describe("turn timing", () => {
 		// The re-edit: A0 is a sibling of A (same parentId null), sent at 00:02:10.
 		appendEntry(doc, makeEntry("a0", null, "2024-01-01T00:02:10Z", "message", { role: "user", content: [] }));
 		doc.status.leafId = "a0";
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1); // only A0 is on the leaf path
 		const a0 = vm.turns[0];
 		expect(a0.kind).toBe("user");
@@ -1546,7 +1546,7 @@ describe("turn timing", () => {
 			doc,
 			makeEntry("u2", "pending:message", "2024-01-01T00:00:20Z", "message", { role: "user", content: [] }),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const u2 = vm.turns[2];
 		if (u2.kind === "user") expect(u2.thoughtForMs).toBeUndefined();
 	});
@@ -1561,7 +1561,7 @@ describe("turn timing", () => {
 				content: [{ type: "text", text: "hi" }],
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[1];
 		expect(a.kind).toBe("assistant");
 		if (a.kind === "assistant") {
@@ -1621,7 +1621,7 @@ describe("turn timing", () => {
 				content: [{ type: "text", text: "done" }],
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged run turn
 		const t1 = vm.turns[1];
 		expect(t1.kind).toBe("assistant");
@@ -1663,7 +1663,7 @@ describe("turn timing", () => {
 			content: [{ type: "text", text: "" }],
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "pending:message";
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// One turn: gen1's tool call accumulated and joined the streaming
 		// message's turn. The provisional entry keeps the turn unsealed —
 		// totals stay undefined until it seals.
@@ -1733,8 +1733,8 @@ describe("identity preservation", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
 
-		const vm1 = computeViewModel({ document: doc, sessions: [], models: [] });
-		const vm2 = computeViewModel({ document: doc, sessions: [], models: [] }, vm1);
+		const vm1 = computeViewModel({ document: doc, models: [] });
+		const vm2 = computeViewModel({ document: doc, models: [] }, vm1);
 
 		expect(vm2.turns[0]).toBe(vm1.turns[0]);
 	});
@@ -1755,8 +1755,8 @@ describe("identity preservation", () => {
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "a1";
 
-		const vm1 = computeViewModel({ document: doc, sessions: [], models: [] });
-		const vm2 = computeViewModel({ document: doc, sessions: [], models: [] }, vm1);
+		const vm1 = computeViewModel({ document: doc, models: [] });
+		const vm2 = computeViewModel({ document: doc, models: [] }, vm1);
 
 		const a1 = vm1.turns[0];
 		const a2 = vm2.turns[0];
@@ -1780,7 +1780,7 @@ describe("identity preservation", () => {
 		} as unknown as Document["entries"][string];
 		doc1.status.leafId = "a1";
 
-		const vm1 = computeViewModel({ document: doc1, sessions: [], models: [] });
+		const vm1 = computeViewModel({ document: doc1, models: [] });
 
 		// New document with a new thinking block at the same index
 		const doc2 = emptyDoc();
@@ -1794,7 +1794,7 @@ describe("identity preservation", () => {
 		} as unknown as Document["entries"][string];
 		doc2.status.leafId = "a1";
 
-		const vm2 = computeViewModel({ document: doc2, sessions: [], models: [] }, vm1);
+		const vm2 = computeViewModel({ document: doc2, models: [] }, vm1);
 		const a1 = vm1.turns[0];
 		const a2 = vm2.turns[0];
 		if (a1.kind === "assistant" && a2.kind === "assistant") {
@@ -1962,20 +1962,20 @@ describe("git identity fold", () => {
 		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 	});
 
 	it("does not reuse a user turn when its effective identity changes", () => {
 		const withoutStamp = emptyDoc();
 		appendEntry(withoutStamp, userEntry("u1", null, "2024-01-01T00:00:01Z"));
-		const previousVM = computeViewModel({ document: withoutStamp, sessions: [], models: [] });
+		const previousVM = computeViewModel({ document: withoutStamp, models: [] });
 
 		const withStamp = emptyDoc();
 		appendEntry(withStamp, stampEntry("s1", null, { v: 1, anchor: "prompt", commit: SHA1, branch: "main" }));
 		appendEntry(withStamp, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
 
-		const vm = computeViewModel({ document: withStamp, sessions: [], models: [] }, previousVM);
+		const vm = computeViewModel({ document: withStamp, models: [] }, previousVM);
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 0)).not.toBe(userTurnAt(previousVM, 0));
 	});
@@ -1991,7 +1991,7 @@ describe("git identity fold", () => {
 		appendEntry(doc, stampEntry("s3", "u2", { v: 1, anchor: "prompt", commit: SHA1_B, branch: "dev" }));
 		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 2).gitIdentity).toEqual({ commit: SHA1_B, branch: "dev" });
@@ -2004,7 +2004,7 @@ describe("git identity fold", () => {
 		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "turn_end", commit: SHA1, branch: null }));
 		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: null, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: null });
 	});
@@ -2023,7 +2023,7 @@ describe("git identity fold", () => {
 		appendEntry(doc, stampEntry("s4", "u3", null));
 		appendEntry(doc, userEntry("u4", "s4", "2024-01-01T00:00:04Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		for (let i = 0; i < 4; i++) expect(userTurnAt(vm, i).gitIdentity).toBeUndefined();
 		expect(vm.turns).toHaveLength(4); // invalid stamps never produce turns
 	});
@@ -2032,7 +2032,7 @@ describe("git identity fold", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toBeUndefined();
 	});
 
@@ -2049,7 +2049,7 @@ describe("git identity fold", () => {
 		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
 		doc.status.leafId = "u3"; // active path is the fork, not u2
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(userTurnAt(vm, 0).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: "main" });
 		// Prompt stamps render nothing of their own (the user turn's header chip
@@ -2071,7 +2071,7 @@ describe("git identity fold", () => {
 		);
 		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user"]);
 		const u = userTurnAt(vm, 0);
 		expect(u.gitIdentity).toEqual({ commit: SHA1, branch: "dev-bridge" });
@@ -2097,7 +2097,7 @@ describe("git identity fold", () => {
 		);
 		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const changes = vm.turns.filter((t) => t.kind === "gitChange");
 		expect(changes).toHaveLength(1);
 		expect(changes[0]).toMatchObject({
@@ -2116,7 +2116,7 @@ describe("git identity fold", () => {
 		appendEntry(doc, stampEntry("s1", null, { v: 1, anchor: "turn_end", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const c = vm.turns.find((t) => t.kind === "gitChange");
 		expect(c).toMatchObject({
 			entryId: "s1",
@@ -2159,7 +2159,7 @@ describe("git identity fold", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// One assistant turn — the run does not split.
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
 		const run = vm.turns[1];
@@ -2202,7 +2202,7 @@ describe("git identity fold", () => {
 			}),
 		);
 
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		// The prompt stamp (s0) renders no card; the turn_end stamp folds in.
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
 		const run = vm.turns[1];
@@ -2225,7 +2225,7 @@ describe("git identity fold", () => {
 				],
 			}),
 		);
-		const vm = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm = computeViewModel({ document: doc, models: [] });
 		const run = vm.turns[1];
 		if (run?.kind !== "assistant") throw new Error("expected assistant");
 		const segments = segmentBlocks(run.blocks);
@@ -2299,7 +2299,7 @@ describe("git identity fold", () => {
 			return [...byGroup.keys()];
 		};
 
-		const vm1 = computeViewModel({ document: doc, sessions: [], models: [] });
+		const vm1 = computeViewModel({ document: doc, models: [] });
 		expect(markOf(vm1)).toEqual(["a1:0"]);
 
 		// The run grows: text, then a new tool group.
@@ -2317,7 +2317,7 @@ describe("git identity fold", () => {
 				content: [{ type: "toolCall", id: "tc2", name: "bash", arguments: { command: "ls" } }],
 			}),
 		);
-		const vm2 = computeViewModel({ document: doc, sessions: [], models: [] }, vm1);
+		const vm2 = computeViewModel({ document: doc, models: [] }, vm1);
 		expect(markOf(vm2)).toEqual(["a1:0"]);
 	});
 });

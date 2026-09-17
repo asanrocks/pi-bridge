@@ -66,8 +66,6 @@ describe("createClientStore", () => {
 		expect(state.frozenActionGroups).toEqual(new Set());
 		expect(state.frozenSteps).toEqual(new Set());
 		expect(state.loadingPaths).toEqual(new Set());
-		expect(state.sessions).toEqual([]);
-		expect(state.sessionsNextCursor).toBeNull();
 		expect(state.models).toEqual([]);
 		expect(state.thinkingLevels).toEqual([]);
 		expect(state.cardWrap).toBe(true);

@@ -11,6 +11,7 @@
 - Store fields `activeSessionId` and `liveSessionId` replaced by `attachedInstanceId` and `instances`.
 - Reconnect no longer auto-pushes a `replace` — the client drives re-attachment from its stored `attachedInstanceId`.
 - `Status.model` is now a `ModelRef` struct `{ provider: string; modelId: string }` instead of a bare id string. The provider was previously dropped at `deriveModel`/`reconcile`/manager boundaries, so same-id models from different providers collided. New `ModelRef` type exported; `ReconcileOptions.model` and the `currentProviderModel` picker prop (renamed `currentModelRef`) take the struct.
+- `ViewModelInput.sessions` removed — `computeViewModel` never read it (the web client's last producer, the Project-home history slice, is gone). Callers pass `{ document, models }`.
 
 ### Added
 
@@ -104,6 +105,8 @@
 - Compact wire form for streaming appends: the WS transport (`Connection` on the host, `BridgeClient` on the client) now holds a stateful `CompactCodec`. Consecutive single-op `append` patches to the same path are emitted as bare JSON strings (no frame envelope); the decoder restores the append op before the mirror sees it. Upper layers (diff engine, `DocumentMirror`, `onPush`) are untouched. Cuts streaming-append envelope overhead ~12× (a 33K-token thinking stream: ~3.66 MB → ~300 KB on the wire). See `docs/06-component-model.md` §Push.
 - `computeObjectDiff` now recurses into arrays element-wise instead of replacing the whole array atomically. A streamed array argument whose element string field grows by a suffix (e.g. an edit tool's `edits[].newText`) now emits `append` on the element sub-path — O(n) wire cost — instead of re-sending the whole array per token (was O(n²); the `edits` stream alone was ~8.67 MB for a ~10 KB final value).
 - Consecutive `model_change`/`thinking_level_change` entries (pi writes them back-to-back on a model switch — `setModel` appends the model change, then the thinking re-clamp appends a level change) now collapse into a single `model_switch` system turn reporting the run's final state (last model, last thinking level; the level is omitted when the run didn't change it). The web UI renders it as one normal-case markdown line — `Model: **DeepSeek V4 Flash** (via DeepSeek, thinking high)`, keeping the divider rules on both sides — using the daemon's curated model display name and a new `ModelInfo.providerName` field (from pi's `Provider` registry, e.g. "DeepSeek"), instead of one all-caps divider per entry. `SystemTurn.detail` removed; new `SystemTurn.switchTo` field. `SystemTurnType` is now `"compaction" | "branch_summary" | "model_switch"`.
+
+- The Project home (`/<projectId>`) is compose-only: the active-sessions and recent-history lists are gone from it — the home shows just the centered compose card, and Projects + active sessions are listed only at the global launcher (`/`). Project sessions are browsed from the sidebar. The client-side plumbing for the home's history page is removed with it (the store's `sessions`/`sessionsHasMore`/`sessionsNextCursor` slice, `appendSessions`/`replaceSessions`, `loadProjectHome`, `loadMoreSessions`, and the `listSessions` fetch on every Project-home open / failed-open fallback).
 
 ### Fixed
 

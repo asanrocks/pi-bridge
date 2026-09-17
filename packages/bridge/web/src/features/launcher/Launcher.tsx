@@ -1,13 +1,13 @@
 // ============================================================================
 // Launcher — the unattached home view (ADR 11). Two surfaces:
 //  - `/` (global): browse Projects and resume an active session.
-//  - `/<projectId>` (Project home): HomeCompose — the shared compose card,
-//    centered and always expanded — starts a new session on send (the
-//    daemon admits the first prompt, attachments, and the pre-session
-//    model choice before attach; ADR 12 slice), plus the Project's active
-//    and recent sessions.
+//  - `/<projectId>` (Project home): the compose card only (HomeCompose) —
+//    centered and always expanded, it starts a new session on send (the
+//    daemon admits the first prompt, attachments, and the pre-session model
+//    choice before attach; ADR 12 slice).
 // No create buttons: a session is started by sending a prompt, and opened by
-// address (the daemon resolves or activates it).
+// address (the daemon resolves or activates it). Project sessions are
+// browsed from the sidebar, not from the home.
 // ============================================================================
 
 import { memo, useMemo } from "react";
@@ -23,24 +23,18 @@ export const Launcher = memo(function Launcher({
 	activeSessions,
 	projectId,
 	models,
-	sessions,
-	sessionsHasMore,
 	onOpenProject,
 	onOpenSession,
 	onNewSession,
-	onLoadMoreSessions,
 	retry,
 }: {
 	connection: ConnectionState;
 	projects: ProjectInfo[];
 	activeSessions: SessionInfo[];
-	/** When set, the Launcher is scoped to one Project's home. */
+	/** When set, the Launcher is the Project home (compose only). */
 	projectId: string | null;
 	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
 	models: ModelInfo[];
-	/** The current Project's first history page (scoped surface only). */
-	sessions: SessionInfo[];
-	sessionsHasMore: boolean;
 	onOpenProject: (projectId: string) => void;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	/** Send the first prompt of a new session. Resolves true on success —
@@ -52,27 +46,12 @@ export const Launcher = memo(function Launcher({
 		model?: ModelRef,
 		thinkingLevel?: string,
 	) => Promise<boolean>;
-	onLoadMoreSessions: () => void;
 	retry: () => void;
 }) {
-	const scoped = useMemo(
-		() => (projectId === null ? projects : projects.filter((p) => p.id === projectId)),
-		[projects, projectId],
-	);
 	const active = useMemo(
-		() =>
-			(projectId === null ? activeSessions : activeSessions.filter((s) => s.projectId === projectId))
-				.slice()
-				.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
-		[activeSessions, projectId],
+		() => activeSessions.slice().sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
+		[activeSessions],
 	);
-	// The history page excludes rows already shown in the active section
-	// (live state is the snapshot's authority — ADR 11).
-	const history = useMemo(() => {
-		if (projectId === null) return [];
-		const activeIds = new Set(active.filter((s) => s.projectId === projectId).map((s) => s.sessionId));
-		return sessions.filter((s) => !activeIds.has(s.sessionId));
-	}, [projectId, sessions, active]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	if (connection.kind === "connecting") {
@@ -124,55 +103,53 @@ export const Launcher = memo(function Launcher({
 		);
 	}
 
-	// ── Connected ──────────────────────────────────────────────────────────
+	// ── Project home: compose only ─────────────────────────────────────────
+	if (projectId !== null) {
+		const project = projects.find((p) => p.id === projectId);
+		return (
+			<div className={styles.launcher}>
+				<HomeCompose
+					projectId={projectId}
+					models={models}
+					defaultModel={project?.defaultModel ?? null}
+					defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
+					connected={connection.kind === "connected"}
+					onNewSession={onNewSession}
+				/>
+			</div>
+		);
+	}
+
+	// ── Global launcher: Projects + active sessions ────────────────────────
 	return (
 		<div className={styles.launcher}>
-			{projectId !== null &&
-				(() => {
-					const project = scoped.find((p) => p.id === projectId);
-					return (
-						<HomeCompose
-							projectId={projectId}
-							models={models}
-							defaultModel={project?.defaultModel ?? null}
-							defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
-							connected={connection.kind === "connected"}
-							onNewSession={onNewSession}
-						/>
-					);
-				})()}
-
-			{projectId === null && (
-				<>
-					<div className={styles.header}>
-						<span className={styles.headerTitle}>Projects</span>
-					</div>
-					{scoped.length === 0 ? (
-						<div className={styles.empty}>
-							<div className={styles.emptyTitle}>No projects configured</div>
-							<div className={styles.emptyHint}>Start pi-bridge with --allow &lt;dir&gt;.</div>
-						</div>
-					) : (
-						<div className={styles.rows}>
-							{scoped.map((project) => (
-								<button
-									type="button"
-									key={project.id}
-									className={styles.rowMain}
-									onClick={() => onOpenProject(project.id)}
-									title={project.cwd}
-								>
-									<div className={styles.rowLine1}>
-										<span className={styles.rowName}>{project.id}</span>
-										<span className={styles.rowCwd} title={project.cwd}>
-											<bdi>{project.cwd}</bdi>
-										</span>
-									</div>
-								</button>
-							))}
-						</div>
-					)}
-				</>
+			<div className={styles.header}>
+				<span className={styles.headerTitle}>Projects</span>
+			</div>
+			{projects.length === 0 ? (
+				<div className={styles.empty}>
+					<div className={styles.emptyTitle}>No projects configured</div>
+					<div className={styles.emptyHint}>Start pi-bridge with --allow &lt;dir&gt;.</div>
+				</div>
+			) : (
+				<div className={styles.rows}>
+					{projects.map((project) => (
+						<button
+							type="button"
+							key={project.id}
+							className={styles.rowMain}
+							onClick={() => onOpenProject(project.id)}
+							title={project.cwd}
+						>
+							<div className={styles.rowLine1}>
+								<span className={styles.rowName}>{project.id}</span>
+								<span className={styles.rowCwd} title={project.cwd}>
+									<bdi>{project.cwd}</bdi>
+								</span>
+							</div>
+						</button>
+					))}
+				</div>
 			)}
 
 			<div className={styles.header}>
@@ -181,9 +158,7 @@ export const Launcher = memo(function Launcher({
 			{active.length === 0 ? (
 				<div className={styles.empty}>
 					<div className={styles.emptyTitle}>No active sessions</div>
-					<div className={styles.emptyHint}>
-						{projectId === null ? "Start one from a project above." : "Send a prompt to start one."}
-					</div>
+					<div className={styles.emptyHint}>Start one from a project above.</div>
 				</div>
 			) : (
 				<div className={styles.rows}>
@@ -203,11 +178,9 @@ export const Launcher = memo(function Launcher({
 										<span className={styles.rowName} title={label}>
 											{label}
 										</span>
-										{projectId === null && (
-											<span className={styles.rowCwd} title={session.stem}>
-												<bdi>{session.projectId}</bdi>
-											</span>
-										)}
+										<span className={styles.rowCwd} title={session.stem}>
+											<bdi>{session.projectId}</bdi>
+										</span>
 										{session.isStreaming && <span className={styles.streaming}>streaming</span>}
 										<span className={styles.rowTime}>{relativeTime(session.timestamp)}</span>
 									</div>
@@ -219,44 +192,6 @@ export const Launcher = memo(function Launcher({
 						);
 					})}
 				</div>
-			)}
-
-			{projectId !== null && history.length > 0 && (
-				<>
-					<div className={styles.header}>
-						<span className={styles.headerTitle}>Recent sessions</span>
-					</div>
-					<div className={styles.rows}>
-						{history.map((session) => {
-							const label = session.name || session.firstMessageText || session.stem;
-							return (
-								<div key={`${session.projectId}/${session.stem}`} className={styles.row}>
-									<button
-										type="button"
-										className={styles.rowMain}
-										onClick={() => onOpenSession(session.projectId, session.stem, session.sessionId)}
-										title={label}
-									>
-										<div className={styles.rowLine1}>
-											<span className={styles.rowName} title={label}>
-												{label}
-											</span>
-											<span className={styles.rowTime}>{relativeTime(session.timestamp)}</span>
-										</div>
-										{session.firstMessageText && (
-											<div className={styles.rowPreview}>{session.firstMessageText}</div>
-										)}
-									</button>
-								</div>
-							);
-						})}
-						{sessionsHasMore && (
-							<button type="button" className={styles.loadMore} onClick={onLoadMoreSessions}>
-								Show more
-							</button>
-						)}
-					</div>
-				</>
 			)}
 		</div>
 	);

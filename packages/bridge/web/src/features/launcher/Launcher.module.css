@@ -1,7 +1,8 @@
 /* Launcher — the home view (unattached). Fills the conversation column.
-   Down states center a full panel; the connected state lists instance rows
-   plus a create affordance. Reuses sidebar row language (gap + typography,
-   no hairlines) and the design tokens defined in app/index.css. */
+   Down states center a full panel; the connected state is either the
+   Project home (compose card) or the global Project + active-session lists.
+   Reuses sidebar row language (gap + typography, no hairlines) and the
+   design tokens defined in app/index.css. */
 
 .launcher {
 	flex: 1;
@@ -30,28 +31,7 @@
 	letter-spacing: 0.04em;
 }
 
-/* History pagination — same spec as the sidebar's load-more. */
-.loadMore {
-	display: block;
-	width: 100%;
-	text-align: left;
-	margin-top: 2px;
-	padding: 4px 10px;
-	font-size: var(--fs-sm);
-	font-family: inherit;
-	color: var(--color-muted-foreground);
-	background: none;
-	border: none;
-	cursor: pointer;
-	user-select: none;
-}
-
-.loadMore:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
-}
-
-/* Empty state (0 instances, connected). */
+/* Empty state (no projects / no active sessions, connected). */
 .empty {
 	flex: 1;
 	display: flex;
@@ -72,50 +52,6 @@
 .emptyHint {
 	font-size: var(--fs-md);
 	color: var(--color-muted-foreground);
-}
-
-.createBtn {
-	margin-top: 12px;
-	padding: 8px 16px;
-	min-height: 36px;
-	font-size: var(--fs-md);
-	font-family: inherit;
-	font-weight: 600;
-	background: var(--color-accent);
-	color: var(--color-on-accent);
-	border: none;
-	border-radius: var(--radius-md);
-	cursor: pointer;
-	flex-shrink: 0;
-	user-select: none;
-}
-
-.createBtn:hover {
-	background: var(--color-accent-hover);
-}
-
-.cwdChips {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	justify-content: center;
-	margin-top: 12px;
-	max-width: 100%;
-}
-
-.cwdChip {
-	padding: 6px 14px;
-	font-size: var(--fs-sm);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	background: var(--color-muted);
-	color: var(--color-foreground);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-}
-
-.cwdChip:hover {
-	border-color: var(--color-accent);
 }
 
 /* Instance rows. */
@@ -142,11 +78,6 @@
 .row:hover,
 .row:focus-within {
 	background: var(--color-muted);
-}
-
-.row:hover .xBtn,
-.row:focus-within .xBtn {
-	opacity: 1;
 }
 
 .dot {
@@ -255,35 +186,6 @@
 	text-overflow: ellipsis;
 	/* Copy target (message text) — opts back in against the row's none. */
 	user-select: text;
-}
-
-.xBtn {
-	background: none;
-	border: none;
-	color: var(--color-muted-foreground);
-	cursor: pointer;
-	padding: 0;
-	width: 28px;
-	height: 28px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	border-radius: var(--radius-sm);
-	flex-shrink: 0;
-	opacity: 0;
-	transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
-}
-
-.xBtn:hover {
-	color: var(--color-error);
-	background: var(--color-muted);
-}
-
-/* Touch devices have no hover — always show × so any instance is killable. */
-@media (hover: none) {
-	.xBtn {
-		opacity: 1;
-	}
 }
 
 /* ── Down states (connecting / reconnecting / unreachable / init_failed) ─ */
