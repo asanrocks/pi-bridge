@@ -1,15 +1,19 @@
 // ============================================================================
 // routes — URL projection of the current session address (ADR 11).
 //
-//   /launcher                           project picker + active sessions
-//   /chat/<projectId>                   one Project's session browser
-//   /chat/<projectId>/<relative-stem>   one session
+//   /                                 project picker + active sessions
+//   /<projectId>                      the Project's home: prompt input + sessions
+//   /<projectId>/<relative-stem>      one session
 //
 // The session path is the remainder of the URL after the Project segment, so
 // nested stems are supported. Each segment is percent-encoded; parsing decodes
 // each segment once, so a stem containing a literal `%2F` round-trips as
 // `%252F`. The URL is read at boot and written with replaceState — never a
 // second live navigation state machine.
+//
+// The first segment is structurally a Project id; whether it is a *known* one
+// is resolved against getDaemonInfo by the caller (useConnection), which
+// falls back to `/` for unknown ids — the same treatment as any project route.
 // ============================================================================
 
 export type Route =
@@ -19,19 +23,17 @@ export type Route =
 
 export function parseRoute(pathname: string): Route {
 	const parts = pathname.split("/").filter((p) => p !== "");
-	if (parts.length === 0 || parts[0] === "launcher") return { kind: "launcher" };
-	if (parts[0] !== "chat" || parts.length < 2) return { kind: "launcher" };
+	if (parts.length === 0) return { kind: "launcher" };
 	let projectId: string;
 	try {
-		projectId = decodeURIComponent(parts[1]);
+		projectId = decodeURIComponent(parts[0]);
 	} catch {
 		return { kind: "launcher" };
 	}
-	if (projectId === "") return { kind: "launcher" };
-	if (parts.length === 2) return { kind: "project", projectId };
+	if (parts.length === 1) return { kind: "project", projectId };
 	try {
 		const stem = parts
-			.slice(2)
+			.slice(1)
 			.map((p) => decodeURIComponent(p))
 			.join("/");
 		if (stem === "") return { kind: "project", projectId };
@@ -46,16 +48,16 @@ function encodeSegment(segment: string): string {
 }
 
 export function launcherPath(): string {
-	return "/launcher";
+	return "/";
 }
 
 export function projectPath(projectId: string): string {
-	return `/chat/${encodeSegment(projectId)}`;
+	return `/${encodeSegment(projectId)}`;
 }
 
 export function sessionPath(projectId: string, stem: string): string {
 	const encoded = stem.split("/").map(encodeSegment).join("/");
-	return `/chat/${encodeSegment(projectId)}/${encoded}`;
+	return `/${encodeSegment(projectId)}/${encoded}`;
 }
 
 /** Write the address into the URL without a history entry (ADR 11). */

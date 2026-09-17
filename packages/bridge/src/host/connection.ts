@@ -69,7 +69,15 @@ export interface DaemonVerbs {
 		cursor?: PrefixCursor | null,
 	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Create a new unflushed session in a Project and attach this Connection. */
-	newSession: (projectId: string, conn: Connection) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
+	/** Create a new unflushed session in a Project and attach this Connection.
+	 * The first prompt's `text` is required and admitted server-side before
+	 * the attach (ADR 12 slice); a refused admission disposes the fresh
+	 * activation, so no empty session is ever created. */
+	newSession: (
+		projectId: string,
+		conn: Connection,
+		text: string,
+	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Release this Connection's attachment (activation stays alive for GC). */
 	detach: (conn: Connection) => void;
 	/** Terminate the live instance for `(projectId, stem)` — a kill, not a
@@ -275,7 +283,8 @@ export class Connection {
 				case "newSession": {
 					const m = msg as unknown as NewSessionRequest;
 					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					const result = await this.daemonVerbs.newSession(m.projectId, this);
+					if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
+					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text);
 					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
 					else this.sendReply(id, false, result.error);
 					break;
