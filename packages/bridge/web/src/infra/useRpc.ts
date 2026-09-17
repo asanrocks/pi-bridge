@@ -22,7 +22,7 @@ import { getGlobalClient } from "./client.ts";
 import { prepareSwitch } from "./entryCache.ts";
 import { projectPath, sessionPath, writeRoute } from "./routes.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
-import { loadProjectHome, projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
+import { projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
 import { getStore } from "./store.tsx";
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ export function useRpc() {
 		}
 	}, []);
 
-	/** Open a Project's home (session browser) without a session attached. */
+	/** Open a Project's home (compose-only) without a session attached. */
 	const openProject = useCallback(async (projectId: string) => {
 		const store = getStore();
 		if (store.getState().currentStem !== null) {
@@ -131,22 +131,6 @@ export function useRpc() {
 		}
 		store.getState().setCurrentSession(projectId, null);
 		writeRoute({ kind: "project", projectId });
-		// A live switch does not go through the boot/reconnect path, so the
-		// Project's history must be fetched here (loadProjectHome clears the
-		// previous Project's rows first).
-		const client = getGlobalClient();
-		if (!client) return;
-		await loadProjectHome({
-			store,
-			projectId,
-			listSessions: (pid, max) => rpc(() => client.listSessions(pid, max), "load sessions failed"),
-			// Guard against a newer navigation (project switch or session open)
-			// that started while this page was in flight.
-			isStillCurrent: () => {
-				const s = getStore().getState();
-				return s.currentProjectId === projectId && s.currentStem === null;
-			},
-		});
 	}, []);
 
 	/** Create a session in a Project by sending its first prompt. The prompt
@@ -215,24 +199,6 @@ export function useRpc() {
 		}
 	}, []);
 
-	const loadMoreSessions = useCallback(async () => {
-		const state = getStore().getState();
-		const projectId = state.currentProjectId;
-		if (!projectId) return;
-		const reply = await rpc(
-			() => getGlobalClient()?.listSessions(projectId, SESSION_PAGE_SIZE, state.sessionsNextCursor),
-			"load more sessions failed",
-		);
-		if (reply?.ok) {
-			const r = reply as unknown as ListSessionsReply;
-			const sessions = (r.sessions as SessionInfo[] | undefined) ?? [];
-			rememberRows(sessions);
-			getStore()
-				.getState()
-				.appendSessions(sessions, r.hasMore === true, r.nextCursor ?? null);
-		}
-	}, []);
-
 	/** Fetch a sidebar folder's first session page (lazy, on expand). Also the
 	 * retry path: an existing error page is re-fetched, a ready/loading one is
 	 * left alone. A missing client (offline expand) lands in the error state
@@ -294,7 +260,6 @@ export function useRpc() {
 			detach,
 			closeSession,
 			refreshActiveSessions,
-			loadMoreSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 			listFiles,
@@ -313,7 +278,6 @@ export function useRpc() {
 			detach,
 			closeSession,
 			refreshActiveSessions,
-			loadMoreSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 			listFiles,
