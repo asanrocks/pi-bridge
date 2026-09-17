@@ -762,8 +762,10 @@ export class Daemon {
 
 		sessionsChanged: (projectId) => this.broadcastSessionsChanged(projectId),
 
-		listFiles: (prefix: string, cwd?: string): Array<{ path: string; isDirectory: boolean }> => {
-			return listFiles(prefix, cwd ?? process.cwd());
+		listFiles: (prefix: string, projectId: string): Array<{ path: string; isDirectory: boolean }> => {
+			const project = this.projects.get(projectId);
+			if (!project) throw new Error(`Unknown project: ${projectId}`);
+			return listFiles(prefix, project.cwd);
 		},
 
 		readFile: (path: string, cwd?: string) => readHostFile(path, cwd ?? process.cwd()),

@@ -772,9 +772,11 @@ Defined by [ADR 06](./06-component-model.md). Dual-channel WebSocket: push
 UX verbs (`prompt`, `abort`, `discardSteer`, `setModel`, `renameSession`, `navigate`,
 `switchSession`, `newSession`) are RPC. Daemon verbs (`listSessions`,
 `getDaemonInfo`, `listFiles`, `listInstances`) and routing verbs (`switchInstance`, `newInstance`, `killInstance`) are also RPC. See `RpcRequestBody` in `core/types.ts`
-for the full verb list. `listFiles(prefix)` supports path
+for the full verb list. `listFiles({ projectId, prefix })` supports path
 autocompletion in the input bar — the server resolves relative prefixes
-against the instance cwd and returns `{ path, isDirectory }[]`. Push `replace` is sent on re-attachment (`switchInstance`), not on raw connect (fresh `Connection` has `attachedManager = null`).
+against that Project's cwd and returns `{ path, isDirectory }[]` (ADR 12:
+Project-addressed, so it needs no attachment and works on the Project home
+before a session exists). Push `replace` is sent on re-attachment (`switchInstance`), not on raw connect (fresh `Connection` has `attachedManager = null`).
 
 ## Implementation status
 
