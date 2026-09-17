@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { Document } from "../../src/core/types.ts";
 import {
 	computeViewModel,
+	leafTextKey,
 	liveActivityPhase,
 	nextFocusedTurnKey,
 	viewModelCacheKey,
@@ -70,6 +71,82 @@ describe("viewModelCacheKey", () => {
 		// pendingSteer/scopedModels are not projected (the renderer reads them
 		// from the store directly) — flipping them must not re-key the VM.
 		expect(viewModelCacheKey(doc({ pendingSteer: ["queued"] }), "stem", 0)).toBe(base);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// leafTextKey — the jump-to-bottom notifier's "new content" signal
+// ---------------------------------------------------------------------------
+
+describe("leafTextKey", () => {
+	function docOf(entries: Document["entries"], leafId: string | null): Document {
+		return { ...doc(), entries, status: { ...doc().status, leafId } };
+	}
+
+	const entry = (over: Record<string, unknown>): Document["entries"][string] =>
+		({
+			id: "x",
+			parentId: null,
+			timestamp: "1",
+			kind: "message",
+			role: "assistant",
+			content: [],
+			...over,
+		}) as unknown as Document["entries"][string];
+
+	it("counts only text blocks, walking leaf->root", () => {
+		const entries = {
+			u1: entry({ id: "u1", role: "user", content: [{ type: "text", text: "hi" }] }),
+			a1: entry({
+				id: "a1",
+				parentId: "u1",
+				content: [
+					{ type: "thinking", thinking: "hmm", signature: "s" },
+					{ type: "text", text: "yo" },
+					{ type: "toolCall", id: "t", name: "bash", arguments: null },
+				],
+			}),
+		} as Document["entries"];
+		expect(leafTextKey(docOf(entries, "a1"))).toBe("a1:2|u1:2");
+	});
+
+	it("is unchanged by thinking/tool growth", () => {
+		const before = {
+			a1: entry({
+				id: "a1",
+				content: [
+					{ type: "text", text: "yo" },
+					{ type: "thinking", thinking: "hmm", signature: "s" },
+				],
+			}),
+		} as Document["entries"];
+		const after = {
+			a1: entry({
+				id: "a1",
+				content: [
+					{ type: "text", text: "yo" },
+					{ type: "thinking", thinking: "hmm hmm hmm", signature: "s" },
+					{ type: "toolCall", id: "t", name: "bash", arguments: null },
+				],
+			}),
+		} as Document["entries"];
+		expect(leafTextKey(docOf(after, "a1"))).toBe(leafTextKey(docOf(before, "a1")));
+	});
+
+	it("changes on text growth and on a new user message", () => {
+		const before = {
+			a1: entry({ id: "a1", content: [{ type: "text", text: "yo" }] }),
+		} as Document["entries"];
+		const grown = {
+			a1: entry({ id: "a1", content: [{ type: "text", text: "yo yo" }] }),
+		} as Document["entries"];
+		expect(leafTextKey(docOf(grown, "a1"))).not.toBe(leafTextKey(docOf(before, "a1")));
+
+		const withUser = {
+			...before,
+			u1: entry({ id: "u1", parentId: "a1", role: "user", content: [{ type: "text", text: "?" }] }),
+		} as Document["entries"];
+		expect(leafTextKey(docOf(withUser, "u1"))).not.toBe(leafTextKey(docOf(before, "a1")));
 	});
 });
 
@@ -196,7 +273,9 @@ describe("liveActivityPhase", () => {
 			"u1",
 		);
 		expect(liveActivityPhase(userLeaf)).toBe("text");
-		expect(liveActivityPhase({ turns: [], leafEntryId: null, pathKey: "", streamingKey: "" })).toBe("text");
+		expect(liveActivityPhase({ turns: [], leafEntryId: null, pathKey: "", streamingKey: "", textKey: "" })).toBe(
+			"text",
+		);
 	});
 
 	it("walks backwards to the latest block with a live signal", () => {
