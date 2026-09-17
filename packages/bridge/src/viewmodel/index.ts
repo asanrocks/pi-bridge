@@ -562,17 +562,16 @@ function projectLeafPath(doc: Document): Entry[] {
 
 // ============================================================================
 // Leaf-path identity — single source of truth for the path-structure string.
-// App uses it for the path portion of its VM cache key (pre-compute, to skip
-// computeViewModel when nothing structural moved); ConversationArea reads the
+// useViewModel (web client) uses it for the path portion of the VM cache
+// key (pre-compute, to skip computeViewModel when nothing structural moved); ConversationArea reads the
 // same value post-compute via vm.pathKey, avoiding a render-time getStore()
 // reach-in and a second walk of the path.
 // ============================================================================
 
 /**
  * Structural identity of the leaf path: `pathIds::provCounts`.
- * - `pathIds` are leaf->root entry ids, matching the pre-existing App cache
- *   and ConversationArea auto-scroll walks, so equality holds across
- *   recomputations of the ViewModel.
+ * - `pathIds` are leaf->root entry ids, stable across recomputations of the
+ *   ViewModel, so key equality holds across recomputations.
  * - `provCounts` are content-block counts for `pending:` entries on the path;
  *   they change as streaming assistant messages append blocks.
  */
@@ -619,6 +618,34 @@ export function leafStreamingKey(doc: Document): string {
 			return "x"; // tool call — args stream via deltas but are lazy; height stays put
 		})
 		.join("|");
+}
+
+/**
+ * Full cache key for the store→ViewModel projection (see useViewModel in
+ * the web client): `leafPathKey` + `leafStreamingKey` (structural identity)
+ * plus the status fields that gate re-projection on non-structural state
+ * changes, and the two external inputs that are not part of the Document
+ * (`scope` — the current session stem, so a session switch re-projects even
+ * onto an identical document — and `pullTick`, so lazy-pull ingests
+ * re-project). Keeping this beside leafPathKey/leafStreamingKey means a new
+ * `Status` field that affects the projection gets added in one place, next
+ * to the code that reads it, instead of in a hand-maintained list in a
+ * component.
+ */
+export function viewModelCacheKey(doc: Document, scope: string | null, pullTick: number): string {
+	const status = doc.status;
+	return [
+		leafPathKey(doc),
+		leafStreamingKey(doc),
+		status.name,
+		`${status.model.provider}/${status.model.modelId}`,
+		status.thinkingLevel,
+		String(status.isStreaming),
+		String(status.isCompacting),
+		String(scope),
+		String(pullTick),
+		String(JSON.stringify(status.contextUsage)),
+	].join("::");
 }
 
 // ============================================================================
@@ -1842,6 +1869,63 @@ export function newestLeafInSubtree(entryId: string, entries: Record<string, Ent
 	}
 
 	return newest.id;
+}
+
+// ============================================================================
+// Keyboard turn navigation — pure index math over the turn list.
+// Kept here (not in the keybinding layer) because the turn-key identity
+// contract lives in viewmodel: keying navigation on entryId instead of
+// turnKey broke once already (run-merged turns share identity rules).
+// ============================================================================
+
+/** Next focused turn key for j/k-style step navigation.
+ * `turns` is the full VM turn list (non-content turns are filtered here);
+ * `fallbackIndex` is lazy (a callback) because the caller's fallback computes
+ * DOM positions — only paid when the focused turn is stale or missing.
+ * Clamps at both ends; returns null only for an empty list. */
+export function nextFocusedTurnKey(
+	turns: TurnVM[],
+	focusedTurnId: string | null,
+	direction: "prev" | "next",
+	fallbackIndex: () => number,
+): string | null {
+	const nav = turns.filter((t) => t.kind === "user" || t.kind === "assistant");
+	if (nav.length === 0) return null;
+	let idx = nav.findIndex((t) => turnKeyOf(t) === focusedTurnId);
+	if (idx === -1) idx = fallbackIndex();
+	idx = direction === "next" ? idx + 1 : idx - 1;
+	idx = Math.max(0, Math.min(nav.length - 1, idx));
+	return turnKeyOf(nav[idx]);
+}
+
+// ============================================================================
+// Live activity phase — what the streaming turn is currently doing.
+// Drives the notification/summary surface (web client maps it to an icon).
+// Pure projection over the ViewModel, not the Document: it reads only the
+// last turn's blocks.
+// ============================================================================
+
+export type ActivityPhase = "thinking" | "tool" | "text";
+
+/** Phase of the currently-streaming run: the latest block that carries a
+ * live signal. Walks the last assistant turn's blocks backwards — the latest
+ * block is the current phase — skipping finished tools (result attached) and
+ * redacted thinking (no live signal). Falls back to "text" when the last
+ * turn isn't an assistant run or every block is done/redacted. */
+export function liveActivityPhase(vm: ViewModel): ActivityPhase {
+	const lastTurn = vm.turns[vm.turns.length - 1];
+	if (!lastTurn || lastTurn.kind !== "assistant") return "text";
+	for (let i = lastTurn.blocks.length - 1; i >= 0; i--) {
+		const block = lastTurn.blocks[i];
+		if (block.blockType === "tool") {
+			if (block.status !== "done" && block.status !== "error") return "tool";
+		} else if (block.blockType === "thinking") {
+			if (!block.redacted) return "thinking";
+		} else {
+			return "text";
+		}
+	}
+	return "text"; // all blocks done/redacted — no live signal
 }
 
 // ============================================================================
