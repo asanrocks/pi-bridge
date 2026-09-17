@@ -377,7 +377,7 @@ listActiveSessions()
 openSession({ projectId, stem, cursor? })
   → { ok, session: SessionInfo }
 
-newSession({ projectId, text })
+newSession({ projectId, text, images?, model? })
   → { ok, session: SessionInfo }
 
 detach()
@@ -437,7 +437,10 @@ session per Project. `text` (the first prompt) is required: the daemon
 admits it before attaching the Connection (an ADR 12 slice), so the initial
 sync carries the in-flight turn, and a refused admission disposes the fresh
 activation instead of leaving an empty session to idle-collect. There is no
-empty-session creation path.
+empty-session creation path. Optional `images` attach to the first prompt;
+an optional `model` is applied before the prompt is admitted (the Project
+home's pre-session model choice) and an unknown model disposes the fresh
+activation like a refused admission.
 
 `detach` removes the Connection's attachment but leaves the activation alive
 for later reattachment or internal GC. Activation termination is not a
@@ -634,14 +637,19 @@ the path once; a stem containing a literal `%2F` round-trips as `%252F`:
 /<projectId>/<relative-stem>       one session
 ```
 
-`/<projectId>` is the Project's home: a prompt input that starts a new session
-on send, plus the Project's active and recent sessions. There is no separate
-empty-session route and no create button. `newSession` takes the first
-prompt's `text` (required): the daemon admits the prompt before attaching the Connection
-(an ADR 12 slice), so the initial sync the client navigates into already
-carries the in-flight turn, and a refused admission (no model, no auth)
-disposes the fresh activation — no empty session survives. The client
-navigates to `/<projectId>/<stem>` as soon as `newSession` returns.
+`/<projectId>` is the Project's home: a compose surface (the same compose
+card the conversation dock uses, centered and always expanded) that starts
+a new session on send, plus the Project's active and recent sessions. There
+is no separate empty-session route and no create button. `newSession` takes
+the first prompt's `text` (required), with optional `images` and a pre-session
+`model`: the daemon applies the model, then admits the prompt before
+attaching the Connection (an ADR 12 slice), so the initial sync the client
+navigates into already carries the in-flight turn, and a refused admission
+or unknown model disposes the fresh activation — no empty session survives.
+The draft is client state scoped per project (persisted under
+`draft:p:<projectId>`), so an unsent prompt survives navigation and reloads.
+The client navigates to `/<projectId>/<stem>` as soon as `newSession`
+returns.
 
 Because a Project id is the first URL path segment and real files win over
 routes in the HTTP server, ids colliding with root web-asset names (`assets`,

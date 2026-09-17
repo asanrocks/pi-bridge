@@ -11,7 +11,7 @@ import { useEffect } from "react";
 import type { ModelInfo } from "../../../../src/core/index.ts";
 import type { SessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { displayModelLabel } from "../../render/modelNames.ts";
-import styles from "./Composer.module.css";
+import styles from "./ComposeCard.module.css";
 import { formatCost, formatTokens } from "./formatters.ts";
 
 export function CostPopover({

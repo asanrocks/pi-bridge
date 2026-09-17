@@ -11,6 +11,7 @@ import type {
 	ListActiveSessionsReply,
 	ListFilesReply,
 	ListSessionsReply,
+	ModelRef,
 	PrefixCursor,
 	RpcReply,
 	SessionInfo,
@@ -149,21 +150,25 @@ export function useRpc() {
 	}, []);
 
 	/** Create a session in a Project by sending its first prompt. The prompt
-	 * is admitted server-side before the attach (ADR 12 slice) — the initial
-	 * sync the client navigates into carries the in-flight turn. Returns
-	 * true on success so the caller can clear (or keep) its input box. */
-	const newSession = useCallback(async (projectId: string, text: string) => {
-		const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text), "new session failed");
-		if (reply?.ok) {
-			const ref = (reply as unknown as { session?: SessionRef }).session;
-			if (ref) {
-				rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-				getStore().getState().setCurrentSession(ref.projectId, ref.stem);
-				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+	 * (with optional attachments and a pre-session model choice) is admitted
+	 * server-side before the attach (ADR 12 slice) — the initial sync the
+	 * client navigates into carries the in-flight turn. Returns true on
+	 * success so the caller can clear (or keep) its draft. */
+	const newSession = useCallback(
+		async (projectId: string, text: string, options?: { images?: ImageContent[]; model?: ModelRef }) => {
+			const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text, options), "new session failed");
+			if (reply?.ok) {
+				const ref = (reply as unknown as { session?: SessionRef }).session;
+				if (ref) {
+					rememberAddress(ref.projectId, ref.stem, ref.sessionId);
+					getStore().getState().setCurrentSession(ref.projectId, ref.stem);
+					writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+				}
 			}
-		}
-		return reply?.ok === true;
-	}, []);
+			return reply?.ok === true;
+		},
+		[],
+	);
 
 	/** Back to the Launcher: unbind server-side, then clear local state. */
 	const detach = useCallback(async () => {

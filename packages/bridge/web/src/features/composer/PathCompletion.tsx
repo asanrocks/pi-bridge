@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { memo, useEffect, useRef } from "react";
-import styles from "./Composer.module.css";
+import styles from "./ComposeCard.module.css";
 
 export const PathCompletion = memo(function PathCompletion({
 	completions,
