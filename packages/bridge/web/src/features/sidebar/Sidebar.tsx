@@ -18,11 +18,12 @@
 // history. Desktop rail visibility persists in localStorage, independent of
 // the rail's width (the resize controller's own persistence).
 //
-// Selection model: the Project header is a disclosure control, never a
-// selection target — the folder toggles folding and nothing else. Selection
-// lives only on session rows: exactly one row (the attached (projectId,
-// stem)) wears the accent tint; the folder shows accent text solely at a
-// Project home, where nothing is selected.
+// Selection model: the Project header navigates — clicking the name opens
+// the Project's home (the compose surface); the chevron beside it is the
+// fold toggle, nothing else. Selection lives only on session rows: exactly
+// one row (the attached (projectId, stem)) wears the accent tint; the
+// folder shows accent text solely at a Project home, where nothing is
+// selected.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -175,6 +176,7 @@ const ProjectFolder = memo(function ProjectFolder({
 	activeRows,
 	page,
 	onToggle,
+	onOpenProject,
 	onOpen,
 	onClose,
 	onLoad,
@@ -190,6 +192,9 @@ const ProjectFolder = memo(function ProjectFolder({
 	activeRows: SessionInfo[];
 	page: SessionFolderPage | undefined;
 	onToggle: (projectId: string) => void;
+	/** Navigate to the Project's home (the compose surface). The folder name
+	 * is a navigation target; the chevron is the fold toggle. */
+	onOpenProject: (projectId: string) => void;
 	onOpen: (session: SessionInfo) => void;
 	/** Terminate a live instance (row menu Close). Passed only to the pinned
 	 * active rows — dormant history has no instance to kill. */
@@ -222,25 +227,34 @@ const ProjectFolder = memo(function ProjectFolder({
 
 	return (
 		<div>
-			<button
-				type="button"
-				className={rowCls}
-				onClick={() => onToggle(project.id)}
-				title={project.cwd}
-				aria-expanded={expanded}
-			>
-				<svg
-					viewBox="0 0 16 16"
-					width="12"
-					height="12"
-					className={expanded ? styles.sidebarChevronOpen : styles.sidebarChevron}
-					fill="currentColor"
-					aria-hidden="true"
+			{/* Row group: the chevron toggles the fold; the name navigates to
+			    the Project home (the compose surface). Two buttons, not one —
+			    a nested button is invalid HTML, and a combined click
+			    (navigate + toggle) would collapse the folder exactly when
+			    you browse away. */}
+			<div className={styles.sidebarFolderRowGroup}>
+				<button
+					type="button"
+					className={styles.sidebarFolderToggle}
+					onClick={() => onToggle(project.id)}
+					aria-expanded={expanded}
+					aria-label={expanded ? `Collapse ${project.id}` : `Expand ${project.id}`}
 				>
-					<path d="M6 3l5 5-5 5z" />
-				</svg>
-				<span className={styles.sidebarItemName}>{project.id}</span>
-			</button>
+					<svg
+						viewBox="0 0 16 16"
+						width="12"
+						height="12"
+						className={expanded ? styles.sidebarChevronOpen : styles.sidebarChevron}
+						fill="currentColor"
+						aria-hidden="true"
+					>
+						<path d="M6 3l5 5-5 5z" />
+					</svg>
+				</button>
+				<button type="button" className={rowCls} onClick={() => onOpenProject(project.id)} title={project.cwd}>
+					<span className={styles.sidebarItemName}>{project.id}</span>
+				</button>
+			</div>
 			{/* Pinned active sessions: always visible — folding hides only the
 			    history. The live dot is the signal; no other chrome. */}
 			<div className={styles.sidebarFolderChildren}>
@@ -307,6 +321,7 @@ export const Sidebar = memo(function Sidebar({
 	activeSessions,
 	sessionPages,
 	onOpenSession,
+	onOpenProject,
 	onCloseSession,
 	onShowLauncher,
 	onLoadFolder,
@@ -326,6 +341,9 @@ export const Sidebar = memo(function Sidebar({
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
+	/** Navigate to a Project's home (the compose surface) — the sidebar's
+	 * folder-name click. */
+	onOpenProject: (projectId: string) => void;
 	/** Terminate a session's live instance (row menu Close, no confirmation). */
 	onCloseSession: (projectId: string, stem: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
@@ -678,6 +696,7 @@ export const Sidebar = memo(function Sidebar({
 						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
 						onToggle={toggleFolder}
+						onOpenProject={onOpenProject}
 						onOpen={handleOpenSession}
 						onClose={handleCloseSession}
 						onLoad={onLoadFolder}
