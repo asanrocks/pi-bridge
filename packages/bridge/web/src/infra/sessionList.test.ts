@@ -1,12 +1,10 @@
-// Unit tests for Project-history loading (ADR 11). The regression this guards:
-// a live Project switch must actually fetch the Project's first page — the
-// boot/reconnect path used to be the only caller of `listSessions`, so
-// `/chat/<projectId>` rendered an empty history after an in-app switch.
+// Unit tests for `listSessions` reply decoding (ADR 11). The sidebar's folder
+// pages are the consumer; `projectPageFromReply` is the single decode path
+// (rows, hasMore, cursor, and the address→sessionId index).
 
 import { describe, expect, it } from "vitest";
 import type { RpcReply, SessionInfo } from "../../../src/core/index.ts";
-import { loadProjectHome, projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
-import { createClientStore } from "./store.ts";
+import { projectPageFromReply } from "./sessionList.ts";
 
 function row(stem: string): SessionInfo {
 	return {
@@ -42,63 +40,12 @@ describe("projectPageFromReply", () => {
 			nextCursor: null,
 		});
 	});
-});
 
-describe("loadProjectHome", () => {
-	it("fetches the first page and commits it with the cursor", async () => {
-		const store = createClientStore();
-		const calls: Array<[string, number]> = [];
-		await loadProjectHome({
-			store,
-			projectId: "proj",
-			listSessions: async (projectId, max) => {
-				calls.push([projectId, max]);
-				return pageReply([row("a"), row("b")], true);
-			},
+	it("decodes rows, hasMore, and the cursor", () => {
+		expect(projectPageFromReply(pageReply([row("a"), row("b")], true))).toEqual({
+			sessions: [row("a"), row("b")],
+			hasMore: true,
+			nextCursor: { sortTimeMs: 5, stem: "a" },
 		});
-
-		expect(calls).toEqual([["proj", SESSION_PAGE_SIZE]]);
-		const s = store.getState();
-		expect(s.sessions.map((x) => x.stem)).toEqual(["a", "b"]);
-		expect(s.sessionsHasMore).toBe(true);
-		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 5, stem: "a" });
-	});
-
-	it("clears the previous Project's rows before committing the new page", async () => {
-		const store = createClientStore();
-		store.getState().replaceSessions([row("stale")], true, { sortTimeMs: 9, stem: "stale" });
-
-		await loadProjectHome({ store, projectId: "proj", listSessions: async () => pageReply([], false) });
-
-		const s = store.getState();
-		expect(s.sessions).toEqual([]);
-		expect(s.sessionsHasMore).toBe(false);
-		expect(s.sessionsNextCursor).toBeNull();
-	});
-
-	it("leaves the list empty when the fetch fails", async () => {
-		const store = createClientStore();
-		store.getState().replaceSessions([row("stale")], true, null);
-
-		await loadProjectHome({
-			store,
-			projectId: "proj",
-			listSessions: async () => ({ id: "1", ok: false, error: "boom" }),
-		});
-
-		expect(store.getState().sessions).toEqual([]);
-	});
-
-	it("does not commit a page superseded by a newer navigation", async () => {
-		const store = createClientStore();
-		await loadProjectHome({
-			store,
-			projectId: "proj",
-			listSessions: async () => pageReply([row("late")], false),
-			// A newer navigation wins while the fetch is in flight.
-			isStillCurrent: () => false,
-		});
-
-		expect(store.getState().sessions).toEqual([]);
 	});
 });

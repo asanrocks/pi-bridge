@@ -30,7 +30,6 @@ import { getEntryCache } from "./entryCache.ts";
 import { drainWantsOutbox } from "./pullLoop.ts";
 import { parseRoute, writeRoute } from "./routes.ts";
 import { promoteSessionCandidate } from "./sessionCandidate.ts";
-import { loadProjectHome } from "./sessionList.ts";
 import type { ConnectionState } from "./store.ts";
 import { getStore } from "./store.tsx";
 import { setWantsDrainer } from "./wants.ts";
@@ -100,36 +99,13 @@ export function useConnection(): { retry: () => void } {
 	// connecting→unreachable threshold and backoff exponent.
 	const attemptRef = useRef(0);
 
-	/** Fetch and publish a Project's first session page. */
-	const loadProjectPage = useCallback(async (client: BridgeClient, projectId: string) => {
-		await loadProjectHome({
-			store: getStore(),
-			projectId,
-			listSessions: (pid, max) => client.listSessions(pid, max),
-			isStillCurrent: () => clientRef.current === client,
-		});
-	}, []);
-
-	/** Open a Project's home: bind the address, fetch its first session page. */
-	const openProjectAddress = useCallback(
-		async (client: BridgeClient, projectId: string) => {
-			getStore().getState().setCurrentSession(projectId, null);
-			await loadProjectPage(client, projectId);
-		},
-		[loadProjectPage],
-	);
-
 	/** A failed open falls back to the Project page (ADR 11): the stem no longer
 	 * resolves (deleted file, or an unflushed session after a daemon restart),
 	 * so the seeded cache/paint and any session identity must be dropped. */
-	const fallbackToProjectPage = useCallback(
-		async (client: BridgeClient, projectId: string) => {
-			getStore().getState().clearCurrentSession(projectId);
-			writeRoute({ kind: "project", projectId });
-			await loadProjectPage(client, projectId);
-		},
-		[loadProjectPage],
-	);
+	const fallbackToProjectPage = useCallback((projectId: string) => {
+		getStore().getState().clearCurrentSession(projectId);
+		writeRoute({ kind: "project", projectId });
+	}, []);
 
 	/**
 	 * Open a session address, seeding the mirror from cache when the address's
@@ -147,7 +123,7 @@ export function useConnection(): { retry: () => void } {
 			if (!sessionId) {
 				const reply = await client.openSession(projectId, stem);
 				if (clientRef.current !== client) return;
-				if (!reply.ok) await fallbackToProjectPage(client, projectId);
+				if (!reply.ok) fallbackToProjectPage(projectId);
 				return;
 			}
 			let records: CacheEntryRecord[] = [];
@@ -171,7 +147,7 @@ export function useConnection(): { retry: () => void } {
 			const cursor = computeCursor(records);
 			const reply = await client.openSession(projectId, stem, cursor ?? undefined);
 			if (clientRef.current !== client) return;
-			if (!reply.ok) await fallbackToProjectPage(client, projectId);
+			if (!reply.ok) fallbackToProjectPage(projectId);
 		},
 		[fallbackToProjectPage],
 	);
@@ -232,7 +208,9 @@ export function useConnection(): { retry: () => void } {
 						store.getState().clearCurrentSession();
 						writeRoute({ kind: "launcher" });
 					} else {
-						await openProjectAddress(client, route.projectId);
+						// The home is compose-only — bind the address; its sessions are
+						// browsed from the sidebar, so there is no page fetch.
+						store.getState().setCurrentSession(route.projectId, null);
 					}
 				} else {
 					store.getState().clearCurrentSession();
@@ -255,7 +233,7 @@ export function useConnection(): { retry: () => void } {
 				if (timer) clearTimeout(timer);
 			}
 		},
-		[openProjectAddress, openSessionAddress],
+		[openSessionAddress],
 	);
 
 	const connect = useCallback(() => {
@@ -385,16 +363,12 @@ export function useConnection(): { retry: () => void } {
 				if (clientRef.current !== client) return;
 				const store = getStore();
 
-				// Project-scoped session-list refresh (ADR 11). Carries the first
-				// page; the previous cursor is invalidated, so restart from page 1.
+				// Project-scoped session-list refresh (ADR 11). The sidebar folder
+				// cache is the only consumer: refresh a page that is already cached;
+				// never load one just because the push arrived (folders fetch on
+				// expand). Loading pages heal via their in-flight fetch.
 				if (push.kind === "sessions_changed") {
 					for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-					if (push.projectId === store.getState().currentProjectId) {
-						store.getState().replaceSessions(push.sessions, push.hasMore, push.nextCursor ?? null);
-					}
-					// Sidebar folder cache: refresh a page that is already cached;
-					// never load one just because the push arrived (folders fetch on
-					// expand). Loading pages heal via their in-flight fetch.
 					if (store.getState().sessionPages[push.projectId]?.kind === "ready") {
 						store
 							.getState()
