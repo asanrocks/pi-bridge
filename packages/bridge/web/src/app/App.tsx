@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { Document, ImageContent } from "../../../src/core/index.ts";
+import type { Document, ImageContent, ModelRef } from "../../../src/core/index.ts";
 import {
 	computeViewModel,
 	findNextModel,
@@ -16,7 +16,7 @@ import {
 	type TurnVM,
 	turnKeyOf,
 } from "../../../src/viewmodel/index.ts";
-import { Composer } from "../features/composer/Composer.tsx";
+import { ComposeDock } from "../features/composer/ComposeDock.tsx";
 import { ConversationArea } from "../features/conversation/ConversationArea.tsx";
 import { copyToClipboard } from "../features/conversation/clipboard.ts";
 import { HistoryPane } from "../features/history/HistoryPane.tsx";
@@ -302,12 +302,13 @@ function AppInner() {
 	);
 
 	// Create a session by sending its first prompt (ADR 12 slice): the
-	// daemon admits the prompt before attaching, so the session the client
-	// navigates into already carries the in-flight turn. There is no
-	// empty-session path — text is required.
+	// daemon admits the prompt (with any attachments and the pre-session
+	// model choice) before attaching, so the session the client navigates
+	// into already carries the in-flight turn. There is no empty-session
+	// path — text is required.
 	const handleNewSession = useCallback(
-		(projectId: string, text: string) => {
-			return rpc.newSession(projectId, text);
+		(projectId: string, text: string, images?: ImageContent[], model?: ModelRef) => {
+			return rpc.newSession(projectId, text, { images, model });
 		},
 		[rpc],
 	);
@@ -549,7 +550,7 @@ function AppInner() {
 								onNavigate={handleNavigate}
 								onEdit={handleEdit}
 							/>
-							<Composer
+							<ComposeDock
 								onCommit={handleCommit}
 								onStop={rpc.abort}
 								onDiscardSteer={rpc.discardSteer}
@@ -572,6 +573,7 @@ function AppInner() {
 							projects={projects}
 							activeSessions={activeSessions}
 							projectId={currentProjectId}
+							models={models}
 							sessions={sessions}
 							sessionsHasMore={sessionsHasMore}
 							onOpenProject={handleOpenProject}

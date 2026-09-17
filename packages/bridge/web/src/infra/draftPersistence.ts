@@ -1,14 +1,16 @@
 // ============================================================================
-// useDraftGuard — durable composer drafts: localStorage persistence scoped
-// per session + beforeunload warning on unsent text.
+// useDraftGuard — durable compose drafts: localStorage persistence scoped
+// per draft slot + beforeunload warning on unsent text.
 //
-// Why session id: session ids are globally unique, so the draft slot is the
-// conversation identity (the address `(projectId, stem)` would work too, but
-// the id is what the ADR 09 cache and the initial-sync SessionRef already
-// carry). It is set on every openSession/newSession, before any draft write.
+// The slot is derived from the address the tab is watching (ADR 11): an open
+// session keys by its durable session id (globally unique, and what the ADR
+// 09 cache and the initial-sync SessionRef already carry), the Project home
+// keys by projectId (the pre-session "floating draft", an ADR 12 slice), and
+// the global launcher has none. The session id is set on every
+// openSession/newSession, before any draft write.
 //
 // Persistence is imperative (store.subscribe), not a reactive effect: a
-// reactive persist effect would race the restore effect on session switch
+// reactive persist effect would race the restore effect on scope switch
 // (stale draft + new key = leak into the wrong slot). The subscribe callback
 // reads keyRef, which the restore effect sets synchronously before loading
 // the saved draft, so writes always land in the correct slot.
@@ -19,30 +21,44 @@ import { getStore, useStore } from "./store.tsx";
 
 const DRAFT_PREFIX = "pi-bridge:draft:";
 
-export function useDraftGuard(): void {
-	const hasSession = useStore((s) => s.currentStem !== null);
-	const activeSessionId = useStore((s) => s.activeSessionId);
+/** The localStorage slot for the current address, or null when none. */
+function draftKey(state: {
+	currentProjectId: string | null;
+	currentStem: string | null;
+	activeSessionId: string | null;
+}): string | null {
+	// Session first: an open session may transiently coexist with a stale
+	// project binding (openProject leaves the old attachment in place).
+	if (state.currentStem !== null) {
+		return state.activeSessionId !== null ? `s:${state.activeSessionId}` : null;
+	}
+	return state.currentProjectId !== null ? `p:${state.currentProjectId}` : null;
+}
 
-	// The localStorage key for the currently-open session, or null when none.
+export function useDraftGuard(): void {
+	const currentProjectId = useStore((s) => s.currentProjectId);
+	const currentStem = useStore((s) => s.currentStem);
+	const activeSessionId = useStore((s) => s.activeSessionId);
+	const key = draftKey({ currentProjectId, currentStem, activeSessionId });
+
 	// Set by the restore effect before any draft write so the persist
 	// subscriber always targets the correct slot.
 	const keyRef = useRef<string | null>(null);
 
-	// ── Restore on open / switch ────────────────────────────────────────
-	// Loads the saved compose draft (dormant — composer stays collapsed
-	// until the user focuses it) or clears a stale draft from the previous
-	// session. Edit drafts are session-live and never restored here.
+	// ── Restore on scope switch ──────────────────────────────────────────
+	// Loads the saved compose draft (dormant — the session composer stays
+	// collapsed until the user focuses it) or clears a stale draft from the
+	// previous slot. Edit drafts are session-live and never restored here.
 	useEffect(() => {
-		if (!hasSession || !activeSessionId) {
+		if (key === null) {
 			keyRef.current = null;
 			return;
 		}
-		const key = DRAFT_PREFIX + activeSessionId;
 		keyRef.current = key;
 		const store = getStore().getState();
 		let saved: string | null = null;
 		try {
-			saved = localStorage.getItem(key);
+			saved = localStorage.getItem(DRAFT_PREFIX + key);
 		} catch {
 			// Private mode / disabled storage — degrade to in-memory drafts.
 		}
@@ -51,25 +67,25 @@ export function useDraftGuard(): void {
 		} else {
 			store.clearDraft();
 		}
-	}, [hasSession, activeSessionId]);
+	}, [key]);
 
 	// ── Persist compose-draft text on change ────────────────────────────
 	// Subscribed once. Filters to compose-text changes; edit drafts are not
-	// persisted (session-live). keyRef gates writes until a session is open,
-	// so pre-attach typing (impossible in practice — the composer only mounts
-	// for an open session) is a no-op.
+	// persisted (session-live). keyRef gates writes until a scope is open.
+	// Image attachments are deliberately not persisted (localStorage quota
+	// vs. base64 payloads); text is the recoverable work.
 	useEffect(() => {
 		const unsub = getStore().subscribe((state, prev) => {
-			const key = keyRef.current;
-			if (key === null) return;
+			const slot = keyRef.current;
+			if (slot === null) return;
 			const cur = state.draft.kind === "compose" ? state.draft.text : null;
 			const old = prev.draft.kind === "compose" ? prev.draft.text : null;
 			if (cur === old) return;
 			try {
 				if (cur != null && cur.trim().length > 0) {
-					localStorage.setItem(key, cur);
+					localStorage.setItem(DRAFT_PREFIX + slot, cur);
 				} else {
-					localStorage.removeItem(key);
+					localStorage.removeItem(DRAFT_PREFIX + slot);
 				}
 			} catch {
 				// Quota / private mode — silently drop; the in-memory draft stands.

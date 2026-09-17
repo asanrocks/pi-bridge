@@ -1,0 +1,20 @@
+/* ==========================================================================
+   ComposeDock — the session-attached compose surface's layout: a fixed
+   wrapper at the viewport bottom (between the sidebar and history panes,
+   above the mobile soft keyboard). Everything inside (bar, card, chips,
+   control row, portals) lives in ComposeCard.module.css.
+   ========================================================================== */
+
+.composer {
+	position: fixed;
+	left: var(--sidebar-w, 0px);
+	right: var(--history-w, 0px);
+	bottom: var(--vv-keyboard, 0px);
+	z-index: 40;
+	/* The card's bottom gap + home-indicator safe area live in the wrapper's
+	   own padding so offsetHeight (published as --composer-h) reliably
+	   includes them — margin would be ambiguous under margin-collapse.
+	   z-index above the TopBar so the model-picker portal (a child here)
+	   renders above the fixed top bar when it opens upward. */
+	padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
+}

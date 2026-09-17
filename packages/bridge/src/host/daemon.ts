@@ -203,11 +203,6 @@ export class Daemon {
 		}
 	}
 
-	/**
-	 * Load disk extensions (agentDir, cwd, settings) onto the daemon's shared
-	 * modelRuntime so extension-registered providers are visible in
-	 * getDaemonInfo before any session exists.
-	 */
 	/** First path segments a Project id must not collide with: real files win
 	 * over routes in the HTTP server, so a same-named Project's page would be
 	 * unreachable (`/assets/...` serves the file, never the shell). Derived
@@ -229,6 +224,11 @@ export class Daemon {
 		return reserved;
 	}
 
+	/**
+	 * Load disk extensions (agentDir, cwd, settings) onto the daemon's shared
+	 * modelRuntime so extension-registered providers are visible in
+	 * getDaemonInfo before any session exists.
+	 */
 	private async loadExtensions(): Promise<void> {
 		try {
 			const cwd = process.cwd();
@@ -667,7 +667,7 @@ export class Daemon {
 			}
 		},
 
-		newSession: async (projectId, conn, text) => {
+		newSession: async (projectId, conn, text, images, model) => {
 			try {
 				const project = this.projects.get(projectId);
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
@@ -693,15 +693,18 @@ export class Daemon {
 					{ projectId, sessionId: manager.liveSessionId, stem },
 					key,
 				);
-				// Admit the first prompt before the attach (ADR 12 slice): the
-				// client's initial sync carries the in-flight turn, and no empty
-				// session exists while the user types. A refused admission (no
+				// Pre-session choices from the Project home (ADR 12 slice): apply the
+				// picked model, then admit the first prompt (with its attachments)
+				// before the attach — the client's initial sync carries the
+				// in-flight turn on the chosen model, and no empty session exists
+				// while the user types. A refused admission or unknown model (no
 				// model, no auth) disposes the fresh activation — nothing empty
 				// survives to idle-collect later. Patches streamed between
 				// admission and attach are covered by the initial sync (the
 				// Document is canonical).
 				try {
-					await manager.promptAdmitted(text);
+					if (model) await manager.setModel(model.provider, model.modelId);
+					await manager.promptAdmitted(text, images);
 				} catch (err) {
 					await this.collectActivation(activation);
 					throw err;
