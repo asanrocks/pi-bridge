@@ -6,12 +6,19 @@ import { createServer, type Server as HttpServer, type ServerResponse } from "no
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, sep } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { DefaultResourceLoader, getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	DefaultResourceLoader,
+	findInitialModel,
+	getAgentDir,
+	ModelRuntime,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
 	Content,
 	Document,
 	ModelInfo,
+	ModelRef,
 	PrefixCursor,
 	ProjectInfo,
 	SessionInfo,
@@ -103,6 +110,9 @@ interface ScanEntry {
 
 export class Daemon {
 	private projects = new Map<string, ProjectConfig>();
+	/** Per-project settings (pi resolves defaults from the Project cwd's
+	 * settings.json — the default model can differ per Project). */
+	private projectSettings = new Map<string, SettingsManager>();
 	private connections = new Set<Connection>();
 	private activations = new Map<string, Activation>();
 	private activationByAddress = new Map<string, string>();
@@ -148,6 +158,13 @@ export class Daemon {
 		// startup.
 		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir, this.reservedProjectIds());
 		this.projects = new Map(projects.map((p) => [p.id, p]));
+		for (const project of projects) {
+			try {
+				this.projectSettings.set(project.id, SettingsManager.create(project.cwd, this.agentDir));
+			} catch {
+				// Unreadable settings degrade to the model-runtime defaults below.
+			}
+		}
 		// Duplicate session ids are unsupported input: fail startup rather than
 		// serve two addresses that would collide in the activation registry.
 		this.assertNoSessionIdConflicts();
@@ -751,7 +768,7 @@ export class Daemon {
 
 		gitShow: (commit: string, cwd?: string) => runGitShow(commit, cwd ?? process.cwd()),
 
-		getDaemonInfo: () => {
+		getDaemonInfo: async () => {
 			const runtime = this.modelRuntime;
 			let models: ModelInfo[] = [];
 			if (runtime) {
@@ -765,10 +782,38 @@ export class Daemon {
 					contextWindow: m.contextWindow,
 				}));
 			}
-			const projects: ProjectInfo[] = [...this.projects.values()].map((p) => ({ id: p.id, cwd: p.cwd }));
+			const projects: ProjectInfo[] = await Promise.all(
+				[...this.projects.values()].map(async (p) => ({
+					id: p.id,
+					cwd: p.cwd,
+					defaultModel: await this.projectDefaultModel(p.id),
+				})),
+			);
 			return { projects, models, thinkingLevels: THINKING_LEVELS, devMode: this.devMode };
 		},
 	};
+
+	/** The model a fresh session in `projectId` resolves to — the same
+	 * `findInitialModel` call a fresh Manager's session performs (scopedModels
+	 * empty, not continuing, the Project's settings), so the reported default
+	 * matches what `newSession` without `model` actually runs on. */
+	private async projectDefaultModel(projectId: string): Promise<ModelRef | null> {
+		const settings = this.projectSettings.get(projectId);
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			...(settings
+				? {
+						defaultProvider: settings.getDefaultProvider(),
+						defaultModelId: settings.getDefaultModel(),
+						defaultThinkingLevel: settings.getDefaultThinkingLevel(),
+						modelThinkingLevels: settings.getAllModelThinkingLevels(),
+					}
+				: {}),
+			modelRuntime: this.modelRuntime,
+		});
+		return result.model ? { provider: result.model.provider, modelId: result.model.id } : null;
+	}
 
 	// ── Server ────────────────────────────────────────────────────────────
 
