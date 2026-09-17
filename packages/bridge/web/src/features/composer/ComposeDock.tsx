@@ -26,8 +26,7 @@ import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./ComposeDock.module.css";
 import { CostPopover } from "./CostPopover.tsx";
 import { formatCost } from "./formatters.ts";
-import { useImageAttachments } from "./useImageAttachments.ts";
-import { usePathCompletion } from "./usePathCompletion.tsx";
+import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 
 interface ComposeDockProps {
 	onCommit: () => void | Promise<void>;
@@ -105,17 +104,11 @@ export const ComposeDock = memo(function ComposeDock({
 	const [costAnchor, setCostAnchor] = useState<DOMRect | null>(null);
 	const costBtnRef = useRef<HTMLButtonElement>(null);
 
-	// ── Shared compose capabilities (also used by HomeCompose) ───────────
-	const attachments = useImageAttachments();
-	const completion = usePathCompletion({
-		value: draftText,
-		onChange: setDraftText,
-		textareaRef,
-		// listFiles resolves relative paths against the attached session's
-		// Project cwd — the dock is always attached. (The Project home defers
-		// completion until listFiles is re-addressed to the Project; ADR 12.)
-		complete: listFilesRpc,
-	});
+	// ── Shared compose capabilities (attachments + path completion) ──────
+	// listFiles resolves relative paths against the attached session's
+	// Project cwd — the dock is always attached. (The Project home defers
+	// completion until listFiles is re-addressed to the Project; ADR 12.)
+	const capabilities = useComposeCapabilities({ textareaRef, complete: listFilesRpc });
 
 	// ── Auto-expand transitions ─────────────────────────────────────────
 	// Open when streaming or editing starts, or while steers are queued.
@@ -232,10 +225,11 @@ export const ComposeDock = memo(function ComposeDock({
 	// immediately on send and a second Enter is a no-op (empty draft) — no
 	// in-flight dedup needed, which would have blocked steering during the
 	// turn.
+	const closeCompletion = capabilities.closeCompletion;
 	const handleCommit = useCallback(() => {
-		completion.close();
+		closeCompletion();
 		void onCommit();
-	}, [completion, onCommit]);
+	}, [closeCompletion, onCommit]);
 
 	// Stop: halt the current generation AND salvage any queued steers into
 	// the draft so they aren't lost. The server-side abort clears the
@@ -327,6 +321,7 @@ export const ComposeDock = memo(function ComposeDock({
 				<ComposeBar dot={dot} placeholder="Type a message..." onClick={handleBarClick} disabled={!connected} />
 			) : (
 				<ComposeCard
+					{...capabilities.cardProps}
 					value={draftText}
 					onChange={setDraftText}
 					onCommit={handleCommit}
@@ -335,12 +330,6 @@ export const ComposeDock = memo(function ComposeDock({
 					onBlurOutside={blurDraft}
 					onEscape={handleEscape}
 					textareaRef={textareaRef}
-					images={attachments.images}
-					onRemoveImage={attachments.removeImage}
-					onFiles={attachments.addFiles}
-					onPaste={attachments.handlePaste}
-					isDragOver={attachments.isDragOver}
-					dragHandlers={attachments.dragHandlers}
 					attachDisabled={isEditing}
 					attachTitle={isEditing ? "Images can't be added while editing" : undefined}
 					editLabel={isEditing ? "Editing message" : null}
@@ -359,8 +348,6 @@ export const ComposeDock = memo(function ComposeDock({
 					onSetThinkingLevel={onSetThinkingLevel}
 					onCycleModel={onCycleModel}
 					leftControls={leftControls}
-					completion={completion.node}
-					beforeKeyDown={completion.handleKeyDown}
 				/>
 			)}
 
