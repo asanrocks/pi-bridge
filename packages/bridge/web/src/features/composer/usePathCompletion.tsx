@@ -1,9 +1,8 @@
 // ============================================================================
 // usePathCompletion — file-path tab-completion for a compose surface. Owns
 // the token extraction, dropdown navigation, and acceptance editing; the
-// completion source is injected (`complete`), so the session dock passes the
-// attached-session `listFiles` RPC and the Project home a no-op (the
-// `listFiles` re-address to the Project is deferred — ADR 12).
+// completion source is injected (`complete`) — useComposeCapabilities supplies
+// the Project-scoped `listFiles` RPC (ADR 12).
 //
 // `handleKeyDown` returns true when the event was consumed (dropdown open,
 // or the Tab trigger fired); the card calls it before its own key handling.

@@ -241,10 +241,6 @@ export function useRpc() {
 		}
 	}, []);
 
-	const listFiles = useCallback(async (prefix: string) => {
-		return listFilesRpc(prefix);
-	}, []);
-
 	return useMemo(
 		() => ({
 			prompt,
@@ -262,7 +258,6 @@ export function useRpc() {
 			refreshActiveSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,
-			listFiles,
 		}),
 		[
 			prompt,
@@ -280,16 +275,20 @@ export function useRpc() {
 			refreshActiveSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,
-			listFiles,
 		],
 	);
 }
 
-export async function listFilesRpc(prefix: string): Promise<Array<{ path: string; isDirectory: boolean }>> {
+/** Path completion (ADR 12): `prefix` resolves against the Project's cwd, so
+ * the Project home completes pre-send without a session attached. */
+export async function listFilesRpc(
+	projectId: string,
+	prefix: string,
+): Promise<Array<{ path: string; isDirectory: boolean }>> {
 	const client = getGlobalClient();
 	if (!client) return [];
 	try {
-		const reply = await client.listFiles(prefix);
+		const reply = await client.listFiles(projectId, prefix);
 		if (!reply.ok) return [];
 		const r = reply as unknown as ListFilesReply;
 		return (r.entries as Array<{ path: string; isDirectory: boolean }>) ?? [];
