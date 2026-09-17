@@ -1,38 +1,21 @@
 /* ==========================================================================
-   Composer — fixed bar at viewport bottom. Two visual modes: collapsed
-   (36px bar: dot + placeholder) and expanded (textarea + control row).
-   The card is always rendered — collapsed swaps the body for a bar
-   button. Streaming and editing are behavioral overlays on expanded
-   (auto-expand; streaming swaps Send for Stop and auto-collapses on
-   turn end if empty).
-
-   Also holds the model-picker portal styles (portal*) used by
-   ModelPickerPortal.tsx, and the path-completion + thinking-level styles.
-   One module per feature: the composer's sub-components share it.
+   ComposeCard — the shared compose-surface styles: the card shell (also
+   used by ComposeBar), the expanded body (textarea, chips, control row),
+   and the sub-component surfaces (model-picker portal, path completion,
+   cost popover). One module per feature: the composer's sub-components
+   share it. Dock-only layout (the fixed bottom wrapper) lives in
+   ComposeDock.module.css; the Project home's centered wrapper in
+   HomeCompose.module.css.
    ========================================================================== */
 
-.composer {
-	position: fixed;
-	left: var(--sidebar-w, 0px);
-	right: var(--history-w, 0px);
-	bottom: var(--vv-keyboard, 0px);
-	z-index: 40;
-	/* The card's bottom gap + home-indicator safe area live in the wrapper's
-	   own padding so offsetHeight (published as --composer-h) reliably
-	   includes them — margin would be ambiguous under margin-collapse.
-	   z-index above the TopBar so the model-picker portal (a child here)
-	   renders above the fixed top bar when it opens upward. */
-	padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
-}
-
-/* Drop-target highlight while image files are dragged over the composer. */
-.composer[data-dragover] .composerCard {
+/* Drop-target highlight while image files are dragged over the card. */
+.composerCard[data-dragover] {
 	outline: 2px dashed var(--color-accent);
 	outline-offset: -2px;
 }
 
 /* Hidden file input backing the attach button (kept in the DOM so the
-   click() focus chain stays inside the composer for blur handling). */
+   click() focus chain stays inside the card for blur handling). */
 .attachInput {
 	position: absolute;
 	width: 1px;
@@ -41,9 +24,12 @@
 	pointer-events: none;
 }
 
-/* ── Card (always rendered, shared by collapsed and expanded) ─────────── */
+/* ── Card shell (shared by the collapsed bar and the expanded card) ──── */
 
 .composerCard {
+	/* Anchors the path-completion dropdown (bottom: 100% of the card) and
+	   the dragover outline. */
+	position: relative;
 	/* desktop: center within the measure, aligned to messages. */
 	margin: 0 auto;
 	max-width: 48rem;
@@ -80,7 +66,7 @@
 	}
 }
 
-/* ── Collapsed bar — 36px bar inside the card, always present ─────────── */
+/* ── Collapsed bar — 44px pill inside the card shell (ComposeBar) ────── */
 
 .composerBar {
 	height: 44px;
@@ -102,7 +88,11 @@
 	color: var(--color-secondary);
 }
 
-/* ── Status dot (shared between collapsed and expanded) ───────────────── */
+.composerBar:disabled {
+	cursor: default;
+}
+
+/* ── Status dot ──────────────────────────────────────────────────────── */
 
 .composerDot {
 	width: 8px;
@@ -135,7 +125,7 @@
 	50% { opacity: 0.4; }
 }
 
-/* ── Body (textarea + control row) — shown only when expanded ────────── */
+/* ── Body (textarea + control row) — the expanded card ───────────────── */
 
 .composerBody {
 }
@@ -249,6 +239,11 @@
 	outline: none;
 }
 
+.composerTextarea:disabled {
+	color: var(--color-muted-foreground);
+	cursor: not-allowed;
+}
+
 /* ── Image attachments ─────────────────────────────────────────────────── */
 
 .attachChips {
@@ -317,11 +312,6 @@
 	background: var(--color-muted);
 }
 
-.composerTextarea:disabled {
-	color: var(--color-muted-foreground);
-	cursor: not-allowed;
-}
-
 /* ── Control row ──────────────────────────────────────────────────────── */
 
 .composerControlRow {
@@ -338,9 +328,9 @@
 }
 
 /* Narrow: compact control row, hide non-essential metrics. Mobile and
-   desktop keep the same element order (pct, bar, cost | model, send) —
-   only the presentation changes: bar hidden, model name swapped for the
-   fixed "Models" label. */
+   desktop keep the same element order (ledger | model, send) — only the
+   presentation changes: bar hidden, model name swapped for the fixed
+   "Models" label. */
 @media (max-width: 640px) {
 	.composerContextBar {
 		display: none;
@@ -379,7 +369,7 @@
 	flex-shrink: 0;
 }
 
-/* ── Cost button (token-breakdown popover) ──────────────────────────────── */
+/* ── Cost button (token-breakdown popover) — session ledger ────────────── */
 
 .composerCostBtn {
 	display: inline-flex;
@@ -466,7 +456,7 @@
 	color: var(--color-muted-foreground);
 }
 
-/* ── Context bar ──────────────────────────────────────────────────────── */
+/* ── Context bar — session ledger ─────────────────────────────────────── */
 
 .composerContextBar {
 	width: 60px;
@@ -742,9 +732,8 @@
 
 
 /* ── Model picker portal (floating, searchable, grouped by provider) ──
-   Moved from App.module.css — the model picker is the only consumer and
-   it lives in this feature. portalOverlay is also duplicated in the
-   sidebar module (cwd-picker backdrop). */
+   portalOverlay is also duplicated in the sidebar module (cwd-picker
+   backdrop). */
 .portalOverlay {
 	position: fixed;
 	inset: 0;

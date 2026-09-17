@@ -290,18 +290,28 @@ describe("BridgeClient", () => {
 		expect(newSessionFrame.verb).toBe("newSession");
 		expect(newSessionFrame.projectId).toBe("proj");
 		expect(newSessionFrame.text).toBe("hello");
+		expect("images" in newSessionFrame).toBe(false);
+		expect("model" in newSessionFrame).toBe(false);
+
+		client.newSession("proj", "hello", {
+			images: [{ type: "image", mimeType: "image/png", data: "aGk=" }],
+			model: { provider: "p", modelId: "m" },
+		});
+		const fullFrame = JSON.parse(transport.sent[2]);
+		expect(fullFrame.images).toEqual([{ type: "image", mimeType: "image/png", data: "aGk=" }]);
+		expect(fullFrame.model).toEqual({ provider: "p", modelId: "m" });
 
 		client.listSessions("proj", 10, { sortTimeMs: 42, stem: "a" });
-		const listFrame = JSON.parse(transport.sent[2]);
+		const listFrame = JSON.parse(transport.sent[3]);
 		expect(listFrame.verb).toBe("listSessions");
 		expect(listFrame.projectId).toBe("proj");
 		expect(listFrame.cursor).toEqual({ sortTimeMs: 42, stem: "a" });
 
 		client.listActiveSessions();
-		expect(JSON.parse(transport.sent[3]).verb).toBe("listActiveSessions");
+		expect(JSON.parse(transport.sent[4]).verb).toBe("listActiveSessions");
 
 		client.getDaemonInfo();
-		expect(JSON.parse(transport.sent[4]).verb).toBe("getDaemonInfo");
+		expect(JSON.parse(transport.sent[5]).verb).toBe("getDaemonInfo");
 	});
 
 	it("pull sends requests array", () => {

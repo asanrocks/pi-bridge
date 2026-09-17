@@ -408,6 +408,11 @@ export interface NewSessionRequest {
 	projectId: string;
 	/** First prompt text. Required, non-empty. */
 	text: string;
+	/** Optional image attachments for the first prompt. */
+	images?: ImageContent[];
+	/** Optional model for the new session, applied before the prompt is
+	 * admitted — the Project home's pre-session model choice. */
+	model?: ModelRef;
 }
 
 /** Paginated history query for one Project (ADR 11). */
