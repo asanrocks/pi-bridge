@@ -1,22 +1,13 @@
 /* ==========================================================================
    HomeCompose — the Project home's compose surface: the shared ComposeCard
-   centered in the launcher column ("compose first, browse second"), always
-   expanded. No dock layout — the card shell's own max-width + centering
-   (ComposeCard.module.css) does the work; this centers the card + hint in
-   the first viewport (the home is a come-to-type surface) with the session
-   lists flowing below.
+   at the top of the launcher column ("compose first, browse second"),
+   always expanded. No dock layout — the card shell's own max-width +
+   centering (ComposeCard.module.css) does the work; the model picker opens
+   downward from here (ModelPickerPortal flips when there is no room above).
    ========================================================================== */
 
 .home {
-	/* The launcher fills the conversation column (100dvh - topbar) and has
-	   16px vertical padding of its own; center within that first screenful
-	   so the card sits mid-viewport, leaving room above for the model
-	   picker portal. */
-	min-height: calc(100dvh - var(--topbar-h) - 32px);
-	display: flex;
-	flex-direction: column;
-	justify-content: center;
-	padding: 0 8px 12px;
+	padding: 24px 8px 12px;
 }
 
 .hint {
