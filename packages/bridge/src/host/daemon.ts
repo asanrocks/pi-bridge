@@ -66,6 +66,9 @@ export interface DaemonOptions {
 	allow?: string[];
 	/** Injectable Manager factory (default: createManager). Test seam. */
 	managerFactory?: (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
+	/** Injectable embedded web assets (default: the bundle-time module).
+	 * Test seam for the embedded (single-file) serving path. */
+	embeddedAssets?: Record<string, string>;
 	/** Shared model runtime (for tests). */
 	modelRuntime?: ModelRuntime;
 	/** Idle GC delays in ms (ADR 11). Test seam. */
@@ -142,11 +145,12 @@ export class Daemon {
 			this.logger = TrafficLogger.open(options.logPath);
 		}
 
-		// Use embedded web assets when no --web-root is given
-		if (!this.webRoot) {
-			if (Object.keys(embeddedAssets).length > 0) {
-				this.embeddedAssets = embeddedAssets as Record<string, string>;
-			}
+		// Injectable embedded assets (test seam); otherwise the bundled web
+		// assets serve when no --web-root is given (single-file distribution).
+		if (options.embeddedAssets) {
+			this.embeddedAssets = options.embeddedAssets;
+		} else if (!this.webRoot && Object.keys(embeddedAssets).length > 0) {
+			this.embeddedAssets = embeddedAssets as Record<string, string>;
 		}
 
 		// Injectable deps (test seam)
@@ -732,7 +736,10 @@ export class Daemon {
 	private tryServeEmbedded(path: string, res: ServerResponse): boolean {
 		if (!this.embeddedAssets) return false;
 		// Normalize: strip leading /, default / → index.html
-		const key = path === "/" ? "index.html" : path.replace(/^\//, "");
+		let key = path === "/" ? "index.html" : path.replace(/^\//, "");
+		// SPA routes have no embedded asset of their own — they serve the shell
+		// and the client resolves the address (ADR 11).
+		if (this.isAppRoute(path)) key = "index.html";
 		const encoded = this.embeddedAssets[key];
 		if (!encoded) return false;
 
