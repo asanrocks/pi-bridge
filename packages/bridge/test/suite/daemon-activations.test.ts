@@ -19,10 +19,15 @@ import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from 
 
 interface StubHandles {
 	emitPatch: (patch: Patch) => void;
-	/** Ordered lifecycle events ("admit" / "attach") — ordering assertions. */
+	/** Ordered lifecycle events ("model" / "admit" / "attach") — ordering
+	 * assertions. */
 	events: () => string[];
 	/** Texts passed to promptAdmitted. */
 	admittedTexts: () => string[];
+	/** `(text, images)` pairs passed to promptAdmitted. */
+	admittedCalls: () => Array<{ text: string; images?: unknown[] }>;
+	/** Models passed to setModel, in order. */
+	setModelCalls: () => Array<{ provider: string; modelId: string }>;
 	/** Flip the stub document's streaming flag and emit the matching patch —
 	 * exercises both the daemon's onPatch listener and the GC eligibility
 	 * check, which reads `document.status.isStreaming`. */
@@ -79,6 +84,8 @@ function makeStubManager(opts: {
 	entries?: Document["entries"];
 	/** Makes promptAdmitted reject — a refused first-prompt admission. */
 	admitError?: Error;
+	/** Makes setModel reject — an unknown newSession model. */
+	setModelError?: Error;
 }): StubManager {
 	const cwd = opts.cwd ?? "";
 	const agentDir = opts.agentDir ?? "";
@@ -90,6 +97,8 @@ function makeStubManager(opts: {
 	const patchListeners = new Set<(patch: Patch) => void>();
 	const events: string[] = [];
 	const admittedTexts: string[] = [];
+	const admittedCalls: Array<{ text: string; images?: unknown[] }> = [];
+	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	const settledListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
@@ -119,15 +128,20 @@ function makeStubManager(opts: {
 			connectionHandles.delete(handle);
 		},
 		async prompt() {},
-		async promptAdmitted(text: string) {
+		async promptAdmitted(text: string, images?: unknown[]) {
 			events.push("admit");
 			if (opts.admitError) throw opts.admitError;
 			admittedTexts.push(text);
+			admittedCalls.push({ text, images });
 		},
 		async executeBash() {},
 		async abort() {},
 		async discardSteer() {},
-		async setModel() {},
+		async setModel(provider: string, modelId: string) {
+			events.push("model");
+			if (opts.setModelError) throw opts.setModelError;
+			setModelCalls.push({ provider, modelId });
+		},
 		async setThinkingLevel() {},
 		async renameSession() {},
 		async navigate() {},
@@ -145,6 +159,8 @@ function makeStubManager(opts: {
 		emitPatch: emit,
 		events: () => [...events],
 		admittedTexts: () => [...admittedTexts],
+		admittedCalls: () => [...admittedCalls],
+		setModelCalls: () => [...setModelCalls],
 		setStreaming: (streaming: boolean) => {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
@@ -496,6 +512,69 @@ describe("daemon: session activation", () => {
 		ws.close();
 	});
 
+	it("newSession applies the picked model and attachments before the admission", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const stubRef: { current: StubManager | null } = { current: null };
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				return stub.manager;
+			},
+		});
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+		const image = { type: "image", mimeType: "image/png", data: "aGk=" };
+
+		const id = send(ws, {
+			verb: "newSession",
+			projectId,
+			text: "look at this",
+			images: [image],
+			model: { provider: "p", modelId: "m" },
+		});
+		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
+		expect(reply.ok).toBe(true);
+
+		const stub = stubRef.current!;
+		// The model is applied first (the first turn runs on it), then the
+		// prompt with its attachments is admitted, then the connection
+		// attaches into the already-streaming turn.
+		expect(stub.handles.setModelCalls()).toEqual([{ provider: "p", modelId: "m" }]);
+		expect(stub.handles.admittedCalls()).toEqual([{ text: "look at this", images: [image] }]);
+		expect(stub.handles.events()).toEqual(["model", "admit", "attach"]);
+
+		ws.close();
+	});
+
+	it("an unknown newSession model disposes the fresh activation", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port, daemon } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) =>
+				makeStubManager({
+					...(opts ?? {}),
+					setModelError: new Error("Model not found: p/m"),
+				}).manager,
+		});
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "newSession", projectId, text: "hi", model: { provider: "p", modelId: "m" } });
+		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; error?: string };
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("Model not found");
+		// Nothing survives: the activation was disposed, not left for idle GC.
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+
+		ws.close();
+	});
+
 	it("a refused admission disposes the fresh activation", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		let refuseAdmission = true;
@@ -541,13 +620,18 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		for (const frame of [
-			{ verb: "newSession", projectId },
-			{ verb: "newSession", projectId, text: "  " },
-		]) {
+		const badFrames: Array<[Record<string, unknown>, RegExp]> = [
+			[{ verb: "newSession", projectId }, /Missing `text`/],
+			[{ verb: "newSession", projectId, text: "  " }, /Missing `text`/],
+			// Malformed optional fields are rejected before anything is created.
+			[{ verb: "newSession", projectId, text: "hi", images: "nope" }, /Invalid `images`/],
+			[{ verb: "newSession", projectId, text: "hi", model: { provider: 1, modelId: "m" } }, /Invalid `model`/],
+			[{ verb: "newSession", projectId, text: "hi", model: "p/m" }, /Invalid `model`/],
+		];
+		for (const [frame, errorRe] of badFrames) {
 			const reply = (await waitForReply(frames, send(ws, frame))) as unknown as { ok: boolean; error?: string };
 			expect(reply.ok).toBe(false);
-			expect(reply.error).toContain("text");
+			expect(reply.error).toMatch(errorRe);
 		}
 		// Nothing was created — text is a precondition, not an option.
 		expect(daemon.listActiveSessions()).toHaveLength(0);

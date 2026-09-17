@@ -11,6 +11,7 @@ import type {
 	Document,
 	ImageContent,
 	JsonValue,
+	ModelRef,
 	PatchOp,
 	PrefixCursor,
 	RpcReply,
@@ -201,9 +202,15 @@ export class BridgeClient {
 	}
 
 	/** Create a new unflushed session in a Project (ADR 11). The first
-	 * prompt's text is admitted before attach (ADR 12 slice). */
-	newSession(projectId: string, text: string): Promise<RpcReply> {
-		return this.call({ verb: "newSession", projectId, text });
+	 * prompt's text is admitted before attach (ADR 12 slice); optional
+	 * `images` attach to it and `model` is applied before admission (the
+	 * Project home's pre-session model choice). */
+	newSession(
+		projectId: string,
+		text: string,
+		options?: { images?: ImageContent[]; model?: ModelRef },
+	): Promise<RpcReply> {
+		return this.call({ verb: "newSession", projectId, text, ...options });
 	}
 
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<RpcReply> {

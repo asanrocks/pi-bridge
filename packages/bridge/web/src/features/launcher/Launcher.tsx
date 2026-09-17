@@ -1,17 +1,19 @@
 // ============================================================================
 // Launcher — the unattached home view (ADR 11). Two surfaces:
 //  - `/` (global): browse Projects and resume an active session.
-//  - `/<projectId>` (Project home): a prompt input that starts a new session
-//    on send — the daemon admits the first prompt before attach (ADR 12
-//    slice), so the conversation the client navigates into is already
-//    streaming — plus the Project's active and recent sessions.
+//  - `/<projectId>` (Project home): HomeCompose — the shared compose card,
+//    centered and always expanded — starts a new session on send (the
+//    daemon admits the first prompt, attachments, and the pre-session
+//    model choice before attach; ADR 12 slice), plus the Project's active
+//    and recent sessions.
 // No create buttons: a session is started by sending a prompt, and opened by
 // address (the daemon resolves or activates it).
 // ============================================================================
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import { memo, useMemo } from "react";
+import type { ImageContent, ModelInfo, ModelRef, ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { ConnectionState } from "../../infra/store.ts";
+import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
 
@@ -20,6 +22,7 @@ export const Launcher = memo(function Launcher({
 	projects,
 	activeSessions,
 	projectId,
+	models,
 	sessions,
 	sessionsHasMore,
 	onOpenProject,
@@ -33,14 +36,16 @@ export const Launcher = memo(function Launcher({
 	activeSessions: SessionInfo[];
 	/** When set, the Launcher is scoped to one Project's home. */
 	projectId: string | null;
+	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
+	models: ModelInfo[];
 	/** The current Project's first history page (scoped surface only). */
 	sessions: SessionInfo[];
 	sessionsHasMore: boolean;
 	onOpenProject: (projectId: string) => void;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	/** Send the first prompt of a new session. Resolves true on success —
-	 * the caller keeps its text on failure. */
-	onNewSession: (projectId: string, text: string) => Promise<boolean>;
+	 * the caller keeps its draft on failure. */
+	onNewSession: (projectId: string, text: string, images?: ImageContent[], model?: ModelRef) => Promise<boolean>;
 	onLoadMoreSessions: () => void;
 	retry: () => void;
 }) {
@@ -116,7 +121,14 @@ export const Launcher = memo(function Launcher({
 	// ── Connected ──────────────────────────────────────────────────────────
 	return (
 		<div className={styles.launcher}>
-			{projectId !== null && <PromptHero projectId={projectId} onNewSession={onNewSession} />}
+			{projectId !== null && (
+				<HomeCompose
+					projectId={projectId}
+					models={models}
+					connected={connection.kind === "connected"}
+					onNewSession={onNewSession}
+				/>
+			)}
 
 			{projectId === null && (
 				<>
@@ -234,75 +246,6 @@ export const Launcher = memo(function Launcher({
 					</div>
 				</>
 			)}
-		</div>
-	);
-});
-
-// ---------------------------------------------------------------------------
-// PromptHero — the Project home's input box. Sending creates the session and
-// navigates into it; a failure keeps the text for retry.
-// ---------------------------------------------------------------------------
-
-const PromptHero = memo(function PromptHero({
-	projectId,
-	onNewSession,
-}: {
-	projectId: string;
-	onNewSession: (projectId: string, text: string) => Promise<boolean>;
-}) {
-	const [text, setText] = useState("");
-	const [sending, setSending] = useState(false);
-	const inputRef = useRef<HTMLTextAreaElement>(null);
-	// Landing on the Project home is a come-to-type gesture — focus the input
-	// (a ref-effect instead of autoFocus, which biome's a11y rule rejects).
-	useEffect(() => {
-		inputRef.current?.focus();
-	}, []);
-
-	const send = async () => {
-		const value = text.trim();
-		if (value === "" || sending) return;
-		setSending(true);
-		let ok = false;
-		try {
-			ok = await onNewSession(projectId, value);
-		} finally {
-			setSending(false);
-		}
-		if (ok) setText("");
-	};
-
-	return (
-		<div className={styles.hero}>
-			<div className={styles.heroCard}>
-				<textarea
-					ref={inputRef}
-					className={styles.heroInput}
-					value={text}
-					onChange={(e) => setText(e.target.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && !e.shiftKey) {
-							e.preventDefault();
-							void send();
-						}
-					}}
-					placeholder={`Send a prompt to ${projectId}…`}
-					rows={1}
-					disabled={sending}
-					aria-label="New session prompt"
-				/>
-				<button
-					type="button"
-					className={styles.heroSend}
-					onClick={() => void send()}
-					disabled={sending || text.trim() === ""}
-					aria-label="Start session"
-					title="Start session (Enter)"
-				>
-					⏎
-				</button>
-			</div>
-			<div className={styles.heroHint}>Enter starts a new session · Shift+Enter for a new line</div>
 		</div>
 	);
 });

@@ -8,6 +8,7 @@ import type {
 	JsonValue,
 	ListFilesRequest,
 	ListSessionsRequest,
+	ModelRef,
 	NavigateRequest,
 	NewSessionRequest,
 	OpenSessionRequest,
@@ -72,11 +73,15 @@ export interface DaemonVerbs {
 	/** Create a new unflushed session in a Project and attach this Connection.
 	 * The first prompt's `text` is required and admitted server-side before
 	 * the attach (ADR 12 slice); a refused admission disposes the fresh
-	 * activation, so no empty session is ever created. */
+	 * activation, so no empty session is ever created. Optional `images`
+	 * attach to the first prompt; optional `model` is applied before
+	 * admission (the Project home's pre-session model choice). */
 	newSession: (
 		projectId: string,
 		conn: Connection,
 		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
 	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Release this Connection's attachment (activation stays alive for GC). */
 	detach: (conn: Connection) => void;
@@ -284,7 +289,17 @@ export class Connection {
 					const m = msg as unknown as NewSessionRequest;
 					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
 					if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
-					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text);
+					if (m.images !== undefined && !Array.isArray(m.images)) throw new Error("Invalid `images`");
+					if (
+						m.model !== undefined &&
+						(typeof m.model !== "object" ||
+							m.model === null ||
+							typeof m.model.provider !== "string" ||
+							typeof m.model.modelId !== "string")
+					) {
+						throw new Error("Invalid `model`");
+					}
+					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, m.images, m.model);
 					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
 					else this.sendReply(id, false, result.error);
 					break;
