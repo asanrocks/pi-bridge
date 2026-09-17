@@ -28,7 +28,6 @@ import type {
 	MessageEntry,
 	ModelInfo,
 	ModelRef,
-	SessionInfo,
 	ToolCallBlock,
 	ToolResultEntry,
 	Usage,
@@ -274,7 +273,6 @@ export interface ToolResultSnapshot {
 
 export interface ViewModelInput {
 	document: Document;
-	sessions: SessionInfo[];
 	models: ModelInfo[];
 }
 

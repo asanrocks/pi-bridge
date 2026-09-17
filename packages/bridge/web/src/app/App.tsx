@@ -72,8 +72,6 @@ function AppInner() {
 	const currentStem = useStore((s) => s.currentStem);
 	const projects = useStore((s) => s.projects);
 	const activeSessions = useStore((s) => s.activeSessions);
-	const sessions = useStore((s) => s.sessions);
-	const sessionsHasMore = useStore((s) => s.sessionsHasMore);
 	const sessionPages = useStore((s) => s.sessionPages);
 	const models = useStore((s) => s.models);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
@@ -133,7 +131,7 @@ function AppInner() {
 		}
 
 		const prevVm = vmCacheRef.current?.vm;
-		const newVm = computeViewModel({ document: doc, sessions, models }, prevVm);
+		const newVm = computeViewModel({ document: doc, models }, prevVm);
 		vmCacheRef.current = { key: key, vm: newVm };
 		return newVm;
 	}, [
@@ -146,7 +144,6 @@ function AppInner() {
 		isCompacting,
 		stats,
 		currentStem,
-		sessions,
 		models,
 		pullTick,
 		statusContextUsage,
@@ -575,12 +572,9 @@ function AppInner() {
 							activeSessions={activeSessions}
 							projectId={currentProjectId}
 							models={models}
-							sessions={sessions}
-							sessionsHasMore={sessionsHasMore}
 							onOpenProject={handleOpenProject}
 							onOpenSession={handleOpenSession}
 							onNewSession={handleNewSession}
-							onLoadMoreSessions={rpc.loadMoreSessions}
 							retry={retry}
 						/>
 					)}
