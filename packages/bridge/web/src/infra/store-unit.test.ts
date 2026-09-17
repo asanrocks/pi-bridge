@@ -38,8 +38,6 @@ describe("clearCurrentSession", () => {
 		expect(s.currentProjectId).toBeNull();
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
-		expect(s.sessions).toEqual([]);
-		expect(s.sessionsNextCursor).toBeNull();
 		expect(s.focusedTurnId).toBeNull();
 		expect(s.draft).toEqual({ kind: "idle" });
 		expect(s.document.entries).toEqual({});
@@ -71,29 +69,6 @@ describe("clearCurrentSession", () => {
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
 		expect(s.document.entries).toEqual({});
-	});
-});
-
-describe("session pages", () => {
-	it("appendSessions upserts by sessionId and keeps the cursor when omitted", () => {
-		const store = createClientStore();
-		store.getState().replaceSessions([session("a")], true, { sortTimeMs: 10, stem: "a" });
-		store.getState().appendSessions([session("b")], false);
-
-		const s = store.getState();
-		expect(s.sessions.map((x) => x.stem).sort()).toEqual(["a", "b"]);
-		expect(s.sessionsHasMore).toBe(false);
-		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 10, stem: "a" });
-	});
-
-	it("replaceSessions resets the cursor (page-1 refresh)", () => {
-		const store = createClientStore();
-		store.getState().replaceSessions([session("a")], true, { sortTimeMs: 10, stem: "a" });
-		store.getState().replaceSessions([session("b")], true, { sortTimeMs: 20, stem: "b" });
-
-		const s = store.getState();
-		expect(s.sessions.map((x) => x.stem)).toEqual(["b"]);
-		expect(s.sessionsNextCursor).toEqual({ sortTimeMs: 20, stem: "b" });
 	});
 });
 

@@ -68,9 +68,8 @@ export type ConnectionState =
 
 // ---------------------------------------------------------------------------
 // Sidebar folder pages — lazily fetched per-Project session lists for the
-// sidebar's folder tree (ADR 11). Distinct from the `sessions` slice (the
-// current Project's page, which feeds the Project-home path): folder pages
-// are pure UI cache, keyed by projectId, fetched on first expand.
+// sidebar's folder tree (ADR 11). Pure UI cache, keyed by projectId, fetched
+// on first expand.
 // ---------------------------------------------------------------------------
 
 export type SessionFolderPage =
@@ -139,10 +138,6 @@ export interface ClientStore {
 	 * after failure.
 	 */
 	pullTick: number;
-	sessions: SessionInfo[];
-	sessionsHasMore: boolean;
-	/** Compound cursor for the last returned session page (ADR 11). */
-	sessionsNextCursor: SessionListCursor | null;
 	/** Sidebar folder pages (ADR 11), keyed by projectId. Absent = never
 	 * expanded (fetch on expand); reset on reconnect. */
 	sessionPages: Record<string, SessionFolderPage>;
@@ -190,17 +185,6 @@ export interface ClientStore {
 	/** Unbind from the current Project/session (Launcher, open failure). Pass a
 	 * `projectId` to land on that Project's home instead of the launcher. */
 	clearCurrentSession: (projectId?: string | null) => void;
-	/**
-	 * Append a page of sessions from load-more. Upserts by sessionId: new entries
-	 * are added, existing entries are updated with fresh metadata. Keeps
-	 * sessions not in the incoming page (partial view).
-	 */
-	appendSessions: (incoming: SessionInfo[], hasMore: boolean, nextCursor?: SessionListCursor | null) => void;
-	/**
-	 * Replace the entire sessions list. Used on Project switch, where the pool
-	 * belongs to a different Project and should not merge with the previous one.
-	 */
-	replaceSessions: (incoming: SessionInfo[], hasMore: boolean, nextCursor?: SessionListCursor | null) => void;
 	/** Mark a sidebar folder page as fetching (expand / retry). */
 	beginSessionPage: (projectId: string) => void;
 	/** Commit a sidebar folder page (fetch success or sessions_changed). */
@@ -213,7 +197,7 @@ export interface ClientStore {
 	/** Mark a sidebar folder page as failed (fetch failure / offline expand). */
 	setSessionPageError: (projectId: string) => void;
 	/** Append a sidebar folder page from load-more. Upserts by sessionId like
-	 * `appendSessions`; a no-op unless the page is ready. */
+	 * `appendSessionPage`; a no-op unless the page is ready. */
 	appendSessionPage: (
 		projectId: string,
 		incoming: SessionInfo[],
@@ -300,9 +284,6 @@ function clearedSessionState() {
 		currentStem: null as string | null,
 		activeSessionId: null as string | null,
 		document: emptyDocument(),
-		sessions: [] as SessionInfo[],
-		sessionsHasMore: false,
-		sessionsNextCursor: null as SessionListCursor | null,
 		expandedActionGroups: new Set<string>(),
 		expandedSteps: new Set<string>(),
 		uncappedDetails: new Set<string>(),
@@ -405,9 +386,6 @@ export function createClientStore() {
 		frozenSteps: new Set(),
 		loadingPaths: new Set(),
 		pullTick: 0,
-		sessions: [],
-		sessionsHasMore: false,
-		sessionsNextCursor: null,
 		sessionPages: {},
 		projects: [],
 		activeSessions: [],
@@ -449,33 +427,6 @@ export function createClientStore() {
 		setCurrentSession: (currentProjectId, currentStem) => set({ currentProjectId, currentStem }),
 
 		clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
-
-		appendSessions: (incoming, hasMore, nextCursor) =>
-			set((s) => {
-				// Upsert by sessionId: update existing, append new, preserve unmatched
-				const incomingMap = new Map(incoming.map((x) => [x.sessionId, x]));
-				const merged: SessionInfo[] = [];
-				for (const cur of s.sessions) {
-					const upd = incomingMap.get(cur.sessionId);
-					if (upd) {
-						merged.push(upd);
-						incomingMap.delete(cur.sessionId);
-					} else {
-						merged.push(cur);
-					}
-				}
-				for (const x of incomingMap.values()) merged.push(x);
-				// Stable sort by timestamp desc
-				merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-				return {
-					sessions: merged,
-					sessionsHasMore: hasMore,
-					sessionsNextCursor: nextCursor ?? s.sessionsNextCursor,
-				};
-			}),
-
-		replaceSessions: (incoming, hasMore, nextCursor) =>
-			set({ sessions: incoming, sessionsHasMore: hasMore, sessionsNextCursor: nextCursor ?? null }),
 
 		beginSessionPage: (projectId) =>
 			set((s) => ({ sessionPages: { ...s.sessionPages, [projectId]: { kind: "loading" } } })),
