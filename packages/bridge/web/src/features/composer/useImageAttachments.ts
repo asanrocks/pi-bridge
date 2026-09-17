@@ -9,6 +9,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ImageContent } from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS, prepareImageFiles } from "../../infra/imageResize.ts";
+import { selectDraftImages } from "../../infra/store.ts";
 import { useStore } from "../../infra/store.tsx";
 
 export interface ImageAttachmentHandlers {
@@ -26,7 +27,7 @@ export function useImageAttachments(): {
 	isDragOver: boolean;
 	dragHandlers: ImageAttachmentHandlers;
 } {
-	const images = useStore((s) => (s.draft.kind === "compose" ? (s.draft.images ?? []) : []));
+	const images = useStore(selectDraftImages);
 	const addDraftImages = useStore((s) => s.addDraftImages);
 	const removeDraftImage = useStore((s) => s.removeDraftImage);
 	const pushToast = useStore((s) => s.pushToast);
