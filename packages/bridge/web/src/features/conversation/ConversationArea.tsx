@@ -143,6 +143,12 @@ export const ConversationArea = memo(function ConversationArea({
 	// don't trip auto-scroll (those are reading actions, not new content).
 	const streamingKey = vm.streamingKey;
 	const prevStreamingKeyRef = useRef<string>("");
+	// Readable-text identity (user/assistant `text` blocks only). The dot's
+	// "new content below" signal is gated on this, not on structKey/streamingKey:
+	// thinking and tool-call churn must not raise the dot while the user is
+	// reading up. Auto-scroll (when at the bottom) still follows every change.
+	const textKey = vm.textKey;
+	const prevTextKeyRef = useRef<string>("");
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: vm is the content-change signal; expanded* state is a deliberate omission
 	useEffect(() => {
@@ -156,14 +162,17 @@ export const ConversationArea = memo(function ConversationArea({
 		const structChanged = structKey !== prevStructKeyRef.current;
 		const streamingGrew = isStreaming && streamingKey !== prevStreamingKeyRef.current;
 		if (!structChanged && !streamingGrew) return;
+		const textChanged = textKey !== prevTextKeyRef.current;
 		prevStructKeyRef.current = structKey;
 		prevStreamingKeyRef.current = streamingKey;
+		prevTextKeyRef.current = textKey;
 		// The user is reading up: don't yank the viewport — raise the
-		// new-content signal on the jump button instead. The prev-key refs
-		// still update above, so a later return to the bottom doesn't replay
-		// the skipped deltas as one stale "change" and double-fire.
+		// new-content signal on the jump button instead, but only for readable
+		// text. Thinking/tool blocks arriving below the viewport update the refs
+		// above without touching the dot, so the notifier does not fire on
+		// activity the reader did not come to read.
 		if (userScrolledUpRef.current) {
-			setNewContentBelow(true);
+			if (textChanged) setNewContentBelow(true);
 			return;
 		}
 		// A smooth jump is animating: an instant scrollTo here would cancel it.
@@ -184,7 +193,7 @@ export const ConversationArea = memo(function ConversationArea({
 		// leave lastScrollHeightRef stale for the next handler invocation.
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [vm, structKey, streamingKey, isStreaming]);
+	}, [vm, structKey, streamingKey, textKey, isStreaming]);
 
 	// Anchor scroll: when the tree dialog selects a message, navigate sets
 	// `scrollToEntryId`; after the VM re-renders with the new leaf path, scroll
