@@ -366,6 +366,12 @@ getDaemonInfo()
 interface ProjectInfo {
   id: string;
   cwd: string;
+  /** The model a fresh session in this Project resolves to (pi's
+   * findInitialModel over the Project's settings + the daemon's model
+   * runtime), or null when no model is available. Display-only: the
+   * client still omits `model` on `newSession` when the user hasn't
+   * picked, so the daemon keeps resolving. */
+  defaultModel: ModelRef | null;
 }
 
 listSessions({ projectId, max?, cursor? })

@@ -8,7 +8,7 @@
 //   - leftControls?: session ledger (cost/context); home renders nothing
 //   - onStop?/isBusy: turn-aware Stop (session only)
 //   - pendingSteer/onDiscardSteer, editLabel/onCancelEdit: session overlays
-//   - model: ModelRef | null — null renders "default" (home pre-session)
+//   - model: ModelRef | null — null renders "none" (no model available)
 // The card shell spec (elevation, radius, surface) is shared with ComposeBar
 // via the same CSS module — one spec per role (ADR 07 §Styling invariants).
 // ============================================================================
@@ -187,7 +187,7 @@ export const ComposeCard = memo(function ComposeCard({
 		? models.find((m) => m.provider === model.provider && m.id === model.modelId)
 		: undefined;
 	const availableThinkingLevels = selectedModel?.supportedThinkingLevels ?? thinkingLevels;
-	const modelName = model?.modelId ? displayModelName(model.provider, model.modelId, models) : "default";
+	const modelName = model?.modelId ? displayModelName(model.provider, model.modelId, models) : "none";
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: layout container is the card's drop target; drag affordances have no ARIA role
