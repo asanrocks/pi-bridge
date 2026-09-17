@@ -383,7 +383,7 @@ listActiveSessions()
 openSession({ projectId, stem, cursor? })
   → { ok, session: SessionInfo }
 
-newSession({ projectId, text, images?, model? })
+newSession({ projectId, text, images?, model?, thinkingLevel? })
   → { ok, session: SessionInfo }
 
 detach()
@@ -444,8 +444,9 @@ admits it before attaching the Connection (an ADR 12 slice), so the initial
 sync carries the in-flight turn, and a refused admission disposes the fresh
 activation instead of leaving an empty session to idle-collect. There is no
 empty-session creation path. Optional `images` attach to the first prompt;
-an optional `model` is applied before the prompt is admitted (the Project
-home's pre-session model choice) and an unknown model disposes the fresh
+an optional `model` and `thinkingLevel` are applied before the prompt is
+admitted (the Project home's pre-session choices; pi clamps the level to
+the model's supported levels) and an unknown model disposes the fresh
 activation like a refused admission.
 
 `detach` removes the Connection's attachment but leaves the activation alive

@@ -303,12 +303,12 @@ function AppInner() {
 
 	// Create a session by sending its first prompt (ADR 12 slice): the
 	// daemon admits the prompt (with any attachments and the pre-session
-	// model choice) before attaching, so the session the client navigates
-	// into already carries the in-flight turn. There is no empty-session
-	// path — text is required.
+	// model/thinking-level choices) before attaching, so the session the
+	// client navigates into already carries the in-flight turn. There is no
+	// empty-session path — text is required.
 	const handleNewSession = useCallback(
-		(projectId: string, text: string, images?: ImageContent[], model?: ModelRef) => {
-			return rpc.newSession(projectId, text, { images, model });
+		(projectId: string, text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) => {
+			return rpc.newSession(projectId, text, { images, model, thinkingLevel });
 		},
 		[rpc],
 	);

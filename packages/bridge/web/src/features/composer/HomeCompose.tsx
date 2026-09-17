@@ -9,10 +9,9 @@
 //
 // Draft: the store draft scoped to the project (draftPersistence keys
 // `p:<projectId>`), so an unsent prompt survives navigation and reloads.
-// Model: a per-project pre-session slot persisted to localStorage; null
-// means "the daemon/session default" and sends no model with newSession.
-// Thinking level is session state — the picker's level row is hidden here
-// until newSession grows a level param.
+// Model + thinking level: per-project pre-session picks persisted to one
+// localStorage slot; unset means "the daemon-resolved default" and sends
+// nothing with newSession, so the daemon keeps resolving.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,11 +25,19 @@ import { usePathCompletion } from "./usePathCompletion.tsx";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
 
-function loadHomeModel(projectId: string): ModelRef | null {
+/** The persisted pre-session pick for one Project: a model plus an optional
+ * thinking level. */
+interface HomePick {
+	provider: string;
+	modelId: string;
+	thinkingLevel?: string;
+}
+
+function loadHomePick(projectId: string): HomePick | null {
 	try {
 		const raw = localStorage.getItem(MODEL_KEY_PREFIX + projectId);
 		if (!raw) return null;
-		const parsed = JSON.parse(raw) as ModelRef;
+		const parsed = JSON.parse(raw) as HomePick;
 		if (typeof parsed.provider !== "string" || typeof parsed.modelId !== "string") return null;
 		return parsed;
 	} catch {
@@ -38,9 +45,9 @@ function loadHomeModel(projectId: string): ModelRef | null {
 	}
 }
 
-function saveHomeModel(projectId: string, model: ModelRef | null): void {
+function saveHomePick(projectId: string, pick: HomePick | null): void {
 	try {
-		if (model) localStorage.setItem(MODEL_KEY_PREFIX + projectId, JSON.stringify(model));
+		if (pick) localStorage.setItem(MODEL_KEY_PREFIX + projectId, JSON.stringify(pick));
 		else localStorage.removeItem(MODEL_KEY_PREFIX + projectId);
 	} catch {
 		// Quota / private mode — the in-memory slot stands for this visit.
@@ -51,6 +58,7 @@ export const HomeCompose = memo(function HomeCompose({
 	projectId,
 	models,
 	defaultModel,
+	defaultThinkingLevel,
 	connected,
 	onNewSession,
 }: {
@@ -60,17 +68,26 @@ export const HomeCompose = memo(function HomeCompose({
 	 * getDaemonInfo) — display only. The send still omits `model` when unset,
 	 * so the daemon keeps resolving (settings/auth changes stay live). */
 	defaultModel: ModelRef | null;
+	/** The thinking level that same resolution yields — display-only like
+	 * `defaultModel`; the bar seeds from it until the user picks. */
+	defaultThinkingLevel: string | null;
 	connected: boolean;
 	/** Send the first prompt of a new session. Resolves true on success —
 	 * the draft is kept for retry on failure. */
-	onNewSession: (projectId: string, text: string, images?: ImageContent[], model?: ModelRef) => Promise<boolean>;
+	onNewSession: (
+		projectId: string,
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+	) => Promise<boolean>;
 }) {
 	const draft = useStore((s) => s.draft);
 	const setDraftText = useStore((s) => s.setDraftText);
 	const clearDraft = useStore((s) => s.clearDraft);
 	const text = draft.kind === "idle" ? "" : draft.text;
 
-	const [model, setModel] = useState<ModelRef | null>(() => loadHomeModel(projectId));
+	const [pick, setPick] = useState<HomePick | null>(() => loadHomePick(projectId));
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -91,22 +108,45 @@ export const HomeCompose = memo(function HomeCompose({
 
 	// The slot is per-project; switching projects re-reads it.
 	useEffect(() => {
-		setModel(loadHomeModel(projectId));
+		setPick(loadHomePick(projectId));
 	}, [projectId]);
+
+	// Effective = the explicit picks, else the daemon-reported defaults (shown
+	// in the button, the level row, and the picker's selected row; "none" when
+	// nothing is available). Only the explicit picks are sent with newSession.
+	// A level-only pick carries no model — the derivation must yield null so
+	// the daemon default (not a {undefined, undefined} object) shows through.
+	const model = pick?.provider && pick?.modelId ? { provider: pick.provider, modelId: pick.modelId } : null;
+	const effectiveModel = model ?? defaultModel;
+	const effectiveLevel = pick?.thinkingLevel ?? defaultThinkingLevel ?? "";
+
+	const thinkingLevels = useStore((s) => s.thinkingLevels);
 
 	const handleSetModel = useCallback(
 		(provider: string, modelId: string) => {
-			const next = { provider, modelId };
-			setModel(next);
-			saveHomeModel(projectId, next);
+			const next: HomePick = { provider, modelId };
+			// Keep the level pick only if the new model supports it — otherwise
+			// drop it and fall back to the Project default (pi clamps server-side
+			// too; this keeps the display honest).
+			const supported = models.find((m) => m.provider === provider && m.id === modelId)?.supportedThinkingLevels;
+			const level = pick?.thinkingLevel;
+			if (level && (!supported || supported.includes(level))) next.thinkingLevel = level;
+			setPick(next);
+			saveHomePick(projectId, next);
 		},
-		[projectId],
+		[projectId, models, pick],
 	);
 
-	// Effective = the explicit pick, else the daemon-reported default (shown
-	// in the button and as the picker's selected row; "none" when nothing is
-	// available). Only the explicit pick is sent with newSession.
-	const effectiveModel = model ?? defaultModel;
+	const handleSetThinkingLevel = useCallback(
+		(level: string) => {
+			// Picking a level without a model pins the level only: the send then
+			// carries the level while the daemon resolves the model.
+			const next: HomePick = pick ? { ...pick, thinkingLevel: level } : ({ thinkingLevel: level } as HomePick);
+			setPick(next);
+			saveHomePick(projectId, next);
+		},
+		[projectId, pick],
+	);
 
 	// Ctrl+P cycles the same provider-deduped list the session dock uses;
 	// cycling from the (unpicked) default starts at the default's position.
@@ -140,7 +180,13 @@ export const HomeCompose = memo(function HomeCompose({
 		setSending(true);
 		let ok = false;
 		try {
-			ok = await onNewSession(projectId, text, images.length > 0 ? images : undefined, model ?? undefined);
+			ok = await onNewSession(
+				projectId,
+				text,
+				images.length > 0 ? images : undefined,
+				model ?? undefined,
+				pick?.thinkingLevel,
+			);
 		} finally {
 			setSending(false);
 		}
@@ -151,7 +197,7 @@ export const HomeCompose = memo(function HomeCompose({
 			// the textarea stays enabled through the send.
 			textareaRef.current?.focus();
 		}
-	}, [sending, text, attachments.images, model, onNewSession, projectId, clearDraft]);
+	}, [sending, text, attachments.images, model, pick, onNewSession, projectId, clearDraft]);
 
 	return (
 		<div className={styles.home}>
@@ -172,9 +218,10 @@ export const HomeCompose = memo(function HomeCompose({
 				model={effectiveModel}
 				models={models}
 				scopedModels={[]}
-				thinkingLevel=""
-				thinkingLevels={[]}
+				thinkingLevel={effectiveLevel}
+				thinkingLevels={thinkingLevels}
 				onSetModel={handleSetModel}
+				onSetThinkingLevel={handleSetThinkingLevel}
 				onCycleModel={handleCycleModel}
 				completion={completion.node}
 				beforeKeyDown={completion.handleKeyDown}

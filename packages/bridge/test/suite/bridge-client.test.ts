@@ -296,10 +296,12 @@ describe("BridgeClient", () => {
 		client.newSession("proj", "hello", {
 			images: [{ type: "image", mimeType: "image/png", data: "aGk=" }],
 			model: { provider: "p", modelId: "m" },
+			thinkingLevel: "high",
 		});
 		const fullFrame = JSON.parse(transport.sent[2]);
 		expect(fullFrame.images).toEqual([{ type: "image", mimeType: "image/png", data: "aGk=" }]);
 		expect(fullFrame.model).toEqual({ provider: "p", modelId: "m" });
+		expect(fullFrame.thinkingLevel).toBe("high");
 
 		client.listSessions("proj", 10, { sortTimeMs: 42, stem: "a" });
 		const listFrame = JSON.parse(transport.sent[3]);

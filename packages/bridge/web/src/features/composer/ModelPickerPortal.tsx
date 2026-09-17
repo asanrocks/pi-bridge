@@ -10,6 +10,21 @@ import { isModelSelected } from "../../../../src/viewmodel/index.ts";
 import { displayProviderName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 
+/** Anchor the portal above the button (the session dock's position), or
+ * flip below it when there is no room above (the Project home's centered
+ * card, short viewports). The downward case also clamps the height so the
+ * portal never runs off the bottom of the screen. */
+function portalPosition(anchor: DOMRect): React.CSSProperties {
+	const left = Math.max(8, Math.min(anchor.left, window.innerWidth - 320 - 8));
+	const roomAbove = anchor.top;
+	if (roomAbove >= 368) {
+		// 360 max-height + 4px gap + slack
+		return { position: "fixed", bottom: window.innerHeight - anchor.top + 4, left, width: 320 };
+	}
+	const maxHeight = Math.max(96, window.innerHeight - anchor.bottom - 12);
+	return { position: "fixed", top: anchor.bottom + 4, left, width: 320, maxHeight };
+}
+
 export function ModelPickerPortal({
 	models,
 	scopedModels,
@@ -157,16 +172,7 @@ export function ModelPickerPortal({
 			<div
 				role="dialog"
 				className={styles.portal}
-				style={
-					anchorRect
-						? {
-								position: "fixed",
-								bottom: window.innerHeight - anchorRect.top + 4,
-								left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - 320 - 8)),
-								width: 320,
-							}
-						: undefined
-				}
+				style={anchorRect ? portalPosition(anchorRect) : undefined}
 				onKeyDown={handleKeyDown}
 			>
 				<ThinkingLevelRow levels={thinkingLevels} current={currentThinkingLevel} onSelect={onSelectThinkingLevel} />

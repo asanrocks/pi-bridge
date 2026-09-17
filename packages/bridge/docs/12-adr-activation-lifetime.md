@@ -4,12 +4,13 @@
 navigation verbs). Retains ADR 11's domain model, addresses, security rules,
 and the activation reservation. Two slices have shipped: (1) the
 text-bearing `newSession` — `text` is required, and the daemon admits the
-first prompt (with optional `images`, and an optional `model` applied before
-admission) before attaching, disposing the fresh activation on refusal —
+first prompt (with optional `images`, and an optional `model`/
+`thinkingLevel` applied before admission) before attaching, disposing the
+fresh activation on refusal —
 and (2) the Project-home floating draft (client-side, persisted per
 project). Everything else — the refcount lifetime rule, transactional
 `openSession` switching, `session_closed`, the `listFiles` re-address to
-the Project, `thinkingLevel` on `newSession`, commit-on-push navigation —
+the Project, commit-on-push navigation —
 remains unimplemented; ADR 11 describes the shipped behavior for those.
 
 ## Context
