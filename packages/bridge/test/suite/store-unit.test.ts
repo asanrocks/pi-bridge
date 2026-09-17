@@ -4,8 +4,13 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import type { Document } from "../../src/core/types.ts";
-import { createClientStore, type ExpandKeySets, migrateExpandKeys } from "../../web/src/infra/store.ts";
+import type { Document, ImageContent } from "../../src/core/types.ts";
+import {
+	createClientStore,
+	type ExpandKeySets,
+	migrateExpandKeys,
+	selectDraftImages,
+} from "../../web/src/infra/store.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -379,5 +384,33 @@ describe("migrateExpandKeys (pure)", () => {
 		expect(result.frozenActionGroups).toEqual(new Set());
 		expect(result.frozenSteps).toEqual(new Set());
 		expect(result.loadingPaths).toEqual(new Set());
+	});
+});
+
+// ---------------------------------------------------------------------------
+// selectDraftImages — snapshot stability. A useStore selector that returns a
+// fresh reference per call makes useSyncExternalStore treat every render as
+// a change ("getSnapshot should be cached" → max update depth loop).
+// Regression: useImageAttachments inlined `?? []` in its selector.
+// ---------------------------------------------------------------------------
+
+describe("selectDraftImages", () => {
+	it("returns a reference-stable empty list for imageless drafts", () => {
+		const store = createClientStore();
+		store.getState().setDraftText("hello"); // idle → compose, no images
+		const state = store.getState();
+		expect(Object.is(selectDraftImages(state), selectDraftImages(state))).toBe(true);
+		expect(selectDraftImages(state)).toEqual([]);
+		// idle and edit drafts share the same stable empty list
+		store.getState().clearDraft();
+		expect(Object.is(selectDraftImages(store.getState()), selectDraftImages(state))).toBe(true);
+	});
+
+	it("returns the draft's own images array (identity follows the draft)", () => {
+		const store = createClientStore();
+		const images = [{ type: "image", mimeType: "image/png", data: "aGk=" }] satisfies ImageContent[];
+		store.getState().addDraftImages(images);
+		const selected = selectDraftImages(store.getState());
+		expect(selected).toBe(images);
 	});
 });
