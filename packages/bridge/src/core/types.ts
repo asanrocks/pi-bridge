@@ -438,6 +438,9 @@ export interface PullRequest {
 export interface ListFilesRequest {
 	verb: "listFiles";
 	prefix: string;
+	/** ADR 12: relative paths resolve against this Project's cwd, so path
+	 * completion works before a session is attached (the Project home). */
+	projectId: string;
 }
 
 /** Read a file fresh from disk for the web viewer (not session state).
