@@ -73,6 +73,7 @@ function AppInner() {
 	const projects = useStore((s) => s.projects);
 	const activeSessions = useStore((s) => s.activeSessions);
 	const sessions = useStore((s) => s.sessions);
+	const sessionsHasMore = useStore((s) => s.sessionsHasMore);
 	const sessionPages = useStore((s) => s.sessionPages);
 	const models = useStore((s) => s.models);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
@@ -187,9 +188,9 @@ function AppInner() {
 	const handleToggleStep = useCallback((key: string) => toggleStep(key), [toggleStep]);
 
 	const sidebarToggleRef = useRef<() => void>(() => {});
-	/** Imperative handle the Sidebar populates: open the sidebar (if closed)
-	    and surface the project picker. Driven by Alt+N when more than one
-	    Project is configured (==1 starts a session directly). */
+	/** Imperative handle the Sidebar populates: open the sidebar (if closed).
+	 * Driven by Alt+N when more than one Project is configured (==1 navigates
+	 * to the Project home, where the prompt input starts a session). */
 	const newSessionRef = useRef<() => void>(() => {});
 
 	// ── Sidebar shell state. The Sidebar owns its mode and the peek drawer;
@@ -300,9 +301,13 @@ function AppInner() {
 		[rpc],
 	);
 
+	// Create a session by sending its first prompt (ADR 12 slice): the
+	// daemon admits the prompt before attaching, so the session the client
+	// navigates into already carries the in-flight turn. There is no
+	// empty-session path — text is required.
 	const handleNewSession = useCallback(
-		(projectId: string) => {
-			rpc.newSession(projectId);
+		(projectId: string, text: string) => {
+			return rpc.newSession(projectId, text);
 		},
 		[rpc],
 	);
@@ -466,15 +471,17 @@ function AppInner() {
 		[handleOpenSession],
 	);
 
+	// Alt+N — new session. With one Project, go to its home (the prompt input
+	// starts the session); with several, surface the sidebar's project list
+	// rather than guess.
 	const handleNewSessionShortcut = useCallback(() => {
 		const s = getStore().getState();
 		if (s.projects.length === 1) {
-			handleNewSession(s.projects[0].id);
+			handleOpenProject(s.projects[0].id);
 		} else if (s.projects.length > 1) {
-			// Multi-project: surface the sidebar's project picker rather than guess.
 			newSessionRef.current();
 		}
-	}, [handleNewSession]);
+	}, [handleOpenProject]);
 
 	useAppKeybindings({
 		onCycleModel: handleCycleModel,
@@ -520,7 +527,6 @@ function AppInner() {
 					activeSessions={activeSessions}
 					sessionPages={sessionPages}
 					onOpenSession={handleOpenSession}
-					onNewSession={handleNewSession}
 					onCloseSession={handleCloseSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={handleLoadFolder}
@@ -566,9 +572,12 @@ function AppInner() {
 							projects={projects}
 							activeSessions={activeSessions}
 							projectId={currentProjectId}
+							sessions={sessions}
+							sessionsHasMore={sessionsHasMore}
 							onOpenProject={handleOpenProject}
 							onOpenSession={handleOpenSession}
 							onNewSession={handleNewSession}
+							onLoadMoreSessions={rpc.loadMoreSessions}
 							retry={retry}
 						/>
 					)}
