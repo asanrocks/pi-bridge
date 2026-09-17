@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync }
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { AuthStorage, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { Document, Patch, RpcReply, SessionRef } from "../../src/core/index.ts";
@@ -347,13 +349,76 @@ describe("daemon: projects", () => {
 		const id = send(ws, { verb: "getDaemonInfo" });
 		const reply = (await waitForReply(frames, id)) as unknown as {
 			ok: boolean;
-			projects: Array<{ id: string; cwd: string }>;
+			projects: Array<{ id: string; cwd: string; defaultModel: unknown }>;
 			devMode: boolean;
 		};
 		expect(reply.ok).toBe(true);
 		expect(reply.projects.map((p) => p.id).sort()).toEqual([basename(a).toLowerCase(), basename(b).toLowerCase()]);
 		expect(reply.projects.find((p) => p.id === basename(a).toLowerCase())?.cwd).toBe(resolve(a));
+		// No configured auth → no available models → no default.
+		for (const p of reply.projects) expect(p.defaultModel).toBeNull();
 
+		ws.close();
+	});
+
+	it("getDaemonInfo reports each project's resolved default model", async () => {
+		const { agentDir, root, a } = makeProjectRoots();
+		// Project settings pin a default model for project a.
+		mkdirSync(join(a, ".pi"), { recursive: true });
+		writeFileSync(
+			join(a, ".pi", "settings.json"),
+			JSON.stringify({ defaultProvider: "faux", defaultModel: "faux-2" }),
+		);
+
+		const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
+		const authStorage = AuthStorage.inMemory();
+		const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
+		await modelRuntime.setRuntimeApiKey("faux", "faux-key");
+		modelRuntime.registerProvider("faux", {
+			baseUrl: faux.getModel("faux-1")!.baseUrl,
+			apiKey: "faux-key",
+			api: faux.api,
+			models: faux.models.map((m) => ({
+				id: m.id,
+				name: m.name,
+				api: m.api,
+				reasoning: m.reasoning,
+				input: m.input,
+				cost: m.cost,
+				contextWindow: m.contextWindow,
+				maxTokens: m.maxTokens,
+				baseUrl: m.baseUrl,
+			})),
+		});
+		cleanups.push(() => faux.unregister());
+
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const id = send(ws, { verb: "getDaemonInfo" });
+		const reply = (await waitForReply(frames, id)) as unknown as {
+			projects: Array<{ id: string; defaultModel: { provider: string; modelId: string } | null }>;
+		};
+		const pid = basename(a).toLowerCase();
+		const project = reply.projects.find((p) => p.id === pid);
+		expect(project?.defaultModel).toEqual({ provider: "faux", modelId: "faux-2" });
+
+		// Without project settings the same runtime resolves to a per-provider
+		// default or the first available model — never null while models exist.
+		const bare = join(root, "bare");
+		mkdirSync(bare);
+		const { port: port2 } = await startDaemon({ agentDir, allow: [bare], modelRuntime });
+		const ws2 = await openClient(port2);
+		const frames2 = collectFrames(ws2);
+		const id2 = send(ws2, { verb: "getDaemonInfo" });
+		const reply2 = (await waitForReply(frames2, id2)) as unknown as {
+			projects: Array<{ id: string; defaultModel: { provider: string; modelId: string } | null }>;
+		};
+		expect(reply2.projects[0]?.defaultModel?.provider).toBe("faux");
+		expect(["faux-1", "faux-2"]).toContain(reply2.projects[0]?.defaultModel?.modelId);
+
+		ws2.close();
 		ws.close();
 	});
 

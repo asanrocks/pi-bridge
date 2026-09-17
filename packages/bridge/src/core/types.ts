@@ -474,6 +474,13 @@ export interface PrefixCursor {
 export interface ProjectInfo {
 	id: string;
 	cwd: string;
+	/** The model a fresh session in this Project resolves to (pi's
+	 * `findInitialModel`: the Project's settings default when authed, else a
+	 * known-provider default, else the first available model) — what the
+	 * Project home's picker shows as the pre-session default. Null when no
+	 * model is available. The client still omits `model` on `newSession` when
+	 * unset, so this is display-only, not a pinned choice. */
+	defaultModel: ModelRef | null;
 }
 
 /** Client-facing session address: project id + relative stem within the
