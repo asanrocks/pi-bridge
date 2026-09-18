@@ -9,10 +9,11 @@
 import { memo, useCallback, useMemo } from "react";
 import type { UserBashTurn } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
-import styles from "./conversation.module.css";
+import styles from "./actionSteps.module.css";
 import { CardControls, CardStatusLine, TruncationNotice } from "./tools/CardSkeleton.tsx";
 import { BASH_TAIL_LINES } from "./tools/resultText.ts";
 import { sanitizeOutputText } from "./tools/sanitize.ts";
+import turnStyles from "./turns.module.css";
 
 export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBashTurn }) {
 	const actionKey = `${turn.entryId}:b0`;
@@ -39,10 +40,10 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 	}, [turn.exitCode, turn.cancelled, turn.truncated, turn.excludeFromContext]);
 
 	return (
-		<div className={styles.userBashTurn}>
+		<div className={turnStyles.userBashTurn}>
 			<div className={styles.actionStep} data-kind="bash" data-muted={turn.excludeFromContext || undefined}>
 				<div className={styles.stepHead}>
-					<span className={styles.userBashPrompt}>$</span>
+					<span className={turnStyles.userBashPrompt}>$</span>
 					<span className={styles.stepSummary}>{turn.command}</span>
 				</div>
 				<div className={styles.detailsCard}>
