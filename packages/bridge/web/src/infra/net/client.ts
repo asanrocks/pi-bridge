@@ -4,7 +4,7 @@
 // Extracted so the three modules don't import each other.
 // ============================================================================
 
-import type { BridgeClient } from "../../../src/core/index.ts";
+import type { BridgeClient } from "../../../../src/core/index.ts";
 
 let globalClient: BridgeClient | null = null;
 

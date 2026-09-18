@@ -20,8 +20,8 @@
 
 import { useCallback } from "react";
 import type { ImageContent } from "../../../../src/core/index.ts";
-import { getStore } from "../../infra/store.tsx";
-import { requestNotificationPermission } from "../../infra/useStatusNotifications.ts";
+import { requestNotificationPermission } from "../../infra/lib/notificationPermission.ts";
+import { getStore } from "../../infra/state/store.tsx";
 
 export interface RpcForCommit {
 	navigate: (entryId: string | null) => Promise<unknown>;

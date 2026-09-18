@@ -14,7 +14,7 @@
 
 import { memo, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
-import type { SessionFolderPage } from "../../infra/store.ts";
+import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { ProjectFolder } from "./ProjectFolder.tsx";
 import styles from "./Sidebar.module.css";
 

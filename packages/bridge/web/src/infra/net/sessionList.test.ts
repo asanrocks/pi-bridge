@@ -3,7 +3,7 @@
 // (rows, hasMore, cursor, and the address→sessionId index).
 
 import { describe, expect, it } from "vitest";
-import type { RpcReply, SessionInfo } from "../../../src/core/index.ts";
+import type { RpcReply, SessionInfo } from "../../../../src/core/index.ts";
 import { projectPageFromReply } from "./sessionList.ts";
 
 function row(stem: string): SessionInfo {

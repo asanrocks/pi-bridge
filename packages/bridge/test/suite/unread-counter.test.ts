@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Entry } from "../../src/core/types.ts";
-import { UnreadMessageCounter } from "../../web/src/infra/unreadCounter.ts";
+import { UnreadMessageCounter } from "../../web/src/infra/lib/unreadCounter.ts";
 
 function messageEntry(over: Partial<Entry> & { id?: string }): Record<string, unknown> {
 	return {

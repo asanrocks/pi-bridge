@@ -17,8 +17,8 @@ import {
 	stepWants,
 	type ToolActionStepVM,
 } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
-import { wantPull } from "../../infra/wants.ts";
+import { wantPull } from "../../infra/net/wants.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import styles from "./actionSteps.module.css";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";

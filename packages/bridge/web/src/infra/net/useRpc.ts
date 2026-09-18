@@ -16,14 +16,14 @@ import type {
 	RpcReply,
 	SessionInfo,
 	SessionRef,
-} from "../../../src/core/index.ts";
-import { rememberAddress } from "./addressIndex.ts";
+} from "../../../../src/core/index.ts";
+import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
+import { rememberAddress } from "../persist/addressIndex.ts";
+import { prepareSwitch } from "../persist/entryCache.ts";
+import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
-import { prepareSwitch } from "./entryCache.ts";
-import { projectPath, sessionPath, writeRoute } from "./routes.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
 import { projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
-import { getStore } from "./store.tsx";
 
 // ---------------------------------------------------------------------------
 // Helpers

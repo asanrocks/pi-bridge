@@ -5,7 +5,7 @@
 // console holds at hook time.
 // ============================================================================
 
-import type { BridgeClient, JsonValue } from "../../../src/core/index.ts";
+import type { BridgeClient, JsonValue } from "../../../../src/core/index.ts";
 
 export function hookConsole(client: BridgeClient): void {
 	const levels = ["log", "warn", "error"] as const;

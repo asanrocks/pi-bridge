@@ -17,8 +17,8 @@
 // ============================================================================
 
 import { useMemo, useRef } from "react";
-import type { ViewModel } from "../../../src/viewmodel/index.ts";
-import { computeViewModel, viewModelCacheKey } from "../../../src/viewmodel/index.ts";
+import type { ViewModel } from "../../../../src/viewmodel/index.ts";
+import { computeViewModel, viewModelCacheKey } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "./store.tsx";
 
 export function useViewModel(): ViewModel {

@@ -10,7 +10,7 @@
 // visible on touch) and copying this block's markdown source.
 
 import { memo, useCallback, useDeferredValue, useState } from "react";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";

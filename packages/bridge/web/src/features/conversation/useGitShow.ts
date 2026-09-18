@@ -5,7 +5,7 @@
 // surface as an error state, not a toast: they're expected.
 
 import { useCallback, useRef, useState } from "react";
-import { gitShowRpc } from "../../infra/useRpc.ts";
+import { gitShowRpc } from "../../infra/net/useRpc.ts";
 
 export type GitShowState =
 	| { status: "idle" }

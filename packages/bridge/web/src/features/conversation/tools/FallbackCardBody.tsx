@@ -2,7 +2,7 @@
 // carries the tool name; the body is the args grid + result text.
 
 import { memo } from "react";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
 import styles from "../actionSteps.module.css";

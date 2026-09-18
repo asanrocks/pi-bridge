@@ -23,8 +23,8 @@
 
 import { memo, useCallback, useEffect, useState } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
-import type { SessionFolderPage } from "../../infra/store.ts";
-import { useMediaQuery } from "../../infra/useMediaQuery.ts";
+import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
+import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
 import styles from "./Sidebar.module.css";
 import { SidebarContent } from "./SidebarContent.tsx";

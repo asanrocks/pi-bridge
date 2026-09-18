@@ -8,7 +8,7 @@ import { useCallback } from "react";
 import type { ImageContent, JsonValue } from "../../../../../src/core/types.ts";
 import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
 import { displayPath } from "../../../../../src/viewmodel/index.ts";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 import { sanitizeOutputText } from "./sanitize.ts";
 
 /** Parsed tool arguments keyed by field name. Use type-narrowing at usage sites. */

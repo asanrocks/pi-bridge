@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
-import { getStore, useStore } from "../../infra/store.tsx";
+import { getStore, useStore } from "../../infra/state/store.tsx";
 
 interface ViewportTracking {
 	/** Pure geometry: viewport not at the live end. Drives the floating jump
