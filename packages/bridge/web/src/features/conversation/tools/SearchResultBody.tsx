@@ -5,7 +5,7 @@
 // tool_result `details` object — lazy-pulled, same as content).
 
 import { memo, useCallback } from "react";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 import styles from "../actionSteps.module.css";
 import type { ActionDetailsProps } from "./args.ts";
 import { truncationWarnings } from "./resultText.ts";

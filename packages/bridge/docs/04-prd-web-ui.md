@@ -658,7 +658,7 @@ stays live for reading. Touch keeps tap + scroll — keyboard shortcuts are
 desktop-only.
 
 One centralized, scope-guarded listener (`useAppKeybindings` in
-`infra/keybindings.ts`) owns all document-level shortcuts; the Composer's
+`app/keybindings.ts`) owns all document-level shortcuts; the Composer's
 `expanded` state lives in the store so `/` can drive it without reaching into
 Composer internals.
 

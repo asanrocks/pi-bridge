@@ -12,12 +12,12 @@ import {
 	computeCursor,
 	type SessionStatusHint,
 	seedDocument,
-} from "../../../src/core/index.ts";
-import { lookupSessionId } from "./addressIndex.ts";
+} from "../../../../src/core/index.ts";
+import { writeRoute } from "../lib/routes.ts";
+import { lookupSessionId } from "../persist/addressIndex.ts";
+import { getEntryCache } from "../persist/entryCache.ts";
+import { getStore } from "../state/store.tsx";
 import { cacheBase } from "./connectionPipeline.ts";
-import { getEntryCache } from "./entryCache.ts";
-import { writeRoute } from "./routes.ts";
-import { getStore } from "./store.tsx";
 
 /** A failed open falls back to the Project page (ADR 11): the stem no longer
  *  resolves (deleted file, or an unflushed session after a daemon restart),

@@ -385,7 +385,7 @@ smoke entry.
 
 ### IndexedDB adapter
 
-`web/src/infra/entryCache.ts` owns browser storage:
+`web/src/infra/persist/entryCache.ts` owns browser storage:
 
 ```ts
 interface CacheEntryRecord {

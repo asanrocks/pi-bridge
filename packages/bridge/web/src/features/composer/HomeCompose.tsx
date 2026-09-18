@@ -17,7 +17,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImageContent, ModelInfo, ModelRef } from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./HomeCompose.module.css";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";

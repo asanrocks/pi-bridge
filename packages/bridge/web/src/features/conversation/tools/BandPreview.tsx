@@ -11,8 +11,8 @@
 
 import { memo } from "react";
 import { resultPullPaths, type ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
-import { useStore } from "../../../infra/store.tsx";
-import { wantPull } from "../../../infra/wants.ts";
+import { wantPull } from "../../../infra/net/wants.ts";
+import { useStore } from "../../../infra/state/store.tsx";
 import styles from "../actionSteps.module.css";
 import { useResultText } from "./args.ts";
 import { errorPreviewLine, headPreview } from "./resultText.ts";

@@ -8,9 +8,9 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { ImageContent } from "../../../../src/core/index.ts";
-import { MAX_ATTACHMENTS, prepareImageFiles } from "../../infra/imageResize.ts";
-import { selectDraftImages } from "../../infra/store.ts";
-import { useStore } from "../../infra/store.tsx";
+import { MAX_ATTACHMENTS, prepareImageFiles } from "../../infra/lib/imageResize.ts";
+import { selectDraftImages } from "../../infra/state/store.ts";
+import { useStore } from "../../infra/state/store.tsx";
 
 export interface ImageAttachmentHandlers {
 	onDragEnter: (e: React.DragEvent) => void;

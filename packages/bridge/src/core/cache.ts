@@ -35,7 +35,7 @@ export type SessionStatusHint = Partial<Status>;
 
 /**
  * Storage adapter interface (ADR 09). The IndexedDB implementation lives in
- * web/src/infra/entryCache.ts; this interface and the in-memory
+ * web/src/infra/persist/entryCache.ts; this interface and the in-memory
  * implementation are browser-safe core so policy tests run without a DOM.
  */
 export interface EntryCacheStore {

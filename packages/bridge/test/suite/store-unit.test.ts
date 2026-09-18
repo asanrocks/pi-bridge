@@ -10,7 +10,7 @@ import {
 	type ExpandKeySets,
 	migrateExpandKeys,
 	selectDraftImages,
-} from "../../web/src/infra/store.ts";
+} from "../../web/src/infra/state/store.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

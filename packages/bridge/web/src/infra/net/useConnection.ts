@@ -14,17 +14,17 @@
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";
-import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../src/core/index.ts";
-import { rememberAddress } from "./addressIndex.ts";
+import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../../src/core/index.ts";
+import { parseRoute, writeRoute } from "../lib/routes.ts";
+import { rememberAddress } from "../persist/addressIndex.ts";
+import type { ConnectionState } from "../state/store.ts";
+import { getStore } from "../state/store.tsx";
 import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole } from "./devConsole.ts";
 import { drainWantsOutbox } from "./pullLoop.ts";
-import { parseRoute, writeRoute } from "./routes.ts";
 import { openSessionAddress } from "./sessionBoot.ts";
-import type { ConnectionState } from "./store.ts";
-import { getStore } from "./store.tsx";
 import { setWantsDrainer } from "./wants.ts";
 
 const CONNECTION_TOAST_ID = "connection";

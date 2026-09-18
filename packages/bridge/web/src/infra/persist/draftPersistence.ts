@@ -17,7 +17,7 @@
 // ============================================================================
 
 import { useEffect, useRef } from "react";
-import { getStore, useStore } from "./store.tsx";
+import { getStore, useStore } from "../state/store.tsx";
 
 const DRAFT_PREFIX = "pi-bridge:draft:";
 

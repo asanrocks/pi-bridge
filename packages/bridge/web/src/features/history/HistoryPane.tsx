@@ -24,9 +24,9 @@ import {
 	newestLeafInSubtree,
 	type PlacedNode,
 } from "../../../../src/viewmodel/index.ts";
-import { getStore, useStore } from "../../infra/store.tsx";
-import { useMediaQuery } from "../../infra/useMediaQuery.ts";
-import { useRpc } from "../../infra/useRpc.ts";
+import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
+import { useRpc } from "../../infra/net/useRpc.ts";
+import { getStore, useStore } from "../../infra/state/store.tsx";
 import { type PaneResizeController, ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
 import styles from "./HistoryPane.module.css";
 

@@ -11,7 +11,7 @@
 
 import { memo, useEffect, useState } from "react";
 import type { ExtraProps } from "streamdown";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { classifyHref } from "./links.ts";
 import styles from "./Viewer.module.css";
 

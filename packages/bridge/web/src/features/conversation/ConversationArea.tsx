@@ -9,7 +9,7 @@
 
 import { memo, useEffect, useRef } from "react";
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
-import { getStore } from "../../infra/store.tsx";
+import { getStore, useStore } from "../../infra/state/store.tsx";
 import { ChevronDownIcon } from "../../render/icons.tsx";
 import { AssistantTurnView } from "./AssistantTurnView.tsx";
 import styles from "./conversation.module.css";
@@ -22,8 +22,6 @@ import { useViewportTracking } from "./useViewportTracking.ts";
 interface ConversationAreaProps {
 	vm: ViewModel;
 	isStreaming: boolean;
-	onToggleGroup: (key: string, cardKeys: string[]) => void;
-	onToggleStep: (key: string) => void;
 	onNavigate: (entryId: string) => void;
 	onEdit: (entryId: string, index: number, text: string) => void;
 }
@@ -31,11 +29,13 @@ interface ConversationAreaProps {
 export const ConversationArea = memo(function ConversationArea({
 	vm,
 	isStreaming,
-	onToggleGroup,
-	onToggleStep,
 	onNavigate,
 	onEdit,
 }: ConversationAreaProps) {
+	// Expand/fold toggles are pure store actions — read here instead of
+	// threaded from the shell.
+	const onToggleGroup = useStore((s) => s.toggleActionGroup);
+	const onToggleStep = useStore((s) => s.toggleStep);
 	const { awayFromBottom, newContentBelow, jumpToBottom } = useViewportTracking(vm, isStreaming);
 
 	// entriesRef for the sibling pager — updated via Zustand subscribe

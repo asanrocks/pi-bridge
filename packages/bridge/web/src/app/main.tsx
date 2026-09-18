@@ -27,7 +27,7 @@ window.addEventListener("gesturestart", (e) => e.preventDefault());
 window.addEventListener("gesturechange", (e) => e.preventDefault());
 
 // Service worker: the vehicle for turn-completion notifications (see
-// infra/useStatusNotifications.ts). It has no fetch handler, so it never
+// app/useStatusNotifications.ts). It has no fetch handler, so it never
 // caches or intercepts requests. Registration is secure-context-only
 // (localhost counts) and failure is non-fatal — the document
 // Notification() constructor remains the fallback.

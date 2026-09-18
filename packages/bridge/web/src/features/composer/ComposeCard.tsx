@@ -15,8 +15,8 @@
 
 import { memo, type ReactNode, useCallback, useRef, useState } from "react";
 import type { ImageContent, ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
-import { MAX_ATTACHMENTS } from "../../infra/imageResize.ts";
-import { useMediaQuery } from "../../infra/useMediaQuery.ts";
+import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
+import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { displayModelName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 import { ModelPickerPortal } from "./ModelPickerPortal.tsx";

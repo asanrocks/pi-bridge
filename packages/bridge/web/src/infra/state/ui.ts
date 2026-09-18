@@ -7,7 +7,7 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
-import type { ClientStore } from "../store.ts";
+import type { ClientStore } from "./store.ts";
 
 // ---------------------------------------------------------------------------
 // Toast notification
