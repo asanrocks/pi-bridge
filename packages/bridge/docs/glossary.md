@@ -55,6 +55,12 @@ again; use the phrase given:
 | lane | describe the serialization in words |
 | wants | "pending pulls" |
 
+One code-local name is a sanctioned exception: **`LaneLayout`**
+(`src/viewmodel/tree.ts`), the history tree's layout, where a *lane* is a
+vertical track a child inherits from its parent. The sense is
+rendering-local, distinct from the retired topology "lane", and may not
+be used in code names outside the history tree.
+
 ## A. Addressing & lifetime
 
 What exists, how it is named, how long it lives. Owned by
@@ -74,8 +80,10 @@ What exists, how it is named, how long it lives. Owned by
 5. An Activation is created by opening a Session and is never rebound to
    another Session.
 6. An Activation is kept alive by its attached Connections and by streaming
-   or compaction in progress; when none apply it is idle-collected. A
-   Session with no Activation is dormant.
+   or compaction in progress; when none apply it is idle-collected. (The
+   rule is stable; the mechanism is not — ADR 11 implements it with idle
+   timers, ADR 12 proposes event boundaries.) A Session with no Activation
+   is dormant.
 
 ADR 12 proposes further lifetime vocabulary (admitted prompt, reservation,
 in-flight window). It is ADR-local until that ADR is accepted; this document
@@ -154,8 +162,8 @@ and [PRD 04](04-prd-web-ui.md); spans `src/viewmodel/` and `web/`.
 6. An action has a **kind** *(common word)* — read, write, edit, bash,
    think. Kinds share a hue: write and edit share the mutate hue.
 7. An action renders **collapsed** *(bound)* (summary line) or **expanded**
-   *(bound)* (full content). Expanded actions stay expanded across
-   re-renders while streaming (keep-expanded).
+   *(bound)* (full content). An expanded action is **frozen** *(bound)*: it
+   stays expanded across re-renders while streaming.
 8. The actions of a group render along a shared vertical line; the group
    header carries one kind-colored dot per kind present.
 9. An expanded action renders its body as a **card** *(bound)*. Shell
