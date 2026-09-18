@@ -6,8 +6,8 @@
 
 import { memo } from "react";
 import type { GitChangeTurn } from "../../../../src/viewmodel/index.ts";
-import styles from "./conversation.module.css";
 import { GitChangeBand } from "./GitChangeShared.tsx";
+import styles from "./turns.module.css";
 
 export const GitChangeView = memo(function GitChangeView({ turn }: { turn: GitChangeTurn }) {
 	return (

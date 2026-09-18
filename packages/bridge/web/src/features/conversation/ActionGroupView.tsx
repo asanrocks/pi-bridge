@@ -26,7 +26,7 @@ import {
 } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { wantPull } from "../../infra/wants.ts";
-import styles from "./conversation.module.css";
+import styles from "./actionSteps.module.css";
 import type { StepSummaryItem } from "./formatGroupSummary.ts";
 import { formatGroupSummary } from "./formatGroupSummary.ts";
 import { GitChangeCard } from "./GitChangeCard.tsx";

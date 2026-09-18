@@ -1,0 +1,751 @@
+/* ==========================================================================
+   Action steps (step-as-backstage) — the whole band/card family: action
+   groups, tinted step bands, fold rows, details cards, tool bodies (edit
+   diff, write, bash, args, search), think blocks, and the band previews.
+   Kept in one module because the parts cross-reference (`.actionStep:hover
+   .cardControls`, `.stepHeadStatic .stepFold`) — CSS modules scope class
+   names per file, so a selector cannot span two module files.
+
+   Each action renders as a full-width tinted band whose hue marks its
+   color family: mutate (edit+write, rose), bash (amber), think (neutral
+   slate), read (dimmed gray). Four families, three tiers — the family
+   color's saturation/value carries the tier (stand-out / neutral /
+   dimmed); one --action-tint strength for all. The tint is the visual
+   landmark separating "backstage" actions from the prose; the per-step
+   status dot is retired — the agent self-corrects, and the turn-header
+   timing already signals in-flight work.
+
+   Left-edge indicators differ by level:
+     - L2 group header: dots (one per family present) — a multi-family
+       legend, always visible, docked left of the summary.
+     - L3 step band:    a 3px left strip (single hue) on the container.
+   Different shapes for different levels — dots legend the container,
+   the strip marks the single step.
+
+   Fold affordances, two controls at the press point (step header):
+     - group header: triangle at the start, then dots, then summary
+     - step header:  triangle at the start (folds the whole details); the
+                     cap toggle ("show all") and the copy/wrap/md controls
+                     live in the hover top bar of the expanded card
+   ========================================================================== */
+
+/* ── Group — a meta-group of consecutive steps. Neutral (no kind hue). ── */
+.actionGroup {
+	margin: 6px 0;
+}
+
+/* Group header — a label row above the kinded steps. The group itself is
+   neutral (no band tint), but carries a left-edge dot legend (one dot per
+   family present) so the group reads as a colored summary at a glance.
+   Triangle (fold) then dots then summary; a light wash on hover keeps it
+   visibly interactive. */
+.actionGroupHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 4px 8px 4px 2px;
+	background: transparent;
+	cursor: pointer;
+	font-size: var(--fs-sm);
+	font-family: inherit;
+	color: var(--color-secondary);
+	border: none;
+	border-radius: var(--radius-sm);
+	user-select: none;
+	text-align: left;
+}
+
+.actionGroupHeader:hover {
+	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+}
+
+/* Fold triangle — shared by group and step headers. Sits at the start. */
+.foldTri {
+	width: 12px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	text-align: center;
+}
+
+.actionGroupSummary {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Family dots — the group's left-edge legend, always visible (stable
+   landmark; the bands below are the expanded detail, the dots are the
+   summary). One dot per color family present, colored by the same
+   --kind-* tokens as the band strips/tints so the legend and the bands
+   read as one vocabulary. */
+.groupSwatches {
+	display: inline-flex;
+	gap: 3px;
+	flex-shrink: 0;
+}
+.groupSwatches > span {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+}
+.groupSwatches > span[data-family="mutate"] { background: var(--kind-mutate); }
+.groupSwatches > span[data-family="bash"]   { background: var(--kind-bash); }
+.groupSwatches > span[data-family="think"]  { background: var(--kind-think); }
+.groupSwatches > span[data-family="read"]   { background: var(--kind-read); }
+.groupSwatches > span[data-family="git"]    { background: var(--kind-git); }
+
+/* Vertical list of steps under a group — no tree branching, no indent
+   (the step's own left accent border is the nesting cue). */
+.spine {
+	padding: 2px 0;
+}
+
+/* ── Step — the tinted backstage region. hue = family. ─────────────── */
+/* Unified anatomy: every band has a 3px left strip + a uniform-strength
+   tint, both from its family color. No per-kind special-cases — the
+   family color's saturation/value does the tiering (stand-out mutate/bash
+   pop; neutral think recedes; dimmed read recedes furthest). edit + write
+   both map to the mutate family; the ADR 10 v2 git change cards reuse the
+   same band anatomy in the git family hue. */
+.actionStep {
+	--step-hue: var(--kind-read);
+	background: color-mix(in srgb, var(--step-hue) var(--action-tint), transparent);
+	border-left: 3px solid color-mix(in srgb, var(--step-hue) 55%, transparent);
+	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	margin: 2px 0;
+}
+
+.actionStep[data-kind="read"]  { --step-hue: var(--kind-read); }
+.actionStep[data-kind="bash"]  { --step-hue: var(--kind-bash); }
+.actionStep[data-kind="write"] { --step-hue: var(--kind-mutate); }
+.actionStep[data-kind="edit"]  { --step-hue: var(--kind-mutate); }
+.actionStep[data-kind="think"] { --step-hue: var(--kind-think); }
+.actionStep[data-kind="git"]   { --step-hue: var(--kind-git); }
+
+/* `!!` runs are excluded from the LLM context — the whole card recedes. */
+.actionStep[data-muted] {
+	opacity: 0.6;
+}
+
+/* Step header row — a div holding the fold button (triangle + summary).
+   No dot (the tint is the marker); no cap chip (it lives in the hover
+   card top bar). */
+.stepHead {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	width: 100%;
+	padding: 0 4px 0 0;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+	border-radius: 0 var(--radius-sm) 0 0;
+}
+
+/* Fold button — triangle + summary. flex:1 fills the header so the cap
+   chip docks right. Owns the step's hover wash. */
+.stepFold {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+	width: 100%;
+	padding: 5px 10px 5px 5px;
+	background: none;
+	border: none;
+	font: inherit;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+	cursor: pointer;
+	user-select: none;
+	text-align: left;
+	border-radius: 0 var(--radius-sm) 0 0;
+}
+
+.stepFold:hover {
+	background: color-mix(in srgb, var(--step-hue) 14%, transparent);
+}
+
+/* Non-interactive step header (redacted/empty think). */
+.stepHeadStatic .stepFold {
+	cursor: default;
+}
+.stepHeadStatic .stepFold:hover {
+	background: none;
+}
+/* Static think labels ("think", "(redacted)") sit muted. */
+.stepHeadStatic .stepSummary {
+	color: var(--color-muted-foreground);
+}
+
+.stepSummary {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--color-foreground);
+}
+
+/* Command-word chip in the beautified shell summary (beautifyShellCommand
+   rule 3): the first command of every chained segment ("npm run", "git
+   commit") — the signal of the line. Tinted with the step's kind hue and
+   rounded so it stands off the plain shell text. Spec: inline, no
+   font-size change (the summary line is already the small scale), padding
+   0 4px, radius-sm, 12% step-hue tint. */
+.cmdChip {
+	background: color-mix(in srgb, var(--step-hue) 12%, transparent);
+	border-radius: var(--radius-sm);
+	padding: 0 4px;
+	margin: 0 1px;
+}
+
+/* Folded token in the beautified shell summary (beautifyShellCommand rules
+   1–2): the abbreviated "cd dir" / "cd;" / "…" / "...last/two" forms — the
+   elided noise, de-emphasized rather than highlighted. Dimmed italic, no
+   background; the title tooltip carries the original. */
+.foldAbbrev {
+	color: var(--color-muted-foreground);
+	font-style: italic;
+}
+
+/* Think preview is plain escaped text (not Markdown) so nowrap holds and a
+   long single line stays clipped — Streamdown's root wrapper applies
+   whitespace-normal, which defeated .stepSummary's nowrap when the preview
+   was a Markdown render and let the step grow vertically. Tool summaries
+   are plain strings too. Think steps reuse .stepSummary for their folded
+   first-line preview (see .stepFold in ThinkActionStepView); the rule is
+   kept for the tool-step summary. */
+
+/* Inline code inside the think body shares the warm code-bg chip; sizing
+   is the global inline-code rule (index.css) so the chip is identical in
+   every host context (ADR 07 invariant #4). */
+.thinkBody code {
+	background: var(--color-code-bg);
+	padding: 1px 4px;
+	border-radius: var(--radius-sm);
+	/* Long unbreakable tokens wrap inside the chip (see .markdownContent code). */
+	overflow-wrap: break-word;
+}
+
+/* Content region of the details card — sits below the upper chrome, separated
+   by a hairline divider (the border-top). It is the only scrollable zone: the
+   height cap bounds the rendered cost of expanded content while the card
+   frame (status, identity, error) stays pinned above it. The persistent
+   bottom fade (on the wrapper) signals clipping so content never disappears
+   silently; the "show all" control lives in the hover controls. */
+.stepDetailsWrap {
+	position: relative;
+	border-top: 1px solid var(--color-border);
+}
+
+.stepDetails {
+	margin: 0;
+	padding: 6px 8px;
+	font-size: var(--fs-sm);
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+/* Clipped-indicator fade — passive signal that the capped details have
+   more content below. Hidden once the scroll window sits at the content
+   tail (JS-driven, see ToolActionStepView) and never intercepts pointer
+   events. Sits at the bottom of the content region, above the card's
+   bottom padding. */
+.stepDetailsFade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 24px;
+	background: linear-gradient(transparent, var(--color-background) 85%);
+	pointer-events: none;
+}
+
+/* ── Think — a foldable inline document on the think tint. ─────────── */
+/* Thinking is prose. Folded, it renders as a full-width fold row — the
+   same .stepFold triangle + one-line plain-text summary a tool step
+   header uses — so it is uniform with tool steps, fully clickable, and
+   streaming-optimized (the selector subscribes to the first line only).
+   Expanded, the full Markdown prose flows inline (a document, not a
+   details card-with-heading); the triangle rides the first line, so the
+   first line is never repeated in a header. */
+.thinkRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 5px 10px 5px 5px;
+	min-width: 0;
+}
+/* The expanded fold control — a real button holding the same triangle
+   glyph as the tool step headers, docked at the start of the first line. */
+.thinkFold {
+	display: flex;
+	align-items: center;
+	background: none;
+	border: none;
+	padding: 2px 8px 2px 0;
+	margin: 0;
+	font: inherit;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+.thinkFold:hover .foldTri {
+	color: var(--color-secondary);
+}
+.thinkBody {
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-secondary);
+	overflow-x: auto;
+}
+.thinkBody p {
+	margin: 0 0 4px 0;
+}
+.thinkBody p:last-child {
+	margin-bottom: 0;
+}
+.thinkBody pre code {
+	background: none;
+	padding: 0;
+	border-radius: 0;
+	font-size: inherit;
+}
+
+/* Expanded prose fills the row beside the fold button. */
+.thinkRow .thinkBody {
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+}
+
+/* Redacted / empty — a static muted one-liner; no fold, no triangle. */
+.thinkStatic {
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+}
+
+/* Action details body — semantic argument rendering */
+.detailsBody {
+	padding: 0;
+}
+
+/* Card body — content area inside the details panel */
+.cardBody {
+	padding: 0 0 2px 0;
+}
+
+
+.cardBody :global(pre) {
+	background: transparent;
+	padding: 0;
+	margin: 0;
+	border: none;
+	/* Deterministic tab width (the TUI replaces tabs with spaces; the web
+	   keeps raw tabs — copy fidelity — and controls width here). */
+	tab-size: 4;
+}
+
+.cardBody :global(pre code) {
+	background: transparent;
+	padding: 0;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+}
+
+/* Edit card — unified diff lines (GitHub -/+ style) */
+.editDiff {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+}
+
+.editDiffLine {
+	padding: 0 4px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.editDiffContext {
+	color: var(--color-muted-foreground);
+}
+
+.editDiffOld {
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.editDiffNew {
+	color: var(--color-success);
+	background: color-mix(in srgb, var(--color-success) 6%, transparent);
+}
+
+.editDiffInlineChanged {
+	background: color-mix(in srgb, currentColor 25%, transparent);
+	border-radius: 2px;
+}
+
+.editDiffHunkSep {
+	color: var(--color-muted-foreground);
+	text-align: center;
+	padding: 4px 0;
+	font-size: var(--fs-xs);
+	user-select: none;
+}
+
+/* Band preview — the collapsed band's result tail (bash) or error line.
+   Muted mono, one line per row with ellipsis clipping (the preview
+   recedes; the expanded card is the readable surface). The hint row counts
+   the lines above the visible tail. */
+.bandPreview {
+	padding: 0 10px 5px 17px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	line-height: 1.5;
+	color: var(--color-muted-foreground);
+}
+
+.bandPreviewLine {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.bandPreviewHint {
+	font-style: italic;
+	opacity: 0.75;
+}
+
+.bandPreviewError {
+	padding: 0 10px 5px 17px;
+	font-size: var(--fs-xs);
+	color: var(--color-error);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Card output block — plain mono result lines (bash output, grep/find/ls
+   matches). Wraps by default (terminal-like); the wrap toggle off gives one
+   line per row with horizontal scroll. */
+.cardOutput {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.6;
+	white-space: pre;
+	overflow-x: auto;
+}
+
+.cardOutput[data-wrap] {
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-x: visible;
+}
+
+.outputLine {
+	padding: 0;
+}
+
+/* Earlier-lines hint — the head of the bash card's middle state: a muted
+   line above the output tail counting the lines the slice skips. */
+.outputHint {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	font-style: italic;
+	color: var(--color-muted-foreground);
+	padding: 0 0 2px;
+}
+
+/* ── Details card — the expanded content region of an action step. ── */
+/* Frameless: no border, no radius, no inset — the card is the document
+   surface. Its background matches --color-background (covering the band
+   tint below the header), so expanded content reads as part of the
+   document; the 3px family strip on the step and the hairline divider
+   above the details are the only separators. Rendered only when expanded
+   (lazy: keeps shiki/code highlighting off collapsed details in long
+   conversations). */
+.detailsCard {
+	background: var(--color-background);
+	padding-bottom: 8px;
+}
+
+/* Status line — light + duration + timeout annotation. Sits at the left
+   of the card's upper side: metadata about the call, not content. Light
+   colors follow the PRD status-dot table: streaming (running) / success
+   (done) / error. Duration is live-witnessed only (exec-start isn't on
+   the wire); the timeout is a call argument, so it survives reload. Text
+   matches the meta tier (muted-foreground). */
+.cardBar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 2px;
+	padding: 5px 8px 0;
+}
+
+.cardMeta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+.cardStatusLight {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--color-muted-foreground);
+}
+
+.cardStatusLight[data-status="running"] {
+	background: var(--color-streaming);
+}
+
+.cardStatusLight[data-status="done"] {
+	background: var(--color-success);
+}
+
+.cardStatusLight[data-status="error"] {
+	background: var(--color-error);
+}
+
+.cardStatusText {
+	white-space: pre-wrap;
+}
+
+/* Status chips — failure metadata (exit code, timeout, abort) parsed out
+   of the result text. Text-only color coding keeps the bar minimal; the
+   error tone matches the light. */
+.cardStatusChip {
+	font-size: var(--fs-xs);
+}
+
+.cardStatusChip[data-tone="error"] {
+	color: var(--color-error);
+}
+
+.cardStatusChip[data-tone="warning"] {
+	color: var(--color-warning);
+}
+
+/* Write confirmation — the tool's success line under the content
+   ("Successfully wrote N bytes to ..."). Muted meta tier. */
+.cardConfirm {
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px solid var(--color-border);
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* Notice strip — truncation/continuation notices parsed out of the content
+   and rendered once, under it, in the warning tier. The full-output path
+   button (bash) copies the daemon-side temp file path. */
+.cardNotice {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	padding-top: 4px;
+	border-top: 1px solid var(--color-border);
+	font-size: var(--fs-xs);
+	color: var(--color-warning);
+}
+
+.noticePath {
+	background: none;
+	border: none;
+	padding: 0;
+	font: inherit;
+	font-size: var(--fs-xs);
+	color: var(--color-warning);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+.noticePath:hover {
+	color: var(--color-secondary);
+}
+
+/* Card controls — hover-revealed cluster docked right in the card top
+   bar: copy, wrap, md, show-all. Hidden (opacity, keeps layout stable)
+   until the step band is hovered or a control is focused; on
+   hover-incapable pointers (touch) always visible — hover-only controls
+   would be unreachable there. */
+.cardControls {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+.actionStep:hover .cardControls,
+.actionStep:focus-within .cardControls,
+.cardControls:focus-within {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.cardControls {
+		opacity: 1;
+	}
+}
+
+.cardCtrlBtn {
+	display: inline-flex;
+	align-items: center;
+	background: none;
+	border: none;
+	padding: 1px 5px;
+	font: inherit;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	user-select: none;
+}
+
+.cardCtrlBtn:hover {
+	color: var(--color-secondary);
+	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+}
+
+/* Toggle state: on reads brighter than off, so the affordance is legible
+   without hover (both tiers stay muted — controls stay subordinate). */
+.cardCtrlBtn[data-on] {
+	color: var(--color-secondary);
+}
+
+/* Identity line — the full-form identifier (full cwd-relative path with
+   the read line range, or the whole command). The band summary
+   abbreviates for scannability; this restores the full truth. Lighter
+   treatment (secondary, mono) on the card background — it reads as
+   metadata about the call, distinct from the content below the divider. */
+.cardIdentity {
+	padding: 0 8px 5px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-secondary);
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+/* Error strip — the tool's error text, skeleton-owned so every card
+   renders failures uniformly. Full-bleed inside the card so the wash
+   reads as a strip between the identity and the divider; same error
+   vocabulary as diff removals (error color on a faint error wash). */
+.cardError {
+	margin: 0;
+	padding: 4px 8px;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	border-left: 2px solid var(--color-error);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Fallback card — thin separator between args and result */
+.fallbackDivider {
+	border-top: 1px solid var(--color-border);
+	margin: 6px 0;
+}
+
+.toolArgsGrid {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px 0;
+}
+
+.toolArgRow {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 1px 0;
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
+
+.toolArgKey {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	min-width: 60px;
+	flex-shrink: 0;
+}
+
+.toolArgValue {
+	color: var(--color-foreground);
+	word-break: break-all;
+}
+
+/* Edit-specific: path row then per-edit diff blocks */
+.toolEdits {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 4px 0 4px 4px;
+	border-left: 2px solid var(--color-border);
+	margin: 4px 0 4px 56px;
+}
+
+.toolEdit {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.toolEditOld {
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.toolEditArrow {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	padding: 0 6px;
+	user-select: none;
+}
+
+.toolEditNew {
+	color: var(--color-success);
+	background: color-mix(in srgb, var(--color-success) 6%, transparent);
+	padding: 3px 6px;
+	border-radius: var(--radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Write content — highlighted file body */
+.writeContent {
+	padding: 8px 0 0 56px;
+}
+
+/* Tool result text (edit/write status messages) */
+.toolResultText {
+	padding: 4px 0 0 56px;
+	font-size: var(--fs-sm);
+	color: var(--color-secondary);
+	white-space: pre-wrap;
+	word-break: break-word;
+}

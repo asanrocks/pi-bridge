@@ -9,7 +9,7 @@ import type { ImageContent } from "../../../../../src/core/types.ts";
 import { stepWants, type ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
 import { useStore } from "../../../infra/store.tsx";
 import { wantPull } from "../../../infra/wants.ts";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import type { ActionDetailsProps, ToolArgs } from "./args.ts";
 import { BashCardBody } from "./BashCardBody.tsx";
 import { EditCardBody } from "./EditCardBody.tsx";

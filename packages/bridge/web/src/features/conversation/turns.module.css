@@ -1,0 +1,438 @@
+/* Turn-level chrome — everything at user/assistant/system turn granularity:
+   the header line (timestamp, role, timing, ADR 10 git chip), the tinted
+   user band vs the flat assistant turn, keyboard-focus and editing marks,
+   the hover-revealed toolbar (Copy / variant pager / Edit), shared markdown
+   and text-segment styles, error rendering, and the standalone turn
+   wrappers (git change cards, user bash runs). The action-step family
+   (bands, folds, details cards) lives in actionSteps.module.css. */
+
+/* Turn header — top line per turn. Left: timestamp then role (You /
+   provider/model for the assistant), always visible. Right: toolbar (Copy /
+   pager / Edit), hover-revealed so it stays put when branch content height
+   changes (cycling branches no longer chases a bottom bar). No turn numbers
+   — they were clutter. */
+.msgHeader {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	margin-bottom: 6px;
+}
+
+/* Scroll-margin so scrollIntoView (keyboard j/k/g/G) keeps the focused turn
+   clear of the fixed TopBar above and the fixed Composer below. Set on both
+   turn surfaces; the value tracks --composer-h at runtime. */
+.userMsg,
+.asstMsg {
+	scroll-margin-top: calc(var(--topbar-h) + 12px);
+	scroll-margin-bottom: calc(var(--composer-h, 64px) + 16px);
+}
+
+/* Keyboard focus chrome (j/k/g/G). A 2px accent frame inside the turn's
+   box — not a background fill. A full tint (the prior approach) drowned the
+   message in blue and was indistinguishable from the user band; a frame
+   marks the selection without recoloring the content surface, so the
+   user-vs-assistant band distinction stays legible. box-shadow (not
+   border) so it doesn't shift layout. */
+.userMsg.focused,
+.asstMsg.focused {
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+
+/* Editing marker — a thicker left accent bar on the message being edited,
+   distinct from the keyboard-focus ring (which frames all four sides).
+   box-shadow so it doesn't shift layout; ordered after .focused so the
+   editing bar wins when both apply. */
+.userMsgEditing {
+	box-shadow: inset 4px 0 0 var(--color-accent);
+}
+
+/* "Editing" pill in the message header — the primary, obvious signal
+   that this message is the edit target (the dimming of later turns alone
+   was too subtle). */
+.editingBadge {
+	background: var(--color-accent);
+	color: var(--color-on-accent);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	padding: 1px 6px;
+	border-radius: var(--radius-sm);
+	text-transform: uppercase;
+}
+
+.msgHeaderLeft {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.msgRole {
+	color: var(--color-secondary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.msgTime {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+/* Turn timing ("thought for" / "worked for" / "tools …"). Sits after the
+   role label, dimmed to muted so the timestamp+role remain the primary
+   signal. A leading "·" separates it from the role; the timing string itself
+   joins total/tool with "·". nowrap so the header stays one line. */
+.msgTiming {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.msgTiming::before {
+	content: "· ";
+	margin: 0 2px;
+}
+
+/* ADR 10 git identity chip ("⎇ main @ a1b2c3d") — the effective
+   repository identity at this send, carried forward from the last stamp
+   on the path. Same tertiary treatment as .msgTiming. */
+.gitStamp {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.gitStamp::before {
+	content: "· ";
+	margin: 0 2px;
+}
+
+/* ADR 10 v2 — standalone (boundary) git change card wrapper: the band
+   between turns (the band anatomy itself is the shared actionStep family,
+   in actionSteps.module.css with the git family hue). */
+.gitChangeTurn {
+	margin: 4px 0;
+}
+
+/* Branch + short hash docked right in the fold row (the read tool's
+   summary abbreviates the path; here the identity abbreviates the same
+   way). Muted mono machine tokens. */
+.gitStepMeta {
+	flex-shrink: 0;
+	white-space: nowrap;
+	color: var(--color-muted-foreground);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Muted note inside the expanded content region (loading / unavailable /
+   truncated). */
+.gitShowNote {
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+}
+
+/* User turn — full-width tinted band (a distinct part of the document,
+   not a bubble). Hairline top/bottom borders separate it from the flat
+   assistant turns. Header line + text use the same 16px padding the
+   assistant uses, so the two align. */
+.userMsg {
+	background: var(--color-user-bg);
+	border-top: 1px solid var(--color-user-border);
+	border-bottom: 1px solid var(--color-user-border);
+	padding: 10px 16px;
+	margin: 4px 0;
+}
+
+/* Shared markdown content styles — used by user messages, assistant text, and thinking blocks */
+.markdownContent p {
+	margin: 0 0 4px 0;
+}
+
+.markdownContent p:last-child {
+	margin-bottom: 0;
+}
+
+.markdownContent ul,
+.markdownContent ol {
+	margin: 0 0 4px 0;
+	padding-left: 22px;
+}
+
+.markdownContent li {
+	margin: 0;
+}
+
+.markdownContent code {
+	background: var(--color-code-bg);
+	padding: 1px 4px;
+	border-radius: var(--radius-sm);
+	/* Font-size is the global inline-code rule (index.css, 0.8125em) — one
+	  ratio for the chip role in every host context (ADR 07 invariant #4). */
+	/* Long unbreakable tokens (paths, URLs, flags) must wrap inside the chip
+	   instead of overflowing the column — on mobile the overflow runs past
+	   the viewport edge and is unreachable (Firefox Android notably, which
+	   doesn't zoom-to-fit wide content). Same value as .userMsgText's
+	   word-break so inline code and surrounding prose wrap identically. */
+	overflow-wrap: break-word;
+}
+
+/* Block code (Streamdown's <pre><code>) must not pick up the inline-code
+   bg/padding/radius above — an inline <code> wrapping block line-spans
+   renders its box as stray rectangles at the start and end of the block.
+   Reset it so the code-block card owns the surface. */
+.markdownContent pre code {
+	background: none;
+	padding: 0;
+	border-radius: 0;
+	font-size: inherit;
+}
+
+/* Streamdown owns table cell styling (divide-y row separators + thead
+   bg-muted/80). The legacy full-grid cell borders stacked a second grid on
+   top of Streamdown's wrappers — removed. */
+.markdownContent table {
+	border-collapse: collapse;
+}
+
+.userMsgText {
+	word-break: break-word;
+}
+
+/* Turn toolbar — the hover-revealed right half of the header line. Holds
+   Copy / variant pager / Edit. Opacity (not display) toggles so layout is
+   stable across hover and content-height changes. On inputs that cannot
+   hover (touch), the toolbar stays visible — hover is not usable there. */
+.turnToolbar {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.userMsg:hover .turnToolbar,
+.userMsg:focus-within .turnToolbar,
+.asstMsg:hover .turnToolbar,
+.asstMsg:focus-within .turnToolbar,
+.userMsg.focused .turnToolbar,
+.asstMsg.focused .turnToolbar {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.turnToolbar {
+		opacity: 1;
+	}
+}
+
+.userMsgPager {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: var(--fs-xs);
+	color: var(--color-secondary);
+}
+
+/* Toolbar buttons — bordered chips with clear affordance (Copy / Edit /
+   pager arrows share one style). Tap targets grow on coarse pointers. */
+.toolbarBtn,
+.userMsgPager button {
+	background: transparent;
+	border: 1px solid var(--color-border);
+	color: var(--color-secondary);
+	font-size: var(--fs-xs);
+	padding: 2px 10px;
+	min-height: 30px;
+	border-radius: var(--radius-sm);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+}
+
+/* Hover scoped to hover-capable inputs so the background doesn't stick
+   after a tap on touch. */
+@media (hover: hover) {
+	.toolbarBtn:hover,
+	.userMsgPager button:hover:not(:disabled) {
+		background: var(--color-muted);
+		color: var(--color-foreground);
+		border-color: var(--color-secondary);
+	}
+
+	/* On the tinted user band, a gray hover reads off-hue — blue-tinted. */
+	.userMsg .toolbarBtn:hover,
+	.userMsg .userMsgPager button:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--color-user-border) 50%, transparent);
+		border-color: var(--color-user-border);
+	}
+}
+
+.toolbarBtn:disabled,
+.userMsgPager button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+@media (pointer: coarse) {
+	.toolbarBtn,
+	.userMsgPager button {
+		min-height: 40px;
+		padding: 6px 14px;
+	}
+}
+
+/* Dimmed messages in edit mode */
+.msgDimmed {
+	opacity: 0.4;
+	transition: opacity 0.15s ease;
+}
+
+/* Assistant message — flat (no band). Same 16px horizontal padding as the
+   user band so the two turns' headers and text share a left edge. */
+.asstMsg {
+	padding: 10px 16px;
+}
+
+/* Text segment */
+.errorLine {
+	margin-top: 6px;
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: var(--color-error);
+	background: color-mix(in srgb, var(--color-error) 6%, transparent);
+	border-left: 2px solid var(--color-error);
+	border-radius: var(--radius-sm);
+}
+
+.errorAttrs {
+	margin: 0 0 0 10px;
+	padding: 3px 10px;
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: color-mix(in srgb, var(--color-fg) 60%, transparent);
+	border-left: 2px solid color-mix(in srgb, var(--color-error) 40%, transparent);
+}
+
+.errorAttr {
+	line-height: 1.5;
+}
+
+.errorAttrKey {
+	font-weight: 600;
+}
+
+.textSegment {
+	position: relative;
+	margin-bottom: 6px;
+}
+
+/* Floating placement for the per-message copy chip on assistant text
+   segments: the .toolbarBtn visual spec (identical to the user-message
+   Copy chip) anchored at the segment's top-right, offset into the gap
+   above. Only placement and reveal live here — size, border, hover, and
+   tap-target growth are owned by .toolbarBtn. Solid-bg override: the chip
+   floats over markdown, and .toolbarBtn's transparent bg would let text
+   show through (this rule sits after .toolbarBtn in the file, so the
+   override holds). */
+.msgCopyBtn {
+	position: absolute;
+	top: -8px;
+	right: 0;
+	background: var(--color-surface-raised);
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.textSegment:hover .msgCopyBtn,
+.textSegment:focus-within .msgCopyBtn,
+.msgCopyBtn:focus-visible {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.msgCopyBtn {
+		opacity: 1;
+	}
+}
+
+/* Blinking cursor at end of streaming text */
+.streamingCursor {
+	display: inline-block;
+	color: var(--color-accent);
+	font-weight: bold;
+	margin-left: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.streamingCursor {
+		animation: blink 0.8s step-end infinite;
+	}
+}
+
+@keyframes blink {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0; }
+}
+
+/* User bash turn — a standalone bash-band card for a user-initiated shell
+   run (see UserBashView). Same margins as the other turn wrappers; the
+   band itself is the shared .actionStep with the bash hue
+   (actionSteps.module.css). */
+.userBashTurn {
+	margin: 8px 0;
+}
+
+/* `$` prompt at the start of the band header — mono, muted; marks the run
+   as the user's own (the agent's bash cards have no prompt glyph). */
+.userBashPrompt {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	user-select: none;
+}
+
+/* System turns — markdown summary body for compaction/branch_summary */
+.systemSummary {
+	padding: 4px 24px 8px;
+	font-size: var(--fs-sm);
+	color: var(--color-secondary);
+}
+
+/* System dividers */
+.systemDivider {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 16px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* Merged model-switch line — divider rules on both sides, markdown content
+ * inline between them (Streamdown's root div sits as the flex item). */
+.systemSwitch {
+	font-size: var(--fs-sm);
+}
+
+.systemDivider::before,
+.systemDivider::after {
+	content: "";
+	flex: 1;
+	border-top: 1px solid var(--color-border);
+}
+
+.systemDividerLabel {
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	flex-shrink: 0;
+}

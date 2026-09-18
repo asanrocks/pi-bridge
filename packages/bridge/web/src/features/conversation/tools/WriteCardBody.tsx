@@ -8,7 +8,7 @@ import { memo } from "react";
 import { useStore } from "../../../infra/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 
 // Render as soon as either `path` or `content` is streaming in. The LLM may

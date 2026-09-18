@@ -7,7 +7,7 @@ import type { SystemTurn } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
-import styles from "./conversation.module.css";
+import styles from "./turns.module.css";
 
 const SYSTEM_LABEL: Record<SystemTurn["type"], string> = {
 	compaction: "Compaction",

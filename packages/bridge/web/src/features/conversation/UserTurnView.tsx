@@ -13,8 +13,8 @@ import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import styles from "./conversation.module.css";
 import { formatDuration, formatGitIdentity, formatTimestamp } from "./format.ts";
+import styles from "./turns.module.css";
 
 export const UserTurnView = memo(function UserTurnView({
 	turn,
