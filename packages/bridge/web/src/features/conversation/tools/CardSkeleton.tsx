@@ -8,8 +8,8 @@
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
 import { CheckIcon, CopyIcon } from "../../../render/icons.tsx";
+import styles from "../actionSteps.module.css";
 import { copyToClipboard } from "../clipboard.ts";
-import styles from "../conversation.module.css";
 
 export interface ToolTiming {
 	startedAt: number;

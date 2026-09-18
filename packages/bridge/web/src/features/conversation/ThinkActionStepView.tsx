@@ -16,7 +16,7 @@ import { stepWants, type ThinkActionStepVM } from "../../../../src/viewmodel/ind
 import { useStore } from "../../infra/store.tsx";
 import { wantPull } from "../../infra/wants.ts";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
-import styles from "./conversation.module.css";
+import styles from "./actionSteps.module.css";
 
 export const ThinkActionStepView = memo(function ThinkActionStepView({
 	step,

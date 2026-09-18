@@ -19,7 +19,7 @@ import {
 } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/store.tsx";
 import { wantPull } from "../../infra/wants.ts";
-import styles from "./conversation.module.css";
+import styles from "./actionSteps.module.css";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";
 import { BandPreview } from "./tools/BandPreview.tsx";

@@ -6,7 +6,7 @@
 
 import { memo, useCallback } from "react";
 import { useStore } from "../../../infra/store.tsx";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import type { ActionDetailsProps } from "./args.ts";
 import { truncationWarnings } from "./resultText.ts";
 
