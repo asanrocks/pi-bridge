@@ -19,12 +19,12 @@ import {
 	planCacheWrites,
 	type ServerPushMessage,
 	statusHintOfDocument,
-} from "../../../src/core/index.ts";
-import { rememberAddress } from "./addressIndex.ts";
-import { getEntryCache } from "./entryCache.ts";
-import { writeRoute } from "./routes.ts";
+} from "../../../../src/core/index.ts";
+import { writeRoute } from "../lib/routes.ts";
+import { rememberAddress } from "../persist/addressIndex.ts";
+import { getEntryCache } from "../persist/entryCache.ts";
+import { getStore } from "../state/store.tsx";
 import { promoteSessionCandidate } from "./sessionCandidate.ts";
-import { getStore } from "./store.tsx";
 
 // Last cache-written base per session (ADR 09): planCacheWrites only sees
 // "unchanged" when before/after share entry references, which holds only for

@@ -4,7 +4,7 @@
 
 import { memo, useCallback } from "react";
 import type { SystemTurn } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import styles from "./turns.module.css";

@@ -5,7 +5,7 @@
 // (store-wide toggle), source otherwise.
 
 import { memo } from "react";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
 import styles from "../actionSteps.module.css";

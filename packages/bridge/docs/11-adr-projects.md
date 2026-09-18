@@ -848,7 +848,7 @@ Decisions this ADR left open, as implemented:
   `getDaemonInfo.cwdAllowlist` field are gone.
 - **Client address → session id.** The URL carries only `(projectId, stem)`,
   while the ADR 09 cache is keyed by `sessionId`. A small client-local
-  localStorage map (`web/src/infra/addressIndex.ts`) records
+  localStorage map (`web/src/infra/persist/addressIndex.ts`) records
   `(projectId, stem) → sessionId` from every initial-sync `SessionRef` and
   every session row, so a cold load can still derive a cache cursor. A miss
   means "open without a cursor", i.e. a full replace — never incorrect.
