@@ -1,9 +1,9 @@
 // AssistantTurnView — flat (unbubbled) turn whose first line is the turn
 // header (provider/model · timestamp, left). Copy lives per message
-// (TextBlockView), not here: a run-merged turn holds several messages, so
-// there is no single "turn text" to copy. Consecutive steps are segmented
-// into action groups (renderer-owned grouping) sharing a visual spine.
-// Padding matches the user band so headers/text align.
+// (TextBlockView), not here: a merged turn holds several messages, so
+// there is no single "turn text" to copy. Consecutive actions are segmented
+// into action groups (renderer-owned grouping) sharing a vertical line.
+// Padding matches the user tinted row so headers/text align.
 
 import { memo, useCallback, useMemo } from "react";
 import {
@@ -25,12 +25,12 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	turn,
 	isStreaming,
 	onToggleGroup,
-	onToggleStep,
+	onToggleAction,
 }: {
 	turn: AssistantTurn;
 	isStreaming: boolean;
 	onToggleGroup: (key: string, cardKeys: string[]) => void;
-	onToggleStep: (key: string) => void;
+	onToggleAction: (key: string) => void;
 }) {
 	const isDimmed = useStore(useCallback((s) => s.draft.kind === "edit" && turn.index >= s.draft.index, [turn.index]));
 	const isFocused = useStore(useCallback((s) => s.focusedTurnId === turn.turnKey, [turn.turnKey]));
@@ -42,8 +42,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const now = useNow(isStreaming);
 
 	const segments = useMemo(() => segmentBlocks(turn.blocks), [turn.blocks]);
-	// ADR 10 v2: mid-run git marks fold into the groups they render in —
-	// summary segment + in-group card. Marks with no group (a text-only run)
+	// ADR 10 v2: mid-turn inline git stamps fold into the groups they render in —
+	// summary segment + in-group card. Inline git stamps with no group (a text-only turn)
 	// fall back to standalone cards after the segments.
 	const groupGit = useMemo(() => assignGroupGitChanges(segments, turn.gitChanges ?? []), [segments, turn.gitChanges]);
 	const lastIdx = segments.length - 1;
@@ -115,11 +115,11 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 					<ActionGroupView
 						key={seg.key}
 						groupKey={seg.key}
-						steps={seg.steps}
+						actions={seg.actions}
 						gitChanges={groupGit.byGroup.get(seg.key)}
 						isTrailing={isStreaming && idx === lastIdx}
 						onToggleGroup={onToggleGroup}
-						onToggleStep={onToggleStep}
+						onToggleAction={onToggleAction}
 					/>
 				),
 			)}

@@ -23,9 +23,9 @@ import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole } from "./devConsole.ts";
-import { drainWantsOutbox } from "./pullLoop.ts";
+import { flushPullQueue } from "./pullLoop.ts";
+import { setDrainer } from "./pullQueue.ts";
 import { openSessionAddress } from "./sessionBoot.ts";
-import { setWantsDrainer } from "./wants.ts";
 
 const CONNECTION_TOAST_ID = "connection";
 // After this many failed reconnect attempts, copy shifts to "Can't reach".
@@ -223,13 +223,13 @@ export function useConnection(): { retry: () => void } {
 
 	useEffect(() => {
 		disposedRef.current = false;
-		setWantsDrainer(() => {
-			void drainWantsOutbox();
+		setDrainer(() => {
+			void flushPullQueue();
 		});
 		connect();
 		return () => {
 			disposedRef.current = true;
-			setWantsDrainer(null);
+			setDrainer(null);
 			if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
 			wsRef.current?.close();
 			clientRef.current?.disconnect();

@@ -1,15 +1,15 @@
 /**
- * Wants outbox + planPull unit tests (ADR 09).
- * Tests the pure batching step (planPull) and per-step wants derivation
- * (stepWants), plus the microtask-scheduled drainer lifecycle.
+ * Pull queue + planPull unit tests (ADR 09).
+ * Tests the pure batching step (planPull) and per-action pull derivation
+ * (actionPulls), plus the microtask-scheduled drainer lifecycle.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
 import { DocumentMirror, type PullRequestItem, planPull } from "../../src/core/index.ts";
 import type { Document } from "../../src/core/types.ts";
-import type { ThinkActionStepVM, ToolActionStepVM } from "../../src/viewmodel/index.ts";
-import { stepWants } from "../../src/viewmodel/index.ts";
-import { setWantsDrainer, takeWants, wantPull } from "../../web/src/infra/net/wants.ts";
+import type { ThinkActionVM, ToolActionVM } from "../../src/viewmodel/index.ts";
+import { actionPulls } from "../../src/viewmodel/index.ts";
+import { drainPullQueue, enqueuePulls, setDrainer } from "../../web/src/infra/net/pullQueue.ts";
 
 // ── planPull (pure batching step) ──────────────────────────────────────────
 
@@ -37,7 +37,7 @@ function makeDoc(overrides: Partial<Document> = {}): Document {
 	return doc;
 }
 
-function wants(item: { entryId: string; fieldPath: string }): PullRequestItem {
+function pull(item: { entryId: string; fieldPath: string }): PullRequestItem {
 	return item;
 }
 
@@ -45,9 +45,9 @@ describe("planPull", () => {
 	it("deduplicates by fieldPath", () => {
 		const mirror = emptyMirror();
 		const items = [
-			wants({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }),
-			wants({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }),
-			wants({ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }),
+			pull({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }),
+			pull({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }),
+			pull({ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }),
 		];
 		const result = planPull(items, mirror, new Set());
 		expect(result).toHaveLength(2);
@@ -76,8 +76,8 @@ describe("planPull", () => {
 		const mirror = emptyMirror(doc);
 
 		const items = [
-			wants({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }), // populated
-			wants({ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }), // null — keep
+			pull({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }), // populated
+			pull({ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }), // null — keep
 		];
 		const result = planPull(items, mirror, new Set());
 		expect(result).toHaveLength(1);
@@ -99,15 +99,15 @@ describe("planPull", () => {
 		});
 		const mirror = emptyMirror(doc);
 
-		const items = [wants({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" })];
+		const items = [pull({ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" })];
 		const result = planPull(items, mirror, new Set(["/entries/a1/content/0/arguments"]));
 		expect(result).toHaveLength(0);
 	});
 });
 
-// ── stepWants ───────────────────────────────────────────────────────────
+// ── actionPulls ───────────────────────────────────────────────────────────
 
-function thinkStep(overrides: Partial<ThinkActionStepVM> = {}): ThinkActionStepVM {
+function thinkAction(overrides: Partial<ThinkActionVM> = {}): ThinkActionVM {
 	return {
 		blockType: "thinking",
 		entryId: "a1",
@@ -119,7 +119,7 @@ function thinkStep(overrides: Partial<ThinkActionStepVM> = {}): ThinkActionStepV
 	};
 }
 
-function toolStep(overrides: Partial<ToolActionStepVM> = {}): ToolActionStepVM {
+function toolAction(overrides: Partial<ToolActionVM> = {}): ToolActionVM {
 	return {
 		blockType: "tool",
 		entryId: "a1",
@@ -134,53 +134,53 @@ function toolStep(overrides: Partial<ToolActionStepVM> = {}): ToolActionStepVM {
 	};
 }
 
-describe("stepWants", () => {
-	it("think step wants thinking (collapsed or expanded)", () => {
-		const h = thinkStep();
-		expect(stepWants(h, false)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
-		expect(stepWants(h, true)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
+describe("actionPulls", () => {
+	it("think action needs a thinking pull (collapsed or expanded)", () => {
+		const h = thinkAction();
+		expect(actionPulls(h, false)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
+		expect(actionPulls(h, true)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
 	});
 
-	it("redacted think step wants nothing", () => {
-		const h = thinkStep({ redacted: true });
-		expect(stepWants(h, false)).toEqual([]);
+	it("redacted think action needs no pull", () => {
+		const h = thinkAction({ redacted: true });
+		expect(actionPulls(h, false)).toEqual([]);
 	});
 
-	it("tool step wants arguments always, result only when expanded", () => {
-		const h = toolStep({ result: { entryId: "tr1", isError: false } });
-		const collapsed = stepWants(h, false);
+	it("tool action needs arguments always, result only when expanded", () => {
+		const h = toolAction({ result: { entryId: "tr1", isError: false } });
+		const collapsed = actionPulls(h, false);
 		expect(collapsed).toHaveLength(1);
 		expect(collapsed[0].fieldPath).toBe("/entries/a1/content/1/arguments");
 
-		const expanded = stepWants(h, true);
+		const expanded = actionPulls(h, true);
 		expect(expanded).toHaveLength(3);
 		expect(expanded.map((w) => w.fieldPath).sort()).toEqual(
 			["/entries/a1/content/1/arguments", "/entries/tr1/content", "/entries/tr1/details"].sort(),
 		);
 	});
 
-	it("tool step without result wants arguments even when expanded", () => {
-		const h = toolStep();
-		expect(stepWants(h, true)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }]);
+	it("tool action without result needs arguments even when expanded", () => {
+		const h = toolAction();
+		expect(actionPulls(h, true)).toEqual([{ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }]);
 	});
 });
 
-// ── Wants outbox (scheduling) ──────────────────────────────────────────────
+// ── Pull queue (scheduling) ──────────────────────────────────────────────
 
-describe("wants outbox", () => {
+describe("pull queue", () => {
 	afterEach(() => {
-		setWantsDrainer(null);
-		takeWants(); // clear leftover
+		setDrainer(null);
+		drainPullQueue(); // clear leftover
 	});
 
-	it("wantPull appends items and schedules drain via microtask", async () => {
+	it("enqueuePulls appends items and schedules drain via microtask", async () => {
 		const drained: PullRequestItem[][] = [];
-		setWantsDrainer(() => {
-			drained.push(takeWants());
+		setDrainer(() => {
+			drained.push(drainPullQueue());
 		});
 
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }]);
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/1/arguments" }]);
 
 		// Drain scheduled but not yet executed (microtask)
 		expect(drained).toHaveLength(0);
@@ -192,30 +192,30 @@ describe("wants outbox", () => {
 		expect(drained[0]).toHaveLength(2);
 	});
 
-	it("takeWants clears the outbox", () => {
-		setWantsDrainer(() => {});
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
-		const items = takeWants();
+	it("drainPullQueue clears the outbox", () => {
+		setDrainer(() => {});
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
+		const items = drainPullQueue();
 		expect(items).toHaveLength(1);
-		expect(takeWants()).toHaveLength(0);
+		expect(drainPullQueue()).toHaveLength(0);
 	});
 
 	it("drain is a no-op when no drainer is registered", async () => {
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/0/thinking" }]);
 		await new Promise<void>((r) => queueMicrotask(r));
 		// Items remain in outbox (no drainer to consume them)
-		expect(takeWants()).toHaveLength(1);
+		expect(drainPullQueue()).toHaveLength(1);
 	});
 
 	it("two renders before microtask fire accumulate (dedup handled by planPull)", () => {
 		const drained: PullRequestItem[][] = [];
-		setWantsDrainer(() => {
-			drained.push(takeWants());
+		setDrainer(() => {
+			drained.push(drainPullQueue());
 		});
 
 		// Same fieldPath appended twice across two "renders"
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
-		wantPull([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
+		enqueuePulls([{ entryId: "a1", fieldPath: "/entries/a1/content/0/arguments" }]);
 
 		// Still only one drain scheduled (second call skipped scheduling)
 		expect(drained).toHaveLength(0);

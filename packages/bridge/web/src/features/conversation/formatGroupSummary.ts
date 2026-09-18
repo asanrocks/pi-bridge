@@ -1,29 +1,29 @@
 // ============================================================================
-// formatGroupSummary — categorizes a list of action steps into a compact
+// formatGroupSummary — categorizes a list of actions into a compact
 // collapsed label grouped by tool kind. Categories appear in a fixed
-// precedence order that matches the group's family dots (edit+write
-// collapse to the mutate family):
-//   git > edit > write > bash-family > read
+// precedence order that matches the group's hue dots (edit+write
+// collapse to the mutate hue):
+//   git > edit > write > bash-hue > read
 //   git: ae02c151 · edit: a.ts, b.ts, c.ts · run 2 tools · read 3 files
 // Only edit/write carry file names — the named outcomes of the group, listed
 // together under one "edit:" category (edit vs write stays visible in the
-// expanded step rows and card identities); mid-run git marks (ADR 10 v2)
+// expanded action rows and card headers); mid-turn inline git stamps (ADR 10 v2)
 // surface as a "git:" hash list first — the highest-precedence category;
 // every other tool (bash, grep, …)
 // is a count under "run N tools", so the header needs no arguments beyond
-// edit/write paths. Thinking steps are not summarized — the header surfaces
+// edit/write paths. Thinking actions are not summarized — the header surfaces
 // tool actions only — except when thinking is all a group holds, where a
-// bare "think" keeps the fold row readable.
+// bare "think" keeps the collapsed row readable.
 // ============================================================================
 
-/** Per-step data extracted from live store args. */
-export interface StepSummaryItem {
+/** Per-action data extracted from live store args. */
+export interface ActionSummaryItem {
 	toolName: string;
 	/** Path basename for edit/write tools (null if unknown). */
 	basename: string | null;
 }
 
-/** Identity slice formatGroupSummary needs from a git mark. */
+/** Identity slice formatGroupSummary needs from a git stamp. */
 export interface GitSummaryItem {
 	commit: string | null;
 	branch: string | null;
@@ -55,14 +55,14 @@ function formatGitGroup(items: GitSummaryItem[]): string | null {
 }
 
 /**
- * Build a categorized group label from step items. Each category appears at
+ * Build a categorized group label from action items. Each category appears at
  * most once, with dedup and truncation inside it. Edit and write share the
  * "edit:" category — modify-existing vs create-new stays visible in the
  * expanded rows; the collapsed header cares only about which files changed.
- * Mid-run git marks (ADR 10 v2) surface as a "git:" segment first, before
+ * Mid-run inline git stamps (ADR 10 v2) surface as a "git:" segment first, before
  * all tool categories.
  */
-export function formatGroupSummary(items: StepSummaryItem[], gitChanges: GitSummaryItem[] = []): string {
+export function formatGroupSummary(items: ActionSummaryItem[], gitChanges: GitSummaryItem[] = []): string {
 	const editMap = new Map<string, number>(); // basename → count
 	let readCount = 0;
 	let otherToolCount = 0;
@@ -85,7 +85,7 @@ export function formatGroupSummary(items: StepSummaryItem[], gitChanges: GitSumm
 
 	const groups: string[] = [];
 
-	// --- git (mid-run identity transitions — highest precedence) ---
+	// --- git (mid-turn identity transitions — highest precedence) ---
 	const gitGroup = formatGitGroup(gitChanges);
 	if (gitGroup) groups.push(gitGroup);
 
@@ -104,7 +104,7 @@ export function formatGroupSummary(items: StepSummaryItem[], gitChanges: GitSumm
 	}
 
 	// Thinking-only group (thinking followed by text is a common shape):
-	// no tool category applies, but the fold row must not be a bare
+	// no tool category applies, but the collapsed row must not be a bare
 	// triangle — fall back to a minimal "think" label.
 	if (groups.length === 0 && thinkCount > 0) {
 		return "think";
