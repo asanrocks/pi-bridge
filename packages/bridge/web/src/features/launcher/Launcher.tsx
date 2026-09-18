@@ -8,46 +8,27 @@
 // No create buttons: a session is started by sending a prompt, and opened by
 // address (the daemon resolves or activates it). Project sessions are
 // browsed from the sidebar, not from the home.
+//
+// Self-sufficient: reads the store and calls useRpc directly; the only
+// shell-provided prop is the connection retry.
 // ============================================================================
 
 import { memo, useMemo } from "react";
-import type { ImageContent, ModelInfo, ModelRef, ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
-import type { ConnectionState } from "../../infra/store.ts";
+import { useRpc } from "../../infra/net/useRpc.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
 
-export const Launcher = memo(function Launcher({
-	connection,
-	projects,
-	activeSessions,
-	projectId,
-	models,
-	onOpenProject,
-	onOpenSession,
-	onNewSession,
-	retry,
-}: {
-	connection: ConnectionState;
-	projects: ProjectInfo[];
-	activeSessions: SessionInfo[];
+export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
+	const connection = useStore((s) => s.connection);
+	const projects = useStore((s) => s.projects);
+	const activeSessions = useStore((s) => s.activeSessions);
 	/** When set, the Launcher is the Project home (compose only). */
-	projectId: string | null;
+	const projectId = useStore((s) => s.currentProjectId);
 	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
-	models: ModelInfo[];
-	onOpenProject: (projectId: string) => void;
-	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
-	/** Send the first prompt of a new session. Resolves true on success —
-	 * the caller keeps its draft on failure. */
-	onNewSession: (
-		projectId: string,
-		text: string,
-		images?: ImageContent[],
-		model?: ModelRef,
-		thinkingLevel?: string,
-	) => Promise<boolean>;
-	retry: () => void;
-}) {
+	const models = useStore((s) => s.models);
+	const rpc = useRpc();
 	const active = useMemo(
 		() => activeSessions.slice().sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
 		[activeSessions],
@@ -114,7 +95,11 @@ export const Launcher = memo(function Launcher({
 					defaultModel={project?.defaultModel ?? null}
 					defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
 					connected={connection.kind === "connected"}
-					onNewSession={onNewSession}
+					onNewSession={(projectId, text, images, model, thinkingLevel) =>
+						// ADR 12 slice: the daemon admits the first prompt (with any
+						// attachments and the pre-session model choice) before attach.
+						rpc.newSession(projectId, text, { images, model, thinkingLevel })
+					}
 				/>
 			</div>
 		);
@@ -138,7 +123,7 @@ export const Launcher = memo(function Launcher({
 							type="button"
 							key={project.id}
 							className={styles.rowMain}
-							onClick={() => onOpenProject(project.id)}
+							onClick={() => rpc.openProject(project.id)}
 							title={project.cwd}
 						>
 							<div className={styles.rowLine1}>
@@ -171,7 +156,7 @@ export const Launcher = memo(function Launcher({
 								<button
 									type="button"
 									className={styles.rowMain}
-									onClick={() => onOpenSession(session.projectId, session.stem, session.sessionId)}
+									onClick={() => rpc.openSession(session.projectId, session.stem, session.sessionId)}
 									title={label}
 								>
 									<div className={styles.rowLine1}>

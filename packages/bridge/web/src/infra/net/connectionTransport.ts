@@ -3,7 +3,7 @@
 // backoff schedule for the client connection layer.
 // ============================================================================
 
-import type { BridgeTransport } from "../../../src/core/index.ts";
+import type { BridgeTransport } from "../../../../src/core/index.ts";
 
 export class WsTransport implements BridgeTransport {
 	private ws: WebSocket;

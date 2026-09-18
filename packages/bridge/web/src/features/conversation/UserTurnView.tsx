@@ -8,7 +8,7 @@
 import { type MutableRefObject, memo, useCallback, useState } from "react";
 import type { Entry } from "../../../../src/core/index.ts";
 import { newestLeafInSubtree, type UserTurn } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";

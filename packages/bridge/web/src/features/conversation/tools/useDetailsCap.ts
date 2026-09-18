@@ -7,7 +7,7 @@
 // `${entryId}:b${blockIndex}` format the tool steps use.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 
 export type DetailsCap = "none" | "capped" | "uncapped";
 

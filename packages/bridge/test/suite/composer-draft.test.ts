@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import type { Document } from "../../src/core/types.ts";
 import { MAX_IMAGES_PER_MESSAGE } from "../../src/core/types.ts";
-import { createClientStore } from "../../web/src/infra/store.ts";
+import { createClientStore } from "../../web/src/infra/state/store.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers

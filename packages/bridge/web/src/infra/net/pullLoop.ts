@@ -5,9 +5,9 @@
 // via setWantsDrainer) and ingests the reply into the DocumentMirror.
 // ============================================================================
 
-import { type JsonValue, planPull } from "../../../src/core/index.ts";
+import { type JsonValue, planPull } from "../../../../src/core/index.ts";
+import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
-import { getStore } from "./store.tsx";
 import { takeWants } from "./wants.ts";
 
 /** Consecutive-failure backoff for pull retries: 1s doubling, capped at 30s. */

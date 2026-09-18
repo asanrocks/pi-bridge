@@ -73,7 +73,7 @@ subscribes to its own content slice. When an `append` targets that block,
 only that component re-renders. The conversation above the fold and the
 sidebar are unaffected.
 
-**Store shape (actual `web/src/infra/store.ts`):**
+**Store shape (actual `web/src/infra/state/store.ts`):**
 
 ```ts
 interface ClientStore {
@@ -512,7 +512,7 @@ Architecture §1 defines four lazy fields on the wire:
 `ToolResultEntry.content`, `ToolResultEntry.details`. Text and
 compaction/branch_summary summaries are wire-eager — always populated.
 
-Components declare wants during render by appending to a per-render wants outbox (`PullRequestItem[]`). The pull loop (`web/src/infra/pullLoop.ts`, `useEffect` after each render) drains the outbox: filter through `needsPull()` + `loadingPaths`, one batched `bridge.pull(requests)`, `ingestPullResponse` → `pullTick` bump → re-render. No component calls `pull` directly; expand handlers are pure store toggles (`toggleActionGroup`/`toggleStep`).
+Components declare wants during render by appending to a per-render wants outbox (`PullRequestItem[]`). The pull loop (`web/src/infra/net/pullLoop.ts`, `useEffect` after each render) drains the outbox: filter through `needsPull()` + `loadingPaths`, one batched `bridge.pull(requests)`, `ingestPullResponse` → `pullTick` bump → re-render. No component calls `pull` directly; expand handlers are pure store toggles (`toggleActionGroup`/`toggleStep`).
 
 Provisional pulls register live subscriptions on the `Connection` (subsequent `append` patches forward until `move` seal); committed pulls are one-shot. `filterPatchForSocket` sanitizes parent-path op values for unsubscribed sockets (convergence invariant).
 

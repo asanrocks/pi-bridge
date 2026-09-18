@@ -11,8 +11,8 @@
 
 import { useEffect, useState } from "react";
 import type { ReadFileReply } from "../../../../src/core/index.ts";
-import { getGlobalClient } from "../../infra/client.ts";
-import { useStore } from "../../infra/store.tsx";
+import { getGlobalClient } from "../../infra/net/client.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import { CodeSnippet } from "../../render/CodeSnippet.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { extToLang } from "../conversation/tools/args.ts";

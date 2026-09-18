@@ -9,8 +9,8 @@
 
 import type { StateCreator } from "zustand/vanilla";
 import type { Document, ModelInfo, ProjectInfo, SessionInfo, SessionListCursor } from "../../../../src/core/types.ts";
-import type { ClientStore } from "../store.ts";
 import type { ComposerDraft } from "./composer.ts";
+import type { ClientStore } from "./store.ts";
 
 // ---------------------------------------------------------------------------
 // Connection state — drives the TopBar chip (always-on) and the Launcher's

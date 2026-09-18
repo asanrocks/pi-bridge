@@ -16,7 +16,7 @@
 // (serial-switch rule).
 // ============================================================================
 
-import { applyPatch, type Document, type PatchOp } from "../../../src/core/index.ts";
+import { applyPatch, type Document, type PatchOp } from "../../../../src/core/index.ts";
 
 export interface SessionCandidate {
 	sessionId: string;

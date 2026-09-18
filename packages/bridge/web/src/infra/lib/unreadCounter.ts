@@ -18,7 +18,7 @@
 //   silently (focused — the user is watching).
 // ============================================================================
 
-import type { Entry } from "../../../src/core/types.ts";
+import type { Entry } from "../../../../src/core/types.ts";
 
 function isSealedMessage(e: Entry | undefined): boolean {
 	return (
