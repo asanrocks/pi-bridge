@@ -26,7 +26,7 @@ Document model (ADR 02), component model (ADR 06), client architecture (ADR 07),
 
 ## Implementer rules
 
-- **Vocabulary comes from `docs/glossary.md`.** Coined names compose terms from at most one glossary domain plus generic vocabulary; mechanisms and UI phrases stay inside their owning concept's description. `docs/glossary.md` is the canonical reference — update it before introducing a new term.
+- **Vocabulary comes from `docs/glossary.md`.** Coined names compose terms from at most one glossary domain plus generic vocabulary; mechanisms and UI phrases stay inside their owning concept's description. `docs/glossary.md` is the canonical reference — update it before introducing a new term. Retired words (band, spine, swatch, wants, …) may not be coined again; `docs/glossary-migration.md` tracks the ongoing code/prose migration to the canonical vocabulary and is deleted when complete.
 
 Architectural invariants live in `docs/architecture.md` §7. The rules below are specific to this codebase — follow them or the build breaks.
 
