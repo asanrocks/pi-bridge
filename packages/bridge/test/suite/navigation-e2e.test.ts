@@ -1,6 +1,6 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
-import { DocumentMirror, projectSnapshot } from "../../src/core/index.ts";
+import { DocumentMirror, snapshotForWire } from "../../src/core/index.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { assertMirrorInSync, createBridgeHarness, createMirrorHarness } from "./harness.ts";
 
@@ -18,7 +18,7 @@ describe("navigation end-to-end", () => {
 
 		// Create a client mirror subscribed to Manager patches
 		const mirror = new DocumentMirror();
-		mirror.applyReplace(projectSnapshot(bh.manager.document));
+		mirror.applyReplace(snapshotForWire(bh.manager.document));
 		bh.manager.onPatch((p) => mirror.applyPatch(p.ops));
 
 		// Pick an entry that is NOT the last committed entry
@@ -83,7 +83,7 @@ describe("navigation end-to-end", () => {
 		harnesses.push(bh);
 
 		const mirror = new DocumentMirror();
-		mirror.applyReplace(projectSnapshot(bh.manager.document));
+		mirror.applyReplace(snapshotForWire(bh.manager.document));
 		bh.manager.onPatch((p) => mirror.applyPatch(p.ops));
 
 		const originalLeafId = bh.manager.document.status.leafId;
@@ -101,7 +101,7 @@ describe("navigation end-to-end", () => {
 		harnesses.push(bh);
 
 		const mirror = new DocumentMirror();
-		mirror.applyReplace(projectSnapshot(bh.manager.document));
+		mirror.applyReplace(snapshotForWire(bh.manager.document));
 
 		const patchLeafOps: string[] = [];
 		bh.manager.onPatch((p) => {

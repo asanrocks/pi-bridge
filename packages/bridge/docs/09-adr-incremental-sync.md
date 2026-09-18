@@ -229,7 +229,7 @@ asynchronous. Once the Manager has rebound, each Connection's initial-sync
 emission is synchronous and precedes later patches from the new session.
 
 Connection-local lazy subscriptions are cleared on attach and session rebind.
-The wants-outbox issues fresh pulls for visible lazy fields. This is a
+The pull queue issues fresh pulls for visible lazy fields. This is a
 behavior change: today the subscription set survives attach.
 
 ### Rebind window and candidate mirror
@@ -357,14 +357,14 @@ current server values.
 
 ```ts
 computeCursor(records) -> PrefixCursor | null
-projectCacheEntry(entry) -> Entry
+entryForCache(entry) -> Entry
 planCacheWrites(sessionId, before, after) -> CacheEntryRecord[]
 seedDocument(records, statusHint) -> Document
 ```
 
-`projectCacheEntry` removes all lazy values. Cached thinking, tool arguments,
+`entryForCache` removes all lazy values. Cached thinking, tool arguments,
 tool result content, and tool result details are always `null`. Pull responses
-are not persisted. The existing wants-outbox pulls visible values again after
+are not persisted. The existing pull queue pulls visible values again after
 restore. Optional assistant metadata (`responseModel`, `responseId`,
 `errorMessage`) is normalized to `null` when absent — never `undefined` — so
 the streaming skeleton and the file projection yield one deterministic entry
@@ -372,7 +372,7 @@ shape and cache records never depend on which path produced them.
 
 `planCacheWrites` uses `applyPatch` structural sharing. It selects changed or
 new entries that have `ord` and do not have a `pending:*` id, then applies
-`projectCacheEntry`. Unchanged entry references produce no write. Structural
+`entryForCache`. Unchanged entry references produce no write. Structural
 sharing only holds between same-session documents evolved via `applyPatch` —
 the client therefore plans against the session's last cache-written base
 (the attach seed, the candidate's pre-promotion seed, or the replace

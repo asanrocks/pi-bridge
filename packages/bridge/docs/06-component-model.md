@@ -73,7 +73,7 @@ and formalizes the existing test seam.
 ```
 
 **Core** — pure, browser-safe. Types, `applyEvent`, `reconcile`,
-`applyPatch`, `DocumentMirror`, `filterPatchForSocket`, `projectSnapshot`.
+`applyPatch`, `DocumentMirror`, `filterPatchForSocket`, `snapshotForWire`.
 No knowledge of pi, sockets, or Node. Unchanged from ADR 02/03.
 
 **Manager** — owns one pi runtime (`AgentSessionRuntime`) and one canonical
@@ -431,7 +431,7 @@ interface Manager {
   against their own subscription sets.
 - **`onReplace`** — called on bootstrap and after `switchSession`/
   `newSession` (via `rebindSession`). The listener receives the full canonical Document (lazy
-  fields populated — Connections call `projectSnapshot` before sending).
+  fields populated — Connections call `snapshotForWire` before sending).
 - **`onExit`** — called during `manager.dispose()` after abort-save, before
   `runtime.dispose()`; Connections send `instance_exit` and detach.
 - **`onSettled`** — called on `turn_end`/`agent_settled`; Connections push `sessions_changed` (first turn after `newSession` flushes the session file).
@@ -555,7 +555,7 @@ component model accommodates M:N from day one without redesign:
 - `manager-verbs.test.ts` — `setModel`, `setThinkingLevel`, `renameSession`, `navigate`, `abort`, idle-state reconcile.
 - `connection-daemon.test.ts` — Connection RPC routing via in-process WS pair (prompt, daemon/routing verbs, pull, setModel, errors).
 - `multi-instance.test.ts` — multi-instance routing (`switchInstance`/`newInstance`/`killInstance`, `instance_exit`).
-- `tree-unit.test.ts` / `accounting.test.ts` / `composer-draft.test.ts` / `wants-outbox.test.ts` — viewmodel + store + pull orchestration.
+- `tree-unit.test.ts` / `accounting.test.ts` / `composer-draft.test.ts` / `pull-queue.test.ts` — viewmodel + store + pull orchestration.
 - `navigation-e2e.test.ts` — Navigate + mirror sync, prompt-from-branch, multi-navigate, idempotency.
 
 Existing files updated for `createHost` → `createManager` and `bus.subscribe` → `manager.onPatch`.

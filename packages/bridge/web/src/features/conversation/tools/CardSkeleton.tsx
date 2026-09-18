@@ -1,14 +1,14 @@
 // CardSkeleton — the shared zones rendered above every tool card's content
 // panel: a status line (light + duration + call annotations), the
-// full-form identity line (full path / full command), and the error strip.
-// Presentational only — ToolActionStepView owns the store subscriptions
+// full-form header line (full path / full command), and the error strip.
+// Presentational only — ToolActionView owns the store subscriptions
 // (live args, result text, timing) and passes plain data, so these render
 // under SSR tests without a store.
 
 import { memo, useCallback, useRef, useState } from "react";
-import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
+import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import { CheckIcon, CopyIcon } from "../../../render/icons.tsx";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import { copyToClipboard } from "../clipboard.ts";
 
 export interface ToolTiming {
@@ -18,7 +18,7 @@ export interface ToolTiming {
 
 /**
  * Status line — light + duration + timeout annotation + status chips
- * (exit code, timeout, abort). Sits on the band tint above the identity
+ * (exit code, timeout, abort). Sits on the row tint above the header
  * line: it is metadata about the call, not content. The light renders once
  * execution has started (status is derivable on reload); the duration
  * renders only for live-witnessed runs (exec-start isn't on the wire). The
@@ -31,7 +31,7 @@ export const CardStatusLine = memo(function CardStatusLine({
 	timeout,
 	chips,
 }: {
-	status: ToolActionStepVM["status"];
+	status: ToolActionVM["status"];
 	timing: ToolTiming | null;
 	timeout: number | null;
 	chips?: ReadonlyArray<{ text: string; tone: "error" | "warning" }>;
@@ -59,19 +59,19 @@ export const CardStatusLine = memo(function CardStatusLine({
 });
 
 /**
- * Identity line — the full-form identifier. The collapsed band abbreviates
+ * Header line — the full-form identifier. The collapsed tinted row abbreviates
  * (basename, single line); this restores the full path / whole command in a
- * lighter treatment on the band tint.
+ * lighter treatment on the row tint.
  */
-export const CardIdentity = memo(function CardIdentity({ text }: { text: string | null }) {
+export const CardHeader = memo(function CardHeader({ text }: { text: string | null }) {
 	if (!text) return null;
-	return <div className={styles.cardIdentity}>{text}</div>;
+	return <div className={styles.cardHeader}>{text}</div>;
 });
 
 /**
  * Error strip — the tool's error text, skeleton-owned so every card renders
  * failures uniformly (the per-tool bodies never re-derive error display).
- * Sits between identity and content.
+ * Sits between header and content.
  */
 export const CardError = memo(function CardError({ text }: { text: string | null }) {
 	if (!text) return null;
@@ -112,7 +112,7 @@ export const TruncationNotice = memo(function TruncationNotice({
 /**
  * Card controls — the hover-revealed cluster docked right in the card's
  * top bar: copy (primary payload), line-wrap toggle, markdown toggle, and
- * the details cap toggle (the old step-header cap chip, swallowed here).
+ * the details cap toggle (the old action-header cap chip, swallowed here).
  * Presentational: every input is a prop, so SSR tests cover it without a
  * store. On hover-incapable pointers (touch) the cluster stays visible —
  * hover-only controls would be unreachable there (CSS media query).

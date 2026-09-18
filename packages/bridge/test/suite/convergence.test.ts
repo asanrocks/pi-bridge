@@ -1,6 +1,6 @@
 /**
  * Convergence test — ADR 09 invariant 1:
- * A client initialized from projectSnapshot and one replaying the filtered
+ * A client initialized from snapshotForWire and one replaying the filtered
  * patch stream (empty subscriptions) must hold the same document. With a
  * subscribed path, only that path may differ.
  *
@@ -17,8 +17,8 @@ import {
 	filterPatchForSocket,
 	initFromEntries,
 	type PatchOp,
-	projectSnapshot,
 	reconcile,
+	snapshotForWire,
 } from "../../src/core/index.ts";
 import { deepEqual } from "./harness.ts";
 
@@ -226,8 +226,8 @@ describe("convergence (ADR 09 invariant 1)", () => {
 		const initial = initFromEntries([userEntry()]);
 		const { final, patches } = driveTurn(initial);
 
-		const snapshotClient = projectSnapshot(final);
-		const replayClient = replayFiltered(projectSnapshot(initial), patches, new Set());
+		const snapshotClient = snapshotForWire(final);
+		const replayClient = replayFiltered(snapshotForWire(initial), patches, new Set());
 
 		assertDocsEqual(snapshotClient, replayClient, "empty subscriptions");
 	});
@@ -237,7 +237,7 @@ describe("convergence (ADR 09 invariant 1)", () => {
 		const { final, patches } = driveTurn(initial);
 
 		const thinkingPath = "/entries/pending:message/content/0/thinking";
-		const subscribedClient = replayFiltered(projectSnapshot(initial), patches, new Set([thinkingPath]));
+		const subscribedClient = replayFiltered(snapshotForWire(initial), patches, new Set([thinkingPath]));
 
 		// The subscribed client received the thinking stream — value survives the seal move
 		const a1 = subscribedClient.entries.a1;
@@ -247,7 +247,7 @@ describe("convergence (ADR 09 invariant 1)", () => {
 		}
 
 		// Beyond thinking, the subscribed client matches the snapshot projection
-		assertDocsEqual(projectSnapshot(final), nullThinking(subscribedClient), "subscribed, thinking nulled");
+		assertDocsEqual(snapshotForWire(final), nullThinking(subscribedClient), "subscribed, thinking nulled");
 	});
 
 	it("reconcile-discovered entries never carry lazy content into the canonical document's wire projection mismatch", () => {
@@ -272,8 +272,8 @@ describe("convergence (ADR 09 invariant 1)", () => {
 		}
 
 		// Convergence: snapshot equals filtered replay of the reconcile patch
-		const snapshotClient = projectSnapshot(canonical);
-		const replayClient = replayFiltered(projectSnapshot(initial), [recPatch!.ops], new Set());
+		const snapshotClient = snapshotForWire(canonical);
+		const replayClient = replayFiltered(snapshotForWire(initial), [recPatch!.ops], new Set());
 		assertDocsEqual(snapshotClient, replayClient, "reconcile-discovered");
 	});
 });

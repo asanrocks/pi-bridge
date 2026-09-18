@@ -246,7 +246,7 @@ describe("computeLaneLayout", () => {
 		expect(layout.forks).toEqual([]);
 		expect(layout.laneCount).toBe(1);
 		// One lineage spanning rows 0..2. endRow is the last primary
-		// descendant's row (u3, a leaf) — no ghost region.
+		// descendant's row (u3, a leaf) — no empty region.
 		expect(layout.lineages).toHaveLength(1);
 		expect(layout.lineages[0]).toEqual({ lane: 0, startRow: 0, endRow: 2 });
 	});
@@ -419,8 +419,8 @@ describe("computeLaneLayout", () => {
 // ---------------------------------------------------------------------------
 
 describe("collapseDrafts", () => {
-	// Typo-fan fixture: u1(root, completed) → siblings u2(draft), u3(draft),
-	// u4(keeper, completed), all under effective parent a1.
+	// Draft-fan fixture: u1(root, completed) → siblings u2(draft), u3(draft),
+	// u4(completed), all under effective parent a1.
 	function fanDoc(): Document {
 		return setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z", "root"),
@@ -429,7 +429,7 @@ describe("collapseDrafts", () => {
 			abortedAsst("a2", "u2", "2024-01-01T00:01:05Z"),
 			userEntry("u3", "a1", "2024-01-01T00:02:00Z", "draft2"),
 			abortedAsst("a3", "u3", "2024-01-01T00:02:05Z"),
-			userEntry("u4", "a1", "2024-01-01T00:03:00Z", "keeper"),
+			userEntry("u4", "a1", "2024-01-01T00:03:00Z", "follow-up"),
 			asstEntry("a4", "u4", "2024-01-01T00:03:05Z"),
 		]);
 	}
@@ -441,7 +441,7 @@ describe("collapseDrafts", () => {
 		const byId = (id: string) => u1.children.find((c) => c.id === id)!;
 		expect(byId("u2").abortedDraft).toBe(true);
 		expect(byId("u3").abortedDraft).toBe(true);
-		expect(byId("u4").abortedDraft).toBe(false); // completed → keeper
+		expect(byId("u4").abortedDraft).toBe(false); // completed → not an aborted draft
 	});
 
 	it("abort + continue (user follow-up under the aborted assistant) is NOT a draft", () => {
@@ -459,7 +459,7 @@ describe("collapseDrafts", () => {
 		expect(u2.abortedDraft).toBe(false); // not dead-ended
 	});
 
-	it("collapses a draft run into the following keeper", () => {
+	it("collapses a draft run into the following node", () => {
 		const tree = computeHistoryTree(fanDoc());
 		const path = computeActiveUserPath(fanDoc(), "a4");
 		const collapsed = collapseDrafts(tree, path);
@@ -468,8 +468,8 @@ describe("collapseDrafts", () => {
 		expect(u1.children[0].discardedDrafts.map((d) => d.id)).toEqual(["u2", "u3"]);
 	});
 
-	it("trailing all-aborted fan promotes the last draft as keeper", () => {
-		// u2, u3 both abort+dead-end; no keeper after. u3 promoted, u2 collapses into it.
+	it("trailing all-aborted fan promotes the last draft as the following node", () => {
+		// u2, u3 both abort+dead-end; no following node after. u3 promoted, u2 collapses into it.
 		const doc = setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z"),
 			asstEntry("a1", "u1", "2024-01-01T00:00:30Z"),
@@ -487,8 +487,8 @@ describe("collapseDrafts", () => {
 	});
 
 	it("on-path draft stays visible (not collapsed)", () => {
-		// Navigate to draft u2 (leafId a2): u2 is on the active path → keeper.
-		// u3 (off-path draft after u2) collapses into the following keeper u4.
+		// Navigate to draft u2 (leafId a2): u2 is on the active path → not collapsed.
+		// u3 (off-path draft after u2) collapses into the following node u4.
 		const tree = computeHistoryTree(fanDoc());
 		const path = computeActiveUserPath(fanDoc(), "a2");
 		const collapsed = collapseDrafts(tree, path);
@@ -504,7 +504,7 @@ describe("collapseDrafts", () => {
 		const path = computeActiveUserPath(doc, "a4");
 		const collapsed = collapseDrafts(tree, path);
 		const layout = computeLaneLayout(collapsed, path);
-		// Drafts u2, u3 are absent — only u1 and the keeper u4 get lanes. u4 is
+		// Drafts u2, u3 are absent — only u1 and the following node u4 get lanes. u4 is
 		// u1's only kept child → primary → inherits lane 0, no fork.
 		expect(ids(layout)).toEqual(["u1", "u4"]);
 		expect(layout.laneCount).toBe(1);

@@ -53,7 +53,7 @@ function jsonValue(v: unknown): JsonValue {
 
 type AnyRecord = Record<string, unknown>;
 
-function projectContent(block: unknown): Content {
+function toContent(block: unknown): Content {
 	const b = block as AnyRecord;
 	switch (b.type) {
 		case "text":
@@ -92,7 +92,7 @@ function projectContent(block: unknown): Content {
 	}
 }
 
-function projectMessage(entry: SessionMessageEntry): Entry {
+function toMessageEntry(entry: SessionMessageEntry): Entry {
 	const msg = entry.message;
 	const role = msg.role as "user" | "assistant";
 	const msgRaw = msg as unknown as AnyRecord;
@@ -100,7 +100,7 @@ function projectMessage(entry: SessionMessageEntry): Entry {
 	const contentBlocks: Content[] =
 		typeof rawContent === "string"
 			? [{ type: "text", text: rawContent }]
-			: ((rawContent as unknown[]) ?? []).map(projectContent);
+			: ((rawContent as unknown[]) ?? []).map(toContent);
 	const base = {
 		id: entry.id,
 		parentId: entry.parentId,
@@ -127,7 +127,7 @@ function projectMessage(entry: SessionMessageEntry): Entry {
 	return base;
 }
 
-function projectToolResult(msg: unknown, entry: SessionMessageEntry): ToolResultEntry {
+function toToolResultEntry(msg: unknown, entry: SessionMessageEntry): ToolResultEntry {
 	const m = msg as AnyRecord;
 	return {
 		kind: "tool_result",
@@ -136,7 +136,7 @@ function projectToolResult(msg: unknown, entry: SessionMessageEntry): ToolResult
 		timestamp: entry.timestamp,
 		toolCallId: m.toolCallId as string,
 		toolName: m.toolName as string,
-		content: ((m.content as unknown[]) ?? []).map(projectContent),
+		content: ((m.content as unknown[]) ?? []).map(toContent),
 		// Normalize absent details to {} (ADR 09 invariant 4: wire `null` only
 		// means "not pulled").
 		details: jsonValue(m.details) ?? {},
@@ -144,7 +144,7 @@ function projectToolResult(msg: unknown, entry: SessionMessageEntry): ToolResult
 	};
 }
 
-function projectBashExecution(msg: unknown, entry: SessionMessageEntry): BashExecutionEntry {
+function toBashExecutionEntry(msg: unknown, entry: SessionMessageEntry): BashExecutionEntry {
 	const m = msg as AnyRecord;
 	return {
 		kind: "bash_execution",
@@ -161,7 +161,7 @@ function projectBashExecution(msg: unknown, entry: SessionMessageEntry): BashExe
 	};
 }
 
-function projectCompaction(entry: PiCompactionEntry): Entry {
+function toCompactionEntry(entry: PiCompactionEntry): Entry {
 	return {
 		kind: "compaction",
 		id: entry.id,
@@ -175,7 +175,7 @@ function projectCompaction(entry: PiCompactionEntry): Entry {
 	};
 }
 
-function projectBranchSummary(entry: PiBranchSummaryEntry): Entry {
+function toBranchSummaryEntry(entry: PiBranchSummaryEntry): Entry {
 	return {
 		kind: "branch_summary",
 		id: entry.id,
@@ -188,7 +188,7 @@ function projectBranchSummary(entry: PiBranchSummaryEntry): Entry {
 	};
 }
 
-function projectModelChange(entry: {
+function toModelChangeEntry(entry: {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
@@ -205,7 +205,7 @@ function projectModelChange(entry: {
 	};
 }
 
-function projectThinkingLevelChange(entry: {
+function toThinkingLevelChangeEntry(entry: {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
@@ -220,7 +220,7 @@ function projectThinkingLevelChange(entry: {
 	};
 }
 
-function projectLabel(entry: {
+function toLabelEntry(entry: {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
@@ -237,7 +237,7 @@ function projectLabel(entry: {
 	};
 }
 
-function projectSessionInfo(entry: PiSessionInfoEntry): Entry {
+function toSessionInfoEntry(entry: PiSessionInfoEntry): Entry {
 	return {
 		kind: "session_info",
 		id: entry.id,
@@ -247,7 +247,7 @@ function projectSessionInfo(entry: PiSessionInfoEntry): Entry {
 	};
 }
 
-function projectCustom(entry: PiCustomEntry): Entry {
+function toCustomEntry(entry: PiCustomEntry): Entry {
 	return {
 		kind: "custom",
 		id: entry.id,
@@ -258,11 +258,11 @@ function projectCustom(entry: PiCustomEntry): Entry {
 	};
 }
 
-function projectCustomMessage(entry: PiCustomMessageEntry): Entry {
+function toCustomMessageEntry(entry: PiCustomMessageEntry): Entry {
 	const msgContent: Content[] =
 		typeof entry.content === "string"
 			? [{ type: "text", text: entry.content }]
-			: (entry.content as unknown[]).map(projectContent);
+			: (entry.content as unknown[]).map(toContent);
 	return {
 		kind: "custom_message",
 		id: entry.id,
@@ -275,34 +275,34 @@ function projectCustomMessage(entry: PiCustomMessageEntry): Entry {
 	};
 }
 
-export function projectEntry(entry: SessionEntry): Entry {
+export function toEntry(entry: SessionEntry): Entry {
 	if (entry.type === "message") {
 		const msg = entry.message;
 		if (msg.role === "toolResult") {
-			return projectToolResult(msg, entry);
+			return toToolResultEntry(msg, entry);
 		}
 		if ((msg as { role?: string }).role === "bashExecution") {
-			return projectBashExecution(msg, entry);
+			return toBashExecutionEntry(msg, entry);
 		}
-		return projectMessage(entry);
+		return toMessageEntry(entry);
 	}
 	switch (entry.type) {
 		case "compaction":
-			return projectCompaction(entry);
+			return toCompactionEntry(entry);
 		case "branch_summary":
-			return projectBranchSummary(entry);
+			return toBranchSummaryEntry(entry);
 		case "model_change":
-			return projectModelChange(entry);
+			return toModelChangeEntry(entry);
 		case "thinking_level_change":
-			return projectThinkingLevelChange(entry);
+			return toThinkingLevelChangeEntry(entry);
 		case "label":
-			return projectLabel(entry);
+			return toLabelEntry(entry);
 		case "session_info":
-			return projectSessionInfo(entry);
+			return toSessionInfoEntry(entry);
 		case "custom":
-			return projectCustom(entry);
+			return toCustomEntry(entry);
 		case "custom_message":
-			return projectCustomMessage(entry);
+			return toCustomMessageEntry(entry);
 		default: {
 			const e = entry as unknown as { id: string; parentId: string | null; timestamp: string; type: string };
 			return {
@@ -489,7 +489,7 @@ function deriveStats(entries: Record<string, Entry>, leafId: string | null): Sta
 export function initFromEntries(entries: SessionEntry[]): Document {
 	const entryMap: Record<string, Entry> = {};
 	for (let i = 0; i < entries.length; i++) {
-		const projected = projectEntry(entries[i]);
+		const projected = toEntry(entries[i]);
 		// ADR 09: bootstrapped entries get their file position immediately.
 		projected.ord = i;
 		entryMap[entries[i].id] = projected;
@@ -700,10 +700,10 @@ function parsePath(path: string): string[] {
 }
 
 // ============================================================================
-// projectSnapshot — strip lazy fields for the wire (Init message)
+// snapshotForWire — strip lazy fields for the wire (Init message)
 // ============================================================================
 
-export function projectSnapshot(doc: Document): Document {
+export function snapshotForWire(doc: Document): Document {
 	const entries: Record<string, Entry> = {};
 	for (const [id, entry] of Object.entries(doc.entries)) {
 		entries[id] = stripLazyFields(entry);
@@ -1125,7 +1125,7 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 			const prefix = `/entries/${id}`;
 			if (event.result?.content !== undefined) {
 				const content = Array.isArray(event.result.content)
-					? (event.result.content as unknown[]).map(projectContent)
+					? (event.result.content as unknown[]).map(toContent)
 					: jsonValue(event.result.content);
 				ops.push({ op: "replace", path: `${prefix}/content`, value: content as JsonValue });
 			}
@@ -1149,7 +1149,7 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 			break;
 
 		case "entry_appended": {
-			const entry = projectEntry(event.entry);
+			const entry = toEntry(event.entry);
 			ops.push({ op: "add", path: `/entries/${entry.id}`, value: entry as unknown as JsonValue });
 			ops.push({ op: "replace", path: "/status/leafId", value: entry.id });
 			break;
@@ -1223,15 +1223,15 @@ export function reconcile(doc: Document, piEntries: SessionEntry[], options?: Re
 			// lazy fields. Streaming skeletons start null and the filling events
 			// are conditional (absent tool details, abort before *_end), so the
 			// seal backfills any still-null lazy field from the durable pi
-			// entry — projectEntry normalizes genuinely-absent values.
+			// entry — toEntry normalizes genuinely-absent values.
 			ops.push(...backfillLazyFields(doc.entries[provisional.id], piEntry));
 			// ADR 09: the sealed entry becomes cacheable — it now has ord.
 			ops.push({ op: "add", path: `/entries/${piEntry.id}/ord`, value: i });
 		} else {
 			// ADR 09 invariant 2: the canonical document holds real values.
 			// Lazy stripping happens only at the wire boundary
-			// (projectSnapshot + filterPatchForSocket).
-			const projected = projectEntry(piEntry);
+			// (snapshotForWire + filterPatchForSocket).
+			const projected = toEntry(piEntry);
 			projected.ord = i;
 			ops.push({ op: "add", path: `/entries/${piEntry.id}`, value: projected as unknown as JsonValue });
 		}
@@ -1272,7 +1272,7 @@ export function reconcile(doc: Document, piEntries: SessionEntry[], options?: Re
 	// provisional entries not yet committed.
 	const effectiveEntries: Record<string, Entry> = {};
 	for (const pe of piEntries) {
-		effectiveEntries[pe.id] = doc.entries[pe.id] ?? projectEntry(pe);
+		effectiveEntries[pe.id] = doc.entries[pe.id] ?? toEntry(pe);
 	}
 	for (const [id, entry] of Object.entries(doc.entries)) {
 		if (id.startsWith("pending:")) {
@@ -1296,7 +1296,7 @@ export function reconcile(doc: Document, piEntries: SessionEntry[], options?: Re
  * (defensive) skip the block rather than guess.
  */
 function backfillLazyFields(prov: Entry, piEntry: SessionEntry): PatchOp[] {
-	const durable = projectEntry(piEntry);
+	const durable = toEntry(piEntry);
 	const prefix = `/entries/${piEntry.id}`;
 	const ops: PatchOp[] = [];
 
@@ -1408,7 +1408,7 @@ function userMessageSkeleton(id: string, parentId: string | null, msg: AnyRecord
 		content:
 			typeof msg.content === "string"
 				? [{ type: "text", text: msg.content }]
-				: (msg.content as unknown[]).map(projectContent),
+				: (msg.content as unknown[]).map(toContent),
 	} as unknown as JsonValue;
 }
 

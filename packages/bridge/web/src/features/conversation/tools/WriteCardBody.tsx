@@ -1,4 +1,4 @@
-// WriteCardBody — written-content card. The band header carries the
+// WriteCardBody — written-content card. The tinted row header carries the
 // path; the body is the content on the white inset panel, with the tool's
 // confirmation line ("Successfully wrote N bytes to ...") under it on
 // success. .md content renders as prose when the markdown toggle is on
@@ -8,7 +8,7 @@ import { memo } from "react";
 import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 
 // Render as soon as either `path` or `content` is streaming in. The LLM may

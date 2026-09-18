@@ -38,7 +38,7 @@ Developers using pi who want to:
    secondary > muted) clears WCAG AA 4.5:1 on both the page and the
    warmer sidebar surface.
 
-3. **Non-text actions are folded by default.** Tool calls and thinking
+3. **Non-text actions are collapsed by default.** Tool calls and thinking
    blocks collapse into an action group. Text always renders inline at
    its natural position in the content order.
 
@@ -249,7 +249,7 @@ Shows user-message branches with lane-based layout and draft collapse:
 ```
 
  ● on-path (tinted)  ○ off-path  ◀ current leaf
-↕ lane per fork; active path = straight spine
+↕ lane per fork; active path = straight line
 [+N] = N consecutive aborted dead-end siblings collapsed into this keeper
 
 Click semantics are decoupled into **look** and **go**:
@@ -267,7 +267,7 @@ re-arms it.
 ### Conversation area
 
 Scrollable single column, top to bottom. User turns are full-width tinted
-bands (hairline top/bottom borders); assistant turns are flat — "you wrote
+tinted rows (hairline top/bottom borders); assistant turns are flat — "you wrote
 this" vs "the model wrote this." Both share horizontal padding so headers
 and text align. Markdown throughout (syntax highlighting, GFM tables,
 per-code-block copy buttons). System entries (compaction, branch summary,
@@ -275,7 +275,7 @@ model change) render as compact centered dividers.
 
 ```
   14:32 You · thought 3s        ⧉  ◀ 1/2 ▶  ✎   ← header: ts · role · timing | toolbar (hover)
-  Fix the buffer overflow in src/main.      ← user turn (tinted band)
+  Fix the buffer overflow in src/main.      ← user turn (tinted row)
 
   14:33 openrouter/glm-5.2 · working 4s · 2 running   ⧉   ← assistant (streaming)
   The buffer overflow is in `process`...
@@ -323,12 +323,12 @@ model change) render as compact centered dividers.
 Assistant messages interleave text with non-text actions (thinking
 blocks and tool calls). Text always renders inline. Consecutive
 non-text actions form an **action group** — a neutral collapsible strip
-that, when expanded, reveals a vertical list of **steps**, one per action.
+that, when expanded, reveals a vertical list of **actions**.
 
-A step is a full-width tinted region whose **hue marks its color family**.
-Four families, three tiers:
+An action is a full-width tinted region whose **hue marks its color group**.
+Four hues, three tiers:
 
-| Family | Kinds | Tier | Hue |
+| Hue | Kinds | Tier | Color |
 |---|---|---|---|
 | mutate | edit, write | stand-out | rose |
 | bash | bash | stand-out | amber |
@@ -336,39 +336,39 @@ Four families, three tiers:
 | read | read | dimmed | gray |
 
 edit + write share the mutate hue (file mutation); the label and details
-still distinguish them, only the band hue merges. The family color's
-saturation/value carries the tier — one tint strength for all bands.
-The tint is the visual landmark separating "backstage" actions from
+still distinguish them, only the tinted row hue merges. The hue's
+saturation/value carries the tier — one tint strength for all tinted rows.
+The tint is the visual landmark separating actions from
 the prose — the eye skips the whole tool zone as terrain, not as a
-list of items. Every band carries a **3px left strip** in its family
+list of items. Every tinted row carries a **3px left strip** in its hue
 color (no exceptions — the read strip is dimmed but present, so the
-band anatomy is uniform). The per-action **status dot is retired**: the
+tinted row anatomy is uniform). The per-action **status dot is retired**: the
 agent self-corrects, and the turn-header timing already signals
 in-flight work — status is not surfaced as color.
 
-Each step folds between an **ActionSummary** (the one-line `kind: detail`
+Each action collapses between an **ActionSummary** (the one-line `kind: detail`
 label — path basename, command, etc.) and **ActionDetails** (the expanded
-content). A single-step group renders the same header as a multi-step
-group — one dot and the step's own summary — so a lone action rests in
-the same collapsed dot-row state as a folded group. Opening it
-auto-expands the lone step's details so the band shows without a second
+content). A single-action group renders the same header as a multi-action
+group — one dot and the action's own summary — so a lone action rests in
+the same collapsed dot-row state as a collapsed group. Opening it
+auto-expands the lone action's details so the tinted row shows without a second
 click.
 
-Fold affordances — three gestures in three places:
+Collapse affordances — three gestures in three places:
 
 - **Group header**: `▸`/`▾` at the start, then a **left-edge dot legend**
-  (one dot per family present, always visible), then the summary. Folds
-  the whole group. Dots use the same family tokens as the band
-  strips/tints — one vocabulary across group and step.
-- **Step header**: `▸`/`▾` at the start of the tinted row. Folds the
-  step's details.
+  (one dot per hue present, always visible), then the summary. Collapses
+  the whole group. Dots use the same hue tokens as the tinted row
+  strips/tints — one vocabulary across group and action.
+- **Action header**: `▸`/`▾` at the start of the tinted row. Collapses the
+  action's details.
 - **Long details**: a `▾ show all` chip at the **header right**
   (sub-expansion) for details clipped by the 300px cap — distinct from
-  the step fold.
+  the action collapse.
 
 The group label categorizes actions by tool type, sorted by precedence
 (edit > write > bash > read > think — the dot legend collapses
-edit+write to one mutate dot, so the family order is mutate > bash >
+edit+write to one mutate dot, so the hue order is mutate > bash >
 read > think), deduped and truncated:
 
   edit: main.ts, buffer.ts, +1 more · write: notes.md · bash: npm install · read 3 files · think
@@ -394,10 +394,10 @@ Entry A: [think, read]   Entry B: [text, bash]
 
 ### Action details
 
-Each expanded step wraps a **white inset panel** — code/diff/output sit
-on an opaque `--color-background` surface inside the tinted step, so
+Each expanded action wraps a **white inset panel** — code/diff/output sit
+on an opaque `--color-background` surface inside the tinted action, so
 syntax colors keep their neutral backdrop regardless of the surrounding
-hue. There is **no annotation line** — the step header (`edit: main.ts`)
+hue. There is **no annotation line** — the action header (`edit: main.ts`)
 is the sole identifier; the details are just its content.
 
 | Kind | Body |
@@ -410,11 +410,11 @@ is the sole identifier; the details are just its content.
 | other | Fallback: argument key-value rows, thin divider, highlighted raw output. |
 
 **Thinking** is prose, not an operation, so it is the exception: its body
-flows inline on the (lighter) step tint — no white panel. Single-line
-thinking is static (nothing to expand); multi-line folds to a first-line
+flows inline on the (lighter) action tint — no white panel. Single-line
+thinking is static (nothing to expand); multi-line collapses to a first-line
 preview with a ▸/▾ triangle.
 
-Expanded step details are capped at 300px; the header-right ▾ show all
+Expanded action details are capped at 300px; the header-right ▾ show all
 chip removes the cap. Streaming content renders as it arrives — bodies
 are not gated on the "annotation" argument (path/command), so a `write`
 whose `content` streams before its `path` shows the content live.
@@ -613,7 +613,7 @@ plus a switch layer:
 dividers are skipped), `g`/`G` jump to first/last. The focused turn
 top-anchors below the fixed TopBar (instant snap — no smooth lag under rapid
 presses) and carries a 2px accent frame (chrome, not a fill, so the
-user/assistant band distinction stays legible).
+user/assistant tinted row distinction stays legible).
 - **Branch (horizontal):** `h`/`l` walk the sibling pager on a focused user
 turn with siblings — the same affordance as the inline `◀ X/Y ▶`, repointing
 focus across the async navigate so consecutive switches keep their place.
@@ -725,17 +725,17 @@ content. The composer's status dot is the persistent connection indicator.
 Content-bearing fields — thinking text, tool arguments, tool results —
 are lazy on the wire: neither the init snapshot nor the patch stream
 carries them. The UI fetches them via `PullRequest`, driven by a single
-visibility → wants mapping computed from the view:
+visibility → pending-pull mapping computed from the view:
 
-- **Summary visible** (step rendered) → pull the step's
+- **Summary visible** (action rendered) → pull the action's
   `arguments`.
-- **Step expanded** → pull its details fields (thinking text,
+- **Action expanded** → pull its details fields (thinking text,
   arguments, tool result content).
 - **In-flight thinking block** → pull its thinking field; on an
   in-flight entry the pull also subscribes the connection to live
   deltas, so subsequent content streams without re-pulling.
 
-Wants are deduplicated against fields already populated in the client
+Pending pulls are deduplicated against fields already populated in the client
 mirror (`needsPull`) and fetched in one loop. Pulled content is cached
 in the mirror; re-rendering never re-fetches.
 
@@ -784,11 +784,11 @@ The chat-style UX described in this doc is implemented in `web/` — a React
 + Vite client wired to the `BridgeClient` + `DocumentMirror` stack over the
 dual-channel WebSocket (push `replace`/`patch`/`sessions_changed`/`instance_exit` + RPC call/reply). The
 conversation area (turns, action groups with cross-entry merging, tinted
-kind steps with white inset details panels, inline thinking), the floating composer (collapsed/expanded, streaming overlay, edit-to-fork,
+kind actions with white inset details panels, inline thinking), the floating composer (collapsed/expanded, streaming overlay, edit-to-fork,
 path tab-completion, model picker portal, cost-breakdown popover,
 pinned-model dedup, mid-stream model switching, Claude-style bar chrome
 with responsive layered elevation),
-read-tracked lazy pull (wants-outbox), freeze-on-interaction, auto-scroll, tab-title
+read-tracked lazy pull (pull queue), freeze-on-interaction, auto-scroll, tab-title
 activity, streamdown+Shiki markdown, and turn-header timing (thought-for /
 worked-for / tool split, with a live ticking total on the in-flight turn)
 are all wired. History pane (docked right rail + drawer), draft collapse/persistence, and the Launcher
