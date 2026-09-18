@@ -7,8 +7,8 @@
 // `(projectId, stem)`).
 // ============================================================================
 
-import type { ListSessionsReply, RpcReply, SessionInfo, SessionListCursor } from "../../../src/core/index.ts";
-import { rememberAddress } from "./addressIndex.ts";
+import type { ListSessionsReply, RpcReply, SessionInfo, SessionListCursor } from "../../../../src/core/index.ts";
+import { rememberAddress } from "../persist/addressIndex.ts";
 
 /** First page size for a Project's history. */
 export const SESSION_PAGE_SIZE = 10;

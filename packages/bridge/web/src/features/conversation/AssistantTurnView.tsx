@@ -12,7 +12,7 @@ import {
 	type ParsedProviderError,
 	segmentBlocks,
 } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
 import { formatDuration, formatTimestamp } from "./format.ts";
