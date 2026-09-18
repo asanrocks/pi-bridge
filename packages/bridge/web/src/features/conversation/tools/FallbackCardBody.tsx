@@ -5,7 +5,7 @@ import { memo } from "react";
 import { useStore } from "../../../infra/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import { type ActionDetailsProps, formatArgValue } from "./args.ts";
 
 export const FallbackCardBody = memo(function FallbackCardBody({ args, resultText, resultImages }: ActionDetailsProps) {

@@ -14,7 +14,7 @@ import { useStore } from "../../infra/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import styles from "./conversation.module.css";
+import styles from "./turns.module.css";
 
 export const TextBlockView = memo(function TextBlockView({
 	entryId,

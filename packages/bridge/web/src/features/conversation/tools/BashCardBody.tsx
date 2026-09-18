@@ -10,7 +10,7 @@
 
 import { memo, useCallback, useMemo } from "react";
 import { useStore } from "../../../infra/store.tsx";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import type { ActionDetailsProps } from "./args.ts";
 import { TruncationNotice } from "./CardSkeleton.tsx";
 import { BASH_TAIL_LINES, bashTailPreview, parseBashResult } from "./resultText.ts";
