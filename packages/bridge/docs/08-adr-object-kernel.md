@@ -47,7 +47,7 @@ methods and subscriptions of its own.
 │ Instance   │ │ Instance   │ │ Client     │  ... peer objects
 │ obj #2     │ │ obj #7     │ │ obj #5     │  (own state, own
 │ pi runtime │ │            │ │ mirror +   │   subscriptions)
-│ journal    │ │            │ │ wants      │
+│ journal    │ │            │ │ pulls      │
 └────────────┘ └────────────┘ └────────────┘
        ▲              ▲              ▲
        └──────────────┴──────┬───────┘
@@ -114,7 +114,7 @@ restated).
 | Kind | Hosted by | Owns |
 |---|---|---|
 | Instance object | daemon process | pi runtime, canonical Document, entry journal, method table, subscriptions (keyed by client id) |
-| Client object | client side (peer over WS) | DocumentMirror, cache, wants/pull orchestration |
+| Client object | client side (peer over WS) | DocumentMirror, cache, pull orchestration |
 | Meta objects (directory, lifecycle, debug) | daemon process | registry state, `newInstance`/`killInstance` implementation, introspection |
 
 `newInstance`/`killInstance` are ordinary methods on a lifecycle meta object
@@ -138,7 +138,7 @@ instance #n ── method table: onUserMessage, setModel, setThinkingLevel,
              ── facets: log / state / transient
              ── subscriptions: Map<clientId, {facet, projection, lazy paths}>
 
-client #m (client process) ── mirror + cache + wants-outbox + cursors
+client #m (client process) ── mirror + cache + pull queue + cursors
 ```
 
 Client objects are not daemon-hosted — the kernel holds only their delivery
@@ -161,7 +161,7 @@ endpoint (the socket); the object itself lives in the client process.
   `pull` becomes an instance method whose subscription side effect is
   internal to the instance. GC follows v1 semantics: when a provisional
   entry commits, path filtering drops ops on the dead id; dead-client
-  entries are inert until dispose. The client object owns the wants-outbox
+  entries are inert until dispose. The client object owns the pull queue
   and the cursor cache; the kernel remembers nothing per subscription.
 
 ### Per-facet sync (duty moves into the objects)

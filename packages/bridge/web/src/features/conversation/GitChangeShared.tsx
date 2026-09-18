@@ -1,20 +1,20 @@
 // GitChangeShared — the git change card shared by both ADR 10 v2 placements:
-// the in-group mark (inside the action group's spine, after the step it
+// the inline git stamp (inside the action group's vertical line, after the action it
 // follows) and the standalone boundary card. Same skeleton as the tool cards
-// (read tool / user bash): a tinted .actionStep band in the git family hue,
-// a .stepFold row whose summary is the commit subject with the branch +
-// short hash docked right, and an expanded .detailsCard whose .cardIdentity
+// (read tool / user bash): a tinted .action tinted row in the git hue,
+// a .actionCollapsed row whose summary is the commit subject with the branch +
+// short hash docked right, and an expanded .detailsCard whose .cardHeader
 // restores the full truth (full hash, anchor, timestamp) above the
 // on-demand `git show --stat` content region.
 
 import { memo } from "react";
 import type { GitIdentity, GitStampAnchor } from "../../../../src/core/index.ts";
-import styles from "./actionSteps.module.css";
+import styles from "./actions.module.css";
 import turnStyles from "./turns.module.css";
 import type { GitShowState } from "./useGitShow.ts";
 import { useGitShow } from "./useGitShow.ts";
 
-/** The fields both stamp renderings (GitChangeTurn, GitChangeMark) share. */
+/** The fields both stamp renderings (GitChangeTurn, InlineGitStamp) share. */
 export interface GitChangeFields {
 	entryId: string;
 	timestamp: string;
@@ -40,20 +40,20 @@ export function formatGitMeta(identity: GitIdentity): string {
 	return hash ?? "";
 }
 
-/** The band. A foldable .actionStep when the change has a resolvable
+/** The tinted row. A collapsible .action when the change has a resolvable
  * commit (expansion fetches `git show --stat`), a static head otherwise
  * (unborn/unknown identities carry nothing to fetch). */
-export const GitChangeBand = memo(function GitChangeBand({ change }: { change: GitChangeFields }) {
+export const GitChangeRow = memo(function GitChangeRow({ change }: { change: GitChangeFields }) {
 	const { commit, branch } = change.identity;
 	const expandable = commit !== null;
 	const { expanded, toggle, state } = useGitShow(expandable ? commit : null);
-	// Folded primary text: the subject; fall back for subject-less stamps
+	// Collapsed primary text: the subject; fall back for subject-less stamps
 	// (v1) to the branch, or "git state" for a bare initial recording.
 	const summary = change.commitSubject ?? branch ?? "git state";
 	const meta = formatGitMeta(change.identity);
-	// Identity line — the full truth the band abbreviates (full hash, anchor,
-	// timestamp), the same role the read tool's identity line plays.
-	const identityLine = [
+	// Header line — the full truth the tinted row abbreviates (full hash, anchor,
+	// timestamp), the same role the read tool's header line plays.
+	const headerLine = [
 		change.isInitial ? "initial git state" : "git state observed",
 		ANCHOR_LABEL[change.anchor],
 		commit ?? "no commit",
@@ -62,35 +62,35 @@ export const GitChangeBand = memo(function GitChangeBand({ change }: { change: G
 		.filter(Boolean)
 		.join(" · ");
 
-	const metaSpan = meta ? <span className={turnStyles.gitStepMeta}>{meta}</span> : null;
+	const metaSpan = meta ? <span className={turnStyles.gitActionMeta}>{meta}</span> : null;
 
 	return (
-		<div className={styles.actionStep} data-kind="git" data-turn-key={change.entryId} data-entry-id={change.entryId}>
-			<div className={expandable ? styles.stepHead : `${styles.stepHead} ${styles.stepHeadStatic}`}>
+		<div className={styles.action} data-kind="git" data-turn-key={change.entryId} data-entry-id={change.entryId}>
+			<div className={expandable ? styles.actionHead : `${styles.actionHead} ${styles.actionHeadStatic}`}>
 				{expandable ? (
 					<button
 						type="button"
-						className={styles.stepFold}
+						className={styles.actionCollapsed}
 						onClick={toggle}
 						aria-expanded={expanded}
 						aria-label={`${expanded ? "Collapse" : "Expand"} git change: ${summary}`}
-						title={identityLine}
+						title={headerLine}
 					>
-						<span className={styles.foldTri}>{expanded ? "\u25BE" : "\u25B8"}</span>
-						<span className={styles.stepSummary}>{summary}</span>
+						<span className={styles.collapseTri}>{expanded ? "\u25BE" : "\u25B8"}</span>
+						<span className={styles.actionSummary}>{summary}</span>
 						{metaSpan}
 					</button>
 				) : (
-					<span className={styles.stepFold} title={identityLine}>
-						<span className={styles.foldTri} />
-						<span className={styles.stepSummary}>{summary}</span>
+					<span className={styles.actionCollapsed} title={headerLine}>
+						<span className={styles.collapseTri} />
+						<span className={styles.actionSummary}>{summary}</span>
 						{metaSpan}
 					</span>
 				)}
 			</div>
 			{expanded && (
 				<div className={styles.detailsCard}>
-					<div className={styles.cardIdentity}>{identityLine}</div>
+					<div className={styles.cardHeader}>{headerLine}</div>
 					<GitShowBody state={state} />
 				</div>
 			)}
@@ -103,15 +103,15 @@ export const GitChangeBand = memo(function GitChangeBand({ change }: { change: G
 export const GitShowBody = memo(function GitShowBody({ state }: { state: GitShowState }) {
 	if (state.status === "loading") {
 		return (
-			<div className={styles.stepDetailsWrap}>
-				<div className={`${styles.stepDetails} ${turnStyles.gitShowNote}`}>Loading…</div>
+			<div className={styles.actionDetailsWrap}>
+				<div className={`${styles.actionDetails} ${turnStyles.gitShowNote}`}>Loading…</div>
 			</div>
 		);
 	}
 	if (state.status === "error") {
 		return (
-			<div className={styles.stepDetailsWrap}>
-				<div className={`${styles.stepDetails} ${turnStyles.gitShowNote}`}>
+			<div className={styles.actionDetailsWrap}>
+				<div className={`${styles.actionDetails} ${turnStyles.gitShowNote}`}>
 					Commit not available — it may no longer be reachable from the current repository.
 				</div>
 			</div>
@@ -119,8 +119,8 @@ export const GitShowBody = memo(function GitShowBody({ state }: { state: GitShow
 	}
 	if (state.status === "ok") {
 		return (
-			<div className={styles.stepDetailsWrap}>
-				<div className={styles.stepDetails}>
+			<div className={styles.actionDetailsWrap}>
+				<div className={styles.actionDetails}>
 					<pre className={styles.cardOutput}>{state.output}</pre>
 					{state.truncated && <div className={turnStyles.gitShowNote}>Output truncated.</div>}
 				</div>

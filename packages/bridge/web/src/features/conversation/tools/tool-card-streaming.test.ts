@@ -21,7 +21,7 @@ import type { ComponentType } from "react";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
-import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
+import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import type { ActionDetailsProps } from "./args.ts";
 
 // Stub CodeSnippet: isolates the gate logic and avoids loading shiki/streamdown
@@ -37,7 +37,7 @@ vi.mock("../../../render/markdown.tsx", () => ({
 	Markdown: ({ text }: { text: string }) => createElement("div", { "data-md-stub": "" }, text),
 }));
 
-// Stub the Shiki singleton for BashIdentity (same reason as CodeSnippet —
+// Stub the Shiki singleton for BashHeader (same reason as CodeSnippet —
 // keep the node test env free of the highlighter bundle). SSR runs no
 // effects, so the stub is never even awaited.
 vi.mock("../../../render/shiki.ts", () => ({
@@ -49,14 +49,14 @@ const { EditCardBody } = await import("./EditCardBody.tsx");
 const { ReadCardBody } = await import("./ReadCardBody.tsx");
 const { BashCardBody } = await import("./BashCardBody.tsx");
 const { FallbackCardBody } = await import("./FallbackCardBody.tsx");
-const { CardStatusLine, CardIdentity, CardError, CardControls } = await import("./CardSkeleton.tsx");
-const { BashIdentity } = await import("./BashIdentity.tsx");
+const { CardStatusLine, CardHeader, CardError, CardControls } = await import("./CardSkeleton.tsx");
+const { BashHeader } = await import("./BashHeader.tsx");
 const { SearchResultBody } = await import("./SearchResultBody.tsx");
 const { UserBashView } = await import("../UserBashView.tsx");
 
-// Card bodies only read `step` opportunistically (FallbackCardBody); the
+// Card bodies only read `action` opportunistically (FallbackCardBody); the
 // per-tool bodies under test ignore it. A bare cast satisfies the prop type.
-const step = {} as ToolActionStepVM;
+const action = {} as ToolActionVM;
 
 function render(
 	Body: ComponentType<ActionDetailsProps>,
@@ -64,12 +64,12 @@ function render(
 	resultText: string | null = null,
 	resultImages: ActionDetailsProps["resultImages"] = [],
 ): string {
-	return renderToStaticMarkup(createElement(Body, { step, args, resultText, resultImages }));
+	return renderToStaticMarkup(createElement(Body, { action, args, resultText, resultImages }));
 }
 
 // The command moved out of the bash body: it renders in the skeleton's
-// identity line (full command, all lines), so mid-stream command visibility
-// is covered by the makeActionIdentity tests in test/suite/viewmodel-unit.
+// header line (full command, all lines), so mid-stream command visibility
+// is covered by the makeActionHeader tests in test/suite/viewmodel-unit.
 // The body is output-only.
 describe("tool card streaming — content visible before annotation key", () => {
 	test("WriteCardBody renders streaming content before path arrives", () => {
@@ -81,7 +81,7 @@ describe("tool card streaming — content visible before annotation key", () => 
 	});
 
 	test("WriteCardBody keeps content once path arrives", () => {
-		// The path identifier now lives in the step header (ToolActionStepView),
+		// The path identifier now lives in the action header (ToolActionView),
 		// not the details body — the body renders content only.
 		const html = render(WriteCardBody, { content: "Spring", path: "essay.txt" });
 		expect(html).toContain("Spring");
@@ -110,7 +110,7 @@ describe("tool card streaming — content visible before annotation key", () => 
 	});
 
 	test("BashCardBody strips the status line into nothing and keeps the output", () => {
-		// The status line renders as a top-bar chip (ToolActionStepView);
+		// The status line renders as a top-bar chip (ToolActionView);
 		// the body shows the bare output.
 		const html = render(BashCardBody, { command: "false" }, "boom\n\nCommand exited with code 1");
 		expect(html).toContain("boom");
@@ -211,7 +211,7 @@ describe("tool card streaming — mid-stream frames", () => {
 		for (const { content, path } of frames) {
 			const html = render(WriteCardBody, { content, path });
 			expect(html).toContain(content);
-			// Path is in the band header, not the body — never present here.
+			// Path is in the tinted row header, not the body — never present here.
 			if (path !== undefined) expect(html).not.toContain(path);
 		}
 	});
@@ -220,7 +220,7 @@ describe("tool card streaming — mid-stream frames", () => {
 // Card skeleton — the status line is presentational (props only), so the
 // reload/timing rules test under SSR without a store. Light renders once
 // execution has started (running/done/error), but the duration text
-// renders only when the run was live-witnessed (a start stamp exists). A
+// renders only when the turn was live-witnessed (a start stamp exists). A
 // reloaded/resumed run has status done/error on the wire but no start
 // stamp (exec-start isn't on the wire), so it renders the light without a
 // "Took" duration. The timeout is a call argument (knowable on reload)
@@ -269,7 +269,7 @@ describe("card skeleton status line", () => {
 		expect(html).toContain("Took 1.5s");
 	});
 
-	test("pending run renders no status line", () => {
+	test("pending turn renders no status line", () => {
 		const html = renderStatus("pending", null);
 		expect(html).toBe("");
 	});
@@ -369,7 +369,7 @@ describe("edit argument tolerance", () => {
 });
 
 // User bash card — a user-initiated shell run rendered standalone (not a
-// tool step). Presentational via the turn object; SSR covers the band,
+// tool action). Presentational via the turn object; SSR covers the tinted row,
 // status chips, and output.
 describe("user bash view", () => {
 	function renderUserBash(turn: Record<string, unknown>): string {
@@ -454,15 +454,15 @@ describe("user bash view", () => {
 });
 
 // Search-tool result body — grep/find/ls render their result text as
-// output lines (the identity line carries the call; the old args-only grid
+// output lines (the header line carries the call; the old args-only grid
 // is gone). Truncation warnings come from the tool_result details object
 // (pure logic pinned in resultText.test.ts).
 describe("search result body", () => {
 	test("renders match lines", () => {
-		const step = { toolName: "grep" } as ToolActionStepVM;
+		const action = { toolName: "grep" } as ToolActionVM;
 		const html = renderToStaticMarkup(
 			createElement(SearchResultBody, {
-				step,
+				action,
 				args: { pattern: "TODO", path: "src" },
 				resultText: "src/a.ts:12:TODO fix\nsrc/b.ts:30:TODO refactor",
 				resultImages: [],
@@ -473,9 +473,9 @@ describe("search result body", () => {
 	});
 
 	test("renders nothing before the result streams", () => {
-		const step = { toolName: "grep" } as ToolActionStepVM;
+		const action = { toolName: "grep" } as ToolActionVM;
 		const html = renderToStaticMarkup(
-			createElement(SearchResultBody, { step, args: { pattern: "TODO" }, resultText: null, resultImages: [] }),
+			createElement(SearchResultBody, { action, args: { pattern: "TODO" }, resultText: null, resultImages: [] }),
 		);
 		expect(html).toBe("");
 	});
@@ -501,22 +501,22 @@ describe("markdown toggle hand-off", () => {
 	});
 });
 
-// Identity line and error strip — presentational, props-only.
-describe("card skeleton identity and error zones", () => {
-	test("identity renders the full-form identifier", () => {
-		const html = renderToStaticMarkup(createElement(CardIdentity, { text: "src/viewmodel/index.ts:12-80" }));
+// Header line and error strip — presentational, props-only.
+describe("card skeleton header and error zones", () => {
+	test("header renders the full-form identifier", () => {
+		const html = renderToStaticMarkup(createElement(CardHeader, { text: "src/viewmodel/index.ts:12-80" }));
 		expect(html).toContain("src/viewmodel/index.ts:12-80");
 	});
 
-	test("bash identity renders the raw command until tokens arrive (SSR fallback)", () => {
-		// SSR runs no effects, so BashIdentity renders its raw-string path —
-		// the same display as the pre-highlighting identity line.
-		const html = renderToStaticMarkup(createElement(BashIdentity, { command: "npm run check 2>&1", lang: "bash" }));
+	test("bash header renders the raw command until tokens arrive (SSR fallback)", () => {
+		// SSR runs no effects, so BashHeader renders its raw-string path —
+		// the same display as the pre-highlighting header line.
+		const html = renderToStaticMarkup(createElement(BashHeader, { command: "npm run check 2>&1", lang: "bash" }));
 		expect(html).toContain("npm run check 2&gt;&amp;1");
 	});
 
-	test("identity renders nothing without text", () => {
-		expect(renderToStaticMarkup(createElement(CardIdentity, { text: null }))).toBe("");
+	test("header renders nothing without text", () => {
+		expect(renderToStaticMarkup(createElement(CardHeader, { text: null }))).toBe("");
 	});
 
 	test("error strip renders the tool error text", () => {

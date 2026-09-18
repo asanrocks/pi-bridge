@@ -135,12 +135,12 @@ export function bashStatusChip(status: BashStatus): StatusChip {
 }
 
 // ---------------------------------------------------------------------------
-// Collapsed-band preview
+// Collapsed-row preview
 // ---------------------------------------------------------------------------
 
 /**
  * Bash expanded-tail bound — the middle state of the bash card's
- * three-state progression (folded: one-line command; expanded: earlier-lines
+ * three-state progression (collapsed: one-line command; expanded: earlier-lines
  * hint + this many tail lines; show-all: the whole output).
  */
 export const BASH_TAIL_LINES = 20;
@@ -159,7 +159,7 @@ export function headPreview(output: string, maxLines: number): { lines: string[]
 	return { lines: skipped > 0 ? lines.slice(0, maxLines) : lines, skipped };
 }
 
-/** First line of an error text, for the collapsed band's error preview. */
+/** First line of an error text, for the collapsed tinted row's error preview. */
 export function errorPreviewLine(text: string): string {
 	const line = text.split("\n")[0] ?? "";
 	return line.length > 200 ? `${line.slice(0, 197)}...` : line;

@@ -2,9 +2,9 @@ export type { CacheEntryRecord, EntryCacheStore, SessionStatusHint } from "./cac
 export {
 	cacheRecordsOfDocument,
 	computeCursor,
+	entryForCache,
 	InMemoryEntryCacheStore,
 	planCacheWrites,
-	projectCacheEntry,
 	seedDocument,
 	statusHintOfDocument,
 } from "./cache.ts";
@@ -20,10 +20,10 @@ export {
 	filterPatchForSocket,
 	getAtPath,
 	initFromEntries,
-	projectSnapshot,
 	reconcile,
 	resolveFieldPath,
 	setAtPath,
+	snapshotForWire,
 } from "./document.ts";
 export type { GitIdentity, GitStampAnchor, GitStampData, GitStampDataV1, GitStampDataV2 } from "./git-stamp.ts";
 export {
