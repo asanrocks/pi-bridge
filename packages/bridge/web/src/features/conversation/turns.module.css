@@ -1,10 +1,10 @@
 /* Turn-level chrome — everything at user/assistant/system turn granularity:
-   the header line (timestamp, role, timing, ADR 10 git chip), the tinted
-   user band vs the flat assistant turn, keyboard-focus and editing marks,
+   the header line (timestamp, role, timing, ADR 10 git chip), the user
+   tinted row vs the flat assistant turn, keyboard-focus and editing marks,
    the hover-revealed toolbar (Copy / variant pager / Edit), shared markdown
    and text-segment styles, error rendering, and the standalone turn
-   wrappers (git change cards, user bash runs). The action-step family
-   (bands, folds, details cards) lives in actionSteps.module.css. */
+   wrappers (git change cards, user bash runs). The action hue
+   (tinted rows, collapsed rows, details cards) lives in actions.module.css. */
 
 /* Turn header — top line per turn. Left: timestamp then role (You /
    provider/model for the assistant), always visible. Right: toolbar (Copy /
@@ -32,9 +32,9 @@
 
 /* Keyboard focus chrome (j/k/g/G). A 2px accent frame inside the turn's
    box — not a background fill. A full tint (the prior approach) drowned the
-   message in blue and was indistinguishable from the user band; a frame
+   message in blue and was indistinguishable from the user tinted row; a frame
    marks the selection without recoloring the content surface, so the
-   user-vs-assistant band distinction stays legible. box-shadow (not
+   user-vs-assistant tinted row distinction stays legible. box-shadow (not
    border) so it doesn't shift layout. */
 .userMsg.focused,
 .asstMsg.focused {
@@ -113,17 +113,17 @@
 	margin: 0 2px;
 }
 
-/* ADR 10 v2 — standalone (boundary) git change card wrapper: the band
-   between turns (the band anatomy itself is the shared actionStep family,
-   in actionSteps.module.css with the git family hue). */
+/* ADR 10 v2 — standalone (boundary) git change card wrapper: the tinted row
+   between turns (the tinted row anatomy itself is the shared action hue,
+   in actions.module.css with the git hue). */
 .gitChangeTurn {
 	margin: 4px 0;
 }
 
-/* Branch + short hash docked right in the fold row (the read tool's
+/* Branch + short hash docked right in the collapsed row (the read tool's
    summary abbreviates the path; here the identity abbreviates the same
    way). Muted mono machine tokens. */
-.gitStepMeta {
+.gitActionMeta {
 	flex-shrink: 0;
 	white-space: nowrap;
 	color: var(--color-muted-foreground);
@@ -137,7 +137,7 @@
 	color: var(--color-muted-foreground);
 }
 
-/* User turn — full-width tinted band (a distinct part of the document,
+/* User turn — full-width tinted row (a distinct part of the document,
    not a bubble). Hairline top/bottom borders separate it from the flat
    assistant turns. Header line + text use the same 16px padding the
    assistant uses, so the two align. */
@@ -267,7 +267,7 @@
 		border-color: var(--color-secondary);
 	}
 
-	/* On the tinted user band, a gray hover reads off-hue — blue-tinted. */
+	/* On the tinted user tinted row, a gray hover reads off-hue — blue-tinted. */
 	.userMsg .toolbarBtn:hover,
 	.userMsg .userMsgPager button:hover:not(:disabled) {
 		background: color-mix(in srgb, var(--color-user-border) 50%, transparent);
@@ -295,8 +295,8 @@
 	transition: opacity 0.15s ease;
 }
 
-/* Assistant message — flat (no band). Same 16px horizontal padding as the
-   user band so the two turns' headers and text share a left edge. */
+/* Assistant message — flat (no tinted row). Same 16px horizontal padding as the
+   user tinted row so the two turns' headers and text share a left edge. */
 .asstMsg {
 	padding: 10px 16px;
 }
@@ -374,7 +374,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
 	.streamingCursor {
-		animation: blink 0.8s step-end infinite;
+		animation: blink 0.8s action-end infinite;
 	}
 }
 
@@ -383,15 +383,15 @@
 	50% { opacity: 0; }
 }
 
-/* User bash turn — a standalone bash-band card for a user-initiated shell
+/* User bash turn — a standalone bash-tinted row card for a user-initiated shell
    run (see UserBashView). Same margins as the other turn wrappers; the
-   band itself is the shared .actionStep with the bash hue
-   (actionSteps.module.css). */
+   tinted row itself is the shared .action with the bash hue
+   (actions.module.css). */
 .userBashTurn {
 	margin: 8px 0;
 }
 
-/* `$` prompt at the start of the band header — mono, muted; marks the run
+/* `$` prompt at the start of the tinted row header — mono, muted; marks the run
    as the user's own (the agent's bash cards have no prompt glyph). */
 .userBashPrompt {
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

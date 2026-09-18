@@ -1,4 +1,4 @@
-// UserTurnView — full-width tinted band (a distinct part of the document,
+// UserTurnView — full-width tinted row (a distinct part of the document,
 // not a bubble). The first line is the turn header (timestamp then You,
 // left) with the hover-revealed toolbar (Copy / variant pager / Edit)
 // right-aligned on the same line. Top-anchoring keeps the toolbar stable

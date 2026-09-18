@@ -84,24 +84,24 @@ interface ClientStore {
   composerExpanded: boolean; // visual only; app keybinding drives "/" → expand
   focusedEntryId: string | null;
   expandedActionGroups: Set<string>; // "${firstEntryId}:${firstBlockIndex}"
-  expandedSteps: Set<string>;        // "${entryId}:b${blockIndex}"
+  expandedActions: Set<string>;        // "${entryId}:b${blockIndex}"
   uncappedDetails: Set<string>;
   frozenActionGroups: Set<string>;
-  frozenSteps: Set<string>;
+  frozenActions: Set<string>;
   loadingPaths: Set<string>;
-  pullTick: number; // bumped on pull ingest/failure → wants re-render (wants-outbox)
+  pullTick: number; // bumped on pull ingest/failure → re-render (pull queue)
   sessions: SessionInfo[]; sessionsHasMore: boolean;
   instances: InstanceInfo[]; cwdAllowlist: string[];
   models: ModelInfo[]; thinkingLevels: string[]; devMode: boolean;
   historyOpen: boolean; scrollToEntryId: string | null;
   notifications: Toast[];
   // actions: setConnectionState, syncInstances/clearInstance, append/replaceSessions,
-  // applyReplace, toggleActionGroup/toggleStep/toggleUncapDetails, setDraft*/blurDraft/clearDraft,
+  // applyReplace, toggleActionGroup/toggleAction/toggleUncapDetails, setDraft*/blurDraft/clearDraft,
   // setComposerExpanded, setFocusedEntryId, setLoadingPaths/bumpPullTick, migrateExpandKeys, toasts
 }
 ```
 
-`ConnectionState` is a discriminated union (TopBar chip + Launcher down-states), not a 3-string enum. `attachedInstanceId` replaced the earlier `activeSessionId/liveSessionId` pair (see §Multi-instance). `draft`+`composerExpanded` own the composer textarea durably; `pullTick` drives the wants-outbox loop.
+`ConnectionState` is a discriminated union (TopBar chip + Launcher down-states), not a 3-string enum. `attachedInstanceId` replaced the earlier `activeSessionId/liveSessionId` pair (see §Multi-instance). `draft`+`composerExpanded` own the composer textarea durably; `pullTick` drives the pull queue loop.
 
 **The store holds a `Document` root, not the `DocumentMirror` instance.**
 The `BridgeClient` lives in `useConnection` (a `useRef`). On every `onPush`
@@ -117,7 +117,7 @@ otherwise `useState` in the owning component.
 |---|---|---|
 | `document`, `connection`, `attachedInstanceId`, `instances` | store | many consumers; Launcher + Sidebar + TopBar |
 | `draft`, `composerExpanded`, `focusedEntryId` | store | Composer + keybinding layer + ConversationArea |
-| `expandedActionGroups`, `expandedSteps`, `uncappedDetails`, `frozen*`, `loadingPaths`, `pullTick` | store | ConversationArea ↔ Action components + pull loop |
+| `expandedActionGroups`, `expandedActions`, `uncappedDetails`, `frozen*`, `loadingPaths`, `pullTick` | store | ConversationArea ↔ Action components + pull loop |
 | `sessions`, `models`, `thinkingLevels`, `cwdAllowlist`, `devMode` | store | Sidebar and pickers read them |
 | `historyOpen`, `scrollToEntryId` | store | HistoryPane ↔ ConversationArea |
 | `sidebarOpen` (derived) | `useState` in Sidebar | local to one component |
@@ -139,21 +139,21 @@ state — the `pending:message` key becomes stale and the committed entry
 renders collapsed. Two mechanisms fix this:
 
 1. **Action group keys use `${firstEntryId}:${firstBlockIndex}`** — the
-   first step's source entry and block index. Since the visual spine can
+   first action's source entry and block index. Since the vertical line can
    span multiple entries (textless-entry accumulation), the key is derived from the
-   first step in the group, not the owning entry. Block indices are stable
-   (append-only) and survive entry-id rename. Step keys:
+   first action in the group, not the owning entry. Block indices are stable
+   (append-only) and survive entry-id rename. Action keys:
    `${entryId}:b${blockIndex}`.
 2. **`migrateExpandKeys(oldId, newId)`** — on every `move` op, the store
-   rewrites keys in `expandedActionGroups`, `expandedSteps`,
-   `frozenActionGroups`, `frozenSteps`, and `loadingPaths` that start
+   rewrites keys in `expandedActionGroups`, `expandedActions`,
+   `frozenActionGroups`, `frozenActions`, and `loadingPaths` that start
    with the old provisional id prefix to the new committed id. This is a
    pure reducer — tested as a unit function.
 
 **Freeze on interaction.** During streaming, the trailing action group
 auto-expands so the user sees actions as they appear. If the user
-manually toggles a group or expands a step, that element is added
-to `frozenActionGroups` / `frozenSteps` and streaming state no longer
+manually toggles a group or expands an action, that element is added
+to `frozenActionGroups` / `frozenActions` and streaming state no longer
 drives it. Frozen sets are permanent — keys never collide across turns
 because `migrateExpandKeys` rewrites provisional ids to durable ids.
 
@@ -194,17 +194,17 @@ does not appear in `LAZY_FIELD_PATTERNS`. Compaction and branch_summary
 `summary` fields are also wire-eager. Only thinking text, tool arguments,
 and tool result content/details require client pull.
 
-The Document's flat `Record<id, Entry>` goes through a two-step pipeline
+The Document's flat `Record<id, Entry>` goes through a two-pass pipeline
 before reaching the renderer:
 
 ```
 Document.entries
   → flatten(doc) → FlattenedBlock[]   (pure-data descriptors, tool result joins)
-  → structure(flat, doc) → ViewModel  (leaf-path walk, run merging, siblings)
-  → render(ViewModel) → React          (consecutive-step detection → spine)
+  → structure(flat, doc) → ViewModel  (leaf-path walk, turn merging, siblings)
+  → render(ViewModel) → React          (consecutive-action detection → vertical line)
 ```
 
-### Flatten step
+### Flatten pass
 
 Each entry in `Document.entries` produces zero or more descriptors. These
 are plain data, not render types — they carry only the fields needed for
@@ -212,7 +212,7 @@ lazy pull (`entryId` + `blockIndex`) and display identity:
 
 - **User MessageEntry:** one `TextBlockVM` per `TextContent`.
 - **Assistant MessageEntry:** one descriptor per `Content` —
-  `TextBlockVM` for text, `ThinkActionStepVM` for thinking, `ToolActionStepVM`
+  `TextBlockVM` for text, `ThinkActionVM` for thinking, `ToolActionVM`
   for tool calls. For tool calls, look up `ToolResultEntry` by
   `toolCallId` and attach a `ToolResultSnapshot` (or `null` if result
   hasn't arrived yet).
@@ -220,30 +220,30 @@ lazy pull (`entryId` + `blockIndex`) and display identity:
   on the `SystemTurn` (wire-eager, no lazy pull needed).
 - **Model change / thinking level change:** no descriptor (metadata-only).
 - **ToolResultEntry:** skipped — already joined during the assistant
-  message's `ToolActionStepVM` production. Never appears as a standalone
+  message's `ToolActionVM` production. Never appears as a standalone
   turn.
 
-### Structure step
+### Structure pass
 
 Walk `status.leafId` → root via `parentId`, reverse for chronological
-order, then collapse into turns. The structure step has access to the
+order, then collapse into turns. The structure pass has access to the
 full `Document` for entry-kind checks and sibling queries.
 
 - **User messages** → `UserTurn`. All text blocks concatenated into
   `text`. Siblings computed from entries with same `parentId`.
 - **Assistant messages** → `AssistantTurn`. Consecutive assistant entries
-  merge into one **run**; the run closes at a user message, a system turn,
+  merge into one **turn**; the turn closes at a user message, a system turn,
   a user bash execution, or the end of the path. Text blocks do NOT split
-  the run: the per-message split experiment (8386faacf, later reverted)
+  the turn: the per-message split experiment (8386faacf, later reverted)
   multiplied turns ~5x on real sessions for a cosmetic gain —
   `segmentBlocks` renders interleaved text/action groups in order within a
   turn. Metadata (model, usage, timestamp) from the last entry in the turn;
-  stopReason/errorMessage ride the run-closing turn (its last ref is the
-  entry's last block), so an error line renders once per run.
-- **Turn timing** is per-run-window: `turnStartedAt` is the seal of the
-  path entry preceding the run's first block (usually the user message).
+  stopReason/errorMessage ride the closing turn (its last ref is the
+  entry's last block), so an error line renders once per turn.
+- **Turn timing** is per-turn window: `turnStartedAt` is the seal of the
+  path entry preceding the turn's first block (usually the user message).
   The window extends past the closing entry's seal to the latest sealed
-  tool result of the tool calls the run issued, and toolMs subtracts the
+  tool result of the tool calls the turn issued, and toolMs subtracts the
   assistant-generation windows (per-batch max for parallel tools, not a
   per-tool sum).
 - **System entries** (compaction, branch_summary, model_change,
@@ -256,16 +256,16 @@ Examples of turn structure:
 ```
 Entry A: [think, read]   assistant   (textless → accumulates)
 Entry B: [edit, bash]    assistant   (textless → accumulates)
-Entry C: [text]          assistant   (text merges; run closes here)
-→ AssistantTurn { blocks: [ThinkActionStep, ToolActionStep(read), ToolActionStep(edit), ToolActionStep(bash), TextBlock] }
+Entry C: [text]          assistant   (text merges; turn closes here)
+→ AssistantTurn { blocks: [ThinkActionVM, ToolActionVM(read), ToolActionVM(edit), ToolActionVM(bash), TextBlock] }
 
 Entry A: [think, text, bash]   assistant   (one entry — no split)
-Entry B: [text]               assistant   (merges into the same run)
-→ AssistantTurn { blocks: [ThinkActionStep, TextBlock, ToolActionStep(bash), TextBlock] }
+Entry B: [text]               assistant   (merges into the same turn)
+→ AssistantTurn { blocks: [ThinkActionVM, TextBlock, ToolActionVM(bash), TextBlock] }
 ```
 
 Turn identity is `turnKey`: the first block's entry id when the turn starts
-at block 0, else `${entryId}:b${blockIndex}`. With run merging a turn
+at block 0, else `${entryId}:b${blockIndex}`. With turn merging a turn
 always starts at block 0, so `turnKey === entryId` in practice — but React
 keys and the previous-VM reuse map key on `turnKey` anyway (the mid-entry
 form is kept so a future split rule cannot silently break identity), never
@@ -299,7 +299,7 @@ interface AssistantTurn {
   turnKey: string;          // unique: entryId, or entryId:b<blockIndex> when
                             // the turn starts mid-entry (split entry)
   index: number;
-  blocks: (TextBlockVM | ToolActionStepVM | ThinkActionStepVM)[];
+  blocks: (TextBlockVM | ToolActionVM | ThinkActionVM)[];
   model?: string;           // from last entry in turn
   usage?: Usage;            // from last entry in turn
   contextPercent?: number;  // window occupancy when the entry was generated
@@ -328,7 +328,7 @@ interface TextBlockVM {
   isProvisional: boolean;
 }
 
-interface ToolActionStepVM {
+interface ToolActionVM {
   blockType: "tool";
   entryId: string;
   blockIndex: number;
@@ -340,7 +340,7 @@ interface ToolActionStepVM {
   status: "pending" | "running" | "done" | "error";
 }
 
-interface ThinkActionStepVM {
+interface ThinkActionVM {
   blockType: "thinking";
   entryId: string;
   blockIndex: number;
@@ -356,7 +356,7 @@ interface ToolResultSnapshot {
 
 ### Action summaries
 
-`ToolActionStepVM.summary` is computed during flattening from the tool name
+`ToolActionVM.summary` is computed during flattening from the tool name
 and `arguments` (a `JsonValue` partial object), falling back to a truncated
 raw string:
 
@@ -396,29 +396,29 @@ App
 ├── Sidebar         (Instances + Sessions, live dot ●, active highlight ▌, switch on click, +new)
 ├── ConversationArea
 │   ├── UserTurn        (tinted background, variant pager)
-│   ├── AssistantTurn   (flat blocks: TextBlock | ToolActionStep | ThinkActionStep)
+│   ├── AssistantTurn   (flat blocks: TextBlock | ToolActionVM | ThinkActionVM)
 │   │   ├── TextBlock       (streamdown + Shiki, copy button)
-│   │   ├── ActionGroupView (neutral group header + vertical spine of steps)
-│   │   │   ├── ToolActionStep    (tinted band: summary + ▸/▾ caret, expandable details + white inset)
-│   │   │   └── ThinkActionStep   (short: plain header; long: caret + expandable prose)
+│   │   ├── ActionGroupView (neutral group header + vertical line of actions)
+│   │   │   ├── ToolActionView    (tinted row: summary + ▸/▾ caret, expandable details + white inset)
+│   │   │   └── ThinkActionView   (short: plain header; long: caret + expandable prose)
 │   └── SystemTurn      (compaction/branch_summary: streamdown; model_change/thinking_level_change: plain text)
 ├── Composer        (fixed floating card, collapsed/expanded, draft=store, steer chips, tab-complete, model picker, cost popover)
 └── HistoryPane     (docked right rail / drawer, lane graph, look vs go)
 ```
 
-AssistantTurn renders a flat list of blocks. Consecutive `ToolActionStep`
-and `ThinkActionStep` blocks share a visual spine grouped under a neutral
-`ActionGroupView` header. A single-step group renders no group header —
-the step's own summary is the label.
+AssistantTurn renders a flat list of blocks. Consecutive `ToolActionVM`
+and `ThinkActionVM` blocks share a vertical line grouped under a neutral
+`ActionGroupView` header. A single-action group renders no group header —
+the action's own summary is the label.
 
-Group fold is renderer-owned: the renderer detects consecutive steps
-and derives a group key from the first step's `${entryId}:${blockIndex}`.
-It looks up `expandedActionGroups` and shows/hides the spine section.
-Individual step expand keys (`expandedSteps`) control details visibility
-within the spine.
+Group collapse is renderer-owned: the renderer detects consecutive actions
+and derives a group key from the first action's `${entryId}:${blockIndex}`.
+It looks up `expandedActionGroups` and shows/hides the action-group line.
+Individual action expand keys (`expandedActions`) control details visibility
+within the group's vertical line.
 
 `React.memo` is keyed on turn identity: each `TurnVM` holds a
-reference-equality-stable `entryId` + block indices. Adding a new step
+reference-equality-stable `entryId` + block indices. Adding a new action
 block appends to the trailing AssistantTurn's `blocks[]` array; only
 that turn re-renders. Within the turn, each block subscribes to its own
 content slice via Zustand, so streaming text updates re-render only the
@@ -430,31 +430,31 @@ active `TextBlock`.
 On each store update, the selector returns the freshest text string.
 The `Markdown` component is `streamdown` (HAST reconciliation via React JSX, not `innerHTML` nuke-and-rebuild) with Shiki highlighting. During streaming `Streamdown` runs in `"streaming"` mode with `parseIncompleteMarkdown` for unclosed fences; on seal (`isProvisional` → false) it flips to `"static"` and Shiki highlights once. `React.memo` prevents stable siblings from re-rendering.
 
-**Action group rendering.** Consecutive `ToolActionStep` and
-`ThinkActionStep` blocks share a visual spine grouped under an
-`ActionGroupView` header (▸/▾ fold + left-edge family dot legend +
-categorized summary). The group label is computed from step summaries
-during render. Band hues map to four color families (mutate = edit+write,
-bash, think, read); the family dot legend and the per-step strips/tints
+**Action group rendering.** Consecutive `ToolActionVM` and
+`ThinkActionVM` blocks share a vertical line grouped under an
+`ActionGroupView` header (▸/▾ collapse + left-edge hue dot legend +
+categorized summary). The group label is computed from action summaries
+during render. Tinted row hues map to four hues (mutate = edit+write,
+bash, think, read); the hue dot legend and the per-action strips/tints
 share the same `--kind-*` tokens.
 
 **Thinking display.** Short thinking (no newlines, < 80 chars) renders as
-a plain step line — no caret, text visible inline, not expandable.
-Long thinking renders as a step header with a ▸/▾ caret; expanding
+a plain action line — no caret, text visible inline, not expandable.
+Long thinking renders as an action header with a ▸/▾ caret; expanding
 reveals the full markdown prose inline on the lighter think tint.
 
-**Tool display.** Tool steps always render with a caret. Expanding
+**Tool display.** Tool actions always render with a caret. Expanding
 reveals a white inset details panel with syntax-highlighted arguments
 and result content (if pulled).
 
 **Group expand state.** The renderer derives group keys from the first
-step's `${entryId}:${blockIndex}` in each consecutive group. The
+action's `${entryId}:${blockIndex}` in each consecutive group. The
 effective expanded state: `expandedActionGroups.has(key) ||
 (isStreaming && isTrailingGroup && !frozenActionGroups.has(key))`.
-During streaming, the trailing group auto-expands — steps appear,
-details stay folded. If the user manually toggles a group or expands a
-step, that element is added to `frozenActionGroups` /
-`frozenSteps` and streaming state no longer drives it. Frozen sets
+During streaming, the trailing group auto-expands — actions appear,
+details stay collapsed. If the user manually toggles a group or expands
+an action, that element is added to `frozenActionGroups` /
+`frozenActions` and streaming state no longer drives it. Frozen sets
 are permanent — keys never collide across turns because
 `migrateExpandKeys` rewrites provisional ids to durable ids. On
 `isStreaming` → false, the group reverts to manual toggle state
@@ -501,18 +501,18 @@ mirror, no transport, pure state machine.
 - Opens `WebSocket`, creates `BridgeClient`, wires to store (`client.onPush` → `store.set({document})` + `migrateExpandKeys` on `move`).
 - On close: sets `connection: {kind:"reconnecting",attempt}` (discriminated union: `connecting/connected/reconnecting/unreachable/init_failed`), starts exponential backoff
   (500ms initial, ×2, cap 5s, full jitter), re-opens. The TopBar chip + Launcher down-state reads `connection`.
-- On reconnect/mount: `getDaemonInfo` + `listInstances` → if stored `attachedInstanceId` still alive, `switchInstance(id)` → `replace` push → `listSessions` → pull loop drains wants-outbox for what's rendered. No auto-push on raw connect (fresh `Connection` has `attachedManager=null`).
+- On reconnect/mount: `getDaemonInfo` + `listInstances` → if stored `attachedInstanceId` still alive, `switchInstance(id)` → `replace` push → `listSessions` → pull loop drains pull queue for what's rendered. No auto-push on raw connect (fresh `Connection` has `attachedManager=null`).
 - Text and compaction summaries are wire-eager and arrive in the `replace` snapshot — no pull gap.
-- Expanded state is **preserved** across re-attach to the *same* instance — the wants-outbox re-drains and `loadingPaths`/`pullTick` restore the view. On `instance_exit` / instance switch, `clearInstance()` resets expand/frozen/loading/draft.
+- Expanded state is **preserved** across re-attach to the *same* instance — the pull queue re-drains and `loadingPaths`/`pullTick` restore the view. On `instance_exit` / instance switch, `clearInstance()` resets expand/frozen/loading/draft.
 
-## Lazy pull (wants-outbox)
+## Lazy pull (pull queue)
 
 Architecture §1 defines four lazy fields on the wire:
 `ThinkingContent.thinking`, `ToolCallBlock.arguments`,
 `ToolResultEntry.content`, `ToolResultEntry.details`. Text and
 compaction/branch_summary summaries are wire-eager — always populated.
 
-Components declare wants during render by appending to a per-render wants outbox (`PullRequestItem[]`). The pull loop (`web/src/infra/net/pullLoop.ts`, `useEffect` after each render) drains the outbox: filter through `needsPull()` + `loadingPaths`, one batched `bridge.pull(requests)`, `ingestPullResponse` → `pullTick` bump → re-render. No component calls `pull` directly; expand handlers are pure store toggles (`toggleActionGroup`/`toggleStep`).
+Components declare pending pulls during render by appending to a per-render pull queue (`PullRequestItem[]`). The pull loop (`web/src/infra/net/pullLoop.ts`, `useEffect` after each render) drains the queue: filter through `needsPull()` + `loadingPaths`, one batched `bridge.pull(requests)`, `ingestPullResponse` → `pullTick` bump → re-render. No component calls `pull` directly; expand handlers are pure store toggles (`toggleActionGroup`/`toggleAction`).
 
 Provisional pulls register live subscriptions on the `Connection` (subsequent `append` patches forward until `move` seal); committed pulls are one-shot. `filterPatchForSocket` sanitizes parent-path op values for unsubscribed sockets (convergence invariant).
 
@@ -539,11 +539,11 @@ dev server — same binary in dev and production. Client rebuild (`vite build
 ## Testing
 
 **Tier 1 — vitest (pure, DOM-free; 23 files):**
-- `test/viewmodel-unit.test.ts` — `computeViewModel`: leaf-path projection, run merging (text does not split), sibling computation + newest-leaf walk, action-summary extraction, move-migration reducer, timing.
+- `test/viewmodel-unit.test.ts` — `computeViewModel`: leaf-path projection, turn merging (text does not split), sibling computation + newest-leaf walk, action-summary extraction, move-migration reducer, timing.
 - `test/tree-unit.test.ts` — `HistoryTree` / `LaneLayout` (Pass 1 + Pass 2).
 - `test/accounting.test.ts` — `sessionAccounting` cost ledger.
 - `test/store-unit.test.ts` — store selectors, expand-state key migration on `move` ops, `loadingPaths` dedup. Store tests drive `set({ document: syntheticDoc })` directly — no mirror needed.
-- `test/compact-codec.test.ts` / `test/wants-outbox.test.ts` / `test/composer-draft.test.ts` / `test/model-ref-disambiguation.test.ts` — codec, pull orchestration, drafts, `ModelRef` dedup.
+- `test/compact-codec.test.ts` / `test/pull-queue.test.ts` / `test/composer-draft.test.ts` / `test/model-ref-disambiguation.test.ts` — codec, pull orchestration, drafts, `ModelRef` dedup.
 - Remaining unit files: `bridge-client`, `client-mirror`, `document-unit`, `convergence`, `integration-gaps`, `property-invariant`, `event-roundtrip`.
 
 **Tier 2 — manual visual check (per review gate):**
@@ -618,7 +618,7 @@ extra import line in `scripts/browser-smoke-entry.ts`.
 
 The `useConnection` hook wraps `BridgeClient` and owns the WebSocket
 lifecycle. Auth, multi-instance routing, and reconnect all plug into the
-connection step — if that logic lives in the store or a component, each
+connection pass — if that logic lives in the store or a component, each
 feature gets hard. Isolating it in a hook + `BridgeClient` keeps state
 and rendering pure and keeps network/identity concerns in one place.
 
@@ -627,7 +627,7 @@ and rendering pure and keeps network/identity concerns in one place.
 Architecture §1 makes thinking, tool arguments, and tool result
 content/details lazy on the wire. Text is wire-eager (always a `string`).
 The PRD says "reading is the primary activity" — text must be visible
-without pulls. The lazy fields are hidden in steps by default and
+without pulls. The lazy fields are hidden in actions by default and
 pulled on expand — heavier and less-frequently accessed, exactly the
 content laziness was designed for.
 
@@ -635,11 +635,11 @@ content laziness was designed for.
 
 The entry boundary is a producer detail — pi emits a new entry for each
 model response. Rendering per-entry would show multiple consecutive
-metadata bars and fragment the step spine across artificial boundaries.
+metadata bars and fragment the action-group line across artificial boundaries.
 Textless blocks (thinking/tool-only) accumulate into the turn the next
 message closes, so a tool-dispatch cycle renders as one unit with the
-message that follows it; the renderer detects consecutive steps and draws
-the visual spine. Turn boundaries land on text ("a message always ends a
+message that follows it; the renderer detects consecutive actions and draws
+the vertical line. Turn boundaries land on text ("a message always ends a
 turn"), which gives readers a natural separation unit and keeps turn
 evolution append-only across recomputes. This preserves block order,
 handles interspersed text naturally, and hides entry boundaries that have
@@ -704,7 +704,7 @@ group after all text, regardless of their position in `content[]`.
 
 **Rejected:** loses information about where tools ran relative to text
 output. Turn separation with strict in-order preserves block ordering.
-The renderer detects consecutive steps for the visual spine. The PRD's
+The renderer detects consecutive actions for the vertical line. The PRD's
 description is the common case, not the general rule.
 
 ## Invariants (client-side)
@@ -804,7 +804,7 @@ values live as comments at each rule site in the CSS modules.
 | Original ADR 07 | Resolved |
 |---|---|
 | Store holds `DocumentMirror` in state | Store holds `Document` root; mirror in `useConnection` ref. Intent preserved; testability improved. |
-| `expandedFoldGroups: Set<entryId>`, `expandedCards: Set<entryId:cardIndex>` | Renamed to `expandedActionGroups` / `expandedSteps`. Keys `${firstEntryId}:${firstBlockIndex}` and `${entryId}:b${blockIndex}`. Added `frozenActionGroups` and `frozenSteps` for freeze-on-interaction. |
+| `expandedFoldGroups: Set<entryId>`, `expandedCards: Set<entryId:cardIndex>` | Renamed to `expandedActionGroups` / `expandedActions`. Keys `${firstEntryId}:${firstBlockIndex}` and `${entryId}:b${blockIndex}`. Added `frozenActionGroups` and `frozenActions` for freeze-on-interaction. |
 | `activeSessionId` sourcing unspecified | `activeSessionId` = client-owned; `liveSessionId` = daemon-owned (new wire field). V1b-future-proof seam. |
 | ViewModel loosely in "the web client" | `src/viewmodel/` — tsgo, browser-smoke, and vitest-gated. |
 | Provisional parentId null, tree malformed during streaming | Producer fix: set `parentId = leafId` at creation in `applyEvent`. |
@@ -830,7 +830,7 @@ instance at a time; switching rebinds without killing the source.
 | `liveSessionId: string \| null` | *(removed)* | Replaced by `InstanceInfo.sessionId` in `listInstances`; live dot now from `instances[]` |
 | *(missing)* | `instances: InstanceInfo[]`, `cwdAllowlist: string[]` | Alive instances + allowed cwds from `getDaemonInfo`/`listInstances` |
 | `connection: "connected"\|...` | `connection: ConnectionState` (5 kinds) | Discriminated union for TopBar chip + Launcher down-states |
-| *(missing)* | `draft: ComposerDraft`, `composerExpanded`, `pullTick` | Durable composer + wants-outbox |
+| *(missing)* | `draft: ComposerDraft`, `composerExpanded`, `pullTick` | Durable composer + pull queue |
 | `syncSessionState(partial)` | `syncInstances(partial)` / `clearInstance()` | Multi-instance attachment lifecycle |
 
 ### Reconnect sequence
@@ -838,7 +838,7 @@ instance at a time; switching rebinds without killing the source.
 Old: "1. replace push → 2. getDaemonInfo → 3. listSessions → 4. re-pull."
 
 New: "1. getDaemonInfo + listInstances → 2. if stored attachedInstanceId in list,
-switchInstance(id) → replace push → 3. listSessions → 4. pull loop drains wants-outbox."
+switchInstance(id) → replace push → 3. listSessions → 4. pull loop drains pull queue."
 
 The `replace` push is now a consequence of re-attachment (`switchInstance`), not automatic. Client
 state (`attachedInstanceId`) persists across reconnect in the Zustand store; on

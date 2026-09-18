@@ -151,7 +151,7 @@ describe("leafTextKey", () => {
 });
 
 // ---------------------------------------------------------------------------
-// nextFocusedTurnKey — j/k step navigation
+// nextFocusedTurnKey — j/k action navigation
 // ---------------------------------------------------------------------------
 
 describe("nextFocusedTurnKey", () => {
@@ -192,7 +192,7 @@ describe("nextFocusedTurnKey", () => {
 	} as unknown as Document["entries"];
 	const vm = vmOf(entries, "a2");
 
-	it("steps by turn key identity", () => {
+	it("advances by turn key identity", () => {
 		expect(nextFocusedTurnKey(vm.turns, "u2", "prev", () => 0)).toBe("a1");
 		expect(nextFocusedTurnKey(vm.turns, "a1", "next", () => 0)).toBe("u2");
 	});
@@ -227,7 +227,7 @@ describe("nextFocusedTurnKey", () => {
 });
 
 // ---------------------------------------------------------------------------
-// liveActivityPhase — what the streaming run is doing
+// liveActivityPhase — what the streaming turn is doing
 // ---------------------------------------------------------------------------
 
 describe("liveActivityPhase", () => {

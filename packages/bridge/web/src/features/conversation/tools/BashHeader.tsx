@@ -1,16 +1,16 @@
-// BashIdentity — the shell card's identity line (the whole command),
+// BashHeader — the shell card's header line (the whole command),
 // syntax-highlighted through the shared Shiki singleton (bash/powershell
-// grammar, github-light token colors). CardSkeleton's CardIdentity stays
+// grammar, github-light token colors). CardSkeleton's CardHeader stays
 // presentational and shiki-free for the node SSR tests; this component
 // owns the async token fetch. Until the highlighter + grammar are loaded
 // (first shell card only — both are singletons) it renders the raw string,
-// exactly CardIdentity's display, so the swap is invisible.
+// exactly CardHeader's display, so the swap is invisible.
 
 import { memo, useEffect, useState } from "react";
 import { type HighlightResult, highlightTokens } from "../../../render/shiki.ts";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 
-export const BashIdentity = memo(function BashIdentity({ command, lang }: { command: string; lang: string }) {
+export const BashHeader = memo(function BashHeader({ command, lang }: { command: string; lang: string }) {
 	const [result, setResult] = useState<HighlightResult | null>(null);
 
 	useEffect(() => {
@@ -23,14 +23,14 @@ export const BashIdentity = memo(function BashIdentity({ command, lang }: { comm
 		};
 	}, [command, lang]);
 
-	if (!result) return <div className={styles.cardIdentity}>{command}</div>;
+	if (!result) return <div className={styles.cardHeader}>{command}</div>;
 
 	// Same treatment decisions as CodeSnippet: no theme bg (the card surface
 	// shows through — ADR 07 §Styling invariants #1), theme fg as the root
 	// color, per-token colors with the (currently inert) dark-mode custom
 	// property carried along for the day a theme toggle exists.
 	return (
-		<div className={styles.cardIdentity} style={{ color: result.fg }}>
+		<div className={styles.cardHeader} style={{ color: result.fg }}>
 			{result.lines.map((line, lineIdx) => (
 				// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
 				<span key={lineIdx} style={{ display: "block" }}>

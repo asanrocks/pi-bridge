@@ -10,10 +10,10 @@ import {
 	filterPatchForSocket,
 	initFromEntries,
 	type PatchOp,
-	projectSnapshot,
 	reconcile,
 	resolveFieldPath,
 	setAtPath,
+	snapshotForWire,
 } from "../../src/core/index.ts";
 
 // For tests: cast Entry to a loose shape for property access.
@@ -1466,10 +1466,10 @@ describe("filterPatchForSocket", () => {
 });
 
 // ---------------------------------------------------------------------------
-// projectSnapshot
+// snapshotForWire
 // ---------------------------------------------------------------------------
 
-describe("projectSnapshot", () => {
+describe("snapshotForWire", () => {
 	it("strips lazy content fields (thinking, arguments) but not text", () => {
 		const doc = emptyDoc();
 		doc.entries.e1 = {
@@ -1485,7 +1485,7 @@ describe("projectSnapshot", () => {
 			],
 		};
 
-		const snapshot = projectSnapshot(doc);
+		const snapshot = snapshotForWire(doc);
 		const content = (snapshot.entries.e1 as { content: Content[] }).content;
 		expect(content[0].type).toBe("text");
 		expect((content[0] as { text: string }).text).toBe("visible text");
@@ -1510,7 +1510,7 @@ describe("projectSnapshot", () => {
 			],
 		};
 
-		const snapshot = projectSnapshot(doc);
+		const snapshot = snapshotForWire(doc);
 		const c = (snapshot.entries.e1 as { content: Content[] }).content;
 		expect((c[0] as { textSignature?: string }).textSignature).toBe("sig1");
 		expect((c[1] as { thinkingSignature?: string }).thinkingSignature).toBe("sig2");
@@ -1533,7 +1533,7 @@ describe("projectSnapshot", () => {
 			isError: false,
 		};
 
-		const snapshot = projectSnapshot(doc);
+		const snapshot = snapshotForWire(doc);
 		const entry = snapshot.entries.e1 as Extract<Entry, { kind: "tool_result" }>;
 		expect(entry.content).toBeNull();
 		expect(entry.details).toBeNull();
@@ -1554,7 +1554,7 @@ describe("projectSnapshot", () => {
 			content: [],
 		};
 
-		const snapshot = projectSnapshot(doc);
+		const snapshot = snapshotForWire(doc);
 		const entry = snapshot.entries.e1 as Extract<Entry, { kind: "message" }>;
 		expect(entry.id).toBe("e1");
 		expect(entry.api).toBe("anthropic");
@@ -1565,7 +1565,7 @@ describe("projectSnapshot", () => {
 		const doc = emptyDoc();
 		doc.status.leafId = "e1";
 		doc.status.isStreaming = true;
-		const snapshot = projectSnapshot(doc);
+		const snapshot = snapshotForWire(doc);
 		expect(snapshot.status.leafId).toBe("e1");
 		expect(snapshot.status.isStreaming).toBe(true);
 	});

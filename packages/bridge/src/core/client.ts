@@ -66,14 +66,14 @@ export class DocumentMirror {
 	}
 
 	/**
-	 * Given a set of lazy field paths the UI wants to display,
+	 * Given a set of lazy field paths the UI needs to display,
 	 * return the subset that are still `null` (not yet fetched).
 	 *
 	 * Call this before sending a PullRequest to the server.
 	 * Paths already populated are filtered out — no redundant pulls.
 	 */
-	needsPull(wants: PullRequestItem[]): PullRequestItem[] {
-		return wants.filter((w) => {
+	needsPull(pending: PullRequestItem[]): PullRequestItem[] {
+		return pending.filter((w) => {
 			const value = getAtPath(this.document, w.fieldPath);
 			return value === null || value === undefined;
 		});
@@ -89,22 +89,22 @@ export class DocumentMirror {
 }
 
 // ---------------------------------------------------------------------------
-// planPull — pure batching step for the wants outbox (ADR 09)
+// planPull — pure batching step for the pull queue (ADR 09)
 // ---------------------------------------------------------------------------
 
 /**
- * Filter a raw wants list down to the items worth pulling: dedupe by
+ * Filter a raw pending list down to the items worth pulling: dedupe by
  * fieldPath, drop fields already populated in the mirror (`needsPull`),
  * drop fields with an in-flight pull (`loadingPaths`).
  */
 export function planPull(
-	wants: PullRequestItem[],
+	pending: PullRequestItem[],
 	mirror: DocumentMirror,
 	loadingPaths: ReadonlySet<string>,
 ): PullRequestItem[] {
 	const seen = new Set<string>();
 	const deduped: PullRequestItem[] = [];
-	for (const w of wants) {
+	for (const w of pending) {
 		if (seen.has(w.fieldPath)) continue;
 		seen.add(w.fieldPath);
 		deduped.push(w);
