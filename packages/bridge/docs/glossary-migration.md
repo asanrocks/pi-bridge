@@ -54,6 +54,12 @@ Status legend: `[ ]` open · `[~]` in progress (name + date) · `[x]` closed
   provisional identity there. Verified against code usage (`onSettled`,
   `ui.ts` "provisionally sealed → durable move", `tools/timing.ts`
   "post-seal remount").
+- [x] v2.1 (2026-09-18): A.6 gains the rule-vs-mechanism clause; D.7
+  claims **frozen** (replacing the "keep-expanded" phrase, aligning with
+  M10's `frozenActions` identifier); `LaneLayout` is sanctioned as a
+  code-local exception in the glossary's naming-rule section, so the
+  sanction survives this file's deletion (M12's parenthetical now points
+  there).
 - [ ] If ADR 02 conflates seal and settle, amend its §reconcile/seal to
   match C.4. *(docs-only; read ADR 02 first)*
 
@@ -201,9 +207,9 @@ M5/M7/M9 so their step-named identifiers are already touched once.
 - `actionSteps.module.css` → `actions.module.css`; `.actionStep` →
   `.action`; `stepHead`/`stepDetails*`/`stepSummary` → `actionHead`/…
 - `web/src/infra/state/ui.ts` + `store.ts`: `expandedSteps` →
-  `expandedActions`, `frozenSteps` → `frozenActions`, `toggleStep` →
-  `toggleAction`; same for `ExpandKeySets` fields and `migrateExpandKeys`
-  docs
+  `expandedActions`, `frozenSteps` → `frozenActions` (D.7 claims
+  **frozen**), `toggleStep` → `toggleAction`; same for `ExpandKeySets`
+  fields and `migrateExpandKeys` docs
 - `onToggleStep` props through `ActionGroupView` / `AssistantTurnView` /
   `ConversationArea`
 
@@ -234,8 +240,9 @@ Verify: `rg -n -w 'run' src/viewmodel docs/10-adr-git-stamp.md AGENTS.md`
 ## [ ] M12 — Drop the topology "lane" noun (P3)
 
 Canonical: B.6 — "a Connection processes verbs one at a time, in order";
-the mechanism has no name. Frees "lane" for the history tree's code-local
-`LaneLayout` (which stays unclaimed, D-external).
+the mechanism has no name. The history tree's `LaneLayout` keeps its
+lane (sanctioned as a code-local exception in
+[glossary.md](glossary.md#naming-rule)).
 
 - ADR 12 prose: "state-transition lane", "lane-serialized", "the lane
   holds…" (~10 hits) → serialization described in words
