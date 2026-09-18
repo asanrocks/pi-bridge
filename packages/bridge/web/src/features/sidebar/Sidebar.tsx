@@ -11,41 +11,31 @@
 // (visible only once the pointer passes the min width). Mobile has only
 // hidden / fullscreen (full-screen width).
 //
-// A folder tree: each Project (static allowlisted cwd configuration) is a
-// foldable folder; its sessions are the leaves. Active sessions pin below the folder
-// row from the global snapshot (the authority for live state) and stay
-// visible regardless of the fold — folding hides only the lazily fetched
-// history. Desktop rail visibility persists in localStorage, independent of
-// the rail's width (the resize controller's own persistence).
-//
-// Selection model: the Project header navigates — clicking the name opens
-// the Project's home (the compose surface); the chevron beside it is the
-// fold toggle, nothing else. Selection lives only on session rows: exactly
-// one row (the attached (projectId, stem)) wears the accent tint; the
-// folder shows accent text solely at a Project home, where nothing is
-// selected.
+// This module is the orchestrator; the pieces are siblings:
+//   - useSidebarMode    — the hidden/rail/fullscreen state machine
+//   - useFolderExpansion — persisted folder fold state + auto-expand
+//   - usePeekDrawer     — the hover-peek drawer (hidden mode)
+//   - useEdgeReveal     — the left-edge drag-open gesture
+//   - SidebarContent    — the shared panel body (header + folder tree)
+//     ├─ ProjectFolder  — one foldable Project branch
+//     └─ SessionRow     — one session leaf (+ row menu)
 // ============================================================================
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/store.ts";
 import { useMediaQuery } from "../../infra/useMediaQuery.ts";
 import { ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
 import styles from "./Sidebar.module.css";
-import { groupSessions, relativeTime } from "./timeUtils.ts";
+import { SidebarContent } from "./SidebarContent.tsx";
+import { useEdgeReveal } from "./useEdgeReveal.ts";
+import { useFolderExpansion } from "./useFolderExpansion.ts";
+import { usePeekDrawer } from "./usePeekDrawer.ts";
+import { type SidebarMode, useSidebarMode } from "./useSidebarMode.ts";
+
+export type { SidebarMode };
 
 const SIDEBAR_BREAKPOINT = "(min-width: 768px)";
-
-/** Sidebar display mode. `rail` (docked, resizable column) is desktop-only;
- *  mobile offers just hidden / fullscreen. */
-export type SidebarMode = "hidden" | "rail" | "fullscreen";
-
-const LS_KEY = "pi-bridge:sidebar-open";
-const LS_FOLDERS_KEY = "pi-bridge:sidebar-folders";
-
-/** Grace delay before an un-hovered peek drawer hides, so the pointer can
- *  cross the hamburger → drawer gap without a flicker. */
-const PEEK_CLOSE_MS = 200;
 
 /* Desktop width bounds for the resizable rail. Default matches the
    historical fixed width; min keeps section headers + rows readable,
@@ -53,266 +43,6 @@ const PEEK_CLOSE_MS = 200;
 const SIDEBAR_DEFAULT_W = 220;
 const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 360;
-
-/** Stable empty array so memoized folders without active rows don't churn. */
-const NO_SESSIONS: SessionInfo[] = [];
-
-// ---------------------------------------------------------------------------
-// SessionRow — one leaf: liveness dot + label + relative time.
-// ---------------------------------------------------------------------------
-
-const SessionRow = memo(function SessionRow({
-	session,
-	dot,
-	selected,
-	onOpen,
-	onClose,
-}: {
-	session: SessionInfo;
-	/** Green = active, orange + pulse = streaming, muted = dormant history. */
-	dot: "active" | "streaming" | "idle";
-	/** Attached session ("you are here"): the one row wearing the accent
-	 * tint. Matched on (projectId, stem) — rows always carry stems, so no
-	 * sessionId fallback is needed. */
-	selected?: boolean;
-	onOpen: (session: SessionInfo) => void;
-	/** Present only on rows with a live instance (the pinned active section):
-	 * opens the row menu whose Close item terminates it. No confirmation —
-	 * the kill is the point. */
-	onClose?: (session: SessionInfo) => void;
-}) {
-	const label = (session.name || session.firstMessageText || session.stem) ?? "";
-	const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
-	const dotCls = [
-		styles.sidebarLiveDot,
-		dot === "streaming" ? styles.sidebarLiveDotStreaming : dot === "idle" ? styles.sidebarDotIdle : "",
-	]
-		.filter(Boolean)
-		.join(" ");
-	return (
-		<div className={styles.sidebarItemWrap}>
-			<button
-				type="button"
-				className={[styles.sidebarItem, selected ? styles.sidebarItemSelected : ""].filter(Boolean).join(" ")}
-				onClick={() => onOpen(session)}
-				title={label}
-				aria-current={selected ? "page" : undefined}
-			>
-				<span className={dotCls} aria-hidden="true" />
-				<span className={styles.sidebarItemRow}>
-					<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
-					<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
-				</span>
-			</button>
-			{onClose && (
-				<button
-					type="button"
-					className={styles.sidebarMenuBtn}
-					aria-label="Session menu"
-					aria-haspopup="menu"
-					aria-expanded={menuAnchor !== null}
-					onClick={(e) => {
-						e.stopPropagation();
-						setMenuAnchor(e.currentTarget.getBoundingClientRect());
-					}}
-				>
-					<svg
-						viewBox="0 0 16 16"
-						width="14"
-						height="14"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.5"
-						strokeLinecap="round"
-						aria-hidden="true"
-					>
-						<path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-					</svg>
-				</button>
-			)}
-			{menuAnchor && (
-				<>
-					<button
-						type="button"
-						aria-label="Close menu"
-						className={styles.portalOverlay}
-						onClick={() => setMenuAnchor(null)}
-					/>
-					<div
-						className={styles.cwdPopover}
-						style={{
-							position: "fixed",
-							top: menuAnchor.bottom + 4,
-							left: Math.max(8, Math.min(menuAnchor.right - 130, window.innerWidth - 130 - 8)),
-							width: 130,
-						}}
-					>
-						<button
-							type="button"
-							className={styles.sidebarMenuClose}
-							onClick={() => {
-								setMenuAnchor(null);
-								onClose?.(session);
-							}}
-						>
-							Close
-						</button>
-					</div>
-				</>
-			)}
-		</div>
-	);
-});
-
-// ---------------------------------------------------------------------------
-// ProjectFolder — one branch: foldable Project row + its session leaves.
-// ---------------------------------------------------------------------------
-
-const ProjectFolder = memo(function ProjectFolder({
-	project,
-	currentProjectId,
-	currentStem,
-	expanded,
-	activeRows,
-	page,
-	onToggle,
-	onOpenProject,
-	onOpen,
-	onClose,
-	onLoad,
-	onLoadMore,
-}: {
-	project: ProjectInfo;
-	/** The attached (projectId, stem) pair — session-row selection input. */
-	currentProjectId: string | null;
-	currentStem: string | null;
-	expanded: boolean;
-	/** Active sessions from the global snapshot, pinned below the folder row
-	 * and always visible — the fold hides only the history. */
-	activeRows: SessionInfo[];
-	page: SessionFolderPage | undefined;
-	onToggle: (projectId: string) => void;
-	/** Navigate to the Project's home (the compose surface). The folder name
-	 * is a navigation target; the chevron is the fold toggle. */
-	onOpenProject: (projectId: string) => void;
-	onOpen: (session: SessionInfo) => void;
-	/** Terminate a live instance (row menu Close). Passed only to the pinned
-	 * active rows — dormant history has no instance to kill. */
-	onClose: (session: SessionInfo) => void;
-	onLoad: (projectId: string) => void;
-	onLoadMore: (projectId: string) => void;
-}) {
-	// Lazy first page: fetch on expand when no page is cached. Re-fires after
-	// a reconnect reset (sessionPages cleared → undefined again).
-	useEffect(() => {
-		if (expanded && page === undefined) onLoad(project.id);
-	}, [expanded, page, project.id, onLoad]);
-
-	const activeIds = useMemo(() => new Set(activeRows.map((r) => r.sessionId)), [activeRows]);
-	// The active snapshot is the authority (ADR 11): snapshot rows render in
-	// the pinned section; a scanned row claiming activity but absent from the
-	// snapshot renders as dormant history.
-	const history = useMemo(
-		() => (page?.kind === "ready" ? page.sessions.filter((s) => !activeIds.has(s.sessionId)) : []),
-		[page, activeIds],
-	);
-	const groups = useMemo(() => groupSessions(history), [history]);
-
-	// Disclosure header, not a selection target: accent text only at a
-	// Project home (browsed without an attached session) — folder-exclusive
-	// chrome that cannot be misread as row selection.
-	const isHome = currentProjectId === project.id && currentStem === null;
-	const rowCls = [styles.sidebarFolderRow, isHome ? styles.sidebarFolderCurrent : ""].filter(Boolean).join(" ");
-	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
-
-	return (
-		<div>
-			{/* Row group: the chevron toggles the fold; the name navigates to
-			    the Project home (the compose surface). Two buttons, not one —
-			    a nested button is invalid HTML, and a combined click
-			    (navigate + toggle) would collapse the folder exactly when
-			    you browse away. */}
-			<div className={styles.sidebarFolderRowGroup}>
-				<button
-					type="button"
-					className={styles.sidebarFolderToggle}
-					onClick={() => onToggle(project.id)}
-					aria-expanded={expanded}
-					aria-label={expanded ? `Collapse ${project.id}` : `Expand ${project.id}`}
-				>
-					<svg
-						viewBox="0 0 16 16"
-						width="12"
-						height="12"
-						className={expanded ? styles.sidebarChevronOpen : styles.sidebarChevron}
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<path d="M6 3l5 5-5 5z" />
-					</svg>
-				</button>
-				<button type="button" className={rowCls} onClick={() => onOpenProject(project.id)} title={project.cwd}>
-					<span className={styles.sidebarItemName}>{project.id}</span>
-				</button>
-			</div>
-			{/* Pinned active sessions: always visible — folding hides only the
-			    history. The live dot is the signal; no other chrome. */}
-			<div className={styles.sidebarFolderChildren}>
-				{activeRows.map((s) => (
-					<SessionRow
-						key={s.sessionId}
-						session={s}
-						dot={s.isStreaming ? "streaming" : "active"}
-						selected={isSelected(s)}
-						onOpen={onOpen}
-						onClose={onClose}
-					/>
-				))}
-			</div>
-			{expanded && (
-				<div className={styles.sidebarFolderChildren}>
-					{(page === undefined || page.kind === "loading") && (
-						<div className={styles.sidebarFolderMsg}>Loading…</div>
-					)}
-					{page?.kind === "error" && (
-						<button type="button" className={styles.sidebarFolderRetry} onClick={() => onLoad(project.id)}>
-							Load failed — retry
-						</button>
-					)}
-					{page?.kind === "ready" && history.length === 0 && activeRows.length === 0 && (
-						<div className={styles.sidebarFolderMsg}>No sessions yet</div>
-					)}
-					{page?.kind === "ready" &&
-						groups.map((group) => (
-							<div key={group.label}>
-								{/* Always labeled: a lone bucket still needs its header to
-								 * distinguish history rows from the pinned section above. */}
-								<div className={styles.sidebarGroupHeader}>{group.label}</div>
-								{group.items.map((s) => (
-									<SessionRow
-										key={`${s.projectId}/${s.stem}`}
-										session={s}
-										dot="idle"
-										selected={isSelected(s)}
-										onOpen={onOpen}
-									/>
-								))}
-							</div>
-						))}
-					{page?.kind === "ready" && page.hasMore && (
-						<button type="button" className={styles.sidebarLoadMore} onClick={() => onLoadMore(project.id)}>
-							Load more
-						</button>
-					)}
-				</div>
-			)}
-		</div>
-	);
-});
-
-// ---------------------------------------------------------------------------
-// Sidebar
-// ---------------------------------------------------------------------------
 
 export const Sidebar = memo(function Sidebar({
 	projects,
@@ -365,156 +95,14 @@ export const Sidebar = memo(function Sidebar({
 }) {
 	const isWide = useMediaQuery(SIDEBAR_BREAKPOINT);
 
-	const [mode, setMode] = useState<SidebarMode>(() => {
-		if (isWide) {
-			try {
-				const stored = localStorage.getItem(LS_KEY);
-				if (stored !== null) return stored === "true" ? "rail" : "hidden";
-			} catch {
-				/* ignore */
-			}
-			return "rail";
-		}
-		return "hidden";
+	const { mode, setMode, dismissOverlay } = useSidebarMode({
+		isWide,
+		toggleRef,
+		newSessionRef,
+		onModeChange,
 	});
-
-	// ── Folder expansion (persisted). The current Project always auto-expands
-	// (the effect adds, never removes — manual collapse stays respected).
-	const [expanded, setExpanded] = useState<Set<string>>(() => {
-		try {
-			const stored = localStorage.getItem(LS_FOLDERS_KEY);
-			if (stored !== null) return new Set(JSON.parse(stored) as string[]);
-		} catch {
-			/* ignore */
-		}
-		return new Set();
-	});
-	// Landing on a Project's home (no session attached) opens its folder — the
-	// browse-this-project stance. The same holds at boot for a session URL: the
-	// first non-null current Project expands even when a stem is attached —
-	// first-paint context, unlike a live session switch, where unfolding is
-	// noise (a pinned row is already visible regardless of folding). Adds,
-	// never removes — manual collapse stays respected.
-	const didBootExpandRef = useRef(false);
-	useEffect(() => {
-		if (currentProjectId === null) return;
-		const isBoot = !didBootExpandRef.current;
-		didBootExpandRef.current = true;
-		if (!isBoot && currentStem !== null) return;
-		setExpanded((s) => (s.has(currentProjectId) ? s : new Set(s).add(currentProjectId)));
-	}, [currentProjectId, currentStem]);
-	const toggleFolder = useCallback((projectId: string) => {
-		setExpanded((s) => {
-			const next = new Set(s);
-			if (next.has(projectId)) next.delete(projectId);
-			else next.add(projectId);
-			return next;
-		});
-	}, []);
-	useEffect(() => {
-		try {
-			localStorage.setItem(LS_FOLDERS_KEY, JSON.stringify([...expanded]));
-		} catch {
-			/* ignore */
-		}
-	}, [expanded]);
-
-	// Alt+N with several Projects: ensure the sidebar is open so its project
-	// list is reachable (a session is started from a Project's home prompt).
-	useEffect(() => {
-		newSessionRef.current = () => {
-			if (mode === "hidden") setMode(isWide ? "rail" : "fullscreen");
-		};
-	}, [mode, isWide, newSessionRef]);
-
-	// Mobile has no rail: crossing to narrow collapses a rail to hidden
-	// (hidden/fullscreen stay valid). Crossing back to wide preserves the
-	// mode — a deliberately hidden sidebar must not reopen on breakpoint
-	// changes.
-	useEffect(() => {
-		if (!isWide) setMode((m) => (m === "rail" ? "hidden" : m));
-	}, [isWide]);
-	useEffect(() => {
-		toggleRef.current = () => {
-			setMode((m) => {
-				// Desktop: hidden ↔ rail; fullscreen backs off to the rail (the
-				// toggle dismisses the overlay). Mobile: hidden ↔ fullscreen.
-				if (isWide) return m === "hidden" ? "rail" : m === "rail" ? "hidden" : "rail";
-				return m === "hidden" ? "fullscreen" : "hidden";
-			});
-		};
-	}, [isWide, toggleRef]);
-	// Desktop rail visibility only — fullscreen is transient, and a mobile
-	// session must not leak its fullscreen into the desktop preference.
-	useEffect(() => {
-		try {
-			if (isWide) localStorage.setItem(LS_KEY, String(mode !== "hidden"));
-		} catch {
-			/* ignore */
-		}
-	}, [mode, isWide]);
-	useEffect(() => {
-		onModeChange?.(mode);
-	}, [mode, onModeChange]);
-
-	// Fullscreen dismissal: close button, Esc, session open, All-projects.
-	// Desktop returns to the rail (the mode it was dragged from); mobile
-	// returns to hidden (its only other mode).
-	const dismissOverlay = useCallback(() => {
-		setMode((m) => (m === "fullscreen" ? (isWide ? "rail" : "hidden") : m));
-	}, [isWide]);
-	useEffect(() => {
-		if (mode !== "fullscreen") return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") dismissOverlay();
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [mode, dismissOverlay]);
-
-	// ── Hover-peek drawer (desktop, hidden mode): same content as the rail,
-	// a full-height overlay above the TopBar (it covers the hamburger too)
-	// while the pointer is over the hamburger or the drawer. Shown
-	// immediately; hidden on a grace delay. The delay exists because the
-	// drawer mounts directly over the hamburger, so the hamburger's
-	// mouseleave fires while the pointer hasn't moved at all — and the
-	// ordering of that leave vs the drawer's mouseenter is not something we
-	// can rely on. So the hide never trusts events alone: when the timer
-	// fires it asks the browser where the pointer is (:hover) and keeps the
-	// drawer if it's still over it. Any mode change cancels it outright.
-	const [peekOpen, setPeekOpen] = useState(false);
-	const peekTimerRef = useRef<number | undefined>(undefined);
-	const peekDrawerRef = useRef<HTMLElement | null>(null);
-	const showPeek = useCallback((show: boolean) => {
-		if (peekTimerRef.current !== undefined) {
-			window.clearTimeout(peekTimerRef.current);
-			peekTimerRef.current = undefined;
-		}
-		if (show) setPeekOpen(true);
-		else
-			peekTimerRef.current = window.setTimeout(() => {
-				peekTimerRef.current = undefined;
-				if (!peekDrawerRef.current?.matches(":hover")) setPeekOpen(false);
-			}, PEEK_CLOSE_MS);
-	}, []);
-	useEffect(() => {
-		showPeek(hamburgerHover);
-	}, [hamburgerHover, showPeek]);
-	useEffect(() => {
-		if (mode !== "hidden") {
-			if (peekTimerRef.current !== undefined) {
-				window.clearTimeout(peekTimerRef.current);
-				peekTimerRef.current = undefined;
-			}
-			setPeekOpen(false);
-		}
-	}, [mode]);
-	useEffect(
-		() => () => {
-			if (peekTimerRef.current !== undefined) window.clearTimeout(peekTimerRef.current);
-		},
-		[],
-	);
+	const { expanded, toggleFolder } = useFolderExpansion(currentProjectId, currentStem);
+	const { peekOpen, showPeek, hideNow, peekDrawerRef } = usePeekDrawer(mode, hamburgerHover);
 
 	// Live overshoot preview from the rail's resize handle: crossing below
 	// min snaps the rail shut (and back open when dragged wider); crossing
@@ -532,6 +120,16 @@ export const Sidebar = memo(function Sidebar({
 		if (mode !== "rail" && dragPreview !== null) setDragPreview(null);
 	}, [mode, dragPreview]);
 
+	// Drag overshoot release on the rail's resize handle: below min hides,
+	// above max fullscreens. The handle restores the pre-drag width first
+	// (both directions), so backing out of either state is an undo.
+	const handleOvershoot = useCallback(
+		(dir: "min" | "max") => {
+			setMode(dir === "min" ? "hidden" : "fullscreen");
+		},
+		[setMode],
+	);
+
 	// Resizable rail (desktop): owns the width, persists it, and publishes
 	// --sidebar-w so .body and the TopBar clear the gutter. useLayoutEffect
 	// inside the hook runs before paint (no one-frame flash); 0 unless the
@@ -548,76 +146,7 @@ export const Sidebar = memo(function Sidebar({
 		active: isWide && mode === "rail" && dragPreview === null,
 	});
 
-	// Drag overshoot release on the rail's resize handle: below min hides,
-	// above max fullscreens. The handle restores the pre-drag width first
-	// (both directions), so backing out of either state is an undo.
-	const handleOvershoot = useCallback((dir: "min" | "max") => {
-		setMode(dir === "min" ? "hidden" : "fullscreen");
-	}, []);
-
-	// Edge-reveal strip (desktop, hidden): pointer-absolute drag — the
-	// implied width is the pointer's x position (the bar's right edge chases
-	// the pointer), and the rail appears only once that width exceeds min;
-	// before that the drag previews closed, same snap semantics as the rail's
-	// handle. A release below min keeps it hidden with the pre-drag stored
-	// width restored. revealDragging keeps the strip mounted for the whole
-	// gesture: its pointerdown flips mode to "rail", and unmounting the
-	// strip would silently release the capture mid-drag.
-	const [revealDragging, setRevealDragging] = useState(false);
-	// Watchdog: the strip adds pane-resizing on pointerdown and normally
-	// removes it on pointerup — but if it unmounts mid-drag (breakpoint
-	// crossing), clear it whenever no reveal drag is active. Idempotent.
-	useEffect(() => {
-		if (!revealDragging) document.documentElement.classList.remove("pane-resizing");
-	}, [revealDragging]);
-	const revealBaseWidth = useRef<number | null>(null);
-	const revealOnPointerDown = useCallback(
-		(e: React.PointerEvent<HTMLDivElement>) => {
-			if (e.button !== 0) return;
-			e.preventDefault();
-			e.currentTarget.setPointerCapture(e.pointerId);
-			revealBaseWidth.current = resize.width;
-			setRevealDragging(true);
-			setMode("rail");
-			// At the far-left edge the implied width is already below min — start
-			// snapped shut so the rail is never shown more eagerly than the drag.
-			setDragPreview(e.clientX < resize.min ? "min" : null);
-			document.documentElement.classList.add("pane-resizing");
-		},
-		[resize],
-	);
-	const revealOnPointerMove = useCallback(
-		(e: React.PointerEvent<HTMLDivElement>) => {
-			if (revealBaseWidth.current === null || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
-			const raw = e.clientX;
-			resize.setWidth(raw);
-			setDragPreview(raw < resize.min ? "min" : null);
-		},
-		[resize],
-	);
-	const revealOnPointerEnd = useCallback(
-		(e: React.PointerEvent<HTMLDivElement>) => {
-			if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-			const base = revealBaseWidth.current;
-			revealBaseWidth.current = null;
-			e.currentTarget.releasePointerCapture(e.pointerId);
-			document.documentElement.classList.remove("pane-resizing");
-			setRevealDragging(false);
-			setDragPreview(null);
-			if (base === null) return;
-			// Release decides on the pointer's position (exact even if the last
-			// pointermove's state update hasn't flushed): below min → hide with
-			// the pre-drag stored width restored; at/above → commit the dragged
-			// width.
-			if (e.clientX < resize.min) {
-				resize.setWidth(base);
-				setMode("hidden");
-			} else {
-				resize.commitCurrent();
-			}
-		},
-		[resize],
-	);
+	const reveal = useEdgeReveal({ resize, setMode, setDragPreview });
 
 	// Opening a session is an attach (ADR 11): the daemon resolves-or-creates
 	// the activation and rebinds this connection — no isBusy guard, the old
@@ -632,15 +161,9 @@ export const Sidebar = memo(function Sidebar({
 			// rail so the picked conversation is visible.
 			if (!isWide) setMode("hidden");
 			else if (mode === "fullscreen") setMode("rail");
-			else if (peekOpen || peekTimerRef.current !== undefined) {
-				if (peekTimerRef.current !== undefined) {
-					window.clearTimeout(peekTimerRef.current);
-					peekTimerRef.current = undefined;
-				}
-				setPeekOpen(false);
-			}
+			else hideNow();
 		},
-		[isWide, mode, onOpenSession, peekOpen],
+		[isWide, mode, onOpenSession, setMode, hideNow],
 	);
 
 	const handleCloseSession = useCallback(
@@ -650,61 +173,30 @@ export const Sidebar = memo(function Sidebar({
 		[onCloseSession],
 	);
 
-	const activeByProject = useMemo(() => {
-		const map = new Map<string, SessionInfo[]>();
-		for (const s of activeSessions) {
-			const arr = map.get(s.projectId);
-			if (arr) arr.push(s);
-			else map.set(s.projectId, [s]);
-		}
-		return map;
-	}, [activeSessions]);
+	// All-projects leaves the current Project: detach, and the fullscreen
+	// overlay backs off (desktop → rail; mobile has nothing to dismiss from
+	// hidden mode).
+	const handleShowLauncher = useCallback(() => {
+		onShowLauncher();
+		if (!isWide || mode === "fullscreen") dismissOverlay();
+	}, [onShowLauncher, isWide, mode, dismissOverlay]);
 
 	const sidebarContent = (
-		<>
-			<div className={styles.sidebarSectionHeader}>
-				<span>Projects</span>
-				<span className={styles.headerActions}>
-					{/* Back to the global project picker. Hidden while already there. */}
-					{currentProjectId !== null && (
-						<button
-							type="button"
-							className={styles.sidebarAddBtn}
-							onClick={() => {
-								onShowLauncher();
-								if (!isWide || mode === "fullscreen") dismissOverlay();
-							}}
-							title="All projects"
-							aria-label="All projects"
-						>
-							<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">
-								<path d="M3.5 3.5a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H4.5a1 1 0 01-1-1V3.5zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H12a1 1 0 01-1-1V3.5zM3.5 11a1 1 0 011-1H8a1 1 0 011 1v3.5a1 1 0 01-1 1H4.5a1 1 0 01-1-1V11zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1v3.5a1 1 0 01-1 1H12a1 1 0 01-1-1V11z" />
-							</svg>
-						</button>
-					)}
-				</span>
-			</div>
-			{projects.length === 0 && <div className={styles.sidebarEmpty}>No projects configured</div>}
-			<div className={styles.sidebarList}>
-				{projects.map((project) => (
-					<ProjectFolder
-						key={project.id}
-						project={project}
-						currentProjectId={currentProjectId}
-						currentStem={currentStem}
-						expanded={expanded.has(project.id)}
-						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
-						page={sessionPages[project.id]}
-						onToggle={toggleFolder}
-						onOpenProject={onOpenProject}
-						onOpen={handleOpenSession}
-						onClose={handleCloseSession}
-						onLoad={onLoadFolder}
-						onLoadMore={onLoadMoreFolder}
-					/>
-				))}
-			</div>
-		</>
+		<SidebarContent
+			projects={projects}
+			currentProjectId={currentProjectId}
+			currentStem={currentStem}
+			activeSessions={activeSessions}
+			sessionPages={sessionPages}
+			expanded={expanded}
+			onToggleFolder={toggleFolder}
+			onOpenSession={handleOpenSession}
+			onOpenProject={onOpenProject}
+			onCloseSession={handleCloseSession}
+			onShowLauncher={handleShowLauncher}
+			onLoadFolder={onLoadFolder}
+			onLoadMoreFolder={onLoadMoreFolder}
+		/>
 	);
 
 	// Pure overlay above the whole shell (TopBar included): the conversation
@@ -793,15 +285,15 @@ export const Sidebar = memo(function Sidebar({
 				    mounted during its own drag (revealDragging) because its
 				    pointerdown flips the mode to "rail" — unmounting would
 				    silently release the pointer capture mid-gesture. */}
-				{((mode === "hidden" && !peekOpen) || revealDragging) && (
+				{((mode === "hidden" && !peekOpen) || reveal.revealDragging) && (
 					<div
 						className={styles.sidebarRevealStrip}
 						aria-hidden="true"
 						title="Drag to open sidebar"
-						onPointerDown={revealOnPointerDown}
-						onPointerMove={revealOnPointerMove}
-						onPointerUp={revealOnPointerEnd}
-						onPointerCancel={revealOnPointerEnd}
+						onPointerDown={reveal.onPointerDown}
+						onPointerMove={reveal.onPointerMove}
+						onPointerUp={reveal.onPointerEnd}
+						onPointerCancel={reveal.onPointerEnd}
 					/>
 				)}
 				{/* The rail. Unmounted during either overshoot preview — a min
