@@ -9,7 +9,7 @@ import { useStore } from "../../../infra/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 import { parseReadNotice } from "./resultText.ts";
 

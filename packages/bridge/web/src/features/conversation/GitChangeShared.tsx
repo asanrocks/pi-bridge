@@ -9,7 +9,8 @@
 
 import { memo } from "react";
 import type { GitIdentity, GitStampAnchor } from "../../../../src/core/index.ts";
-import styles from "./conversation.module.css";
+import styles from "./actionSteps.module.css";
+import turnStyles from "./turns.module.css";
 import type { GitShowState } from "./useGitShow.ts";
 import { useGitShow } from "./useGitShow.ts";
 
@@ -61,7 +62,7 @@ export const GitChangeBand = memo(function GitChangeBand({ change }: { change: G
 		.filter(Boolean)
 		.join(" · ");
 
-	const metaSpan = meta ? <span className={styles.gitStepMeta}>{meta}</span> : null;
+	const metaSpan = meta ? <span className={turnStyles.gitStepMeta}>{meta}</span> : null;
 
 	return (
 		<div className={styles.actionStep} data-kind="git" data-turn-key={change.entryId} data-entry-id={change.entryId}>
@@ -103,14 +104,14 @@ export const GitShowBody = memo(function GitShowBody({ state }: { state: GitShow
 	if (state.status === "loading") {
 		return (
 			<div className={styles.stepDetailsWrap}>
-				<div className={`${styles.stepDetails} ${styles.gitShowNote}`}>Loading…</div>
+				<div className={`${styles.stepDetails} ${turnStyles.gitShowNote}`}>Loading…</div>
 			</div>
 		);
 	}
 	if (state.status === "error") {
 		return (
 			<div className={styles.stepDetailsWrap}>
-				<div className={`${styles.stepDetails} ${styles.gitShowNote}`}>
+				<div className={`${styles.stepDetails} ${turnStyles.gitShowNote}`}>
 					Commit not available — it may no longer be reachable from the current repository.
 				</div>
 			</div>
@@ -121,7 +122,7 @@ export const GitShowBody = memo(function GitShowBody({ state }: { state: GitShow
 			<div className={styles.stepDetailsWrap}>
 				<div className={styles.stepDetails}>
 					<pre className={styles.cardOutput}>{state.output}</pre>
-					{state.truncated && <div className={styles.gitShowNote}>Output truncated.</div>}
+					{state.truncated && <div className={turnStyles.gitShowNote}>Output truncated.</div>}
 				</div>
 			</div>
 		);
