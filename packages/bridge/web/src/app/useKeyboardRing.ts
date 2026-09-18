@@ -15,8 +15,8 @@ import { useCallback } from "react";
 import type { TurnVM, ViewModel } from "../../../src/viewmodel/index.ts";
 import { newestLeafInSubtree, nextFocusedTurnKey, segmentBlocks, turnKeyOf } from "../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../features/conversation/clipboard.ts";
+import { getStore } from "../infra/state/store.tsx";
 import type { AppKeyHandlers } from "./keybindings.ts";
-import { getStore } from "./store.tsx";
 
 export interface KeyboardRingDeps {
 	vm: ViewModel;

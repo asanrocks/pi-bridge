@@ -14,8 +14,9 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import { getStore } from "./store.tsx";
-import { UnreadMessageCounter } from "./unreadCounter.ts";
+import { notificationPermissionGranted } from "../infra/lib/notificationPermission.ts";
+import { UnreadMessageCounter } from "../infra/lib/unreadCounter.ts";
+import { getStore } from "../infra/state/store.tsx";
 
 // ---------------------------------------------------------------------------
 // Activity signal
@@ -50,47 +51,6 @@ function closeNotification(): void {
 			})
 			.catch(() => {});
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Permission
-// ---------------------------------------------------------------------------
-
-type PermissionState = "granted" | "denied" | "unavailable";
-
-let permissionState: PermissionState = "unavailable";
-let permissionRequested = false;
-
-/** Sync the browser's current permission state into the module cache. */
-function syncPermissionState(): void {
-	if (typeof Notification === "undefined") {
-		permissionState = "unavailable";
-		return;
-	}
-	permissionState = Notification.permission as PermissionState;
-}
-
-/**
- * Request notification permission. Must be called from a user gesture
- * (e.g. send): browsers gate `requestPermission()` on transient activation,
- * so deferring to a later arbitrary click fails on mobile. Once-only — a
- * denial or dismiss is not re-promitted.
- */
-export function requestNotificationPermission(): void {
-	if (permissionRequested) return;
-	permissionRequested = true;
-	if (typeof Notification === "undefined") {
-		permissionState = "unavailable";
-		return;
-	}
-	// Already decided on a previous visit (granted/denied)
-	if (Notification.permission !== "default") {
-		permissionState = Notification.permission as PermissionState;
-		return;
-	}
-	Notification.requestPermission().then((r) => {
-		permissionState = r as PermissionState;
-	});
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +166,7 @@ function cancelPendingFire(): void {
 }
 
 function fireNotification(sessionName: string, durationMs: number): void {
-	syncPermissionState();
-	if (permissionState !== "granted") return;
+	if (!notificationPermissionGranted()) return;
 	if (typeof Notification === "undefined") return;
 
 	const seconds = Math.round(durationMs / 1000);

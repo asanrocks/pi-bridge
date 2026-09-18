@@ -1,7 +1,7 @@
 // ADR 09 stage-5 tests: client cache plumbing that is testable without a
 // DOM — the in-memory EntryCacheStore (policy-facing storage semantics), the
 // document→record helpers, and the candidate-mirror registry. The IndexedDB
-// adapter (web/src/infra/entryCache.ts) uses DOM types and is checked by
+// adapter (web/src/infra/persist/entryCache.ts) uses DOM types and is checked by
 // web/tsconfig only.
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -24,7 +24,7 @@ import {
 	discardSessionCandidate,
 	promoteSessionCandidate,
 	sessionCandidatePending,
-} from "../../web/src/infra/sessionCandidate.ts";
+} from "../../web/src/infra/net/sessionCandidate.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures

@@ -7,7 +7,7 @@
 // renders cost at most one redundant pull of already-fetched data.
 // ============================================================================
 
-import type { PullRequestItem } from "../../../src/core/index.ts";
+import type { PullRequestItem } from "../../../../src/core/index.ts";
 
 const outbox: PullRequestItem[] = [];
 let drainer: (() => void) | null = null;

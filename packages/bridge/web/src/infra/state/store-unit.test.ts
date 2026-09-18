@@ -5,7 +5,7 @@
 // address with no Project.
 
 import { describe, expect, it } from "vitest";
-import type { SessionInfo } from "../../../src/core/index.ts";
+import type { SessionInfo } from "../../../../src/core/index.ts";
 import { createClientStore } from "./store.ts";
 
 function session(stem: string): SessionInfo {

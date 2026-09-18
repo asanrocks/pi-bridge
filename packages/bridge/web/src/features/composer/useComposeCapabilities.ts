@@ -15,8 +15,8 @@
 
 import { useMemo } from "react";
 import type { ImageContent } from "../../../../src/core/index.ts";
-import { useStore } from "../../infra/store.tsx";
-import { listFilesRpc } from "../../infra/useRpc.ts";
+import { listFilesRpc } from "../../infra/net/useRpc.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import type { ComposeCardProps } from "./ComposeCard.tsx";
 import { useImageAttachments } from "./useImageAttachments.ts";
 import { type PathCompletionEntry, usePathCompletion } from "./usePathCompletion.tsx";

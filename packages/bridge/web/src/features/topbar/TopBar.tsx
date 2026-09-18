@@ -9,7 +9,7 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import type { ConnectionState } from "../../infra/store.ts";
+import type { ConnectionState } from "../../infra/state/store.ts";
 import styles from "./TopBar.module.css";
 
 export function TopBar({

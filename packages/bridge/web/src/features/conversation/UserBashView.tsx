@@ -8,7 +8,7 @@
 
 import { memo, useCallback, useMemo } from "react";
 import type { UserBashTurn } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useStore } from "../../infra/state/store.tsx";
 import styles from "./actionSteps.module.css";
 import { CardControls, CardStatusLine, TruncationNotice } from "./tools/CardSkeleton.tsx";
 import { BASH_TAIL_LINES } from "./tools/resultText.ts";

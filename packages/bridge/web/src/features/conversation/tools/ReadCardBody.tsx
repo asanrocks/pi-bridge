@@ -5,7 +5,7 @@
 // markdown toggle is on (store-wide toggle), source otherwise.
 
 import { memo, useMemo } from "react";
-import { useStore } from "../../../infra/store.tsx";
+import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
