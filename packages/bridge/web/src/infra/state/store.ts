@@ -9,7 +9,7 @@
 //     address (ADR 11), registries, sidebar folder pages
 //   - composer.ts — the draft (the textarea's single source of truth) and
 //     composer expansion
-//   - ui.ts — ephemeral view state: expand/fold sets, keyboard focus, pull
+//   - ui.ts — ephemeral view state: expand/collapse sets, keyboard focus, pull
 //     tickers, chrome, toasts
 // Slices share one store on purpose: `clearCurrentSession` (protocol) resets
 // session-scoped composer/UI state, and `blurDraft` (composer) reads the

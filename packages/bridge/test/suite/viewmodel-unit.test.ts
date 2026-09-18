@@ -1,6 +1,6 @@
 // ============================================================================
 // ViewModel unit tests — computeViewModel: flatten + structure pipeline,
-// turn collapsing (cross-entry merge), siblings, step summaries,
+// turn collapsing (cross-entry merge), siblings, action summaries,
 // move migration (migrateExpandKeys delegated to store tests).
 // Pure tests — no mirror, no WebSocket, no transport.
 // biome-ignore-all lint/complexity/useLiteralKeys: test fixtures use string-keyed entry names for readability
@@ -12,7 +12,7 @@ import {
 	assignGroupGitChanges,
 	beautifyShellCommand,
 	computeViewModel,
-	makeActionIdentity,
+	makeActionHeader,
 	makeActionSummary,
 	newestLeafInSubtree,
 	parseProviderError,
@@ -212,12 +212,12 @@ describe("computeViewModel", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Turn structure — consecutive assistant entries merge into one run;
+// Turn structure — consecutive assistant entries merge into one turn;
 // text never splits a turn.
 // ---------------------------------------------------------------------------
 
 describe("turn separation by text", () => {
-	it("merges a multi-response run into one turn per run", () => {
+	it("merges a multi-response turn into one turn", () => {
 		// The canonical multi-response shape: [think,text] [think,text] [tool]
 		// entries under one user turn render as ONE assistant turn — text
 		// does not split; segmentBlocks renders the interleaving in order.
@@ -252,19 +252,19 @@ describe("turn separation by text", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + merged assistant run
-		const run = vm.turns[1];
-		expect(run.kind).toBe("assistant");
-		if (run.kind === "assistant") {
-			expect(run.entryId).toBe("a1");
-			expect(run.turnKey).toBe("a1");
-			expect(run.blocks.map((b) => b.blockType)).toEqual(["thinking", "text", "thinking", "text", "tool"]);
+		expect(vm.turns).toHaveLength(2); // user + merged assistant turn
+		const assistantTurn = vm.turns[1];
+		expect(assistantTurn.kind).toBe("assistant");
+		if (assistantTurn.kind === "assistant") {
+			expect(assistantTurn.entryId).toBe("a1");
+			expect(assistantTurn.turnKey).toBe("a1");
+			expect(assistantTurn.blocks.map((b) => b.blockType)).toEqual(["thinking", "text", "thinking", "text", "tool"]);
 		}
 	});
 
 	it("accumulated tools, a message, and its trailing tools merge into one turn", () => {
 		// a1 is tool-only; a2 = [text, toolCall]: everything accumulates into
-		// a single run turn — a1's tool, the message, and a2's trailing tool
+		// a single merged turn — a1's tool, the message, and a2's trailing tool
 		// call render in block order within the turn.
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
@@ -287,13 +287,13 @@ describe("turn separation by text", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + one merged run turn
-		const run = vm.turns[1];
-		expect(run.kind).toBe("assistant");
-		if (run.kind === "assistant") {
-			expect(run.turnKey).toBe("a1");
-			expect(run.entryId).toBe("a1");
-			expect(run.blocks.map((b) => b.blockType)).toEqual(["tool", "text", "tool"]);
+		expect(vm.turns).toHaveLength(2); // user + one merged turn turn
+		const assistantTurn = vm.turns[1];
+		expect(assistantTurn.kind).toBe("assistant");
+		if (assistantTurn.kind === "assistant") {
+			expect(assistantTurn.turnKey).toBe("a1");
+			expect(assistantTurn.entryId).toBe("a1");
+			expect(assistantTurn.blocks.map((b) => b.blockType)).toEqual(["tool", "text", "tool"]);
 		}
 	});
 
@@ -314,18 +314,18 @@ describe("turn separation by text", () => {
 
 		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
-		const run = vm.turns[1];
-		if (run.kind === "assistant") {
-			expect(run.turnKey).toBe("a1");
-			expect(run.entryId).toBe("a1");
-			expect(run.blocks.map((b) => b.blockType)).toEqual(["thinking", "text", "tool"]);
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn.kind === "assistant") {
+			expect(assistantTurn.turnKey).toBe("a1");
+			expect(assistantTurn.entryId).toBe("a1");
+			expect(assistantTurn.blocks.map((b) => b.blockType)).toEqual(["thinking", "text", "tool"]);
 			// Run timing: anchored on the user seal, window extends past the
 			// entry's seal to its tool results.
-			expect(run.turnStartedAt).toBe("2024-01-01T00:00:00Z");
+			expect(assistantTurn.turnStartedAt).toBe("2024-01-01T00:00:00Z");
 		}
 	});
 
-	it("aborted entry carries stopReason/errorMessage once, on the run turn", () => {
+	it("aborted entry carries stopReason/errorMessage once, on the turn turn", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
 		appendEntry(
@@ -343,12 +343,12 @@ describe("turn separation by text", () => {
 
 		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
-		const run = vm.turns[1];
-		if (run.kind === "assistant") {
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn.kind === "assistant") {
 			// The turn's last ref is the entry's last block → the anomaly
 			// fields attach exactly once.
-			expect(run.stopReason).toBe("aborted");
-			expect(run.errorMessage).toBe("Operation aborted");
+			expect(assistantTurn.stopReason).toBe("aborted");
+			expect(assistantTurn.errorMessage).toBe("Operation aborted");
 		}
 	});
 
@@ -434,9 +434,9 @@ describe("turn separation by text", () => {
 		});
 	});
 
-	it("merged run anchors on the user seal and spans to the last entry's seal", () => {
+	it("merged turn anchors on the user seal and spans to the last entry's seal", () => {
 		// a1 and a2 are both text-final entries — they merge into ONE turn,
-		// so the run's timing spans the user seal to the last entry's seal
+		// so the turn's timing spans the user seal to the last entry's seal
 		// (per-response anchors exist only for mid-entry splits).
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
@@ -456,7 +456,7 @@ describe("turn separation by text", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + merged assistant run
+		expect(vm.turns).toHaveLength(2); // user + merged assistant turn
 		const t = vm.turns[1];
 		if (t.kind === "assistant") {
 			expect(t.turnStartedAt).toBe("2024-01-01T00:00:00Z"); // user seal
@@ -532,7 +532,7 @@ describe("cross-entry merge", () => {
 		doc.status.leafId = "pending:a2";
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		// user + one merged run turn (both entries text-final → merged)
+		// user + one merged turn turn (both entries text-final → merged)
 		expect(vm.turns).toHaveLength(2);
 		const a = vm.turns[1];
 		expect(a.kind).toBe("assistant");
@@ -545,7 +545,7 @@ describe("cross-entry merge", () => {
 		}
 	});
 
-	// (Text-bearing entries merge into the run unless an action block
+	// (Text-bearing entries merge into the turn unless an action block
 	// follows the text in the same entry — see "turn separation by text".)
 	it("tool_result between textless assistant entries does not break the merge", () => {
 		const doc = emptyDoc();
@@ -583,7 +583,7 @@ describe("cross-entry merge", () => {
 		if (a.kind === "assistant") expect(a.blocks).toHaveLength(2);
 	});
 
-	it("user message breaks the assistant run", () => {
+	it("user message breaks the assistant turn", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
 		appendEntry(
@@ -689,7 +689,7 @@ describe("system turns", () => {
 		}
 	});
 
-	it("a thinking-only run produces a switch turn without a model", () => {
+	it("a thinking-only turn produces a switch turn without a model", () => {
 		const doc = emptyDoc();
 		appendEntry(
 			doc,
@@ -758,7 +758,7 @@ describe("system turns", () => {
 // ---------------------------------------------------------------------------
 
 describe("tool result join", () => {
-	it("folds tool_result into the matching ToolActionStepVM result", () => {
+	it("folds tool_result into the matching ToolActionVM result", () => {
 		const doc = emptyDoc();
 		doc.entries["a1"] = {
 			kind: "message",
@@ -866,7 +866,7 @@ describe("tool result join", () => {
 	it("tool with provisional result entry (tool_execution_start) shows running", () => {
 		// A provisional tool_result (pending: prefix) is created at
 		// tool_execution_start, before tool_execution_end seals it. The
-		// step is running, not done.
+		// action is running, not done.
 		const doc = emptyDoc();
 		doc.entries["a1"] = {
 			kind: "message",
@@ -902,7 +902,7 @@ describe("tool result join", () => {
 // Heading summaries
 // ---------------------------------------------------------------------------
 
-describe("tool step summaries", () => {
+describe("tool action summaries", () => {
 	function docWithTool(args: Record<string, unknown> | null): Document {
 		const doc = emptyDoc();
 		doc.entries["a1"] = {
@@ -1011,7 +1011,7 @@ describe("user bash turns", () => {
 		expect(bashTurn.excludeFromContext).toBe(false);
 	});
 
-	it("failed run carries exit code and context exclusion", () => {
+	it("failed turn carries exit code and context exclusion", () => {
 		const doc = emptyDoc();
 		appendEntry(
 			doc,
@@ -1070,71 +1070,71 @@ describe("read compact classifications — makeActionSummary", () => {
 	});
 });
 
-describe("tool step identity — makeActionIdentity", () => {
-	// Pure function tests (no document): the identity is the full-form
-	// counterpart of the abbreviated band summary — cwd-relative full paths
+describe("tool action header — makeActionHeader", () => {
+	// Pure function tests (no document): the header is the full-form
+	// counterpart of the abbreviated tinted row summary — cwd-relative full paths
 	// with the read line range, the whole bash command.
 	it("read shows the full path with line range", () => {
-		expect(makeActionIdentity("read", { path: "src/main.ts", offset: 12, limit: 80 }, "/repo")).toBe(
+		expect(makeActionHeader("read", { path: "src/main.ts", offset: 12, limit: 80 }, "/repo")).toBe(
 			"src/main.ts:12-91",
 		);
-		expect(makeActionIdentity("read", { path: "/repo/src/main.ts", offset: 5 }, "/repo")).toBe("src/main.ts:5");
-		expect(makeActionIdentity("read", { path: "src/main.ts" })).toBe("src/main.ts");
+		expect(makeActionHeader("read", { path: "/repo/src/main.ts", offset: 5 }, "/repo")).toBe("src/main.ts:5");
+		expect(makeActionHeader("read", { path: "src/main.ts" })).toBe("src/main.ts");
 	});
 
 	it("read honors the filePath alias", () => {
-		expect(makeActionIdentity("read", { filePath: "src/main.ts" })).toBe("src/main.ts");
+		expect(makeActionHeader("read", { filePath: "src/main.ts" })).toBe("src/main.ts");
 	});
 
 	it("paths outside cwd stay absolute", () => {
-		expect(makeActionIdentity("read", { path: "/etc/hosts" }, "/repo")).toBe("/etc/hosts");
+		expect(makeActionHeader("read", { path: "/etc/hosts" }, "/repo")).toBe("/etc/hosts");
 	});
 
 	it("edit and write show the full path", () => {
-		expect(makeActionIdentity("edit", { path: "packages/bridge/src/cli.ts" }, "/repo")).toBe(
+		expect(makeActionHeader("edit", { path: "packages/bridge/src/cli.ts" }, "/repo")).toBe(
 			"packages/bridge/src/cli.ts",
 		);
-		expect(makeActionIdentity("write", { filePath: "packages/bridge/src/cli.ts" }, "/repo")).toBe(
+		expect(makeActionHeader("write", { filePath: "packages/bridge/src/cli.ts" }, "/repo")).toBe(
 			"packages/bridge/src/cli.ts",
 		);
 	});
 
 	it("bash shows the whole command, multi-line preserved", () => {
-		expect(makeActionIdentity("bash", { command: "npm test" })).toBe("npm test");
-		expect(makeActionIdentity("bash", { command: "cd /tmp\nls -la" })).toBe("cd /tmp\nls -la");
+		expect(makeActionHeader("bash", { command: "npm test" })).toBe("npm test");
+		expect(makeActionHeader("bash", { command: "cd /tmp\nls -la" })).toBe("cd /tmp\nls -la");
 	});
 
-	it("grep identity shows pattern, path, glob, limit", () => {
-		expect(makeActionIdentity("grep", { pattern: "TODO" }, "/repo")).toBe("/TODO/ in .");
-		expect(makeActionIdentity("grep", { pattern: "TODO", path: "src" }, "/repo")).toBe("/TODO/ in src");
-		expect(makeActionIdentity("grep", { pattern: "TODO", path: "/repo/src", glob: "*.ts", limit: 50 }, "/repo")).toBe(
+	it("grep header shows pattern, path, glob, limit", () => {
+		expect(makeActionHeader("grep", { pattern: "TODO" }, "/repo")).toBe("/TODO/ in .");
+		expect(makeActionHeader("grep", { pattern: "TODO", path: "src" }, "/repo")).toBe("/TODO/ in src");
+		expect(makeActionHeader("grep", { pattern: "TODO", path: "/repo/src", glob: "*.ts", limit: 50 }, "/repo")).toBe(
 			"/TODO/ in src (*.ts) limit 50",
 		);
-		expect(makeActionIdentity("grep", { query: "alt" })).toBe("/alt/ in .");
+		expect(makeActionHeader("grep", { query: "alt" })).toBe("/alt/ in .");
 	});
 
-	it("find identity shows pattern, path, limit", () => {
-		expect(makeActionIdentity("find", { pattern: "*.ts" }, "/repo")).toBe("*.ts in .");
-		expect(makeActionIdentity("find", { pattern: "*.ts", path: "src", limit: 10 }, "/repo")).toBe(
+	it("find header shows pattern, path, limit", () => {
+		expect(makeActionHeader("find", { pattern: "*.ts" }, "/repo")).toBe("*.ts in .");
+		expect(makeActionHeader("find", { pattern: "*.ts", path: "src", limit: 10 }, "/repo")).toBe(
 			"*.ts in src limit 10",
 		);
 	});
 
-	it("ls identity shows path and limit", () => {
-		expect(makeActionIdentity("ls", {}, "/repo")).toBe("ls .");
-		expect(makeActionIdentity("ls", { path: "src/web", limit: 100 }, "/repo")).toBe("ls src/web limit 100");
+	it("ls header shows path and limit", () => {
+		expect(makeActionHeader("ls", {}, "/repo")).toBe("ls .");
+		expect(makeActionHeader("ls", { path: "src/web", limit: 100 }, "/repo")).toBe("ls src/web limit 100");
 	});
 
 	it("unknown tools fall back to the first string argument, uncapped", () => {
 		const long = "x".repeat(200);
-		expect(makeActionIdentity("todoSearch", { pattern: long })).toBe(long);
+		expect(makeActionHeader("todoSearch", { pattern: long })).toBe(long);
 	});
 
 	it("returns null while the identifier argument has not streamed", () => {
-		expect(makeActionIdentity("read", null)).toBeNull();
-		expect(makeActionIdentity("read", {})).toBeNull();
-		expect(makeActionIdentity("bash", { command: "" })).toBeNull();
-		expect(makeActionIdentity("read", { path: "" })).toBeNull();
+		expect(makeActionHeader("read", null)).toBeNull();
+		expect(makeActionHeader("read", {})).toBeNull();
+		expect(makeActionHeader("bash", { command: "" })).toBeNull();
+		expect(makeActionHeader("read", { path: "" })).toBeNull();
 	});
 });
 
@@ -1143,7 +1143,7 @@ describe("tool step identity — makeActionIdentity", () => {
 // ---------------------------------------------------------------------------
 
 describe("segmentBlocks", () => {
-	it("splits flat blocks into text + groups of steps", () => {
+	it("splits flat blocks into text + groups of actions", () => {
 		const blocks = [
 			{ blockType: "text" as const, entryId: "e1", blockIndex: 0, text: "Hi", isProvisional: false },
 			{
@@ -1173,13 +1173,13 @@ describe("segmentBlocks", () => {
 		expect(segs[0].kind).toBe("text");
 		expect(segs[1].kind).toBe("group");
 		if (segs[1].kind === "group") {
-			expect(segs[1].steps).toHaveLength(2);
+			expect(segs[1].actions).toHaveLength(2);
 			expect(segs[1].key).toBe("e1:1");
 		}
 		expect(segs[2].kind).toBe("text");
 	});
 
-	it("merges consecutive steps into one group with correct key", () => {
+	it("merges consecutive actions into one group with correct key", () => {
 		const blocks = [
 			{
 				blockType: "thinking" as const,
@@ -1217,7 +1217,7 @@ describe("segmentBlocks", () => {
 		expect(segs).toHaveLength(1);
 		expect(segs[0].kind).toBe("group");
 		if (segs[0].kind === "group") {
-			expect(segs[0].steps).toHaveLength(3);
+			expect(segs[0].actions).toHaveLength(3);
 			expect(segs[0].key).toBe("e1:0");
 		}
 	});
@@ -1440,7 +1440,7 @@ describe("turn context usage", () => {
 		}
 	});
 
-	it("one merged turn reports the run's usage reading once", () => {
+	it("one merged turn reports the turn's usage reading once", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
 		appendEntry(
@@ -1458,9 +1458,9 @@ describe("turn context usage", () => {
 		);
 		const vm = computeViewModel({ document: doc, models });
 		expect(vm.turns).toHaveLength(2); // user + one merged turn
-		const run = vm.turns[1];
-		if (run.kind === "assistant") {
-			expect(run.contextPercent).toBeCloseTo(25, 5); // reported exactly once
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn.kind === "assistant") {
+			expect(assistantTurn.contextPercent).toBeCloseTo(25, 5); // reported exactly once
 		}
 	});
 });
@@ -1571,7 +1571,7 @@ describe("turn timing", () => {
 		}
 	});
 
-	it("run timing across a multi-batch run (parallel-safe)", () => {
+	it("turn timing across a multi-batch turn (parallel-safe)", () => {
 		// Timeline (all sealed):
 		//   00:00  user send (t_user)
 		//   00:10  asst gen1 seals (toolUse)            → gen1 = 10s
@@ -1622,7 +1622,7 @@ describe("turn timing", () => {
 			}),
 		);
 		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + one merged run turn
+		expect(vm.turns).toHaveLength(2); // user + one merged turn turn
 		const t1 = vm.turns[1];
 		expect(t1.kind).toBe("assistant");
 		if (t1.kind === "assistant") {
@@ -1803,13 +1803,13 @@ describe("identity preservation", () => {
 	});
 });
 
-describe("beautifyShellCommand — folded shell summaries", () => {
+describe("beautifyShellCommand — elided shell summaries", () => {
 	const CWD = "/home/x/inst";
 
 	it("folds a leading cd to a cwd-relative chip", () => {
 		const segs = beautifyShellCommand(`cd ${CWD}/and/sub/dir && npm run check`, CWD);
 		expect(segs).toEqual([
-			{ kind: "fold", label: "cd and/sub/dir", original: `cd ${CWD}/and/sub/dir &&` },
+			{ kind: "elide", label: "cd and/sub/dir", original: `cd ${CWD}/and/sub/dir &&` },
 			{ kind: "text", text: " " },
 			{ kind: "cmd", text: "npm run" },
 			{ kind: "text", text: " check" },
@@ -1821,18 +1821,18 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		expect(segs).toEqual([
 			{ kind: "cmd", text: "npm run" },
 			{ kind: "text", text: " check " },
-			{ kind: "fold", label: "...to/path.tsx", original: `${CWD}/and/sub/dir/to/path.tsx` },
+			{ kind: "elide", label: "...to/path.tsx", original: `${CWD}/and/sub/dir/to/path.tsx` },
 		]);
 	});
 
 	it("combines fold rules with command chips", () => {
 		const segs = beautifyShellCommand(`cd ${CWD}/sub && npm run check ${CWD}/sub/to/path.tsx`, CWD);
 		expect(segs).toEqual([
-			{ kind: "fold", label: "cd sub", original: `cd ${CWD}/sub &&` },
+			{ kind: "elide", label: "cd sub", original: `cd ${CWD}/sub &&` },
 			{ kind: "text", text: " " },
 			{ kind: "cmd", text: "npm run" },
 			{ kind: "text", text: " check " },
-			{ kind: "fold", label: "...to/path.tsx", original: `${CWD}/sub/to/path.tsx` },
+			{ kind: "elide", label: "...to/path.tsx", original: `${CWD}/sub/to/path.tsx` },
 		]);
 	});
 
@@ -1843,7 +1843,7 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 
 	it("cd to the cwd itself folds to a no-op chip", () => {
 		expect(beautifyShellCommand(`cd ${CWD} && npm test 2>&1 | tail -4`, CWD)).toEqual([
-			{ kind: "fold", label: "cd;", original: `cd ${CWD} &&` },
+			{ kind: "elide", label: "cd;", original: `cd ${CWD} &&` },
 			{ kind: "text", text: " " },
 			{ kind: "cmd", text: "npm test" },
 			{ kind: "text", text: " 2>&1 | tail -4" },
@@ -1857,7 +1857,7 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		const cwd = "/home/hugh/project/agenty/pi/packages/bridge";
 		expect(beautifyShellCommand(`cd ${dir} && npm run check`, cwd)).toEqual([
 			{ kind: "text", text: "cd " },
-			{ kind: "fold", label: "…", original: dir },
+			{ kind: "elide", label: "…", original: dir },
 			{ kind: "text", text: "agenty/pi && " },
 			{ kind: "cmd", text: "npm run" },
 			{ kind: "text", text: " check" },
@@ -1869,7 +1869,7 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		expect(beautifyShellCommand("cd /a/b && ls", CWD)).toEqual([{ kind: "text", text: "cd /a/b && ls" }]);
 	});
 
-	it("cd without a chained command is not folded", () => {
+	it("cd without a chained command is not elided", () => {
 		expect(beautifyShellCommand("cd somewhere", CWD)).toEqual([{ kind: "text", text: "cd somewhere" }]);
 	});
 
@@ -1912,7 +1912,7 @@ describe("beautifyShellCommand — folded shell summaries", () => {
 		expect(beautifyShellCommand("node ../../node_modules/vitest/dist/cli.js --run x", CWD)).toEqual([
 			{ kind: "cmd", text: "node" },
 			{ kind: "text", text: " " },
-			{ kind: "fold", label: "...dist/cli.js", original: "../../node_modules/vitest/dist/cli.js" },
+			{ kind: "elide", label: "...dist/cli.js", original: "../../node_modules/vitest/dist/cli.js" },
 			{ kind: "text", text: " --run x" },
 		]);
 	});
@@ -2078,7 +2078,7 @@ describe("git identity fold", () => {
 		expect(u.gitCommitSubject).toBe("feat: x");
 	});
 
-	it("a run-anchor stamp with no open run still renders a standalone card", () => {
+	it("a turn-anchor stamp with no open turn still renders a standalone card", () => {
 		const doc = emptyDoc();
 		appendEntry(
 			doc,
@@ -2126,7 +2126,7 @@ describe("git identity fold", () => {
 		});
 	});
 
-	it("a mid-run stamp folds into the run: no split, mark positioned after its block", () => {
+	it("a mid-turn stamp folds into the turn: no split, mark positioned after its block", () => {
 		// Path: user → assistant(toolCall) → stamp → tool_result → assistant(text)
 		const doc = emptyDoc();
 		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
@@ -2160,12 +2160,12 @@ describe("git identity fold", () => {
 		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		// One assistant turn — the run does not split.
+		// One assistant turn — the turn does not split.
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
-		const run = vm.turns[1];
-		if (run?.kind !== "assistant") throw new Error("expected assistant");
-		expect(run.gitChanges).toHaveLength(1);
-		expect(run.gitChanges![0]).toMatchObject({
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn?.kind !== "assistant") throw new Error("expected assistant");
+		expect(assistantTurn.gitChanges).toHaveLength(1);
+		expect(assistantTurn.gitChanges![0]).toMatchObject({
 			entryId: "s1",
 			identity: { commit: SHA1_B, branch: "main" },
 			commitSubject: "agent commit",
@@ -2174,13 +2174,13 @@ describe("git identity fold", () => {
 			afterBlockKey: "a1:b0",
 		});
 		// The tool result still joins its tool call.
-		const step = run.blocks[0];
-		if (step?.blockType !== "tool") throw new Error("expected tool step");
-		expect(step.status).toBe("done");
-		expect(step.result).toMatchObject({ entryId: "tr1", isError: false });
+		const action = assistantTurn.blocks[0];
+		if (action?.blockType !== "tool") throw new Error("expected tool action");
+		expect(action.status).toBe("done");
+		expect(action.result).toMatchObject({ entryId: "tr1", isError: false });
 	});
 
-	it("a turn_end stamp with an open run folds as a trailing mark", () => {
+	it("a turn_end stamp with an open turn folds as a trailing mark", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, stampEntry("s0", null, { v: 2, anchor: "prompt", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u1", "s0", "2024-01-01T00:00:01Z"));
@@ -2205,10 +2205,14 @@ describe("git identity fold", () => {
 		const vm = computeViewModel({ document: doc, models: [] });
 		// The prompt stamp (s0) renders no card; the turn_end stamp folds in.
 		expect(vm.turns.map((t) => t.kind)).toEqual(["user", "assistant"]);
-		const run = vm.turns[1];
-		if (run?.kind !== "assistant") throw new Error("expected assistant");
-		expect(run.gitChanges).toHaveLength(1);
-		expect(run.gitChanges![0]).toMatchObject({ anchor: "turn_end", afterBlockKey: "a1:b0", isInitial: false });
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn?.kind !== "assistant") throw new Error("expected assistant");
+		expect(assistantTurn.gitChanges).toHaveLength(1);
+		expect(assistantTurn.gitChanges![0]).toMatchObject({
+			anchor: "turn_end",
+			afterBlockKey: "a1:b0",
+			isInitial: false,
+		});
 	});
 
 	it("assignGroupGitChanges places marks in the owning group", () => {
@@ -2226,10 +2230,10 @@ describe("git identity fold", () => {
 			}),
 		);
 		const vm = computeViewModel({ document: doc, models: [] });
-		const run = vm.turns[1];
-		if (run?.kind !== "assistant") throw new Error("expected assistant");
-		const segments = segmentBlocks(run.blocks);
-		// Two groups (edit step, read step) separated by text.
+		const assistantTurn = vm.turns[1];
+		if (assistantTurn?.kind !== "assistant") throw new Error("expected assistant");
+		const segments = segmentBlocks(assistantTurn.blocks);
+		// Two groups (edit action, read action) separated by text.
 		expect(segments).toHaveLength(3);
 		const { byGroup, unattached } = assignGroupGitChanges(segments, [
 			{
@@ -2252,7 +2256,7 @@ describe("git identity fold", () => {
 			},
 		]);
 		expect(unattached).toHaveLength(0);
-		// The step-anchored mark owns its group; the text-anchored one attaches
+		// The action-anchored inline git stamp owns its group; the text-anchored one attaches
 		// to the group preceding that text (prefix-stable, see the next test).
 		expect(byGroup.get("a1:0")).toHaveLength(2);
 		expect(byGroup.get("a1:0")![0]!.entryId).toBe("s1");
@@ -2260,9 +2264,9 @@ describe("git identity fold", () => {
 		expect(byGroup.get("a1:2")).toBeUndefined();
 	});
 
-	it("mark placement is prefix-stable as the run grows (no group hopping)", () => {
+	it("mark placement is prefix-stable as the turn grows (no group hopping)", () => {
 		// A turn_end mark anchors on a closing text block; the group before it
-		// must stay its home even after a new group appears later in the run —
+		// must stay its home even after a new group appears later in the turn —
 		// hopping groups would remount (and visually flash) the card.
 		const doc = emptyDoc();
 		appendEntry(doc, userEntry("u1", null, "2024-01-01T00:00:01Z"));
@@ -2292,9 +2296,12 @@ describe("git identity fold", () => {
 		);
 
 		const markOf = (vm: ReturnType<typeof computeViewModel>) => {
-			const run = vm.turns.find((t) => t.kind === "assistant");
-			if (!run || run.kind !== "assistant") throw new Error("expected assistant");
-			const { byGroup, unattached } = assignGroupGitChanges(segmentBlocks(run.blocks), run.gitChanges ?? []);
+			const assistantTurn = vm.turns.find((t) => t.kind === "assistant");
+			if (!assistantTurn || assistantTurn.kind !== "assistant") throw new Error("expected assistant");
+			const { byGroup, unattached } = assignGroupGitChanges(
+				segmentBlocks(assistantTurn.blocks),
+				assistantTurn.gitChanges ?? [],
+			);
 			expect(unattached).toHaveLength(0);
 			return [...byGroup.keys()];
 		};
@@ -2302,7 +2309,7 @@ describe("git identity fold", () => {
 		const vm1 = computeViewModel({ document: doc, models: [] });
 		expect(markOf(vm1)).toEqual(["a1:0"]);
 
-		// The run grows: text, then a new tool group.
+		// The turn grows: text, then a new tool group.
 		appendEntry(
 			doc,
 			makeEntry("a3", "s1", "2024-01-01T00:00:04Z", "message", {
@@ -2340,7 +2347,7 @@ describe("beautifyShellCommand — quote awareness (piece scanner front-end)", (
 		expect(beautifyShellCommand("sed 's/a|b/c/' x", CWD)).toEqual([{ kind: "text", text: "sed 's/a|b/c/' x" }]);
 	});
 
-	it("quoted paths are not folded", () => {
+	it("quoted paths are not elided", () => {
 		expect(beautifyShellCommand('git commit -m "fix /a/b/c/d.ts now"', CWD)).toEqual([
 			{ kind: "cmd", text: "git commit" },
 			{ kind: "text", text: ' -m "fix /a/b/c/d.ts now"' },

@@ -75,14 +75,14 @@ browser-safe, both producing patches:
   extensions — these carry the real id in the event, so no provisional is
   needed).
 - **`reconcile(doc, piEntries, opts?) → patches`** — called by the host at each
-  seal (see [Seal timing](#seal-timing)) and by idle-state verbs (`setModel`/
+  settle (see [Settle timing](#settle-timing)) and by idle-state verbs (`setModel`/
   `setThinkingLevel`/`renameSession`). Diffs `piEntries` (`getEntries()`) against the
   `Document` to conform the document to pi's durable state: renames provisional
   ids to pi ids, discovers silent entries the event stream didn't carry, and
   repairs status drift (`model`/`thinkingLevel`/`contextUsage`/`name` via `opts: ReconcileOptions`, `stats` recomputed).
 
 The host subscribes to `session.subscribe`, runs `applyEvent` per event, and
-calls `reconcile` at the seals. The bus dispatches patches from both. The client
+calls `reconcile` at each settle. The bus dispatches patches from both. The client
 never knows which function produced a patch — it just applies them.
 
 There is no synthetic event mechanism. The reducer's input is **only real pi
@@ -113,7 +113,7 @@ Document {
 **Amendment (ADR 09):** committed `Entry`s carry an optional wire-eager
 `ord` - their index in the session file's entry list. It is assigned only
 where the full file-ordered list is in hand (`initFromEntries` or `reconcile`
-at seal), never by `applyEvent`. Initial sync can add the same `ord` to its
+at settle), never by `applyEvent`. Initial sync can add the same `ord` to its
 wire projection without mutating the canonical Document. `reconcile` assigns
 positions in the same patch that discovers any earlier hole. An entry becomes
 cacheable only after it has `ord`; renderers still derive order from
@@ -121,7 +121,7 @@ cacheable only after it has `ord`; renderers still derive order from
 
 In-flight entries live in `entries` under provisional ids alongside committed
 entries. There is no separate `pending` field. An entry's provisional id is
-renamed to its pi-assigned id at the seal. The renderer treats all entries
+renamed to its pi-assigned id at the settle. The renderer treats all entries
 uniformly (one `Entry` shape, one path); provisional entries are rendered as
 in-flight, committed entries as frozen.
 
@@ -131,13 +131,13 @@ primitive). Rename is stock json-patch (`move` to rename the key + `replace`
 for metadata fields). Everything else is stock json-patch (`replace` for
 `status`, `add`/`remove`/`move` for structural changes).
 
-**Thinking, tool arguments, and tool results are lazy (pull-to-stream).** `TextContent.text` is wire-eager (never `null`). The server withholds lazy fields on the wire (`null`); the client requests them on demand. A pull on an in-flight entry opens a live subscription (streams updates until commit); a pull on a committed entry is one-shot. See [Lazy-value contract](#lazy-value-contract) and `architecture.md` §7 invariants 11–12 (wants-outbox, filter sanitization).
+**Thinking, tool arguments, and tool results are lazy (pull-to-stream).** `TextContent.text` is wire-eager (never `null`). The server withholds lazy fields on the wire (`null`); the client requests them on demand. A pull on an in-flight entry opens a live subscription (streams updates until commit); a pull on a committed entry is one-shot. See [Lazy-value contract](#lazy-value-contract) and `architecture.md` §7 invariants 11–12 (pull queue, filter sanitization).
 
 ## Pending in `entries`
 
 In-flight entries are items in `entries` with a special (provisional) name. No
 separate `pending` field; no merging of tool results into messages (pi's
-entry-based model is followed as-is). At the seal, the entry is renamed
+entry-based model is followed as-is). At the settle, the entry is renamed
 (provisional id → pi id) and its metadata is conformed (`id`, `parentId`,
 `timestamp`).
 
@@ -153,7 +153,7 @@ Verified in `packages/agent/src/agent-loop.ts` and `session-manager.ts`:
   is identical between the event and the committed entry — reconciliation adds
   metadata, not a content diff.
 
-## Seal timing
+## Settle timing
 
 Pi assigns entry ids inside `appendMessage`, **after** `message_end` fires
 (`agent-session.ts:548–594`: `_emit(event)` runs synchronously, then
@@ -167,7 +167,7 @@ The bridge therefore **defers reconciliation to a later event guaranteed to see
 pi's post-append state.** Pi's `processEvents` awaits every listener per event
 (`agent.ts:565`), and the agent loop awaits each `emit(event)` — so any event
 after `message_end` is a safe reconciliation point. The content freezes at
-`message_end` (streaming stops); the id is learned at the seal. The gap is
+`message_end` (streaming stops); the id is learned at the settle. The gap is
 benign: `isStreaming` is already false, the entry exists under its provisional
 id, `leafId` points at it, and reconnect rebuilds from real ids anyway.
 
@@ -216,7 +216,7 @@ diff partitions new entries into three categories:
    `reconcile` discovers them via the `getEntries()` diff and emits `add
    /entries/<piId>` (skeleton + content, all lazy fields `null`). These can
    arrive mid-turn (e.g. `setLabel` from an extension during tool execution);
-   the next seal sweep catches them. The gap is bounded by the next seal —
+   the next settle sweep catches them. The gap is bounded by the next settle —
    same as category 1's rename gap.
 
 `reconcile` also repairs **status drift** at each sweep: applies `opts` (`model`/`thinkingLevel`/`contextUsage`/`name`) and recomputes `stats` via `deriveStats`, emitting `replace
@@ -336,7 +336,7 @@ navigation, `PullRequest` and `PullResponse` are **batches** — arrays of
 **Pull = subscription for in-flight entries.** A `PullRequest` for a provisional
 entry opens a live subscription: the server sends a `PullResponse` with the
 current value, then forwards subsequent patches touching that path until the
-entry commits (the `move` at the seal is the natural end-of-subscription
+entry commits (the `move` at the settle is the natural end-of-subscription
 signal; the daemon GCs subscriptions whose entry has committed). A
 `PullRequest` for a committed entry (frozen, no future updates) degenerates to
 one-shot: a `PullResponse` with the final value, no follow-ups. One protocol,
@@ -353,7 +353,7 @@ a transport concern (which socket gets which op), not a reducer concern.
 
 ## Conformance scope
 
-At the seal, `reconcile` diffs `piEntries` against the `Document` (and applies `opts`). For each
+At the settle, `reconcile` diffs `piEntries` against the `Document` (and applies `opts`). For each
 new entry:
 
 - **Provisional exists (streamed)** → `move /entries/provisionalId →
@@ -364,7 +364,7 @@ new entry:
   carried, so the content is identical between the in-flight and committed
   entry.
 - **No provisional (silent)** → `add /entries/<piId>` (projected `SessionEntry`,
-  lazy fields `null` on the wire via `filterPatchForSocket`/`projectSnapshot`; canonical holds real values).
+  lazy fields `null` on the wire via `filterPatchForSocket`/`snapshotForWire`; canonical holds real values).
 - **Already in `Document` (custom)** → skip.
 
 After entries, `reconcile` reconciles `status` (`leafId`, `name`/`model`/`thinkingLevel`/`contextUsage` from `opts`, `stats` via `deriveStats`).
@@ -423,7 +423,7 @@ a committed entry without a parent is domain-invalid.
 client applies all ops in a Patch before rendering. The reducer guarantees:
 after each complete Patch, the document is domain-valid. Ops that must be atomic
 (commit rename + metadata + `leafId` advance, or a batch of renames from one
-seal) are grouped into one Patch. No concept beyond the Patch — the atomicity is
+settle) are grouped into one Patch. No concept beyond the Patch — the atomicity is
 a property of how the reducer groups ops and how the client applies them. One
 event → zero or one Patch; one `reconcile` call (which may carry multiple
 entries) → one Patch.
@@ -500,7 +500,7 @@ ThinkingContent = { type: "thinking", thinking: string | null, ... } // null = l
 ToolCallBlock   = { type: "toolCall", id, name,
                     arguments: JsonValue | null, ... }               // null = lazy; object = partial/final
 
-EntryBase = { id, parentId, timestamp }   // id is provisional ("pending:...") until seal
+EntryBase = { id, parentId, timestamp }   // id is provisional ("pending:...") until settle
 ```
 
 The bridge `Entry` union follows pi's `SessionEntry` model but is a **wire-safe
@@ -516,7 +516,7 @@ filters.
 
 An in-flight `MessageEntry` has `id: "pending:message"` or
 `id: "pending:user:<n>"`; an in-flight `ToolResultEntry` has `id:
-"pending:<toolCallId>"`. `parentId` and `timestamp` are set at the seal.
+"pending:<toolCallId>"`. `parentId` and `timestamp` are set at the settle.
 `ToolCall.arguments` is a `JsonValue` (partial object). It is not serialized
 as a string — pi's `parseStreamingJson` has already reconstructed the
 partial object from LLM fragments. Streaming emits granular json-patch ops
@@ -535,7 +535,7 @@ to be written in `packages/bridge/src/core/`.
 3. The serial event loop is non-negotiable; events are processed one at a time,
    in order.
 4. Entry ids come from pi; `reconcile` renames provisional ids to pi ids at the
-   seal (`turn_end` + `agent_settled`), and discovers silent entries via
+   settle (`turn_end` + `agent_settled`), and discovers silent entries via
    `getEntries()` diff.
 5. Thinking, tool arguments, and tool results are lazy; `null` at those fields means "not yet
    fetched." `TextContent.text` is wire-eager (never `null`). Pull on an in-flight entry = subscription; pull on a committed
@@ -560,6 +560,6 @@ v0 ships the bus; this ADR specifies what replaces it. With the two-function
 model placed in `core`, the migration is additive: the bus's `subscribe`/
 `dispatch` surface is the listener the host hooks into. The bus becomes the
 patch-emission channel; `dispatch` goes from "forward the raw event" to
-"`applyEvent`, then dispatch patches; at seals, `reconcile`, then dispatch
+"`applyEvent`, then dispatch patches; at settles, `reconcile`, then dispatch
 patches." A usage line must be added to `scripts/browser-smoke-entry.ts` so the
 gate exercises both `applyEvent` and `reconcile`.

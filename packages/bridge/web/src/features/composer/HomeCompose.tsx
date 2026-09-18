@@ -24,19 +24,19 @@ import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
 
-/** The persisted pre-session pick for one Project: a model plus an optional
+/** The persisted pre-session choice for one Project: a model plus an optional
  * thinking level. */
-interface HomePick {
+interface HomeModelChoice {
 	provider: string;
 	modelId: string;
 	thinkingLevel?: string;
 }
 
-function loadHomePick(projectId: string): HomePick | null {
+function loadHomeModelChoice(projectId: string): HomeModelChoice | null {
 	try {
 		const raw = localStorage.getItem(MODEL_KEY_PREFIX + projectId);
 		if (!raw) return null;
-		const parsed = JSON.parse(raw) as HomePick;
+		const parsed = JSON.parse(raw) as HomeModelChoice;
 		if (typeof parsed.provider !== "string" || typeof parsed.modelId !== "string") return null;
 		return parsed;
 	} catch {
@@ -44,9 +44,9 @@ function loadHomePick(projectId: string): HomePick | null {
 	}
 }
 
-function saveHomePick(projectId: string, pick: HomePick | null): void {
+function saveHomeModelChoice(projectId: string, choice: HomeModelChoice | null): void {
 	try {
-		if (pick) localStorage.setItem(MODEL_KEY_PREFIX + projectId, JSON.stringify(pick));
+		if (choice) localStorage.setItem(MODEL_KEY_PREFIX + projectId, JSON.stringify(choice));
 		else localStorage.removeItem(MODEL_KEY_PREFIX + projectId);
 	} catch {
 		// Quota / private mode — the in-memory slot stands for this visit.
@@ -86,7 +86,7 @@ export const HomeCompose = memo(function HomeCompose({
 	const clearDraft = useStore((s) => s.clearDraft);
 	const text = draft.kind === "idle" ? "" : draft.text;
 
-	const [pick, setPick] = useState<HomePick | null>(() => loadHomePick(projectId));
+	const [choice, setChoice] = useState<HomeModelChoice | null>(() => loadHomeModelChoice(projectId));
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -99,44 +99,46 @@ export const HomeCompose = memo(function HomeCompose({
 
 	// The slot is per-project; switching projects re-reads it.
 	useEffect(() => {
-		setPick(loadHomePick(projectId));
+		setChoice(loadHomeModelChoice(projectId));
 	}, [projectId]);
 
 	// Effective = the explicit picks, else the daemon-reported defaults (shown
 	// in the button, the level row, and the picker's selected row; "none" when
 	// nothing is available). Only the explicit picks are sent with newSession.
-	// A level-only pick carries no model — the derivation must yield null so
+	// A level-only choice carries no model — the derivation must yield null so
 	// the daemon default (not a {undefined, undefined} object) shows through.
-	const model = pick?.provider && pick?.modelId ? { provider: pick.provider, modelId: pick.modelId } : null;
+	const model = choice?.provider && choice?.modelId ? { provider: choice.provider, modelId: choice.modelId } : null;
 	const effectiveModel = model ?? defaultModel;
-	const effectiveLevel = pick?.thinkingLevel ?? defaultThinkingLevel ?? "";
+	const effectiveLevel = choice?.thinkingLevel ?? defaultThinkingLevel ?? "";
 
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 
 	const handleSetModel = useCallback(
 		(provider: string, modelId: string) => {
-			const next: HomePick = { provider, modelId };
-			// Keep the level pick only if the new model supports it — otherwise
+			const next: HomeModelChoice = { provider, modelId };
+			// Keep the level choice only if the new model supports it — otherwise
 			// drop it and fall back to the Project default (pi clamps server-side
 			// too; this keeps the display honest).
 			const supported = models.find((m) => m.provider === provider && m.id === modelId)?.supportedThinkingLevels;
-			const level = pick?.thinkingLevel;
+			const level = choice?.thinkingLevel;
 			if (level && (!supported || supported.includes(level))) next.thinkingLevel = level;
-			setPick(next);
-			saveHomePick(projectId, next);
+			setChoice(next);
+			saveHomeModelChoice(projectId, next);
 		},
-		[projectId, models, pick],
+		[projectId, models, choice],
 	);
 
 	const handleSetThinkingLevel = useCallback(
 		(level: string) => {
 			// Picking a level without a model pins the level only: the send then
 			// carries the level while the daemon resolves the model.
-			const next: HomePick = pick ? { ...pick, thinkingLevel: level } : ({ thinkingLevel: level } as HomePick);
-			setPick(next);
-			saveHomePick(projectId, next);
+			const next: HomeModelChoice = choice
+				? { ...choice, thinkingLevel: level }
+				: ({ thinkingLevel: level } as HomeModelChoice);
+			setChoice(next);
+			saveHomeModelChoice(projectId, next);
 		},
-		[projectId, pick],
+		[projectId, choice],
 	);
 
 	// Ctrl+P cycles the same provider-deduped list the session dock uses;
@@ -176,7 +178,7 @@ export const HomeCompose = memo(function HomeCompose({
 				text,
 				images.length > 0 ? images : undefined,
 				model ?? undefined,
-				pick?.thinkingLevel,
+				choice?.thinkingLevel,
 			);
 		} finally {
 			setSending(false);
@@ -188,7 +190,7 @@ export const HomeCompose = memo(function HomeCompose({
 			// the textarea stays enabled through the send.
 			textareaRef.current?.focus();
 		}
-	}, [sending, text, capabilities.images, model, pick, onNewSession, projectId, clearDraft]);
+	}, [sending, text, capabilities.images, model, choice, onNewSession, projectId, clearDraft]);
 
 	return (
 		<div className={styles.home}>

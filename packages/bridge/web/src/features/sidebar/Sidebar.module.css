@@ -114,7 +114,7 @@
 /* Disclosure header, not a row: the folder toggles folding and nothing
    else, so it never competes with session rows for selection chrome.
    Quiet by construction — dimmed text, no fill at rest; hover darkens the
-   text rather than painting a band. */
+   text rather than painting a tinted row. */
 .sidebarFolderRowGroup {
 	display: flex;
 	align-items: stretch;
