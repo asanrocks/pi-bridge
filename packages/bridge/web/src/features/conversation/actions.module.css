@@ -1,43 +1,43 @@
 /* ==========================================================================
-   Action steps (step-as-backstage) — the whole band/card family: action
-   groups, tinted step bands, fold rows, details cards, tool bodies (edit
-   diff, write, bash, args, search), think blocks, and the band previews.
-   Kept in one module because the parts cross-reference (`.actionStep:hover
-   .cardControls`, `.stepHeadStatic .stepFold`) — CSS modules scope class
+   Actions — the whole tinted row/card set: action groups, tinted action
+   rows, collapsed rows, details cards, tool bodies (edit
+   diff, write, bash, args, search), think blocks, and the row previews.
+   Kept in one module because the parts cross-reference (`.action:hover
+   .cardControls`, `.actionHeadStatic .actionCollapsed`) — CSS modules scope class
    names per file, so a selector cannot span two module files.
 
-   Each action renders as a full-width tinted band whose hue marks its
-   color family: mutate (edit+write, rose), bash (amber), think (neutral
-   slate), read (dimmed gray). Four families, three tiers — the family
+   Each action renders as a full-width tinted row whose hue marks its
+   hue: mutate (edit+write, rose), bash (amber), think (neutral
+   slate), read (dimmed gray). Four hues, three tiers — the hue
    color's saturation/value carries the tier (stand-out / neutral /
    dimmed); one --action-tint strength for all. The tint is the visual
-   landmark separating "backstage" actions from the prose; the per-step
+   landmark separating actions from the prose; the per-action
    status dot is retired — the agent self-corrects, and the turn-header
    timing already signals in-flight work.
 
    Left-edge indicators differ by level:
-     - L2 group header: dots (one per family present) — a multi-family
+     - L2 group header: dots (one per hue present) — a multi-hue
        legend, always visible, docked left of the summary.
-     - L3 step band:    a 3px left strip (single hue) on the container.
+     - L3 action tinted row:    a 3px left strip (single hue) on the container.
    Different shapes for different levels — dots legend the container,
-   the strip marks the single step.
+   the strip marks the single action.
 
-   Fold affordances, two controls at the press point (step header):
+   Collapse affordances, two controls at the press point (action header):
      - group header: triangle at the start, then dots, then summary
-     - step header:  triangle at the start (folds the whole details); the
+     - action header:  triangle at the start (collapses the whole details); the
                      cap toggle ("show all") and the copy/wrap/md controls
                      live in the hover top bar of the expanded card
    ========================================================================== */
 
-/* ── Group — a meta-group of consecutive steps. Neutral (no kind hue). ── */
+/* ── Group — a meta-group of consecutive actions. Neutral (no kind hue). ── */
 .actionGroup {
 	margin: 6px 0;
 }
 
-/* Group header — a label row above the kinded steps. The group itself is
-   neutral (no band tint), but carries a left-edge dot legend (one dot per
-   family present) so the group reads as a colored summary at a glance.
-   Triangle (fold) then dots then summary; a light wash on hover keeps it
+/* Group header — a label row above the kinded actions. The group itself is
+   neutral (no tint), but carries a left-edge dot legend (one dot per
+   hue present) so the group reads as a colored summary at a glance.
+   Triangle (collapse) then dots then summary; a light wash on hover keeps it
    visibly interactive. */
 .actionGroupHeader {
 	display: flex;
@@ -60,8 +60,8 @@
 	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
 }
 
-/* Fold triangle — shared by group and step headers. Sits at the start. */
-.foldTri {
+/* Collapse triangle — shared by group and action headers. Sits at the start. */
+.collapseTri {
 	width: 12px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
@@ -76,64 +76,64 @@
 	white-space: nowrap;
 }
 
-/* Family dots — the group's left-edge legend, always visible (stable
-   landmark; the bands below are the expanded detail, the dots are the
-   summary). One dot per color family present, colored by the same
-   --kind-* tokens as the band strips/tints so the legend and the bands
+/* Hue dots — the group's left-edge legend, always visible (stable
+   landmark; the tinted rows below are the expanded detail, the dots are the
+   summary). One dot per hue present, colored by the same
+   --kind-* tokens as the row strips/tints so the legend and the rows
    read as one vocabulary. */
-.groupSwatches {
+.groupDots {
 	display: inline-flex;
 	gap: 3px;
 	flex-shrink: 0;
 }
-.groupSwatches > span {
+.groupDots > span {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
 }
-.groupSwatches > span[data-family="mutate"] { background: var(--kind-mutate); }
-.groupSwatches > span[data-family="bash"]   { background: var(--kind-bash); }
-.groupSwatches > span[data-family="think"]  { background: var(--kind-think); }
-.groupSwatches > span[data-family="read"]   { background: var(--kind-read); }
-.groupSwatches > span[data-family="git"]    { background: var(--kind-git); }
+.groupDots > span[data-hue="mutate"] { background: var(--kind-mutate); }
+.groupDots > span[data-hue="bash"]   { background: var(--kind-bash); }
+.groupDots > span[data-hue="think"]  { background: var(--kind-think); }
+.groupDots > span[data-hue="read"]   { background: var(--kind-read); }
+.groupDots > span[data-hue="git"]    { background: var(--kind-git); }
 
-/* Vertical list of steps under a group — no tree branching, no indent
-   (the step's own left accent border is the nesting cue). */
-.spine {
+/* Vertical list of actions under a group — no tree branching, no indent
+   (the action's own left accent border is the nesting cue). */
+.groupLine {
 	padding: 2px 0;
 }
 
-/* ── Step — the tinted backstage region. hue = family. ─────────────── */
-/* Unified anatomy: every band has a 3px left strip + a uniform-strength
-   tint, both from its family color. No per-kind special-cases — the
-   family color's saturation/value does the tiering (stand-out mutate/bash
+/* ── Action — the tinted region. hue = kind. ─────────────────────── */
+/* Unified anatomy: every tinted row has a 3px left strip + a uniform-strength
+   tint, both hued from the same token. No per-kind special-cases — the
+   hue's saturation/value does the tiering (stand-out mutate/bash
    pop; neutral think recedes; dimmed read recedes furthest). edit + write
-   both map to the mutate family; the ADR 10 v2 git change cards reuse the
-   same band anatomy in the git family hue. */
-.actionStep {
-	--step-hue: var(--kind-read);
-	background: color-mix(in srgb, var(--step-hue) var(--action-tint), transparent);
-	border-left: 3px solid color-mix(in srgb, var(--step-hue) 55%, transparent);
+   both map to the mutate hue; the ADR 10 v2 git change cards reuse the
+   same tinted row anatomy in the git hue. */
+.action {
+	--action-hue: var(--kind-read);
+	background: color-mix(in srgb, var(--action-hue) var(--action-tint), transparent);
+	border-left: 3px solid color-mix(in srgb, var(--action-hue) 55%, transparent);
 	border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 	margin: 2px 0;
 }
 
-.actionStep[data-kind="read"]  { --step-hue: var(--kind-read); }
-.actionStep[data-kind="bash"]  { --step-hue: var(--kind-bash); }
-.actionStep[data-kind="write"] { --step-hue: var(--kind-mutate); }
-.actionStep[data-kind="edit"]  { --step-hue: var(--kind-mutate); }
-.actionStep[data-kind="think"] { --step-hue: var(--kind-think); }
-.actionStep[data-kind="git"]   { --step-hue: var(--kind-git); }
+.action[data-kind="read"]  { --action-hue: var(--kind-read); }
+.action[data-kind="bash"]  { --action-hue: var(--kind-bash); }
+.action[data-kind="write"] { --action-hue: var(--kind-mutate); }
+.action[data-kind="edit"]  { --action-hue: var(--kind-mutate); }
+.action[data-kind="think"] { --action-hue: var(--kind-think); }
+.action[data-kind="git"]   { --action-hue: var(--kind-git); }
 
 /* `!!` runs are excluded from the LLM context — the whole card recedes. */
-.actionStep[data-muted] {
+.action[data-muted] {
 	opacity: 0.6;
 }
 
-/* Step header row — a div holding the fold button (triangle + summary).
+/* Action header row — a div holding the collapse button (triangle + summary).
    No dot (the tint is the marker); no cap chip (it lives in the hover
    card top bar). */
-.stepHead {
+.actionHead {
 	display: flex;
 	align-items: center;
 	gap: 4px;
@@ -144,9 +144,9 @@
 	border-radius: 0 var(--radius-sm) 0 0;
 }
 
-/* Fold button — triangle + summary. flex:1 fills the header so the cap
-   chip docks right. Owns the step's hover wash. */
-.stepFold {
+/* Collapse button — triangle + summary. flex:1 fills the header so the cap
+   chip docks right. Owns the action's hover wash. */
+.actionCollapsed {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -165,23 +165,23 @@
 	border-radius: 0 var(--radius-sm) 0 0;
 }
 
-.stepFold:hover {
-	background: color-mix(in srgb, var(--step-hue) 14%, transparent);
+.actionCollapsed:hover {
+	background: color-mix(in srgb, var(--action-hue) 14%, transparent);
 }
 
-/* Non-interactive step header (redacted/empty think). */
-.stepHeadStatic .stepFold {
+/* Non-interactive action header (redacted/empty think). */
+.actionHeadStatic .actionCollapsed {
 	cursor: default;
 }
-.stepHeadStatic .stepFold:hover {
+.actionHeadStatic .actionCollapsed:hover {
 	background: none;
 }
 /* Static think labels ("think", "(redacted)") sit muted. */
-.stepHeadStatic .stepSummary {
+.actionHeadStatic .actionSummary {
 	color: var(--color-muted-foreground);
 }
 
-.stepSummary {
+.actionSummary {
 	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -191,33 +191,33 @@
 
 /* Command-word chip in the beautified shell summary (beautifyShellCommand
    rule 3): the first command of every chained segment ("npm run", "git
-   commit") — the signal of the line. Tinted with the step's kind hue and
+   commit") — the signal of the line. Tinted with the action's kind hue and
    rounded so it stands off the plain shell text. Spec: inline, no
    font-size change (the summary line is already the small scale), padding
-   0 4px, radius-sm, 12% step-hue tint. */
+   0 4px, radius-sm, 12% action-hue tint. */
 .cmdChip {
-	background: color-mix(in srgb, var(--step-hue) 12%, transparent);
+	background: color-mix(in srgb, var(--action-hue) 12%, transparent);
 	border-radius: var(--radius-sm);
 	padding: 0 4px;
 	margin: 0 1px;
 }
 
-/* Folded token in the beautified shell summary (beautifyShellCommand rules
+/* Elided token in the beautified shell summary (beautifyShellCommand rules
    1–2): the abbreviated "cd dir" / "cd;" / "…" / "...last/two" forms — the
    elided noise, de-emphasized rather than highlighted. Dimmed italic, no
    background; the title tooltip carries the original. */
-.foldAbbrev {
+.elideAbbrev {
 	color: var(--color-muted-foreground);
 	font-style: italic;
 }
 
 /* Think preview is plain escaped text (not Markdown) so nowrap holds and a
    long single line stays clipped — Streamdown's root wrapper applies
-   whitespace-normal, which defeated .stepSummary's nowrap when the preview
-   was a Markdown render and let the step grow vertically. Tool summaries
-   are plain strings too. Think steps reuse .stepSummary for their folded
-   first-line preview (see .stepFold in ThinkActionStepView); the rule is
-   kept for the tool-step summary. */
+   whitespace-normal, which defeated .actionSummary's nowrap when the preview
+   was a Markdown render and let the action grow vertically. Tool summaries
+   are plain strings too. Think actions reuse .actionSummary for their collapsed
+   first-line preview (see .actionCollapsed in ThinkActionView); the rule is
+   kept for the tool-action summary. */
 
 /* Inline code inside the think body shares the warm code-bg chip; sizing
    is the global inline-code rule (index.css) so the chip is identical in
@@ -233,15 +233,15 @@
 /* Content region of the details card — sits below the upper chrome, separated
    by a hairline divider (the border-top). It is the only scrollable zone: the
    height cap bounds the rendered cost of expanded content while the card
-   frame (status, identity, error) stays pinned above it. The persistent
+   frame (status, header, error) stays pinned above it. The persistent
    bottom fade (on the wrapper) signals clipping so content never disappears
    silently; the "show all" control lives in the hover controls. */
-.stepDetailsWrap {
+.actionDetailsWrap {
 	position: relative;
 	border-top: 1px solid var(--color-border);
 }
 
-.stepDetails {
+.actionDetails {
 	margin: 0;
 	padding: 6px 8px;
 	font-size: var(--fs-sm);
@@ -251,10 +251,10 @@
 
 /* Clipped-indicator fade — passive signal that the capped details have
    more content below. Hidden once the scroll window sits at the content
-   tail (JS-driven, see ToolActionStepView) and never intercepts pointer
+   tail (JS-driven, see ToolActionView) and never intercepts pointer
    events. Sits at the bottom of the content region, above the card's
    bottom padding. */
-.stepDetailsFade {
+.actionDetailsFade {
 	position: absolute;
 	left: 0;
 	right: 0;
@@ -264,10 +264,10 @@
 	pointer-events: none;
 }
 
-/* ── Think — a foldable inline document on the think tint. ─────────── */
-/* Thinking is prose. Folded, it renders as a full-width fold row — the
-   same .stepFold triangle + one-line plain-text summary a tool step
-   header uses — so it is uniform with tool steps, fully clickable, and
+/* ── Think — a collapsible inline document on the think tint. ──────── */
+/* Thinking is prose. Collapsed, it renders as a full-width collapsed row — the
+   same .actionCollapsed triangle + one-line plain-text summary a tool action
+   header uses — so it is uniform with tool actions, fully clickable, and
    streaming-optimized (the selector subscribes to the first line only).
    Expanded, the full Markdown prose flows inline (a document, not a
    details card-with-heading); the triangle rides the first line, so the
@@ -279,9 +279,9 @@
 	padding: 5px 10px 5px 5px;
 	min-width: 0;
 }
-/* The expanded fold control — a real button holding the same triangle
-   glyph as the tool step headers, docked at the start of the first line. */
-.thinkFold {
+/* The expanded collapse control — a real button holding the same triangle
+   glyph as the tool action headers, docked at the start of the first line. */
+.thinkCollapsed {
 	display: flex;
 	align-items: center;
 	background: none;
@@ -292,7 +292,7 @@
 	cursor: pointer;
 	flex-shrink: 0;
 }
-.thinkFold:hover .foldTri {
+.thinkCollapsed:hover .collapseTri {
 	color: var(--color-secondary);
 }
 .thinkBody {
@@ -314,14 +314,14 @@
 	font-size: inherit;
 }
 
-/* Expanded prose fills the row beside the fold button. */
+/* Expanded prose fills the row beside the collapse button. */
 .thinkRow .thinkBody {
 	flex: 1;
 	min-width: 0;
 	padding: 0;
 }
 
-/* Redacted / empty — a static muted one-liner; no fold, no triangle. */
+/* Redacted / empty — a static muted one-liner; no collapse, no triangle. */
 .thinkStatic {
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
@@ -396,11 +396,11 @@
 	user-select: none;
 }
 
-/* Band preview — the collapsed band's result tail (bash) or error line.
+/* Tinted row preview — the collapsed tinted row's result tail (bash) or error line.
    Muted mono, one line per row with ellipsis clipping (the preview
    recedes; the expanded card is the readable surface). The hint row counts
    the lines above the visible tail. */
-.bandPreview {
+.rowPreview {
 	padding: 0 10px 5px 17px;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: var(--fs-xs);
@@ -408,18 +408,18 @@
 	color: var(--color-muted-foreground);
 }
 
-.bandPreviewLine {
+.rowPreviewLine {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.bandPreviewHint {
+.rowPreviewHint {
 	font-style: italic;
 	opacity: 0.75;
 }
 
-.bandPreviewError {
+.rowPreviewError {
 	padding: 0 10px 5px 17px;
 	font-size: var(--fs-xs);
 	color: var(--color-error);
@@ -459,11 +459,11 @@
 	padding: 0 0 2px;
 }
 
-/* ── Details card — the expanded content region of an action step. ── */
+/* ── Details card — the expanded content region of an action. ── */
 /* Frameless: no border, no radius, no inset — the card is the document
-   surface. Its background matches --color-background (covering the band
+   surface. Its background matches --color-background (covering the tinted row
    tint below the header), so expanded content reads as part of the
-   document; the 3px family strip on the step and the hairline divider
+   document; the 3px hue strip on the action and the hairline divider
    above the details are the only separators. Rendered only when expanded
    (lazy: keeps shiki/code highlighting off collapsed details in long
    conversations). */
@@ -577,7 +577,7 @@
 
 /* Card controls — hover-revealed cluster docked right in the card top
    bar: copy, wrap, md, show-all. Hidden (opacity, keeps layout stable)
-   until the step band is hovered or a control is focused; on
+   until the action tinted row is hovered or a control is focused; on
    hover-incapable pointers (touch) always visible — hover-only controls
    would be unreachable there. */
 .cardControls {
@@ -589,8 +589,8 @@
 	transition: opacity 0.12s ease;
 }
 
-.actionStep:hover .cardControls,
-.actionStep:focus-within .cardControls,
+.action:hover .cardControls,
+.action:focus-within .cardControls,
 .cardControls:focus-within {
 	opacity: 1;
 }
@@ -626,12 +626,12 @@
 	color: var(--color-secondary);
 }
 
-/* Identity line — the full-form identifier (full cwd-relative path with
-   the read line range, or the whole command). The band summary
+/* Header line — the full-form identifier (full cwd-relative path with
+   the read line range, or the whole command). The tinted row summary
    abbreviates for scannability; this restores the full truth. Lighter
    treatment (secondary, mono) on the card background — it reads as
    metadata about the call, distinct from the content below the divider. */
-.cardIdentity {
+.cardHeader {
 	padding: 0 8px 5px;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: var(--fs-sm);
@@ -643,7 +643,7 @@
 
 /* Error strip — the tool's error text, skeleton-owned so every card
    renders failures uniformly. Full-bleed inside the card so the wash
-   reads as a strip between the identity and the divider; same error
+   reads as a strip between the header and the divider; same error
    vocabulary as diff removals (error color on a faint error wash). */
 .cardError {
 	margin: 0;

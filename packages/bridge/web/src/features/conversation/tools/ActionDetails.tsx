@@ -1,15 +1,15 @@
-// ActionDetails — the expanded details renderer for a tool action step.
+// ActionDetails — the expanded details renderer for a tool action.
 // Each tool renders as a card: the skeleton zones above (status line,
-// identity, error strip — ToolActionStepView) and a body showing the
+// header, error strip — ToolActionView) and a body showing the
 // meaningful content — diff, code, output, matches. Subscribes to the
 // live arguments/result slices (lazy-pulled).
 
 import { type ComponentType, memo, useCallback } from "react";
 import type { ImageContent } from "../../../../../src/core/types.ts";
-import { stepWants, type ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
-import { wantPull } from "../../../infra/net/wants.ts";
+import { actionPulls, type ToolActionVM } from "../../../../../src/viewmodel/index.ts";
+import { enqueuePulls } from "../../../infra/net/pullQueue.ts";
 import { useStore } from "../../../infra/state/store.tsx";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import type { ActionDetailsProps, ToolArgs } from "./args.ts";
 import { BashCardBody } from "./BashCardBody.tsx";
 import { EditCardBody } from "./EditCardBody.tsx";
@@ -36,29 +36,29 @@ const TOOL_DETAILS: Record<string, ComponentType<ActionDetailsProps>> = {
 	ls: SearchResultBody,
 };
 
-export const ActionDetails = memo(function ActionDetails({ step }: { step: ToolActionStepVM }) {
+export const ActionDetails = memo(function ActionDetails({ action }: { action: ToolActionVM }) {
 	useStore((s) => s.pullTick);
-	wantPull(stepWants(step, true));
+	enqueuePulls(actionPulls(action, true));
 
 	const arguments_ = useStore(
 		useCallback(
 			(s) => {
-				const entry = s.document.entries[step.entryId];
-				if (!entry || entry.kind !== "message") return step.arguments;
-				const block = entry.content[step.blockIndex];
-				return block?.type === "toolCall" ? (block.arguments ?? null) : step.arguments;
+				const entry = s.document.entries[action.entryId];
+				if (!entry || entry.kind !== "message") return action.arguments;
+				const block = entry.content[action.blockIndex];
+				return block?.type === "toolCall" ? (block.arguments ?? null) : action.arguments;
 			},
-			[step.entryId, step.blockIndex, step.arguments],
+			[action.entryId, action.blockIndex, action.arguments],
 		),
 	);
 	const resultContent = useStore(
 		useCallback(
 			(s) => {
-				if (!step.result) return null;
-				const entry = s.document.entries[step.result.entryId];
+				if (!action.result) return null;
+				const entry = s.document.entries[action.result.entryId];
 				return entry?.kind === "tool_result" ? (entry.content ?? null) : null;
 			},
-			[step.result],
+			[action.result],
 		),
 	);
 	const fullResultText = resultContent
@@ -70,16 +70,16 @@ export const ActionDetails = memo(function ActionDetails({ step }: { step: ToolA
 	// content only on success. Bash is the exception: its error results are
 	// command output plus a status line appended by the tool, which belongs
 	// in the output area — the strip would duplicate it.
-	const bodyOwnsResult = !(step.result?.isError ?? false) || step.toolName === "bash";
+	const bodyOwnsResult = !(action.result?.isError ?? false) || action.toolName === "bash";
 	const resultText = bodyOwnsResult ? fullResultText : null;
 	const resultImages = bodyOwnsResult
 		? (resultContent ?? []).filter((c): c is ImageContent => c.type === "image")
 		: [];
 
-	const Body = TOOL_DETAILS[step.toolName] ?? FallbackCardBody;
+	const Body = TOOL_DETAILS[action.toolName] ?? FallbackCardBody;
 	return (
 		<div className={styles.detailsBody}>
-			<Body step={step} args={args} resultText={resultText} resultImages={resultImages} />
+			<Body action={action} args={args} resultText={resultText} resultImages={resultImages} />
 		</div>
 	);
 });

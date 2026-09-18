@@ -7,7 +7,7 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AuthStorage, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Document, Patch, PatchOp } from "../../src/core/index.ts";
-import { DocumentMirror, projectSnapshot } from "../../src/core/index.ts";
+import { DocumentMirror, snapshotForWire } from "../../src/core/index.ts";
 import { createManager, type Manager } from "../../src/host/index.ts";
 
 export interface BridgeHarnessOptions {
@@ -167,11 +167,11 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Normalize a Document for comparison: projectSnapshot (strip lazy fields),
+ * Normalize a Document for comparison: snapshotForWire (strip lazy fields),
  * then JSON round-trip (eliminates undefined vs missing).
  */
 export function normalizeForComparison(doc: Document): Document {
-	return JSON.parse(JSON.stringify(projectSnapshot(doc))) as Document;
+	return JSON.parse(JSON.stringify(snapshotForWire(doc))) as Document;
 }
 
 /** A BridgeHarness paired with a DocumentMirror subscribed to the Manager. */
@@ -185,7 +185,7 @@ export interface MirrorHarness {
 /** Create a MirrorHarness: init mirror from canonical snapshot, subscribe to Manager patches. */
 export function createMirrorHarness(bh: BridgeHarness): MirrorHarness {
 	const mirror = new DocumentMirror();
-	mirror.applyReplace(projectSnapshot(bh.manager.document));
+	mirror.applyReplace(snapshotForWire(bh.manager.document));
 
 	bh.manager.onPatch((patch) => {
 		mirror.applyPatch(patch.ops);

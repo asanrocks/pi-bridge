@@ -69,13 +69,13 @@
   --color-thinking-max: #be185d;
   --color-mutate: #d6336c;              /* rose: file mutation (edit + write) */
 
-  /* ── Action bands (band-as-backstage) ──────────────────────────────── */
-  /* Four color families, three tiers: stand-out (mutate, bash), neutral
-     (think), dimmed (read). The family color's saturation/value carries
+  /* ── Action tinted rows ──────────────────────────────── */
+  /* Four hues, three tiers: stand-out (mutate, bash), neutral
+     (think), dimmed (read). The hue's saturation/value carries
      the tier — one --action-tint strength for all, no per-kind tint
-     multiplier. edit + write share the mutate family (the label/details
-     still distinguish them); the band hue is a family signal. */
-  --action-tint: 6%;                    /* band background strength (uniform) */
+     multiplier. edit + write share the mutate hue (the label/details
+     still distinguish them); the tinted row hue is a hue signal. */
+  --action-tint: 6%;                    /* tinted row background strength (uniform) */
   --kind-mutate: var(--color-mutate);   /* edit + write — stand-out A */
   --kind-bash:   var(--color-streaming); /* stand-out B */
   --kind-think:  var(--color-think);   /* neutral */
@@ -213,11 +213,11 @@ input, textarea {
    Streamdown element overrides.
    Streamdown emits a double-boxed "card within a card" for tables and code
    blocks (outer bg-sidebar wrapper + inner bg-background body, each
-   bordered), plus a chrome header band and a bordered, blurred actions pill
+   bordered), plus a chrome header bar and a bordered, blurred actions pill
    on code blocks. On the warm page tone that reads as a thick, chrome-framed
    region — incoherent with the tool-card annotation-line rhythm (edit/read/
-   write cards: .stepDetails is bg-background, radius-sm, 6px 10px padding,
-   single border, a dimmed .fileCardLine annotation, no header band, no
+   write cards: .actionDetails is bg-background, radius-sm, 6px 10px padding,
+   single border, a dimmed .fileCardLine annotation, no header bar, no
    actions pill). De-chrome both to match: bg-background + radius-sm + single
    border, the inner body transparent and unpadded (the card padding wraps
    the content — no double pad), and the code copy action borderless. The h-8
@@ -240,7 +240,7 @@ input, textarea {
 }
 
 /* Code: de-chrome the card (bg-background, radius-sm, single border; inner
-   body transparent/unpadded), drop the language tag + its h-8 header band,
+   body transparent/unpadded), drop the language tag + its h-8 header bar,
    and float the copy action at the top-right — dimmed by default, revealed on
    hover, not clickable while hidden. (Download is disabled in markdown.tsx,
    so the pill holds only the copy button.) */
@@ -252,11 +252,11 @@ input, textarea {
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-sm);
 }
-/* Drop the language tag and the h-8 band it sits in. */
+/* Drop the language tag and the h-8 bar it sits in. */
 [data-streamdown="code-block-header"] {
 	display: none;
 }
-/* Float the actions wrapper at the top-right, out of flow (no vertical band).
+/* Float the actions wrapper at the top-right, out of flow (no vertical strip).
    Resets Streamdown's sticky / -mt-10 / h-8 — those were calibrated to the
    now-hidden header. :has targets the wrapper (it has no data-streamdown
    attribute of its own); if Streamdown restructures, revisit this. */

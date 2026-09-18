@@ -14,7 +14,7 @@
 // is derivable from isError; timing is not).
 
 import { useEffect, useState } from "react";
-import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
+import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 
 const toolTiming = new Map<string, { startedAt: number | null; endedAt: number | null }>();
 
@@ -27,7 +27,7 @@ const toolTiming = new Map<string, { startedAt: number | null; endedAt: number |
  * miss the post-seal remount case (status done, no running tick to trigger
  * a re-render after stamping).
  */
-export function useToolTiming(toolCallId: string, status: ToolActionStepVM["status"]) {
+export function useToolTiming(toolCallId: string, status: ToolActionVM["status"]) {
 	const [, setTick] = useState(0);
 
 	// 1s re-render while running so the live elapsed updates.

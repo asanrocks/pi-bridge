@@ -62,9 +62,9 @@ describe("createClientStore", () => {
 		expect(state.projects).toEqual([]);
 		expect(state.activeSessions).toEqual([]);
 		expect(state.expandedActionGroups).toEqual(new Set());
-		expect(state.expandedSteps).toEqual(new Set());
+		expect(state.expandedActions).toEqual(new Set());
 		expect(state.frozenActionGroups).toEqual(new Set());
-		expect(state.frozenSteps).toEqual(new Set());
+		expect(state.frozenActions).toEqual(new Set());
 		expect(state.loadingPaths).toEqual(new Set());
 		expect(state.models).toEqual([]);
 		expect(state.thinkingLevels).toEqual([]);
@@ -182,62 +182,62 @@ describe("createClientStore", () => {
 		expect(store.getState().frozenActionGroups).toEqual(new Set(["e1:0"]));
 	});
 
-	it("toggleActionGroup resets the group's steps to folded (header is master toggle)", () => {
+	it("toggleActionGroup resets the group's actions to collapsed (header is master toggle)", () => {
 		const store = createClientStore();
-		const stepKeys = ["e1:b0", "e1:b1", "e1:b2"];
+		const actionKeys = ["e1:b0", "e1:b1", "e1:b2"];
 
 		// Cards expanded independently (user opened two of three).
-		store.getState().toggleStep("e1:b0");
-		store.getState().toggleStep("e1:b1");
-		expect(store.getState().expandedSteps).toEqual(new Set(["e1:b0", "e1:b1"]));
-		expect(store.getState().frozenSteps).toEqual(new Set(["e1:b0", "e1:b1"]));
+		store.getState().toggleAction("e1:b0");
+		store.getState().toggleAction("e1:b1");
+		expect(store.getState().expandedActions).toEqual(new Set(["e1:b0", "e1:b1"]));
+		expect(store.getState().frozenActions).toEqual(new Set(["e1:b0", "e1:b1"]));
 
-		// Open the group header — all steps reset to folded, so reopening
-		// shows descendants folded rather than the pre-fold state.
-		store.getState().toggleActionGroup("e1:0", stepKeys);
-		expect(store.getState().expandedSteps).toEqual(new Set());
-		expect(store.getState().frozenSteps).toEqual(new Set());
+		// Open the group header — all actions reset to collapsed, so reopening
+		// shows descendants collapsed rather than the pre-collapse state.
+		store.getState().toggleActionGroup("e1:0", actionKeys);
+		expect(store.getState().expandedActions).toEqual(new Set());
+		expect(store.getState().frozenActions).toEqual(new Set());
 		expect(store.getState().expandedActionGroups).toEqual(new Set(["e1:0"]));
 
-		// Re-expand a step, then fold the group — same reset on fold.
-		store.getState().toggleStep("e1:b2");
-		store.getState().toggleActionGroup("e1:0", stepKeys);
-		expect(store.getState().expandedSteps).toEqual(new Set());
-		expect(store.getState().frozenSteps).toEqual(new Set());
+		// Re-expand an action, then collapse the group — same reset on collapse.
+		store.getState().toggleAction("e1:b2");
+		store.getState().toggleActionGroup("e1:0", actionKeys);
+		expect(store.getState().expandedActions).toEqual(new Set());
+		expect(store.getState().frozenActions).toEqual(new Set());
 		expect(store.getState().expandedActionGroups).toEqual(new Set());
 	});
 
-	it("toggleActionGroup without stepKeys leaves step state untouched (legacy)", () => {
+	it("toggleActionGroup without actionKeys leaves action state untouched (legacy)", () => {
 		const store = createClientStore();
-		store.getState().toggleStep("e1:b0");
+		store.getState().toggleAction("e1:b0");
 		store.getState().toggleActionGroup("e1:0");
-		expect(store.getState().expandedSteps).toEqual(new Set(["e1:b0"]));
+		expect(store.getState().expandedActions).toEqual(new Set(["e1:b0"]));
 	});
 
-	it("toggleActionGroup opening a single-step group auto-expands the lone step", () => {
+	it("toggleActionGroup opening a single-action group auto-expands the lone action", () => {
 		const store = createClientStore();
 
-		// Open a one-step group — the lone step's details auto-expand (a folded group
+		// Open a one-action group — the lone action's details auto-expand (a collapsed group
 		// with a single element is a wasted click).
 		store.getState().toggleActionGroup("e1:0", ["e1:b0"]);
 		expect(store.getState().expandedActionGroups).toEqual(new Set(["e1:0"]));
-		expect(store.getState().expandedSteps).toEqual(new Set(["e1:b0"]));
+		expect(store.getState().expandedActions).toEqual(new Set(["e1:b0"]));
 
-		// Fold the group — the lone step resets to folded with the rest.
+		// Collapse the group — the lone action resets to collapsed with the rest.
 		store.getState().toggleActionGroup("e1:0", ["e1:b0"]);
-		expect(store.getState().expandedSteps).toEqual(new Set());
+		expect(store.getState().expandedActions).toEqual(new Set());
 	});
 
-	it("toggleStep adds to expanded and frozen sets", () => {
+	it("toggleAction adds to expanded and frozen sets", () => {
 		const store = createClientStore();
 
-		store.getState().toggleStep("e1:b0");
-		expect(store.getState().expandedSteps).toEqual(new Set(["e1:b0"]));
-		expect(store.getState().frozenSteps).toEqual(new Set(["e1:b0"]));
+		store.getState().toggleAction("e1:b0");
+		expect(store.getState().expandedActions).toEqual(new Set(["e1:b0"]));
+		expect(store.getState().frozenActions).toEqual(new Set(["e1:b0"]));
 
-		store.getState().toggleStep("e1:b0");
-		expect(store.getState().expandedSteps).toEqual(new Set());
-		expect(store.getState().frozenSteps).toEqual(new Set(["e1:b0"]));
+		store.getState().toggleAction("e1:b0");
+		expect(store.getState().expandedActions).toEqual(new Set());
+		expect(store.getState().frozenActions).toEqual(new Set(["e1:b0"]));
 	});
 
 	it("setLoadingPaths replaces loading set", () => {
@@ -256,7 +256,7 @@ describe("createClientStore", () => {
 		// Pre-populate expand state with pending keys
 		store.getState().toggleActionGroup("pending:message:0");
 		store.getState().toggleActionGroup("pending:message:3");
-		store.getState().toggleStep("pending:message:b0");
+		store.getState().toggleAction("pending:message:b0");
 		store.getState().setLoadingPaths(new Set(["/entries/pending:message/content/0/text"]));
 
 		// Also add a key that doesn't match (should be left alone)
@@ -267,9 +267,9 @@ describe("createClientStore", () => {
 
 		const state = store.getState();
 		expect(state.expandedActionGroups).toEqual(new Set(["msg_001:0", "msg_001:3", "other-entry:0"]));
-		expect(state.expandedSteps).toEqual(new Set(["msg_001:b0"]));
+		expect(state.expandedActions).toEqual(new Set(["msg_001:b0"]));
 		expect(state.frozenActionGroups).toEqual(new Set(["msg_001:0", "msg_001:3", "other-entry:0"]));
-		expect(state.frozenSteps).toEqual(new Set(["msg_001:b0"]));
+		expect(state.frozenActions).toEqual(new Set(["msg_001:b0"]));
 		expect(state.loadingPaths).toEqual(new Set(["/entries/msg_001/content/0/text"]));
 	});
 
@@ -305,10 +305,10 @@ describe("migrateExpandKeys (pure)", () => {
 	function emptySets(): ExpandKeySets {
 		return {
 			expandedActionGroups: new Set(),
-			expandedSteps: new Set(),
+			expandedActions: new Set(),
 			uncappedDetails: new Set(),
 			frozenActionGroups: new Set(),
-			frozenSteps: new Set(),
+			frozenActions: new Set(),
 			loadingPaths: new Set(),
 		};
 	}
@@ -329,12 +329,12 @@ describe("migrateExpandKeys (pure)", () => {
 		const result = migrateExpandKeys(
 			{
 				...emptySets(),
-				expandedSteps: new Set(["pending:msg:b0", "pending:msg:b3"]),
+				expandedActions: new Set(["pending:msg:b0", "pending:msg:b3"]),
 			},
 			"pending:msg",
 			"real-001",
 		);
-		expect(result.expandedSteps).toEqual(new Set(["real-001:b0", "real-001:b3"]));
+		expect(result.expandedActions).toEqual(new Set(["real-001:b0", "real-001:b3"]));
 	});
 
 	it("rewrites loading paths with /entries/entryId/ prefix", () => {
@@ -354,13 +354,13 @@ describe("migrateExpandKeys (pure)", () => {
 			{
 				...emptySets(),
 				frozenActionGroups: new Set(["pending:msg:0"]),
-				frozenSteps: new Set(["pending:msg:b1"]),
+				frozenActions: new Set(["pending:msg:b1"]),
 			},
 			"pending:msg",
 			"real",
 		);
 		expect(result.frozenActionGroups).toEqual(new Set(["real:0"]));
-		expect(result.frozenSteps).toEqual(new Set(["real:b1"]));
+		expect(result.frozenActions).toEqual(new Set(["real:b1"]));
 	});
 
 	it("does not touch keys that don't match the old prefix", () => {
@@ -378,9 +378,9 @@ describe("migrateExpandKeys (pure)", () => {
 	it("handles empty input sets", () => {
 		const result = migrateExpandKeys(emptySets(), "old", "new");
 		expect(result.expandedActionGroups).toEqual(new Set());
-		expect(result.expandedSteps).toEqual(new Set());
+		expect(result.expandedActions).toEqual(new Set());
 		expect(result.frozenActionGroups).toEqual(new Set());
-		expect(result.frozenSteps).toEqual(new Set());
+		expect(result.frozenActions).toEqual(new Set());
 		expect(result.loadingPaths).toEqual(new Set());
 	});
 });

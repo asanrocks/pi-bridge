@@ -368,15 +368,15 @@ A pure, browser-safe class in `core`:
 |---|---|
 | `applyReplace(snapshot)` | Replace entire mirror with server snapshot (new root, immutable-persistent) |
 | `applyPatch(ops)` | Apply incremental Patch batch (returns new root, structural sharing) |
-| `needsPull(wants)` | Return subset of wanted fields whose value is still `null` |
+| `needsPull(pending)` | Return subset of pending fields whose value is still `null` |
 | `ingestPullResponse(values)` | Set lazy fields to received values (new root) |
 
 The mirror is the client's single source of truth for rendering. It converges
 to the canonical Document over time but is never treated as authoritative.
 
-### Pull orchestration (wants-outbox)
+### Pull orchestration (pull queue)
 
-Components declare wants during render by appending lazy-field paths to a per-render outbox. The connection layer drains the outbox after each render pass:
+Components declare pending pulls during render by appending lazy-field paths to a per-render pull queue. The connection layer drains the queue after each render pass:
 
 1. Components append wanted `(entryId, fieldPath)` pairs during render.
 2. Drain: filter through `needsPull()` + `loadingPaths` (in-flight dedup).
@@ -385,7 +385,7 @@ Components declare wants during render by appending lazy-field paths to a per-re
 
 ### Reconnect
 
-On disconnect, the client opens a new WebSocket, creates a new `BridgeClient`, and drives re-attachment: `getDaemonInfo` + `listInstances` → if stored `attachedInstanceId` still alive, `switchInstance(id)` → `replace` push. A fresh `Connection` has `attachedManager = null` — `replace` is a consequence of re-attachment, not automatic (multi-instance, §9). All lazy fields are `null` again; the pull loop re-drains wants for what's on screen. `BridgeClient` rejects all pending RPC promises.
+On disconnect, the client opens a new WebSocket, creates a new `BridgeClient`, and drives re-attachment: `getDaemonInfo` + `listInstances` → if stored `attachedInstanceId` still alive, `switchInstance(id)` → `replace` push. A fresh `Connection` has `attachedManager = null` — `replace` is a consequence of re-attachment, not automatic (multi-instance, §9). All lazy fields are `null` again; the pull loop re-drains pulls for what's on screen. `BridgeClient` rejects all pending RPC promises.
 
 ## 5. Cross-cutting topics
 
@@ -436,7 +436,7 @@ The lazy content contract spans all four components:
 
 1. **Manager** — the canonical Document holds real values in all content
    fields. Laziness does not exist here.
-2. **Connection** — `projectSnapshot()` nulls lazy fields before sending
+2. **Connection** — `snapshotForWire()` nulls lazy fields before sending
    `replace`. `filterPatchForSocket()` drops Patch ops touching lazy fields
    the socket hasn't subscribed to. `pull` resolves real values from the
    canonical Document on demand.
@@ -504,8 +504,8 @@ issues.
 | `property-invariant.test.ts` | Unit | Invariants: committed entries immutable, domain-valid, structural sharing |
 | `store-unit.test.ts` | Unit | Store selectors, `migrateExpandKeys`, `loadingPaths` dedup |
 | `tree-unit.test.ts` | Unit | `HistoryTree` / `LaneLayout` (Pass 1 + Pass 2) |
-| `viewmodel-unit.test.ts` | Unit | `computeViewModel`: leaf-path, run merging, siblings, newest-leaf walk |
-| `wants-outbox.test.ts` | Unit | `planPull`, `stepWants`, outbox scheduling |
+| `viewmodel-unit.test.ts` | Unit | `computeViewModel`: leaf-path, turn merging, siblings, newest-leaf walk |
+| `pull-queue.test.ts` | Unit | `planPull`, `actionPulls`, pull-queue scheduling |
 | `connection-daemon.test.ts` | Integration | Connection RPC routing (prompt, daemon/routing verbs, pull, setModel), in-process WS pair |
 | `manager-verbs.test.ts` | Integration | Manager verbs: setModel, setThinkingLevel, renameSession, navigate, abort, idle reconcile |
 | `mirror-integration.test.ts` | Integration | Tool execution, concurrent tools, abort, errors |
@@ -539,7 +539,7 @@ The load-bearing constraints. Violating one is expensive to undo.
    synchronous.
 7. **Thinking, tool arguments, and tool results are lazy on the wire; `TextContent.text` is wire-eager (never null).** `null` means "not
    fetched." The canonical Document always holds real values; lazy stripping
-   happens only at the wire boundary (`projectSnapshot` + value-recursive
+   happens only at the wire boundary (`snapshotForWire` + value-recursive
    sanitization in `filterPatchForSocket`). After a pull, lazy
    fields in the canonical document are never `null` for committed entries;
    genuinely-absent values normalize to `""` (redacted thinking) or `{}`
@@ -550,16 +550,16 @@ The load-bearing constraints. Violating one is expensive to undo.
    lifecycle. `prompt` always uses `streamingBehavior: "steer"`.
 10. **Reconnect replaces state wholesale.** No retained op history. `replace`
     snapshot + re-pull for what's on screen.
-11. **Components declare wants, the pull loop is the sole fetcher.** Components
-    append lazy-field paths to the per-render wants outbox during render.
-    The connection layer drains the outbox after each render pass,
+11. **Components declare pending pulls, the pull loop is the sole fetcher.** Components
+    append lazy-field paths to the per-render pull queue during render.
+    The connection layer drains the queue after each render pass,
     issues one batched pull, and ingests results into the mirror. No
     component calls `pull` directly.
 12. **filterPatchForSocket sanitizes embedded lazy content (convergence invariant).** Parent-path op
     values (entry-root adds, block-level replaces) may embed lazy subfields;
     the filter strips them from the wire value for unsubscribed sockets. A
     client replaying the filtered patch stream converges to the same document
-    as one re-initialized from `projectSnapshot`.
+    as one re-initialized from `snapshotForWire`.
 13. **Manager verbs' effects are observed via push, not reply.** The reply
     carries only the failure channel. Document changes arrive as `patch` or
     `replace`. Replies never carry Document state.

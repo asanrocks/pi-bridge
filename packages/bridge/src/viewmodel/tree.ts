@@ -43,10 +43,10 @@ export interface HistoryNode {
 	/** Effective children (user messages whose nearest user ancestor is this node). */
 	children: HistoryNode[];
 	/**
-	 * Drafts collapsed into this keeper: consecutive aborted-dead-end
+	 * Drafts collapsed into this node: consecutive aborted-dead-end
 	 * siblings that preceded this node chronologically and were hidden from
-	 * the lane graph to keep typo-fans from fanning into separate lanes.
-	 * Empty for non-keepers and keepers with no preceding drafts. The
+	 * the lane graph to keep sibling drafts from fanning into separate lanes.
+	 * Empty for nodes that receive no drafts and nodes with no preceding drafts. The
 	 * renderer shows a "+N drafts" affordance when non-empty.
 	 */
 	discardedDrafts: HistoryNode[];
@@ -188,24 +188,24 @@ export function computeActiveUserPath(doc: Document, leafId: string | null): Set
 }
 
 // ---------------------------------------------------------------------------
-// Draft collapse — hide typo-fan siblings into the following keeper
+// Draft collapse — hide aborted sibling drafts in the following node
 // ---------------------------------------------------------------------------
 
 /**
- * Collapse aborted-dead-end sibling runs into the following keeper.
+ * Collapse aborted-dead-end sibling runs into the following node.
  *
  * A "discarded draft" is a sibling user message whose assistant turn aborted
  * and dead-ended (`abortedDraft: true`) AND which is not on the active path
  * (a draft you navigated back to stays visible). Maximal runs of consecutive
  * drafts are removed from the parent's children and attached to the following
- * keeper's `discardedDrafts`. A trailing run with no following keeper
- * promotes its chronologically-last draft to keeper (the most recent attempt
+ * following node's `discardedDrafts`. A trailing run with no following node
+ * promotes its chronologically-last draft to be the node (the most recent attempt
  * stays visible) and attaches the rest to it.
  *
  * This runs after `computeHistoryTree` and before `computeLaneLayout`: Pass 2
  * iterates `children`, so removing drafts from children keeps them out of the
  * lane graph (no lane per draft, no fan). The renderer surfaces them via the
- * keeper's `discardedDrafts` as an expandable "+N drafts" affordance — a UI
+ * following node's `discardedDrafts` as an expandable "+N drafts" affordance — a UI
  * overlay, not a graph relayout.
  *
  * Pure: returns a new tree; does not mutate the input.
@@ -220,20 +220,20 @@ export function collapseDrafts(tree: HistoryTree, activePath: Set<string>): Hist
 
 /**
  * Collapse one sibling list. Drafts (aborted + off-path) are pulled out and
- * attached to the following keeper's `discardedDrafts`; a trailing run
+ * attached to the following node's `discardedDrafts`; a trailing run
  * promotes its last draft. `siblings` must be sorted chronologically (Pass 1
  * sorts roots and children).
  */
 function collapseSiblings(siblings: HistoryNode[], activePath: Set<string>): HistoryNode[] {
 	const result: HistoryNode[] = [];
-	let run: HistoryNode[] = []; // consecutive drafts awaiting a keeper to attach to
+	let run: HistoryNode[] = []; // consecutive drafts awaiting a node to attach to
 
 	for (const s of siblings) {
 		if (s.abortedDraft && !activePath.has(s.id)) {
 			run.push(s);
 			continue;
 		}
-		// s is a keeper. Attach the pending run to it.
+		// s is a completed sibling. Attach the pending run to it.
 		if (run.length > 0) {
 			result.push({ ...s, discardedDrafts: [...s.discardedDrafts, ...run] });
 			run = [];
@@ -242,8 +242,8 @@ function collapseSiblings(siblings: HistoryNode[], activePath: Set<string>): His
 		}
 	}
 
-	// Trailing run with no following keeper: promote the chronologically-last
-	// draft (siblings are sorted) as keeper, attach the rest to it.
+	// Trailing run with no following node: promote the chronologically-last
+	// draft (siblings are sorted) as the node, attach the rest to it.
 	if (run.length > 0) {
 		const last = run[run.length - 1];
 		const rest = run.slice(0, -1);
@@ -487,7 +487,7 @@ export function computeLaneLayout(tree: HistoryTree, activePath: Set<string>): L
 
 		// Free lanes whose primary chain has ended. Git-correct: the vertical
 		// ends at the last primary descendant's dot; later forks arc off the
-		// branch point directly, not off a bare ghost vertical.
+		// branch point directly, not off a bare vertical.
 		const freed: number[] = [];
 		for (const [l, lin] of activeLanes) {
 			if (row >= lin.endRow) freed.push(l);

@@ -1,15 +1,15 @@
 import type { AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { projectEntry } from "../../src/core/document.ts";
+import { toEntry } from "../../src/core/document.ts";
 import {
 	applyEvent,
 	applyPatch,
 	type CacheEntryRecord,
 	computeCursor,
 	type Entry,
+	entryForCache,
 	initFromEntries,
 	planCacheWrites,
-	projectCacheEntry,
 	reconcile,
 	seedDocument,
 } from "../../src/core/index.ts";
@@ -99,10 +99,10 @@ describe("computeCursor", () => {
 });
 
 // ---------------------------------------------------------------------------
-// projectCacheEntry
+// entryForCache
 // ---------------------------------------------------------------------------
 
-describe("projectCacheEntry", () => {
+describe("entryForCache", () => {
 	it("strips all lazy values but keeps wire-eager content and ord", () => {
 		const doc = initFromEntries([
 			{
@@ -136,7 +136,7 @@ describe("projectCacheEntry", () => {
 		const entry = doc.entries.a1 as unknown as { ord?: number; content: Array<Record<string, unknown>> };
 		expect(entry.ord).toBe(0);
 
-		const cached = projectCacheEntry(doc.entries.a1 as Entry);
+		const cached = entryForCache(doc.entries.a1 as Entry);
 		const c = cached as unknown as { content: Array<Record<string, unknown>>; ord?: number };
 		expect(c.content[0]?.thinking).toBeNull();
 		expect(c.content[1]?.text).toBe("answer");
@@ -162,7 +162,7 @@ describe("projectCacheEntry", () => {
 				},
 			} as unknown as SessionEntry,
 		]);
-		const cached = projectCacheEntry(doc.entries.t1 as Entry) as unknown as Record<string, unknown>;
+		const cached = entryForCache(doc.entries.t1 as Entry) as unknown as Record<string, unknown>;
 		expect(cached.content).toBeNull();
 		expect(cached.details).toBeNull();
 		expect(cached.isError).toBe(false);
@@ -229,7 +229,7 @@ describe("planCacheWrites", () => {
 
 	it("a lazy-field pull (reference change, identical projection) produces no write", () => {
 		// Regression (log3): pull replies fill lazy fields via replace ops on
-		// lazy paths; the entry reference changes but projectCacheEntry strips
+		// lazy paths; the entry reference changes but entryForCache strips
 		// those fields, so the cached record is byte-identical. A 408-request
 		// pull wave once rewrote 393 identical records.
 		const doc = initFromEntries([
@@ -339,8 +339,8 @@ describe("cache determinism", () => {
 
 		expect(doc.entries.a1).toBeDefined();
 		expect(doc.entries.u1).toBeDefined();
-		const fromStream = projectCacheEntry(doc.entries.a1 as Entry);
-		const fromFile = { ...projectCacheEntry(projectEntry(assistantFile)), ord: 1 };
+		const fromStream = entryForCache(doc.entries.a1 as Entry);
+		const fromFile = { ...entryForCache(toEntry(assistantFile)), ord: 1 };
 		expect(fromStream).toEqual(fromFile);
 	});
 });

@@ -2,14 +2,14 @@
 // standalone turn between user/assistant turns. The same frameless expanded
 // content as the tool cards: status line (light + exit/cancelled/truncated
 // chips) in the upper chrome, the output as the content region below the
-// divider. The band keeps the bash hue but the `$` prompt marks it as the
+// divider. The tinted row keeps the bash hue but the `$` prompt marks it as the
 // user's own run (not the agent's); `!!` runs (excluded from context) render
 // muted.
 
 import { memo, useCallback, useMemo } from "react";
 import type { UserBashTurn } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/state/store.tsx";
-import styles from "./actionSteps.module.css";
+import styles from "./actions.module.css";
 import { CardControls, CardStatusLine, TruncationNotice } from "./tools/CardSkeleton.tsx";
 import { BASH_TAIL_LINES } from "./tools/resultText.ts";
 import { sanitizeOutputText } from "./tools/sanitize.ts";
@@ -41,10 +41,10 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 
 	return (
 		<div className={turnStyles.userBashTurn}>
-			<div className={styles.actionStep} data-kind="bash" data-muted={turn.excludeFromContext || undefined}>
-				<div className={styles.stepHead}>
+			<div className={styles.action} data-kind="bash" data-muted={turn.excludeFromContext || undefined}>
+				<div className={styles.actionHead}>
 					<span className={turnStyles.userBashPrompt}>$</span>
-					<span className={styles.stepSummary}>{turn.command}</span>
+					<span className={styles.actionSummary}>{turn.command}</span>
 				</div>
 				<div className={styles.detailsCard}>
 					<div className={styles.cardBar}>
@@ -61,11 +61,11 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 							onToggleCap={() => toggleUncap(actionKey)}
 						/>
 					</div>
-					<div className={styles.stepDetailsWrap}>
+					<div className={styles.actionDetailsWrap}>
 						{/* No max-height cap: the middle state is the tail slice, and
 						    "show all" means the whole output (line-count cap, not a
 						    scroll window). */}
-						<div className={styles.stepDetails} style={{ maxHeight: "none" }}>
+						<div className={styles.actionDetails} style={{ maxHeight: "none" }}>
 							{output && (
 								<div className={styles.cardBody}>
 									{showTail && (

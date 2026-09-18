@@ -1,4 +1,4 @@
-// ReadCardBody — code card. The band header carries the path; the body is
+// ReadCardBody — code card. The tinted row header carries the path; the body is
 // the file content on the white inset panel. Truncated reads show a
 // warning strip with the tool's continuation notice (offset hint) instead
 // of the notice leaking into the code. .md files render as prose when the
@@ -9,7 +9,7 @@ import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import { type ActionDetailsProps, extToLang } from "./args.ts";
 import { parseReadNotice } from "./resultText.ts";
 

@@ -158,7 +158,7 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
 
 ### Concurrency
 
-- Per-Connection, a state-transition lane is handled serially: the navigation
+- Per-Connection, state transitions are handled serially: the navigation
   verbs (`openSession`, `newSession`, `detach`) plus the
   attached-session verbs that act on the current attachment (`prompt`,
   `abort`, `discardSteer`, `setModel`, `setThinkingLevel`, `renameSession`,
@@ -168,7 +168,7 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   meaningless, and the daemon enforces it rather than relying on client
   discipline. Query verbs (`listSessions`, `listActiveSessions`,
   `getDaemonInfo`, `readFile`, `gitShow`) and `executeBash`
-  run outside the lane: a slow one (a timed `gitShow` spawn, a 256 KB
+  run outside that serialization: a slow one (a timed `gitShow` spawn, a 256 KB
   `readFile`, a user `!` command that runs for minutes) must not block
   navigation. The queries are read-only against the current attachment;
   `readFile`, `gitShow`, and `executeBash` capture the attached Manager
@@ -181,12 +181,12 @@ lifetime rule). This is the same behavior as a socket dying mid-turn.
   rule), because it is neither streaming nor compacting and would
   otherwise leave the activation kill-eligible mid-command. `pull` is the
   reverse exception: fast (a synchronous in-memory read) like a query,
-  but lane-serialized because it is not read-only — it mutates the
+  but serialized because it is not read-only — it mutates the
   Connection's lazy-subscription set, which attach clears, so a pull
   racing a switch could install old-session subscriptions after the new
-  initial sync. The lane holds `prompt` only until admission
+  initial sync. The serialization holds `prompt` only until admission
   (see Reply semantics), never for a whole turn, and attached-session
-  verbs act on the activation captured when the lane was entered — so an
+  verbs act on the activation captured when serialization began — so an
   admitted turn and a navigation on the same socket are linearized rather
   than racing the attachment swap.
 - Cross-Connection races keep the ADR 11 rule: resolution, creation, and
@@ -219,7 +219,7 @@ separate machinery.
 ### Reply semantics
 
 Each verb's reply carries an explicit per-verb contract. This is what makes
-the lane implementable: admission-style verbs release the lane while the
+the serialization implementable: admission-style verbs release it while the
 work continues; completion-style verbs are short by construction.
 
 | Verb | `ok: true` means |
@@ -232,7 +232,7 @@ work continues; completion-style verbs are short by construction.
 | `executeBash` | The command completed. |
 | `setModel` / `setThinkingLevel` / `renameSession` / `navigate` / `discardSteer` | The operation completed (synchronous throws reply `ok: false` immediately). |
 | Queries (`listSessions`, `listActiveSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `gitShow`) | The query completed. |
-| `pull` | The query completed (lane-serialized despite query semantics — see Concurrency). |
+| `pull` | The query completed (serialized despite query semantics — see Concurrency). |
 
 `prompt` is admission-style, not completion-style: pi's `preflightResult`
 callback fires immediately before the agent run starts, and that is the
@@ -242,7 +242,7 @@ Manager therefore gains an admission-style prompt alongside the
 completion-style one (which disposal keeps using). Any future
 model-consuming operation that runs outside a turn — a manual `compact`, a
 summarizing `navigateTree` — needs the same admission treatment before it
-may join the lane.
+may join the serialization.
 
 ## Lifetime rule
 
@@ -491,8 +491,8 @@ rules (frames carrying `session` are never compacted; `Connection.attach`
 resets the codec), ADR 09 cursor semantics, `pull`, and the
 attached-session verbs other than the `listFiles` re-addressing
 above. `session_closed` is the only wire addition beyond the three verb
-changes; existing push shapes are untouched. (`executeBash` moving out of
-the lane is internal — its reply shape is unchanged.)
+changes; existing push shapes are untouched.  (`executeBash` moving out of
+that serialization is internal — its reply shape is unchanged.)
 
 The settle and rename `sessions_changed` triggers
 are retained — the first settle after a flush still reorders the list
@@ -580,14 +580,14 @@ Connection state machine:
   until the push lands, and a failed open leaves the URL untouched;
 - `openSession` behaves identically from both states — no client-side state
   mirroring to pick a verb;
-- two state transitions on one Connection cannot interleave (serial lane),
-  and slow out-of-lane verbs (`gitShow`, a long-running `executeBash`) do
+- two state transitions on one Connection cannot interleave (serial per-Connection ordering),
+  and slow verbs that run outside the ordering (`gitShow`, a long-running `executeBash`) do
   not block navigation;
 - an `executeBash` issued before a switch appends its entry to the
   captured session's document; its reply may land after the switch;
 - a `pull` issued before a switch cannot install old-session subscriptions
-  after the new initial sync (lane serialization);
-- a prompt admission does not hold the lane — `openSession`/`abort` on the
+  after the new initial sync (serialization);
+- a prompt admission does not hold serialization — `openSession`/`abort` on the
   same socket proceed while the admitted turn is still streaming;
 - switching away from a streaming session does not abort the turn;
 - `closeSession` pushes `session_closed` to every attached Connection and
@@ -661,7 +661,7 @@ Drafts:
 - Reopening a worked-on session pays cold-open latency (deferred warmth).
 - The one accepted loss: aborted/errored first turns are not durable.
 - Protocol v2 and the client move together (as with ADR 11).
-- The daemon needs a per-Connection state-transition lane, the
+- The daemon needs per-Connection serialization of state transitions, the
   settle-boundary sweep, an admitted-work signal on the Manager, and the
   `session_closed` push on explicit kills — the "daemon must be smart"
   cost, judged manageable against the deleted timer machinery.

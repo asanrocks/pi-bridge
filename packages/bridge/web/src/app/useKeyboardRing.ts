@@ -73,7 +73,7 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 		if (!turn || turn.kind !== "assistant") return;
 		const firstGroup = segmentBlocks(turn.blocks).find((seg) => seg.kind === "group");
 		if (!firstGroup || firstGroup.kind !== "group") return;
-		const cardKeys = firstGroup.steps.map((h) => `${h.entryId}:b${h.blockIndex}`);
+		const cardKeys = firstGroup.actions.map((h) => `${h.entryId}:b${h.blockIndex}`);
 		s.toggleActionGroup(firstGroup.key, cardKeys);
 	}, [vm]);
 

@@ -1,10 +1,10 @@
 // useDetailsCap — the height-cap + clipped-fade mechanics for a card's
-// details panel, shared by tool cards (ToolActionStepView) and user-bash
+// details panel, shared by tool cards (ToolActionView) and user-bash
 // cards (UserBashView). Detects whether the capped panel's content
 // overflows and whether the scroll window sits at the content tail (the
 // fade must never claim hidden content once the user scrolled to the
 // bottom). Cap state (uncapped) lives in the store keyed by the same
-// `${entryId}:b${blockIndex}` format the tool steps use.
+// `${entryId}:b${blockIndex}` format the tool actions use.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "../../../infra/state/store.tsx";

@@ -18,7 +18,7 @@
 // ============================================================================
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { findProvisional, projectEntry, stripLazyFields } from "./document.ts";
+import { findProvisional, stripLazyFields, toEntry } from "./document.ts";
 import type {
 	Document,
 	Entry,
@@ -49,7 +49,7 @@ interface CommittedProjection {
 }
 
 /** Committed entries with ord and lazy fields stripped, in file order. */
-function projectCommitted(doc: Document, piEntries: SessionEntry[]): CommittedProjection[] {
+function collectCommitted(doc: Document, piEntries: SessionEntry[]): CommittedProjection[] {
 	const out: CommittedProjection[] = [];
 	for (let i = 0; i < piEntries.length; i++) {
 		const piEntry = piEntries[i];
@@ -64,14 +64,14 @@ function projectCommitted(doc: Document, piEntries: SessionEntry[]): CommittedPr
 		// Prefer the canonical entry (streaming-enriched); fall back to the
 		// file projection — this also discovers silently-appended entries
 		// (e.g. setLabel) that no event has delivered yet.
-		const base = doc.entries[piEntry.id] ?? projectEntry(piEntry);
+		const base = doc.entries[piEntry.id] ?? toEntry(piEntry);
 		out.push({ id: piEntry.id, ord: i, value: stripLazyFields({ ...base, ord: i } as Entry) });
 	}
 	return out;
 }
 
 /** Provisional entries with lazy fields stripped, never cached, no ord. */
-function projectProvisional(doc: Document): Array<[string, Entry]> {
+function collectProvisional(doc: Document): Array<[string, Entry]> {
 	const out: Array<[string, Entry]> = [];
 	for (const [id, entry] of Object.entries(doc.entries)) {
 		if (id.startsWith("pending:")) out.push([id, stripLazyFields(entry)]);
@@ -96,10 +96,10 @@ export function buildInitialSync(
 
 	if (!valid) {
 		const entries: Record<string, Entry> = {};
-		for (const committed of projectCommitted(doc, piEntries)) {
+		for (const committed of collectCommitted(doc, piEntries)) {
 			entries[committed.id] = committed.value;
 		}
-		for (const [id, value] of projectProvisional(doc)) {
+		for (const [id, value] of collectProvisional(doc)) {
 			entries[id] = value;
 		}
 		return {
@@ -110,12 +110,12 @@ export function buildInitialSync(
 	}
 
 	const ops: PatchOp[] = [];
-	for (const committed of projectCommitted(doc, piEntries)) {
+	for (const committed of collectCommitted(doc, piEntries)) {
 		if (committed.ord >= cursor.entryCount) {
 			ops.push({ op: "add", path: `/entries/${committed.id}`, value: committed.value as unknown as JsonValue });
 		}
 	}
-	for (const [id, value] of projectProvisional(doc)) {
+	for (const [id, value] of collectProvisional(doc)) {
 		ops.push({ op: "add", path: `/entries/${id}`, value: value as unknown as JsonValue });
 	}
 	ops.push({ op: "replace", path: "/status", value: doc.status as unknown as JsonValue });
