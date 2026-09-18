@@ -3,7 +3,7 @@
 // text (wire-eager, streams via append). Streamdown handles incremental DOM
 // updates so each chunk doesn't nuke the subtree.
 //
-// Copy is attached here — per message, not per turn: a run-merged turn holds
+// Copy is attached here — per message, not per turn: a merged turn holds
 // several messages, so the turn header cannot copy "the message". The
 // button uses the same .toolbarBtn chip spec as the user-message Copy,
 // floating at the segment's top-right, revealed on hover/focus (always

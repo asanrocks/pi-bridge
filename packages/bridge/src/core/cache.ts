@@ -112,7 +112,7 @@ export function computeCursor(records: CacheEntryRecord[]): PrefixCursor | null 
  * Cached thinking, tool arguments, tool result content, and tool result
  * details are always null; pull responses are never persisted.
  */
-export function projectCacheEntry(entry: Entry): Entry {
+export function entryForCache(entry: Entry): Entry {
 	return stripLazyFields(entry);
 }
 
@@ -142,11 +142,11 @@ export function planCacheWrites(sessionId: string, before: Document, after: Docu
 		if (
 			base !== undefined &&
 			base.ord === entry.ord &&
-			JSON.stringify(projectCacheEntry(base)) === JSON.stringify(projectCacheEntry(entry))
+			JSON.stringify(entryForCache(base)) === JSON.stringify(entryForCache(entry))
 		) {
 			continue; // only lazy (stripped) fields changed — cache content identical
 		}
-		writes.push({ sessionId, ord: entry.ord, entryId: id, entry: projectCacheEntry(entry) });
+		writes.push({ sessionId, ord: entry.ord, entryId: id, entry: entryForCache(entry) });
 	}
 	writes.sort((a, b) => a.ord - b.ord);
 	return writes;
@@ -161,7 +161,7 @@ export function cacheRecordsOfDocument(sessionId: string, doc: Document): CacheE
 	for (const [id, entry] of Object.entries(doc.entries)) {
 		if (id.startsWith("pending:")) continue;
 		if (entry.ord === undefined) continue;
-		records.push({ sessionId, ord: entry.ord, entryId: id, entry: projectCacheEntry(entry) });
+		records.push({ sessionId, ord: entry.ord, entryId: id, entry: entryForCache(entry) });
 	}
 	records.sort((a, b) => a.ord - b.ord);
 	return records;

@@ -1,5 +1,5 @@
 // ============================================================================
-// UI slice — ephemeral view state: conversation expand/fold sets and their
+// UI slice — ephemeral view state: conversation expand/collapse sets and their
 // freeze/migrate machinery, keyboard focus, pull orchestration tickers,
 // chrome (history pane, file viewer), and toast notifications. Nothing here
 // is protocol state; all of it is session-scoped or app-chrome.
@@ -42,9 +42,9 @@ function setAdd(s: Set<string>, key: string): Set<string> {
 
 export interface ExpandKeySets {
 	expandedActionGroups: Set<string>;
-	expandedSteps: Set<string>;
+	expandedActions: Set<string>;
 	frozenActionGroups: Set<string>;
-	frozenSteps: Set<string>;
+	frozenActions: Set<string>;
 	loadingPaths: Set<string>;
 	uncappedDetails: Set<string>;
 }
@@ -57,7 +57,7 @@ export interface ExpandKeySets {
  *
  * Key formats:
  *   expandedActionGroups / frozenActionGroups: "${entryId}:${blockIndex}"
- *   expandedSteps / frozenSteps:              "${entryId}:b${blockIndex}"
+ *   expandedActions / frozenActions:              "${entryId}:b${blockIndex}"
  *   loadingPaths: fieldPath starting with "/entries/${entryId}/"
  */
 export function migrateExpandKeys(sets: ExpandKeySets, oldId: string, newId: string): ExpandKeySets {
@@ -77,10 +77,10 @@ export function migrateExpandKeys(sets: ExpandKeySets, oldId: string, newId: str
 
 	return {
 		expandedActionGroups: migrate(sets.expandedActionGroups),
-		expandedSteps: migrate(sets.expandedSteps),
+		expandedActions: migrate(sets.expandedActions),
 		uncappedDetails: migrate(sets.uncappedDetails),
 		frozenActionGroups: migrate(sets.frozenActionGroups),
-		frozenSteps: migrate(sets.frozenSteps),
+		frozenActions: migrate(sets.frozenActions),
 		loadingPaths: migrate(sets.loadingPaths),
 	};
 }
@@ -96,10 +96,10 @@ export interface UiSlice {
 	    focused turn leaves the active path it goes stale; the next j/k snaps
 	    to the turn nearest the viewport center. */
 	focusedTurnId: string | null;
-	/** keys: "${firstEntryId}:${firstBlockIndex}" (first step in group) */
+	/** keys: "${firstEntryId}:${firstBlockIndex}" (first action in group) */
 	expandedActionGroups: Set<string>;
-	/** keys: "${entryId}:b${blockIndex}" — steps whose details are expanded. */
-	expandedSteps: Set<string>;
+	/** keys: "${entryId}:b${blockIndex}" — actions whose details are expanded. */
+	expandedActions: Set<string>;
 	/** Keys where the details' max-height cap has been removed. */
 	uncappedDetails: Set<string>;
 	/** Card content-view toggles (skeleton top-bar controls). Global, not
@@ -110,13 +110,13 @@ export interface UiSlice {
 	cardMarkdown: boolean;
 	/** Manually toggled during streaming — streaming state no longer drives them. */
 	frozenActionGroups: Set<string>;
-	frozenSteps: Set<string>;
+	frozenActions: Set<string>;
 	/** fieldPaths with in-flight pulls (dedup). */
 	loadingPaths: Set<string>;
 	/**
 	 * Bumped after every pull ingest and (delayed) after pull failures
-	 * (ADR 09). Want-registering components subscribe to it so a bump
-	 * re-renders them: fresh summaries after ingest, re-registered wants
+	 * (ADR 09). Pull-requesting components subscribe to it so a bump
+	 * re-renders them: fresh summaries after ingest, re-registered pulls
 	 * after failure.
 	 */
 	pullTick: number;
@@ -145,14 +145,14 @@ export interface UiSlice {
 	// Actions
 	setFocusedTurnId: (id: string | null) => void;
 	/** Toggle a group and freeze it against streaming auto-expand.
-	 * Passing the group's step card keys also resets those steps to folded
+	 * Passing the group's action card keys also resets those actions to collapsed
 	 * (the header is the master toggle — reopening shows all descendants
-	 * folded, not their pre-fold state). On open, a single-step group
-	 * auto-expands its lone step's details. Atomic with the group toggle. */
+	 * collapsed, not their pre-collapse state). On open, a single-action group
+	 * auto-expands its lone action's details. Atomic with the group toggle. */
 	toggleActionGroup: (key: string, cardKeys?: string[]) => void;
-	/** Toggle a step's details and freeze it against streaming auto-expand. */
-	toggleStep: (key: string) => void;
-	/** Toggle the max-height cap on an expanded step's details. */
+	/** Toggle an action's details and freeze it against streaming auto-expand. */
+	toggleAction: (key: string) => void;
+	/** Toggle the max-height cap on an expanded action's details. */
 	toggleUncapDetails: (key: string) => void;
 	/** Toggle line wrap for card content (code + output). */
 	toggleCardWrap: () => void;
@@ -176,12 +176,12 @@ export interface UiSlice {
 export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) => ({
 	focusedTurnId: null,
 	expandedActionGroups: new Set(),
-	expandedSteps: new Set(),
+	expandedActions: new Set(),
 	uncappedDetails: new Set(),
 	cardWrap: true,
 	cardMarkdown: true,
 	frozenActionGroups: new Set(),
-	frozenSteps: new Set(),
+	frozenActions: new Set(),
 	loadingPaths: new Set(),
 	pullTick: 0,
 
@@ -220,31 +220,31 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 	// adds the key to the frozen set so streaming auto-expand no longer
 	// drives it. Frozen sets are permanent.
 	// Header is the master toggle (nit 3): toggling the group also resets
-	// every step below it to folded, so reopening always shows descendants
-	// folded rather than their pre-fold expand state. Atomic with the group
-	// toggle so the two never paint a mixed state. On open, a single-step
-	// group auto-expands its lone step's details — opening a one-step
-	// group to see a folded step is a wasted click.
+	// every action below it to collapsed, so reopening always shows descendants
+	// collapsed rather than their pre-collapse expand state. Atomic with the group
+	// toggle so the two never paint a mixed state. On open, a single-action
+	// group auto-expands its lone action's details — opening a one-action
+	// group to see a collapsed action is a wasted click.
 	toggleActionGroup: (key, cardKeys = []) =>
 		set((s) => {
 			const wasExpanded = s.expandedActionGroups.has(key);
 			const expandedActionGroups = setToggle(s.expandedActionGroups, key);
 			const frozenActionGroups = setAdd(s.frozenActionGroups, key);
 			if (cardKeys.length === 0) return { expandedActionGroups, frozenActionGroups };
-			const expandedSteps = new Set(s.expandedSteps);
-			const frozenSteps = new Set(s.frozenSteps);
+			const expandedActions = new Set(s.expandedActions);
+			const frozenActions = new Set(s.frozenActions);
 			for (const ck of cardKeys) {
-				expandedSteps.delete(ck);
-				frozenSteps.delete(ck);
+				expandedActions.delete(ck);
+				frozenActions.delete(ck);
 			}
-			if (!wasExpanded && cardKeys.length === 1) expandedSteps.add(cardKeys[0]);
-			return { expandedActionGroups, frozenActionGroups, expandedSteps, frozenSteps };
+			if (!wasExpanded && cardKeys.length === 1) expandedActions.add(cardKeys[0]);
+			return { expandedActionGroups, frozenActionGroups, expandedActions, frozenActions };
 		}),
 
-	toggleStep: (key) =>
+	toggleAction: (key) =>
 		set((s) => ({
-			expandedSteps: setToggle(s.expandedSteps, key),
-			frozenSteps: setAdd(s.frozenSteps, key),
+			expandedActions: setToggle(s.expandedActions, key),
+			frozenActions: setAdd(s.frozenActions, key),
 		})),
 
 	toggleUncapDetails: (key) => set((s) => ({ uncappedDetails: setToggle(s.uncappedDetails, key) })),

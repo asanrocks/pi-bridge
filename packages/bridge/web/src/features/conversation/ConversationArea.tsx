@@ -1,7 +1,7 @@
 // ============================================================================
 // ConversationArea — renders the turn list via ViewModel projection.
 // Turn-based dispatch: UserTurn, AssistantTurn (flat blocks), SystemTurn.
-// Consecutive steps share a visual spine; grouping is renderer-owned
+// Consecutive actions share a vertical line; grouping is renderer-owned
 // (segmentBlocks) — the ViewModel has no group entity. All scroll behavior
 // (at-bottom detection, auto-scroll, anchors, keyboard focus) lives in
 // useViewportTracking.
@@ -32,10 +32,10 @@ export const ConversationArea = memo(function ConversationArea({
 	onNavigate,
 	onEdit,
 }: ConversationAreaProps) {
-	// Expand/fold toggles are pure store actions — read here instead of
+	// Expand/collapse toggles are pure store actions — read here instead of
 	// threaded from the shell.
 	const onToggleGroup = useStore((s) => s.toggleActionGroup);
-	const onToggleStep = useStore((s) => s.toggleStep);
+	const onToggleAction = useStore((s) => s.toggleAction);
 	const { awayFromBottom, newContentBelow, jumpToBottom } = useViewportTracking(vm, isStreaming);
 
 	// entriesRef for the sibling pager — updated via Zustand subscribe
@@ -84,7 +84,7 @@ export const ConversationArea = memo(function ConversationArea({
 								turn={turn}
 								isStreaming={isStreaming && turn === lastTurn}
 								onToggleGroup={onToggleGroup}
-								onToggleStep={onToggleStep}
+								onToggleAction={onToggleAction}
 							/>
 						);
 					case "system":

@@ -83,8 +83,8 @@ Daemon
 | **Connection** | One client transport attached to at most one activation. | transport-local | socket |
 
 "Active" is a property of a Session, not a separate domain object. The daemon
-answers "which sessions are active" by projecting its internal activation
-registry onto `SessionInfo`.
+answers "which sessions are active" with a projection of its internal
+activation registry onto `SessionInfo`.
 
 A Project is not an archival object. If a cwd is removed from `--allow`, its
 sessions are simply not served by that daemon. There is no orphan-project UI,

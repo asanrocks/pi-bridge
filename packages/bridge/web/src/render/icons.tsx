@@ -5,7 +5,7 @@
 // evenodd fill, currentColor) so the turn-text Copy button and the code-block
 // Copy button (rendered by streamdown) read as one icon set. This is the
 // "copy affordance" role from ADR 07 §Styling invariants #3: one icon across
-// containers, different container chrome per family.
+// containers, different container chrome per hue.
 // ============================================================================
 
 interface IconProps {

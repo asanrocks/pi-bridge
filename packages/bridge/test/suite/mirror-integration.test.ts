@@ -4,8 +4,8 @@ import {
 	type Document,
 	DocumentMirror,
 	type JsonValue,
-	projectSnapshot,
 	resolveFieldPath,
+	snapshotForWire,
 } from "../../src/core/index.ts";
 import type { BridgeHarness } from "./harness.ts";
 import {
@@ -164,7 +164,7 @@ describe("mirror integration (property-based sync)", () => {
 		harnesses.push(bh);
 
 		const mirror = new DocumentMirror();
-		mirror.applyReplace(projectSnapshot(bh.manager.document));
+		mirror.applyReplace(snapshotForWire(bh.manager.document));
 
 		let patchIndex = 0;
 		bh.manager.onPatch((patch) => {
@@ -195,7 +195,7 @@ describe("mirror integration (property-based sync)", () => {
 		harnesses.push(bh);
 
 		const mirror = new DocumentMirror();
-		mirror.applyReplace(projectSnapshot(bh.manager.document));
+		mirror.applyReplace(snapshotForWire(bh.manager.document));
 
 		let patchIndex = 0;
 		bh.manager.onPatch((patch) => {
@@ -388,7 +388,7 @@ describe("mirror integration (property-based sync)", () => {
 
 		// Simulate reconnect: fresh mirror, Init snapshot (lazy fields null)
 		const reconnected = new DocumentMirror();
-		reconnected.applyReplace(projectSnapshot(bh.manager.document));
+		reconnected.applyReplace(snapshotForWire(bh.manager.document));
 
 		const canonical = bh.manager.document;
 

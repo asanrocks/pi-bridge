@@ -5,7 +5,7 @@
 //   Document.entries
 //     → flatten (entry → block descriptors, tool result joins)
 //     → structure (leaf-path walk, cross-entry merge, siblings) → ViewModel
-//     → render (consecutive-action detection → visual spine, renderer-owned)
+//     → render (consecutive-action detection → vertical line, renderer-owned)
 //
 // Browser-safe: no node:* imports, no DOM. Pure functions only.
 // ============================================================================
@@ -62,10 +62,10 @@ export interface ViewModel {
 export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn | GitChangeTurn;
 
 /** ADR 10 v2: a boundary git identity stamp rendered as an ordered
- * transcript item (prompt / user_bash_end anchors, or a run-anchor stamp
- * with no open run). Mid-run stamps (tool_end / turn_end inside a run) do
- * not produce this — they fold into the run's action group as
- * {@link GitChangeMark}s. Either way it is not a conversation turn:
+ * transcript item (prompt / user_bash_end anchors, or a turn-anchor stamp
+ * with no open turn). Mid-turn stamps (tool_end / turn_end inside a turn) do
+ * not produce this — they fold into the turn's action group as
+ * {@link InlineGitStamp}s. Either way it is not a conversation turn:
  * no sibling navigation, editing, or tool-result joining. */
 export interface GitChangeTurn {
 	kind: "gitChange";
@@ -129,21 +129,21 @@ export interface UserBashTurn {
 
 export interface AssistantTurn {
 	kind: "assistant";
-	/** First entry of the merged run. */
+	/** First entry of the merged turn. */
 	entryId: string;
 	index: number;
 	blocks: AssistantBlockVM[];
-	/** From last entry in merged run. */
+	/** From last entry in merged turn. */
 	model?: string;
-	/** From last entry in merged run. */
+	/** From last entry in merged turn. */
 	provider?: string;
-	/** From last entry in merged run. */
+	/** From last entry in merged turn. */
 	usage?: Usage;
 	/** The turn's stop reason — "stop", "toolUse", "end_turn", "error", "aborted", "length". */
 	stopReason?: string;
 	/** Unique turn identity. For a turn starting at block 0 of its first
 	 * entry this equals `entryId`; for a turn starting mid-entry it is
-	 * `${entryId}:b${blockIndex}`. With run merging a turn always starts at
+	 * `${entryId}:b${blockIndex}`. With turn merging a turn always starts at
 	 * block 0, so `turnKey === entryId` in practice — but React keys and the
 	 * previous-VM reuse map key on this, never `entryId`, so a future split
 	 * rule cannot silently break identity. */
@@ -159,7 +159,7 @@ export interface AssistantTurn {
 	timestamp: string;
 	/** ISO seal anchoring this turn's timing: the seal of the path entry
 	 * preceding the turn's first block (usually the user message that opened
-	 * the run). The renderer uses it for the live "working for Xs" tick while
+	 * the turn). The renderer uses it for the live "working for Xs" tick while
 	 * the turn streams; the viewmodel also uses it as the total-duration base. */
 	turnStartedAt?: string;
 	/** Total wall-clock ms from turnStartedAt to the turn's window end (the
@@ -175,7 +175,7 @@ export interface AssistantTurn {
 	 * (input + cacheRead + cacheWrite — what the model saw), matching pi's
 	 * compaction skip rule: aborted/error stops and all-zero usage are
 	 * untrustworthy and yield undefined. Reported on the turn whose first
-	 * ref is block 0 of its entry (the run's first entry) — one reading per
+	 * ref is block 0 of its entry (the turn's first entry) — one reading per
 	 * turn, no duplicates. */
 	contextPercent?: number;
 	/** Change in context occupancy vs. the previous valid reading on the
@@ -184,15 +184,15 @@ export interface AssistantTurn {
 	 * readings incomparable), or below the 1% display threshold — except a
 	 * negative delta (compaction drop), which always renders. */
 	contextDeltaPercent?: number;
-	/** ADR 10 v2: git changes observed while this run was open (tool_end /
-	 * turn_end anchors), folded into the run instead of splitting it. Each
-	 * mark renders as its own card inside its action group, after the step
+	/** ADR 10 v2: git changes observed while this turn was open (tool_end /
+	 * turn_end anchors), folded into the turn instead of splitting it. Each
+	 * inline git stamp renders as its own card inside its action group, after the action
 	 * it follows, and the group summary gains a `git:` segment. */
-	gitChanges?: GitChangeMark[];
+	gitChanges?: InlineGitStamp[];
 }
 
-/** One mid-run git identity transition (ADR 10 v2). */
-export interface GitChangeMark {
+/** One mid-turn git identity transition (ADR 10 v2). */
+export interface InlineGitStamp {
 	/** The stamp entry id. */
 	entryId: string;
 	timestamp: string;
@@ -205,7 +205,7 @@ export interface GitChangeMark {
 	/** First valid stamp on the path — an initial state recording. */
 	isInitial: boolean;
 	/** Render position: the last block accumulated when the stamp was
-	 * observed — the card renders after the step with this key
+	 * observed — the card renders after the action with this key
 	 * (`"${entryId}:b${blockIndex}"`). */
 	afterBlockKey: string;
 }
@@ -219,19 +219,19 @@ export interface SystemTurn {
 	index: number;
 	/** Markdown, for compaction/branch_summary (wire-eager). */
 	summary?: string;
-	/** Final state of a merged run of consecutive model_change /
+	/** Final state of a merged turn of consecutive model_change /
 	 * thinking_level_change entries. pi appends these back-to-back on a
 	 * model switch (setModel → appendModelChange, then the thinking re-clamp
-	 * → appendThinkingLevelChange), so the run collapses into one turn.
-	 * provider/modelId are empty for a thinking-only run; thinkingLevel is
-	 * undefined when the run didn't change the level. */
+	 * → appendThinkingLevelChange), so the turn collapses into one turn.
+	 * provider/modelId are empty for a thinking-only turn; thinkingLevel is
+	 * undefined when the turn didn't change the level. */
 	switchTo?: { provider: string; modelId: string; thinkingLevel?: string };
 }
 
-export type AssistantBlockVM = TextBlockVM | ToolActionStepVM | ThinkActionStepVM;
+export type AssistantBlockVM = TextBlockVM | ToolActionVM | ThinkActionVM;
 
-/** A tool or thinking action step — the per-action unit inside an ActionGroup. */
-export type ActionStepVM = ToolActionStepVM | ThinkActionStepVM;
+/** A tool or thinking action — the per-action unit inside an ActionGroup. */
+export type ActionVM = ToolActionVM | ThinkActionVM;
 
 export interface TextBlockVM {
 	blockType: "text";
@@ -243,7 +243,7 @@ export interface TextBlockVM {
 	isProvisional: boolean;
 }
 
-export interface ToolActionStepVM {
+export interface ToolActionVM {
 	blockType: "tool";
 	entryId: string;
 	blockIndex: number;
@@ -257,7 +257,7 @@ export interface ToolActionStepVM {
 	status: "pending" | "running" | "done" | "error";
 }
 
-export interface ThinkActionStepVM {
+export interface ThinkActionVM {
 	blockType: "thinking";
 	entryId: string;
 	blockIndex: number;
@@ -291,14 +291,14 @@ export interface ViewModelInput {
  *
  * 1. Leaf-path projection — walk from status.leafId up via parentId, reverse.
  * 2. Structure — collapse the path into turns. Consecutive assistant
- *    entries merge into one run; the run closes at a user message, a
+ *    entries merge into one turn; the turn closes at a user message, a
  *    system turn (compaction, branch_summary, model switch), a user bash
- *    execution, or the end of the path. Text blocks do NOT split the run:
+ *    execution, or the end of the path. Text blocks do NOT split the turn:
  *    the per-message split experiment (8386faacf) multiplied turns ~5x on
  *    real sessions (54 → 271 on before-compaction.jsonl) for a cosmetic
  *    gain — segmentBlocks already renders interleaved text/action groups
  *    in order within a turn. tool_result and other invisible entries
- *    neither render nor break the run accumulation.
+ *    neither render nor break the turn accumulation.
  * 3. Flatten — each assistant entry's content becomes block descriptors;
  *    tool calls join their ToolResultEntry by toolCallId.
  * 4. Siblings — user messages get variant-pager info by parentId.
@@ -325,20 +325,20 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 
 	const turns: TurnVM[] = [];
 	// Turn accumulator: (entry, blockIndex) refs for the assistant blocks of
-	// the current run. Refs — not entries — are the accumulation unit, so a
+	// the current turn. Refs — not entries — are the accumulation unit, so a
 	// future mid-entry split rule would not need a rewrite.
 	let pending: BlockRef[] = [];
-	// Accumulator for a run of consecutive model_change/thinking_level_change
+	// Accumulator for a turn of consecutive model_change/thinking_level_change
 	// entries (see SystemTurn.switchTo). Flushed when any other turn-producing
 	// entry appears or at the end of the path.
-	let switchRun: { firstId: string; provider: string; modelId: string; thinkingLevel: string } | null = null;
-	const flushSwitchRun = () => {
-		if (switchRun === null) return;
-		turns.push(buildSwitchTurn(switchRun, turns.length, prevTurns));
-		switchRun = null;
+	let switchTurn: { firstId: string; provider: string; modelId: string; thinkingLevel: string } | null = null;
+	const flushSwitchTurn = () => {
+		if (switchTurn === null) return;
+		turns.push(buildSwitchTurn(switchTurn, turns.length, prevTurns));
+		switchTurn = null;
 	};
 	// Timing anchor: the seal of the last timestamped path entry seen before
-	// the turn's first block (usually the user message that opened the run).
+	// the turn's first block (usually the user message that opened the turn).
 	// User turns anchor on the wall-clock previous ASSISTANT completion
 	// across all branches (see buildUserTurn), so they need no leaf-path
 	// predecessor.
@@ -362,9 +362,9 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// True once any valid stamp has been seen on the path — the next stamp is
 	// a transition rather than an initial state recording.
 	let seenGitStamp = false;
-	// ADR 10 v2: mid-run stamps (tool_end/turn_end observed while a run is
-	// open) folded into the pending run; attached to the turn at flushPending.
-	let pendingGitMarks: GitChangeMark[] = [];
+	// ADR 10 v2: mid-turn stamps (tool_end/turn_end observed while a turn is
+	// open) folded into the pending turn; attached to the turn at flushPending.
+	let pendingGitStamps: InlineGitStamp[] = [];
 	const modelList = input.models;
 	const contextWindowOf = (provider: string | undefined, model: string | undefined): number | undefined => {
 		if (!model) return undefined;
@@ -387,7 +387,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	const flushPending = () => {
 		if (pending.length === 0) return;
 		// Context usage: report the entry's usage reading on the turn that
-		// STARTS at block 0 of the entry — the run's first entry — one reading
+		// STARTS at block 0 of the entry — the turn's first entry — one reading
 		// per turn. The entry's usage is "what the model saw when generating
 		// that response". Invalid usage (aborted/error stop, all-zero) is
 		// skipped, matching pi's compaction skip rule.
@@ -423,24 +423,24 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				contextPercent,
 				contextDeltaPercent,
 			},
-			pendingGitMarks,
+			pendingGitStamps,
 		);
 		turns.push(t);
 		pending = [];
-		pendingGitMarks = [];
+		pendingGitStamps = [];
 	};
 
 	for (const entry of path) {
 		switch (entry.kind) {
 			case "message":
 				if (entry.role === "assistant") {
-					flushSwitchRun();
-					// All blocks accumulate into the pending run — text does not
+					flushSwitchTurn();
+					// All blocks accumulate into the pending turn — text does not
 					// split. Turn evolution stays append-only by construction: a
 					// turn is keyed by its first block and only ever grows until
 					// a non-assistant entry flushes it. stopReason/errorMessage
-					// ride the run-closing turn (its last ref is the entry's last
-					// block), so an error line renders once per run.
+					// ride the turn-closing turn (its last ref is the entry's last
+					// block), so an error line renders once per turn.
 					for (let i = 0; i < entry.content.length; i++) {
 						if (pending.length === 0) {
 							pendingAnchor = i > 0 ? entry.timestamp : prevSealTs;
@@ -450,15 +450,15 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					// Entry with no content blocks but an error/abort stop reason:
 					// produce a block carrying the error message even though there
 					// is nothing to render in the block stream. It merges into the
-					// pending run like any other entry; the next flush (user turn,
-					// system turn, or run end) emits it.
+					// pending turn like any other entry; the next flush (user turn,
+					// system turn, or turn end) emits it.
 					if (entry.content.length === 0 && (entry.stopReason === "error" || entry.stopReason === "aborted")) {
 						const synthetic: MessageEntry = { ...entry, content: [{ type: "text", text: "" }] };
 						if (pending.length === 0) pendingAnchor = prevSealTs;
 						pending.push({ entry: synthetic, blockIndex: 0 });
 					}
 				} else {
-					flushSwitchRun();
+					flushSwitchTurn();
 					flushPending();
 					const t = buildUserTurn(
 						entry,
@@ -474,44 +474,44 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				}
 				break;
 			case "compaction":
-				flushSwitchRun();
+				flushSwitchTurn();
 				flushPending();
 				turns.push(buildSystemTurn(entry, turns.length, "compaction", entry.summary, prevTurns));
 				break;
 			case "branch_summary":
-				flushSwitchRun();
+				flushSwitchTurn();
 				flushPending();
 				turns.push(buildSystemTurn(entry, turns.length, "branch_summary", entry.summary, prevTurns));
 				break;
 			case "bash_execution":
 				// A user-initiated shell run (! command) — its own turn between
 				// user/assistant turns, chronologically where it ran.
-				flushSwitchRun();
+				flushSwitchTurn();
 				flushPending();
 				turns.push(buildUserBashTurn(entry, turns.length));
 				break;
 			case "model_change":
 			case "thinking_level_change":
 				flushPending();
-				if (switchRun === null) {
-					switchRun = { firstId: entry.id, provider: "", modelId: "", thinkingLevel: "" };
+				if (switchTurn === null) {
+					switchTurn = { firstId: entry.id, provider: "", modelId: "", thinkingLevel: "" };
 				}
 				if (entry.kind === "model_change") {
-					switchRun.provider = entry.provider;
-					switchRun.modelId = entry.modelId;
+					switchTurn.provider = entry.provider;
+					switchTurn.modelId = entry.modelId;
 				} else {
-					switchRun.thinkingLevel = entry.thinkingLevel;
+					switchTurn.thinkingLevel = entry.thinkingLevel;
 				}
 				break;
 			default:
-				// ADR 10: a valid git stamp updates the carried identity. Mid-run
-				// stamps (tool_end/turn_end while a run is open) fold into the run
-				// — the run does NOT split; the mark rides the pending refs and
+				// ADR 10: a valid git stamp updates the carried identity. Mid-turn
+				// stamps (tool_end/turn_end while a turn is open) fold into the turn
+				// — the turn does NOT split; the stamp rides the pending refs and
 				// renders inside its action group. A prompt-anchored stamp renders
 				// nothing on its own: its identity is the next user message's
-				// header chip. Other boundary stamps (user_bash_end, or a run
-				// anchor with no open run) render as standalone cards at their
-				// path position, flushing the run first so the order holds.
+				// header chip. Other boundary stamps (user_bash_end, or a turn
+				// anchor with no open turn) render as standalone cards at their
+				// path position, flushing the turn first so the order holds.
 				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
 					const stamp = parseGitStampEntry(entry);
 					if (stamp) {
@@ -519,7 +519,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						const subject = stamp.v === 2 ? stamp.commitSubject : null;
 						if (pending.length > 0 && (stamp.anchor === "tool_end" || stamp.anchor === "turn_end")) {
 							const last = pending[pending.length - 1]!;
-							pendingGitMarks.push({
+							pendingGitStamps.push({
 								entryId: entry.id,
 								timestamp: entry.timestamp,
 								identity,
@@ -529,7 +529,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 								afterBlockKey: `${last.entry.id}:b${last.blockIndex}`,
 							});
 						} else if (stamp.anchor !== "prompt") {
-							flushSwitchRun();
+							flushSwitchTurn();
 							flushPending();
 							turns.push(buildGitChangeTurn(entry, turns.length, identity, stamp, !seenGitStamp, prevTurns));
 						}
@@ -537,14 +537,14 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						seenGitStamp = true;
 					}
 				}
-				// tool_result (joined into ToolActionStepVM), label, session_info,
+				// tool_result (joined into ToolActionVM), label, session_info,
 				// custom, custom_message — invisible; do not break the merge.
 				break;
 		}
 		if (entry.timestamp) prevSealTs = entry.timestamp;
 	}
 	flushPending();
-	flushSwitchRun();
+	flushSwitchTurn();
 
 	return {
 		turns,
@@ -692,7 +692,7 @@ export function viewModelCacheKey(doc: Document, scope: string | null, pullTick:
 }
 
 // ============================================================================
-// Structure step — turn builders (with identity preservation)
+// Structure pass — turn builders (with identity preservation)
 // ============================================================================
 
 /** Element-wise image comparison for VM reuse (data/mimeType are the only fields). */
@@ -878,9 +878,9 @@ function buildAssistantTurn(
 	prevBlocks: Map<string, AssistantBlockVM>,
 	turnStartedAt: string,
 	context: { contextPercent?: number; contextDeltaPercent?: number },
-	gitChanges: GitChangeMark[] = [],
+	gitChanges: InlineGitStamp[] = [],
 ): AssistantTurn {
-	// Flatten step: one descriptor per accumulated block ref, in order.
+	// Flatten pass: one descriptor per accumulated block ref, in order.
 	const blocks: AssistantBlockVM[] = [];
 	for (const { entry, blockIndex } of refs) {
 		const isProvisional = entry.id.startsWith("pending:");
@@ -908,7 +908,7 @@ function buildAssistantTurn(
 	const sealed = !!last.timestamp;
 	// Turn window end: a turn's tool calls execute AFTER their entry seals, so
 	// the window extends to the latest sealed tool result — the per-turn
-	// windows then partition the whole run (the next turn anchors on this
+	// windows then partition the whole turn (the next turn anchors on this
 	// turn's last tool seal, so tool time is counted once, in the turn that
 	// issued the calls). A tool call with no sealed result yet (running, or
 	// arguments still streaming) keeps the totals undefined.
@@ -944,8 +944,8 @@ function buildAssistantTurn(
 		provider: last.provider,
 		usage: last.usage,
 		// stopReason/errorMessage only when the turn's last ref is its entry's
-		// last block (always true for run-merged turns): an error/abort line
-		// renders once per run, never per sub-turn.
+		// last block (always true for turn-merged turns): an error/abort line
+		// renders once per turn, never per sub-turn.
 		stopReason: refs[refs.length - 1].blockIndex === last.content.length - 1 ? last.stopReason : undefined,
 		errorMessage:
 			refs[refs.length - 1].blockIndex === last.content.length - 1 ? (last.errorMessage ?? undefined) : undefined,
@@ -978,7 +978,7 @@ function buildAssistantTurn(
 		prev.toolMs === turn.toolMs &&
 		prev.contextPercent === turn.contextPercent &&
 		prev.contextDeltaPercent === turn.contextDeltaPercent &&
-		sameGitMarks(prev.gitChanges, turn.gitChanges) &&
+		sameGitStamps(prev.gitChanges, turn.gitChanges) &&
 		prev.blocks.length === turn.blocks.length &&
 		prev.blocks.every((b, i) => b === turn.blocks[i])
 	) {
@@ -988,7 +988,7 @@ function buildAssistantTurn(
 }
 
 /** Element-wise comparison for AssistantTurn.gitChanges reuse. */
-function sameGitMarks(a: GitChangeMark[] | undefined, b: GitChangeMark[] | undefined): boolean {
+function sameGitStamps(a: InlineGitStamp[] | undefined, b: InlineGitStamp[] | undefined): boolean {
 	if (a === b) return true;
 	if (!a || !b || a.length !== b.length) return false;
 	return a.every((m, i) => {
@@ -1077,20 +1077,20 @@ function buildSystemTurn(
 }
 
 function buildSwitchTurn(
-	run: { firstId: string; provider: string; modelId: string; thinkingLevel: string },
+	switchData: { firstId: string; provider: string; modelId: string; thinkingLevel: string },
 	index: number,
 	prevTurns: Map<string, TurnVM>,
 ): SystemTurn {
 	const switchTo = {
-		provider: run.provider,
-		modelId: run.modelId,
-		thinkingLevel: run.thinkingLevel !== "" ? run.thinkingLevel : undefined,
+		provider: switchData.provider,
+		modelId: switchData.modelId,
+		thinkingLevel: switchData.thinkingLevel !== "" ? switchData.thinkingLevel : undefined,
 	};
-	const turn: SystemTurn = { kind: "system", type: "model_switch", entryId: run.firstId, index, switchTo };
-	// Keyed by the run's first entry id: when the run extends (a new entry
+	const turn: SystemTurn = { kind: "system", type: "model_switch", entryId: switchData.firstId, index, switchTo };
+	// Keyed by the turn's first entry id: when the turn extends (a new entry
 	// appended to the doc), the key is stable but switchTo differs, so the
 	// dedup still yields a fresh turn.
-	const prev = prevTurns.get(`system:${run.firstId}`);
+	const prev = prevTurns.get(`system:${switchData.firstId}`);
 	if (prev?.kind === "system" && prev.type === "model_switch" && prev.index === turn.index && prev.switchTo) {
 		const p = prev.switchTo;
 		if (
@@ -1105,7 +1105,7 @@ function buildSwitchTurn(
 }
 
 // ============================================================================
-// Flatten step — block VM construction
+// Flatten pass — block VM construction
 // ============================================================================
 
 function buildBlockVM(
@@ -1132,7 +1132,7 @@ function buildBlockVM(
 			const result: ToolResultSnapshot | null = resultEntry
 				? { entryId: resultEntry.id, isError: resultEntry.isError }
 				: null;
-			let status: ToolActionStepVM["status"];
+			let status: ToolActionVM["status"];
 			if (resultEntry) {
 				// A provisional result entry (pending: prefix) is created at
 				// tool_execution_start and lives until tool_execution_end seals
@@ -1175,13 +1175,13 @@ function reuseBlock(prevBlocks: Map<string, AssistantBlockVM>, vm: AssistantBloc
 			return p.text === vm.text && p.isProvisional === vm.isProvisional ? p : vm;
 		}
 		case "thinking": {
-			const p = prev as ThinkActionStepVM;
+			const p = prev as ThinkActionVM;
 			return p.thinking === vm.thinking && p.isProvisional === vm.isProvisional && p.redacted === vm.redacted
 				? p
 				: vm;
 		}
 		case "tool": {
-			const p = prev as ToolActionStepVM;
+			const p = prev as ToolActionVM;
 			const sameResult =
 				p.result === vm.result ||
 				(p.result !== null &&
@@ -1325,11 +1325,11 @@ function buildActionSummary(block: ToolCallBlock): string {
 }
 
 // ---------------------------------------------------------------------------
-// Beautified shell command — the collapsed bash step renders the command
+// Beautified shell command — the collapsed bash action renders the command
 // with two decorations (rendered as spans by the web layer): command words
 // ("npm run", "git commit") as tinted chips, and abbreviated tokens as
 // dimmed italic text (the title carries the original). Purely cosmetic:
-// the raw command stays the data model, and the expanded card's identity
+// the raw command stays the data model, and the expanded card's header
 // line shows it unmodified.
 //
 // Front-end: a quote-aware piece scanner (scanShellPieces) — NOT a shell
@@ -1341,11 +1341,11 @@ function buildActionSummary(block: ToolCallBlock): string {
 // bash grammar) could slot in later.
 //
 // Rules (deliberately ad-hoc heuristics over pieces):
-//   1. a leading "cd <dir> <sep>" folds by its relation to the cwd (under
+//   1. a leading "cd <dir> <sep>" is elided by its relation to the cwd (under
 //      it → cwd-relative chip; equal to it → no-op "cd;" chip; outside it
 //      → elided-prefix chip keeping the last two segments);
 //   2. any path-shaped word (absolute or ./ ../-prefixed) with more than
-//      two real segments folds to its last two ("/a/b/c/d.ts" →
+//      two real segments is elided to its last two ("/a/b/c/d.ts" →
 //      "...c/d.ts"; "../.." never leaks beside a "..." label);
 //   3. the first command of every separated segment gets a chip — words
 //      containing "=" (env assignments) don't count and keep the
@@ -1356,12 +1356,12 @@ function buildActionSummary(block: ToolCallBlock): string {
 // ---------------------------------------------------------------------------
 
 /** One piece of a beautified shell command: literal text, a highlighted
- * command word, or a folded token (shortened label + the original for the
+ * command word, or an elided token (shortened label + the original for the
  * hover title). */
 export type ShellCommandSegment =
 	| { kind: "text"; text: string }
 	| { kind: "cmd"; text: string }
-	| { kind: "fold"; label: string; original: string };
+	| { kind: "elide"; label: string; original: string };
 
 /** Scanner output: an unquoted word, a whole quoted span (quotes included,
  * never decorated inside), an unquoted command separator, or whitespace. */
@@ -1436,7 +1436,7 @@ export function scanShellPieces(text: string): ShellPiece[] {
 	return pieces;
 }
 
-/** Fold a shell command into display segments. A command nothing applies
+/** Elide a shell command into display segments. A command nothing applies
  * to yields a single text segment — callers can treat a one-text result as
  * "no decoration needed". */
 export function beautifyShellCommand(command: string, cwd?: string | null): ShellCommandSegment[] {
@@ -1462,13 +1462,13 @@ export function beautifyShellCommand(command: string, cwd?: string | null): Shel
 	let idx = 0;
 
 	// Rule 1: leading "cd <dir> <sep>" — three shapes:
-	//   dir under cwd   → one chip "cd <relative>" (the separator folds in);
+	//   dir under cwd   → one chip "cd <relative>" (the separator is elided);
 	//   dir is the cwd  → one chip "cd;" — a no-op cd, nothing to show;
 	//   dir outside cwd → "cd" and the separator stay plain text; a deep dir
 	//                     elides its prefix to a "…" chip with the last two
 	//                     segments as plain text (a shallow dir stays raw —
 	//                     eliding "/" would be decoration without gain).
-	// In every shape the dir is consumed here, so rule 2 never re-folds it.
+	// In every shape the dir is consumed here, so rule 2 never re-elides it.
 	if (pieces[0]?.kind === "word" && pieces[0].text === "cd") {
 		const dirIdx = nextNonOther(1);
 		const sepIdx = dirIdx >= 0 ? nextNonOther(dirIdx + 1) : -1;
@@ -1477,7 +1477,7 @@ export function beautifyShellCommand(command: string, cwd?: string | null): Shel
 			const relative = displayPath(dir, cwd ?? null);
 			if (relative !== dir) {
 				out.push({
-					kind: "fold",
+					kind: "elide",
 					label: relative.length > 0 ? `cd ${relative}` : "cd;",
 					original: textOf(0, sepIdx + 1),
 				});
@@ -1490,7 +1490,7 @@ export function beautifyShellCommand(command: string, cwd?: string | null): Shel
 				const elided = tail !== null ? dir.slice(0, dir.length - tail.length) : "";
 				if (tail !== null && elided.length > 1) {
 					pushText(textOf(0, dirIdx)); // "cd "
-					out.push({ kind: "fold", label: "…", original: dir });
+					out.push({ kind: "elide", label: "…", original: dir });
 					pushText(tail);
 					pushText(textOf(dirIdx + 1, sepIdx + 1)); // " &&"
 					idx = sepIdx + 1;
@@ -1519,10 +1519,10 @@ export function beautifyShellCommand(command: string, cwd?: string | null): Shel
 		}
 		const word = p.text;
 
-		// Rule 2: path-shaped words fold to their last two real segments.
-		const folded = foldPathWord(word);
-		if (folded !== null) {
-			out.push(folded);
+		// Rule 2: path-shaped words elide to their last two real segments.
+		const elided = elidePathWord(word);
+		if (elided !== null) {
+			out.push(elided);
 			expectCommand = false;
 			idx++;
 			continue;
@@ -1562,14 +1562,14 @@ export function beautifyShellCommand(command: string, cwd?: string | null): Shel
 	return out;
 }
 
-/** Rule 2 helper — fold a path-shaped word ("/a/b/c/d.ts", "./x/y.ts",
+/** Rule 2 helper — elide a path-shaped word ("/a/b/c/d.ts", "./x/y.ts",
  * "../../x/y.ts") with more than two real segments to its last two. */
-function foldPathWord(word: string): ShellCommandSegment | null {
+function elidePathWord(word: string): ShellCommandSegment | null {
 	if (!word.startsWith("/") && !word.startsWith("./") && !word.startsWith("../")) return null;
 	const parts = word.split("/").filter((p) => p !== "" && p !== "." && p !== "..");
 	if (parts.length <= 2) return null;
 	return {
-		kind: "fold",
+		kind: "elide",
 		label: `...${parts[parts.length - 2]}/${parts[parts.length - 1]}`,
 		original: word,
 	};
@@ -1686,13 +1686,13 @@ const SUB_WORD = /^[A-Za-z][\w-]*$/;
 
 /**
  * The full-form identifier for a tool call — the counterpart of
- * makeActionSummary. The collapsed band abbreviates for scannability
+ * makeActionSummary. The collapsed tinted row abbreviates for scannability
  * (basename, single line); the expanded card restores the full truth:
  * cwd-relative full paths (with the read line range), the entire bash
  * command (all lines). Not length-capped. Returns null while the
  * identifier argument has not streamed yet.
  */
-export function makeActionIdentity(name: string, args: JsonValue | null, cwd?: string | null): string | null {
+export function makeActionHeader(name: string, args: JsonValue | null, cwd?: string | null): string | null {
 	const recArgs: Record<string, unknown> | null =
 		args !== null && typeof args === "object" ? (args as Record<string, unknown>) : null;
 
@@ -1810,7 +1810,7 @@ function lowerBound(arr: string[], x: string): number {
 	return lo;
 }
 
-/** Time in tool execution across a sealed assistant run.
+/** Time in tool execution across a sealed assistant turn.
  *
  * Computed as total − Σ(assistant-generation windows), so parallel tools are
  * handled correctly: each batch's tool window is the wall-clock span from the
@@ -1918,10 +1918,10 @@ export function newestLeafInSubtree(entryId: string, entries: Record<string, Ent
 // Keyboard turn navigation — pure index math over the turn list.
 // Kept here (not in the keybinding layer) because the turn-key identity
 // contract lives in viewmodel: keying navigation on entryId instead of
-// turnKey broke once already (run-merged turns share identity rules).
+// turnKey broke once already (turn-merged turns share identity rules).
 // ============================================================================
 
-/** Next focused turn key for j/k-style step navigation.
+/** Next focused turn key for j/k-style action navigation.
  * `turns` is the full VM turn list (non-content turns are filtered here);
  * `fallbackIndex` is lazy (a callback) because the caller's fallback computes
  * DOM positions — only paid when the focused turn is stale or missing.
@@ -1950,11 +1950,11 @@ export function nextFocusedTurnKey(
 
 export type ActivityPhase = "thinking" | "tool" | "text";
 
-/** Phase of the currently-streaming run: the latest block that carries a
+/** Phase of the currently-streaming turn: the latest block that carries a
  * live signal. Walks the last assistant turn's blocks backwards — the latest
  * block is the current phase — skipping finished tools (result attached) and
  * redacted thinking (no live signal). Falls back to "text" when the last
- * turn isn't an assistant run or every block is done/redacted. */
+ * turn isn't an assistant turn or every block is done/redacted. */
 export function liveActivityPhase(vm: ViewModel): ActivityPhase {
 	const lastTurn = vm.turns[vm.turns.length - 1];
 	if (!lastTurn || lastTurn.kind !== "assistant") return "text";
@@ -1975,16 +1975,16 @@ export function liveActivityPhase(vm: ViewModel): ActivityPhase {
 // Renderer-side grouping helper — consecutive-action group detection.
 //
 // Grouping is renderer-owned (ADR 07): the ViewModel has no group entity.
-// This pure helper is shared by the renderer (spine sections) and the
-// reconnect re-pull (resolving expanded group keys back to steps), so
+// This pure helper is shared by the renderer (action-group sections) and the
+// reconnect re-pull (resolving expanded group keys back to actions), so
 // both derive identical group keys.
 // ============================================================================
 
-export type TurnSegment = { kind: "text"; block: TextBlockVM } | { kind: "group"; key: string; steps: ActionStepVM[] };
+export type TurnSegment = { kind: "text"; block: TextBlockVM } | { kind: "group"; key: string; actions: ActionVM[] };
 
 /**
  * Split an AssistantTurn's flat block list into text blocks and maximal
- * groups of consecutive action steps. The group key is the first step's
+ * groups of consecutive actions. The group key is the first action's
  * `${entryId}:${blockIndex}` — stable under seal (block indices are
  * append-only; entry-id renames go through migrateExpandKeys).
  */
@@ -1998,69 +1998,69 @@ export function segmentBlocks(blocks: AssistantBlockVM[]): TurnSegment[] {
 			i++;
 			continue;
 		}
-		const steps: ActionStepVM[] = [];
+		const actions: ActionVM[] = [];
 		while (i < blocks.length && blocks[i].blockType !== "text") {
-			steps.push(blocks[i] as ActionStepVM);
+			actions.push(blocks[i] as ActionVM);
 			i++;
 		}
 		segments.push({
 			kind: "group",
-			key: `${steps[0].entryId}:${steps[0].blockIndex}`,
-			steps,
+			key: `${actions[0].entryId}:${actions[0].blockIndex}`,
+			actions,
 		});
 	}
 	return segments;
 }
 
-/** Mid-run git marks assigned to action groups (ADR 10 v2). */
+/** Mid-turn inline git stamps assigned to action groups (ADR 10 v2). */
 export interface GroupGitChanges {
-	/** Marks per group key (the group the mark renders inside). */
-	byGroup: Map<string, GitChangeMark[]>;
-	/** Marks with no group to fold into (a text-only run) — the renderer
-	 * falls back to standalone cards after the turn's segments. */
-	unattached: GitChangeMark[];
+	/** Inline git stamps per group key (the group the stamp renders inside). */
+	byGroup: Map<string, InlineGitStamp[]>;
+	/** Inline git stamps with no group to fold into (a text-only turn) — the
+	 * renderer falls back to standalone cards after the turn's segments. */
+	unattached: InlineGitStamp[];
 }
 
-/** Assign a turn's mid-run git marks to its action groups: a mark renders
- * inside the group owning its `afterBlockKey` step; when that block is text
- * (a turn_end stamp after a closing text block, say), it attaches to the
+/** Assign a turn's mid-turn inline git stamps to its action groups: a stamp
+ * renders inside the group owning its `afterBlockKey` action; when that block is
+ * text (a turn_end stamp after a closing text block, say), it attaches to the
  * nearest group *before* that text. Both resolutions are prefix-stable —
- * everything preceding the anchor is immutable — so a mark keeps its group
- * (and therefore its DOM parent) as the run grows. Resolving against the
- * turn's last group instead would let a mark hop groups mid-stream, which
+ * everything preceding the anchor is immutable — so a stamp keeps its group
+ * (and therefore its DOM parent) as the turn grows. Resolving against the
+ * turn's last group instead would let a stamp hop groups mid-stream, which
  * remounts its card. */
-export function assignGroupGitChanges(segments: TurnSegment[], marks: GitChangeMark[]): GroupGitChanges {
-	const byGroup = new Map<string, GitChangeMark[]>();
-	const unattached: GitChangeMark[] = [];
-	if (marks.length === 0) return { byGroup, unattached };
-	const groupOfStep = new Map<string, string>();
+export function assignGroupGitChanges(segments: TurnSegment[], stamps: InlineGitStamp[]): GroupGitChanges {
+	const byGroup = new Map<string, InlineGitStamp[]>();
+	const unattached: InlineGitStamp[] = [];
+	if (stamps.length === 0) return { byGroup, unattached };
+	const groupOfAction = new Map<string, string>();
 	// Text block key → the group preceding it (absent when no group is before).
 	const groupBeforeText = new Map<string, string>();
 	let lastGroupKey: string | null = null;
 	for (const seg of segments) {
 		if (seg.kind === "group") {
 			lastGroupKey = seg.key;
-			for (const s of seg.steps) groupOfStep.set(`${s.entryId}:b${s.blockIndex}`, seg.key);
+			for (const s of seg.actions) groupOfAction.set(`${s.entryId}:b${s.blockIndex}`, seg.key);
 		} else if (lastGroupKey !== null) {
 			groupBeforeText.set(`${seg.block.entryId}:b${seg.block.blockIndex}`, lastGroupKey);
 		}
 	}
-	for (const mark of marks) {
-		const key = groupOfStep.get(mark.afterBlockKey) ?? groupBeforeText.get(mark.afterBlockKey) ?? null;
+	for (const stamp of stamps) {
+		const key = groupOfAction.get(stamp.afterBlockKey) ?? groupBeforeText.get(stamp.afterBlockKey) ?? null;
 		if (key === null) {
-			unattached.push(mark);
+			unattached.push(stamp);
 		} else {
 			const list = byGroup.get(key);
-			if (list) list.push(mark);
-			else byGroup.set(key, [mark]);
+			if (list) list.push(stamp);
+			else byGroup.set(key, [stamp]);
 		}
 	}
 	return { byGroup, unattached };
 }
 
 // ============================================================================
-// Lazy pull wants — single source of truth for step → lazy-field mapping.
-// Components call stepWants during render and append to the wants outbox
+// Lazy pulls — single source of truth for action → lazy-field mapping.
+// Components call actionPulls during render and enqueue pending pulls
 // (ADR 09); the pull loop is the sole fetcher.
 // ============================================================================
 
@@ -2089,32 +2089,32 @@ export {
 } from "./tree.ts";
 
 /**
- * Wants for one rendered action step (ADR 09: components declare wants
- * during render). A visible think step always wants `thinking` (the inline
- * one-line rendering needs it even collapsed); a visible tool step always
- * wants `arguments` (the summary needs it); an expanded tool step
- * additionally wants its linked result content/details.
+ * Pending pulls for one rendered action (ADR 09: components declare pending
+ * pulls during render). A visible think action always needs `thinking` (the
+ * inline one-line rendering needs it even collapsed); a visible tool action
+ * always needs `arguments` (the summary needs it); an expanded tool action
+ * additionally needs its linked result content/details.
  */
-export function stepWants(step: ActionStepVM, expanded: boolean): PullRequestItem[] {
-	if (step.blockType === "thinking") {
-		if (step.redacted) return [];
+export function actionPulls(action: ActionVM, expanded: boolean): PullRequestItem[] {
+	if (action.blockType === "thinking") {
+		if (action.redacted) return [];
 		return [
 			{
-				entryId: step.entryId,
-				fieldPath: `/entries/${step.entryId}/content/${step.blockIndex}/thinking`,
+				entryId: action.entryId,
+				fieldPath: `/entries/${action.entryId}/content/${action.blockIndex}/thinking`,
 			},
 		];
 	}
-	const wants: PullRequestItem[] = [
+	const pending: PullRequestItem[] = [
 		{
-			entryId: step.entryId,
-			fieldPath: `/entries/${step.entryId}/content/${step.blockIndex}/arguments`,
+			entryId: action.entryId,
+			fieldPath: `/entries/${action.entryId}/content/${action.blockIndex}/arguments`,
 		},
 	];
-	if (expanded && step.result) {
-		wants.push(...resultPullPaths(step.result.entryId));
+	if (expanded && action.result) {
+		pending.push(...resultPullPaths(action.result.entryId));
 	}
-	return wants;
+	return pending;
 }
 
 /** Tool result lazy field paths. */
@@ -2127,7 +2127,7 @@ export function resultPullPaths(resultId: string): PullRequestItem[] {
 
 // ---------------------------------------------------------------------------
 // Action kind — pure mapping from tool name to the visual kind used by the
-// renderer to tint the action's band. The band's hue carries the kind;
+// renderer to tint the action's tinted row. The tinted row's hue carries the kind;
 // status is not surfaced as color (the agent self-corrects, and the
 // turn-header timing already signals in-flight work). Read-like tools
 // (grep/find/ls/glob) share the bland read hue so they recede; unknown
@@ -2136,11 +2136,11 @@ export function resultPullPaths(resultId: string): PullRequestItem[] {
 
 export type ActionKind = "read" | "bash" | "write" | "edit" | "think";
 
-/** Color family — the visual tier a kind maps to. edit + write share the
- * mutate family (file mutation); the label/details still distinguish them,
- * only the band hue merges. This is the single source of truth for the
- * band strip/tint and the group legend dots. */
-export type ActionFamily = "mutate" | "bash" | "think" | "read";
+/** Kind hue — the color group a kind maps to. edit + write share the
+ * mutate hue (file mutation); the label/details still distinguish them,
+ * only the tinted row hue merges. This is the single source of truth for the
+ * row strip/tint and the group legend dots. */
+export type ActionHue = "mutate" | "bash" | "think" | "read";
 
 export function kindForTool(name: string): ActionKind {
 	switch (name) {
@@ -2162,8 +2162,8 @@ export function kindForTool(name: string): ActionKind {
 	}
 }
 
-/** Map a kind to its color family. edit/write → mutate. */
-export function kindFamily(kind: ActionKind): ActionFamily {
+/** Map a kind to its color group. edit/write → mutate. */
+export function kindHue(kind: ActionKind): ActionHue {
 	switch (kind) {
 		case "edit":
 		case "write":

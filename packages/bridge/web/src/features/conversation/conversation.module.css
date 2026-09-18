@@ -1,6 +1,6 @@
 /* ConversationArea shell — scroll container, the jump-to-bottom affordance,
    and the empty placeholder. Turn chrome lives in turns.module.css; the
-   action-step family in actionSteps.module.css. */
+   action hue in actions.module.css. */
 
 /* Scroll container (ConversationArea wraps content for auto-scroll) */
 .scrollContainer {

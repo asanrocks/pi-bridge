@@ -11,7 +11,7 @@ import { diffLines, diffWords } from "diff";
 import { memo, useEffect, useMemo, useState } from "react";
 import type { HighlightResult } from "../../../render/shiki.ts";
 import { highlightTokens } from "../../../render/shiki.ts";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import { type ActionDetailsProps, extToLang, normalizeEditArgs } from "./args.ts";
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
 
 import { useCallback } from "react";
 import type { ImageContent, JsonValue } from "../../../../../src/core/types.ts";
-import type { ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
+import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import { displayPath } from "../../../../../src/viewmodel/index.ts";
 import { useStore } from "../../../infra/state/store.tsx";
 import { sanitizeOutputText } from "./sanitize.ts";
@@ -29,7 +29,7 @@ export interface ToolArgs extends Record<string, unknown> {
  * is one file plus one registry line.
  */
 export interface ActionDetailsProps {
-	step: ToolActionStepVM;
+	action: ToolActionVM;
 	args: ToolArgs | null;
 	resultText: string | null;
 	/** Image blocks from the tool result, in order. Empty when none. */
@@ -41,22 +41,22 @@ export interface ActionDetailsProps {
 // ---------------------------------------------------------------------------
 
 /**
- * Live tool-call arguments for a step, read store-direct so they update as
+ * Live tool-call arguments for an action, read store-direct so they update as
  * the call's arguments stream in (the VM cache key excludes argument
  * values; the snapshot copy goes stale mid-stream). Falls back to the VM
  * snapshot while the entry is not yet in the document.
  */
-export function useLiveArgs(step: ToolActionStepVM): JsonValue | null {
+export function useLiveArgs(action: ToolActionVM): JsonValue | null {
 	return useStore(
 		useCallback(
 			(s) => {
-				const entry = s.document.entries[step.entryId];
-				if (!entry || entry.kind !== "message") return step.arguments ?? null;
-				const block = entry.content[step.blockIndex];
+				const entry = s.document.entries[action.entryId];
+				if (!entry || entry.kind !== "message") return action.arguments ?? null;
+				const block = entry.content[action.blockIndex];
 				if (block?.type === "toolCall") return block.arguments ?? null;
-				return step.arguments ?? null;
+				return action.arguments ?? null;
 			},
-			[step.entryId, step.blockIndex, step.arguments],
+			[action.entryId, action.blockIndex, action.arguments],
 		),
 	);
 }
@@ -66,22 +66,22 @@ export function useLiveArgs(step: ToolActionStepVM): JsonValue | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Sanitized, trimmed tool-result text for a step (ANSI/binary/\r cleaned,
+ * Sanitized, trimmed tool-result text for an action (ANSI/binary/\r cleaned,
  * see sanitize.ts), or null while absent/empty. Subscribes to the result
  * entry's lazy-pulled content.
  */
-export function useResultText(step: ToolActionStepVM): string | null {
+export function useResultText(action: ToolActionVM): string | null {
 	return useStore(
 		useCallback(
 			(s) => {
-				if (!step.result) return null;
-				const entry = s.document.entries[step.result.entryId];
+				if (!action.result) return null;
+				const entry = s.document.entries[action.result.entryId];
 				if (!entry || entry.kind !== "tool_result") return null;
 				const raw = (entry.content ?? []).map((c) => (c.type === "text" && c.text) || "").join("\n");
 				const text = sanitizeOutputText(raw).trim();
 				return text || null;
 			},
-			[step.result],
+			[action.result],
 		),
 	);
 }

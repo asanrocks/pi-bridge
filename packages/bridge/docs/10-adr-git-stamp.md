@@ -290,29 +290,29 @@ valid stamp at or before that point, carried forward along the path. An empty
 stamp set means unknown, not an error.
 
 A valid stamp is represented in one of two ways, depending on where it
-falls. A stamp observed while an assistant run is open (the `tool_end` and
-`turn_end` anchors — the run is still accumulating when the walk reaches
-the stamp) **folds into the run**: the run does not split; the stamp becomes
-a `GitChangeMark` on the turn carrying its position (the last block
-accumulated when it was observed). The mark renders as its own card inside
-the owning action group, after the step it follows — for a tool-anchored
-stamp, between the committing tool's band and the following steps. The
+falls. A stamp observed while an assistant turn is open (the `tool_end` and
+`turn_end` anchors — the turn is still accumulating when the walk reaches
+the stamp) **folds into the turn**: the turn does not split; the stamp becomes
+a `InlineGitStamp` on the turn carrying its position (the last block
+accumulated when it was observed). The inline git stamp renders as its own card inside
+the owning action group, after the action it follows — for a tool-anchored
+stamp, between the committing tool's tinted row and the following actions. The
 group's collapsed summary leads with a `git:` segment (e.g. `git:
-ae02c151 · edit: foo.ts · run 1 tool · read 3 files`) and its family-dot
-legend gains a leading git swatch. A stamp whose anchor block is
+ae02c151 · edit: foo.ts · run 1 tool · read 3 files`) and its dot
+legend gains a leading git dot. A stamp whose anchor block is
 text attaches to the nearest group *before* that text — placement is
-prefix-stable, so a mark keeps its group (and its DOM parent) as the run
-grows; resolving against the turn's last group instead would let a mark hop
-groups mid-stream and remount its card. A run with no group before the
-anchor falls back to a standalone card after the run.
+prefix-stable, so a stamp keeps its group (and its DOM parent) as the turn
+grows; resolving against the turn's last group instead would let a stamp hop
+groups mid-stream and remount its card. A turn with no group before the
+anchor falls back to a standalone card after the turn.
 
 A `prompt`-anchored stamp renders nothing of its own: its identity (and
 commit subject) is carried onto the following user turn, where the header
 shows a compact identity chip with the commit subject as its tooltip. The
-other boundary stamps (`user_bash_end`, or a run-anchor stamp with no open
-run) are `GitChange` items in the ordered viewmodel sequence — standalone
+other boundary stamps (`user_bash_end`, or a turn-anchor stamp with no open
+turn) are `GitChange` items in the ordered viewmodel sequence — standalone
 cards at their path position. Either way the item is
-not a user or assistant turn: it does not merge assistant runs, participate
+not a user or assistant turn: it does not merge assistant turns, participate
 in sibling navigation or editing, or join with assistant tool results, and
 user and assistant turn indexes retain their existing editing semantics.
 
@@ -351,28 +351,28 @@ The viewmodel must process valid Git stamps while walking the active leaf path:
 - emit one ordered `GitChange` item for each other boundary stamp; the
   first is an initial state recording and later changed keys are Git change
   cards;
-- fold each valid mid-run stamp (`tool_end`/`turn_end` with an open run)
-  into the run as a `GitChangeMark` positioned after its last accumulated
+- fold each valid mid-turn stamp (`tool_end`/`turn_end` with an open turn)
+  into the turn as a `InlineGitStamp` positioned after its last accumulated
   block;
 - preserve v1 items without inventing a subject or tool relationship;
 - leave unknown custom types and malformed Git stamps invisible;
 - keep observation cards out of LLM context.
 
 Boundary git-change items are separate visual cards in the conversation
-timeline at the stamp's path position. Mid-run marks render inside the owning
+timeline at the stamp's path position. Mid-turn inline git stamps render inside the owning
 action group: the group's collapsed summary leads with a `git:` hash segment
-(git: ae02c151 · edit: foo.ts · run 1 tool · read 3 files), the family-dot
-legend gains a leading git swatch, and
-expansion shows the change as its own slim card after the step it follows —
+(git: ae02c151 · edit: foo.ts · run 1 tool · read 3 files), the dot
+legend gains a leading git dot, and
+expansion shows the change as its own slim card after the action it follows —
 including between an assistant tool-call entry and its later tool result when
 the observation is tool-anchored. Neither is mistaken for a user or assistant
 message, and wording stays neutral ("Git state observed") rather than claiming
 that a particular tool caused the change when tools were concurrent.
 
 Both cards reuse the tool-card skeleton (the read tool / user bash anatomy):
-a tinted `.actionStep` band in the git family hue, a fold row whose summary
+a tinted `.action` row in the git hue, a collapsed row whose summary
 is the commit subject with the branch and short hash docked right (muted,
-monospace), and an expanded details card whose identity line restores the
+monospace), and an expanded details card whose header line restores the
 full truth (full hash, anchor, timestamp) above the content region. Expanding
 a card with a resolvable commit fetches `git show --stat` on demand (see
 "Git query and consistency" above); cards without a commit (unborn or
@@ -488,7 +488,7 @@ silently incorrect repository metadata.
 - Unknown versions and malformed payloads never establish a baseline and never
   render as Git identity or a change card.
 - A valid stamp produces one rendered Git state item (a standalone card or a
-  mid-run mark folded into its group) and updates the carried
+  mid-turn inline git stamp folded into its group) and updates the carried
   identity; it does not enter LLM context.
 - Commit subject and the observation anchor never affect transition
   deduplication.
@@ -511,8 +511,8 @@ silently incorrect repository metadata.
 - branch and subject validation, including extra output;
 - fold behavior across interleaved stamps, forks, and missing observations;
 - viewmodel identity preservation when a user's effective identity changes;
-- Git-change item ordering and card/mark data for each anchor, including
-  mid-run fold placement and group-summary segments.
+- Git-change item ordering and card/inline-stamp data for each anchor, including
+  mid-turn fold placement and group-summary segments.
 
 ### Extension and integration tests
 
@@ -544,8 +544,8 @@ provider:
 - custom-entry patches arrive in the expected order around prompt, tool-end,
   user-bash, and turn-end events;
 - Git-change items carry stable entry ids, appear in path order, and do not
-  alter user/assistant editing indexes, assistant-run contents, or tool-result
-  joining (mid-run stamps fold into the run's action groups as marks, not
+  alter user/assistant editing indexes, assistant-turn contents, or tool-result
+  joining (mid-turn stamps fold into the turn's action groups as inline git stamps, not
   splits);
 
 ## Relationship to Other ADRs

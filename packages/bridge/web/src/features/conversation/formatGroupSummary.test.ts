@@ -3,16 +3,16 @@
 // module directly; type-checked by check:bridge-web.
 
 import { describe, expect, it } from "vitest";
-import { formatGroupSummary, type StepSummaryItem } from "./formatGroupSummary.ts";
+import { type ActionSummaryItem, formatGroupSummary } from "./formatGroupSummary.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
 
-const step = (toolName: string, basename: string | null = null): StepSummaryItem => ({ toolName, basename });
+const action = (toolName: string, basename: string | null = null): ActionSummaryItem => ({ toolName, basename });
 
 describe("formatGroupSummary — git segment", () => {
 	it("places git before every tool category", () => {
-		const items = [step("edit", "foo.ts"), step("bash"), step("read", "a.ts")];
+		const items = [action("edit", "foo.ts"), action("bash"), action("read", "a.ts")];
 		const label = formatGroupSummary(items, [{ commit: SHA, branch: "main" }]);
 		expect(label).toBe("git: 01234567 · edit: foo.ts · run 1 tool · read 1 file");
 	});
@@ -22,13 +22,13 @@ describe("formatGroupSummary — git segment", () => {
 	});
 
 	it("dedupes repeated identities and truncates at two hashes", () => {
-		const marks = [
+		const stamps = [
 			{ commit: SHA, branch: "main" },
 			{ commit: SHA, branch: "main" }, // dedup
 			{ commit: SHA_B, branch: "main" },
 			{ commit: "a".repeat(40), branch: "dev" },
 		];
-		expect(formatGroupSummary([], marks)).toBe("git: 01234567, fedcba98, +1");
+		expect(formatGroupSummary([], stamps)).toBe("git: 01234567, fedcba98, +1");
 	});
 
 	it("unborn HEAD shows the branch; fully unknown shows ?", () => {
@@ -36,7 +36,7 @@ describe("formatGroupSummary — git segment", () => {
 		expect(formatGroupSummary([], [{ commit: null, branch: null }])).toBe("git: ?");
 	});
 
-	it("no marks keeps the legacy label", () => {
-		expect(formatGroupSummary([step("edit", "foo.ts")])).toBe("edit: foo.ts");
+	it("no stamps keeps the legacy label", () => {
+		expect(formatGroupSummary([action("edit", "foo.ts")])).toBe("edit: foo.ts");
 	});
 });

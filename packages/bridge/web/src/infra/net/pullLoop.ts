@@ -1,14 +1,14 @@
 // ============================================================================
-// Pull loop (ADR 09) — drains the wants outbox, issues one batched pull.
+// Pull loop (ADR 09) — drains the pull queue, issues one batched pull.
 // The sole fetcher: no component calls `pull` directly. Components declare
-// wants during render (wantPull); this layer drains them (microtask-scheduled
-// via setWantsDrainer) and ingests the reply into the DocumentMirror.
+// pending pulls during render (enqueuePulls); this layer drains them (microtask-scheduled
+// via setDrainer) and ingests the reply into the DocumentMirror.
 // ============================================================================
 
 import { type JsonValue, planPull } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
-import { takeWants } from "./wants.ts";
+import { drainPullQueue } from "./pullQueue.ts";
 
 /** Consecutive-failure backoff for pull retries: 1s doubling, capped at 30s. */
 let pullRetryDelay = 1000;
@@ -25,16 +25,16 @@ function scheduleRetryBump(): void {
 	}, delay);
 }
 
-export async function drainWantsOutbox(): Promise<void> {
+export async function flushPullQueue(): Promise<void> {
 	const client = getGlobalClient();
-	const wants = takeWants();
-	// Disconnected: drop the wants. On reconnect the replace push bumps
+	const pending = drainPullQueue();
+	// Disconnected: drop the pending pulls. On reconnect the replace push bumps
 	// pullTick, components re-render and re-register.
-	if (!client || wants.length === 0) return;
+	if (!client || pending.length === 0) return;
 
 	const store = getStore();
 	const loading = store.getState().loadingPaths;
-	const needed = planPull(wants, client.mirror, loading);
+	const needed = planPull(pending, client.mirror, loading);
 	if (needed.length === 0) return;
 
 	// Mark in-flight
@@ -73,7 +73,7 @@ export async function drainWantsOutbox(): Promise<void> {
 		}
 	} catch {
 		// ADR 09 failure policy: evict from loadingPaths (below, finally) and
-		// bump pullTick after a capped-backoff delay so want-registering
+		// bump pullTick after a capped-backoff delay so pull-requesting
 		// components re-render and re-register. No tight loop: the retry rides
 		// the render cadence.
 		scheduleRetryBump();

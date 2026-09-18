@@ -5,9 +5,8 @@ intended vocabulary, not a report of current code. Normative: a term means
 what the claims of its domain say, and may only be used where a claim
 licenses it. Identifiers and prose follow the claims.
 
-This document describes the desired, ultimate vocabulary. It carries no
-process state — aliases, current-code mappings, and migration status all
-live in [glossary-migration.md](glossary-migration.md).
+This document describes the ultimate vocabulary. It carries no process
+state.
 
 ## Tiers
 
@@ -119,8 +118,9 @@ wire protocol) and [ADR 09](09-adr-incremental-sync.md) (cache, cursor).
    runs at **settle** *(bound)* — the end of a turn, when streaming stops —
    and on idle-state verbs. Reconcile **seals** *(coined)* provisional
    entries: each provisional id is replaced by its durable id, emitted as a
-   `move` op. Settle is the event; sealing is what reconcile does to
-   identity at that event.
+   `move` op. Settle is the event; sealing is the identity transition at that
+   event. `sealed` and `seal timestamp` name the resulting state, so "on
+   seal" means "when the entry is sealed" — never a second event.
 5. A **Mirror** *(bound)* is the synchronized client-side replica of a
    Document.
 6. Entry fields are **lazy** *(bound)* or **eager** *(bound)*. Lazy fields

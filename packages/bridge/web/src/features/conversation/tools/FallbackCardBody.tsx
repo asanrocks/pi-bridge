@@ -1,11 +1,11 @@
-// FallbackCardBody — generic card for unknown tools. The band header
+// FallbackCardBody — generic card for unknown tools. The tinted row header
 // carries the tool name; the body is the args grid + result text.
 
 import { memo } from "react";
 import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import { ResultImages } from "../../../render/ResultImages.tsx";
-import styles from "../actionSteps.module.css";
+import styles from "../actions.module.css";
 import { type ActionDetailsProps, formatArgValue } from "./args.ts";
 
 export const FallbackCardBody = memo(function FallbackCardBody({ args, resultText, resultImages }: ActionDetailsProps) {
