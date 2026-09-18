@@ -10,7 +10,7 @@
 
 import type { StateCreator } from "zustand/vanilla";
 import { type ImageContent, MAX_IMAGES_PER_MESSAGE } from "../../../../src/core/types.ts";
-import type { ClientStore } from "../store.ts";
+import type { ClientStore } from "./store.ts";
 
 export type ComposerDraft =
 	| { kind: "idle" }

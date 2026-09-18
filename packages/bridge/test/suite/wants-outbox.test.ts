@@ -9,7 +9,7 @@ import { DocumentMirror, type PullRequestItem, planPull } from "../../src/core/i
 import type { Document } from "../../src/core/types.ts";
 import type { ThinkActionStepVM, ToolActionStepVM } from "../../src/viewmodel/index.ts";
 import { stepWants } from "../../src/viewmodel/index.ts";
-import { setWantsDrainer, takeWants, wantPull } from "../../web/src/infra/wants.ts";
+import { setWantsDrainer, takeWants, wantPull } from "../../web/src/infra/net/wants.ts";
 
 // ── planPull (pure batching step) ──────────────────────────────────────────
 

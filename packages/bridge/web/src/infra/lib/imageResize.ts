@@ -12,7 +12,7 @@
 // browsers, so the re-encode bakes the oriented pixels.
 // ============================================================================
 
-import { type ImageContent, MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../../src/core/types.ts";
+import { type ImageContent, MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../../../src/core/types.ts";
 
 /** Attachments allowed per message (host-enforced wire limit). */
 export const MAX_ATTACHMENTS = MAX_IMAGES_PER_MESSAGE;

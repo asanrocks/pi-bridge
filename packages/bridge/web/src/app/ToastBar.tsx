@@ -5,8 +5,8 @@
 // ============================================================================
 
 import { memo, useCallback } from "react";
-import type { Toast } from "../infra/store.ts";
-import { getStore, useStore } from "../infra/store.tsx";
+import type { Toast } from "../infra/state/store.ts";
+import { getStore, useStore } from "../infra/state/store.tsx";
 import styles from "./ToastBar.module.css";
 
 export const ToastBar = memo(function ToastBar() {

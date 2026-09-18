@@ -13,12 +13,17 @@
 // drafts work (blur salvage, offline sends, per-scope persistence). The dock
 // is a view: onChange → setDraftText, blur → blurDraft, Enter → onCommit
 // (useComposerCommit does the atomic RPC; clears the draft only on success).
+//
+// Self-sufficient: models, status, and connection state come from the store;
+// verb callbacks come from useRpc / useModelCycling. The one prop is the
+// commit callback — it is shared with the keyboard ring (App), so it is
+// created once there and passed down rather than re-derived here.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/store.tsx";
+import { useRpc } from "../../infra/net/useRpc.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
 import cardStyles from "./ComposeCard.module.css";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -26,40 +31,15 @@ import styles from "./ComposeDock.module.css";
 import { CostPopover } from "./CostPopover.tsx";
 import { formatCost } from "./formatters.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
+import { useModelCycling } from "./useModelCycling.ts";
 
 interface ComposeDockProps {
 	onCommit: () => void | Promise<void>;
-	onStop: () => void;
-	onDiscardSteer: () => void;
-	isBusy: boolean;
-	connected: boolean;
-	model: ModelRef;
-	thinkingLevel: string;
-	models: ModelInfo[];
-	scopedModels: ScopedModelInfo[];
-	thinkingLevels: string[];
-	isStreaming: boolean;
-	onSetModel: (provider: string, modelId: string) => void;
-	onSetThinkingLevel: (level: string) => void;
-	onCycleModel: (direction: "forward" | "backward") => void;
 }
 
-export const ComposeDock = memo(function ComposeDock({
-	onCommit,
-	onStop,
-	onDiscardSteer,
-	isBusy,
-	connected,
-	model,
-	thinkingLevel,
-	models,
-	scopedModels,
-	thinkingLevels,
-	isStreaming,
-	onSetModel,
-	onSetThinkingLevel,
-	onCycleModel,
-}: ComposeDockProps) {
+export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockProps) {
+	const rpc = useRpc();
+	const onCycleModel = useModelCycling();
 	// ── Composer expanded/collapsed state ───────────────────────────────
 	// Owned in the store so the app keybinding layer can drive `/` (expand)
 	// without reaching into dock internals. Visual only — decoupled from
@@ -88,15 +68,24 @@ export const ComposeDock = memo(function ComposeDock({
 	// branch, including pre-compaction messages — monotonic and
 	// navigation-invariant, matching pi-tui's footer.
 	const entries = useStore((s) => s.document.entries);
+	const models = useStore((s) => s.models);
 	const accounting = useMemo(() => sessionAccounting(entries, models), [entries, models]);
 	const contextUsage = useStore((s) => s.document.status.contextUsage);
 	// Pending steers queued mid-stream (AgentSession queue_update →
 	// /status/pendingSteer). Rendered as read-only draft chips above the
 	// textarea; × clears the whole queue.
 	const pendingSteer = useStore((s) => s.document.status.pendingSteer);
-	// Compaction is the non-streaming busy state. Send stays available during
-	// streaming (it queues a steer) but is disabled during compaction.
-	const isCompacting = isBusy && !isStreaming;
+	// Status the card renders. Compaction is the non-streaming busy state.
+	// Send stays available during streaming (it queues a steer) but is
+	// disabled during compaction.
+	const isStreaming = useStore((s) => s.document.status.isStreaming);
+	const isCompacting = useStore((s) => s.document.status.isCompacting);
+	const isBusy = isStreaming || isCompacting;
+	const connected = useStore((s) => s.connection.kind === "connected");
+	const model = useStore((s) => s.document.status.model);
+	const thinkingLevel = useStore((s) => s.document.status.thinkingLevel);
+	const scopedModels = useStore((s) => s.document.scopedModels);
+	const thinkingLevels = useStore((s) => s.thinkingLevels);
 
 	// Cost-breakdown popover state
 	const [costOpen, setCostOpen] = useState(false);
@@ -241,8 +230,8 @@ export const ComposeDock = memo(function ComposeDock({
 			const current = draft.kind === "compose" ? draft.text : "";
 			setDraftText(current.trim() ? `${drafts}\n\n${current}` : drafts);
 		}
-		onStop();
-	}, [pendingSteer, draft, setDraftText, onStop]);
+		rpc.abort();
+	}, [pendingSteer, draft, setDraftText, rpc]);
 
 	// ── Escape: collapse; cancel edit if editing ───────────────────────
 	// Edit drafts are cleared (Escape exits edit mode). Compose drafts are
@@ -333,7 +322,7 @@ export const ComposeDock = memo(function ComposeDock({
 					editLabel={isEditing ? "Editing message" : null}
 					onCancelEdit={handleEditCancel}
 					pendingSteer={pendingSteer}
-					onDiscardSteer={onDiscardSteer}
+					onDiscardSteer={rpc.discardSteer}
 					isBusy={isBusy}
 					isCompacting={isCompacting}
 					onStop={handleStop}
@@ -342,8 +331,8 @@ export const ComposeDock = memo(function ComposeDock({
 					scopedModels={scopedModels}
 					thinkingLevel={thinkingLevel}
 					thinkingLevels={thinkingLevels}
-					onSetModel={onSetModel}
-					onSetThinkingLevel={onSetThinkingLevel}
+					onSetModel={rpc.setModel}
+					onSetThinkingLevel={rpc.setThinkingLevel}
 					onCycleModel={onCycleModel}
 					leftControls={leftControls}
 				/>

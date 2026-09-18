@@ -17,9 +17,9 @@
 // ============================================================================
 
 import { createStore } from "zustand/vanilla";
-import { type ComposerSlice, createComposerSlice } from "./store/composer.ts";
-import { createProtocolSlice, type ProtocolSlice } from "./store/protocol.ts";
-import { createUiSlice, type UiSlice } from "./store/ui.ts";
+import { type ComposerSlice, createComposerSlice } from "./composer.ts";
+import { createProtocolSlice, type ProtocolSlice } from "./protocol.ts";
+import { createUiSlice, type UiSlice } from "./ui.ts";
 
 export type ClientStore = ProtocolSlice & ComposerSlice & UiSlice;
 
@@ -39,8 +39,8 @@ export function createClientStore() {
 // Public surface — consumers keep importing from this module.
 // ---------------------------------------------------------------------------
 
-export type { ComposerDraft } from "./store/composer.ts";
-export { selectDraftImages } from "./store/composer.ts";
-export type { ConnectionState, SessionFolderPage } from "./store/protocol.ts";
-export type { ExpandKeySets, Toast } from "./store/ui.ts";
-export { migrateExpandKeys } from "./store/ui.ts";
+export type { ComposerDraft } from "./composer.ts";
+export { selectDraftImages } from "./composer.ts";
+export type { ConnectionState, SessionFolderPage } from "./protocol.ts";
+export type { ExpandKeySets, Toast } from "./ui.ts";
+export { migrateExpandKeys } from "./ui.ts";

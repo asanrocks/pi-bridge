@@ -18,9 +18,9 @@
 // and is therefore not importable from test/suite.
 // ============================================================================
 
-import type { CacheEntryRecord, EntryCacheStore, PrefixCursor, SessionStatusHint } from "../../../src/core/index.ts";
-import { computeCursor, InMemoryEntryCacheStore, seedDocument } from "../../../src/core/index.ts";
-import { beginSessionCandidate } from "./sessionCandidate.ts";
+import type { CacheEntryRecord, EntryCacheStore, PrefixCursor, SessionStatusHint } from "../../../../src/core/index.ts";
+import { computeCursor, InMemoryEntryCacheStore, seedDocument } from "../../../../src/core/index.ts";
+import { beginSessionCandidate } from "../net/sessionCandidate.ts";
 
 const DB_NAME = "pi-bridge-cache";
 const ENTRIES_STORE = "entries";
