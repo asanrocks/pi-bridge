@@ -13,7 +13,7 @@ import { memo } from "react";
 import { resultPullPaths, type ToolActionStepVM } from "../../../../../src/viewmodel/index.ts";
 import { useStore } from "../../../infra/store.tsx";
 import { wantPull } from "../../../infra/wants.ts";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 import { useResultText } from "./args.ts";
 import { errorPreviewLine, headPreview } from "./resultText.ts";
 

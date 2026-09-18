@@ -15,10 +15,10 @@ import {
 import { useStore } from "../../infra/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
-import styles from "./conversation.module.css";
 import { formatDuration, formatTimestamp } from "./format.ts";
 import { GitChangeView } from "./GitChangeView.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
+import styles from "./turns.module.css";
 import { useNow } from "./useNow.ts";
 
 export const AssistantTurnView = memo(function AssistantTurnView({

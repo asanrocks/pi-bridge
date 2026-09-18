@@ -8,7 +8,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { type HighlightResult, highlightTokens } from "../../../render/shiki.ts";
-import styles from "../conversation.module.css";
+import styles from "../actionSteps.module.css";
 
 export const BashIdentity = memo(function BashIdentity({ command, lang }: { command: string; lang: string }) {
 	const [result, setResult] = useState<HighlightResult | null>(null);
