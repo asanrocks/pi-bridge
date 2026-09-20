@@ -139,12 +139,14 @@ describe("createClientStore", () => {
 		expect(state.loadingPaths).toEqual(new Set());
 	});
 
-	it("setModels updates models and thinking levels", () => {
+	it("setModels updates models, thinking levels, and scoped models", () => {
 		const store = createClientStore();
 		const models = [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: false }];
-		store.getState().setModels(models, ["off", "low", "high"]);
+		const scopedModels = [{ provider: "faux", id: "faux-1", name: "Faux 1" }];
+		store.getState().setModels(models, ["off", "low", "high"], scopedModels);
 		expect(store.getState().models).toEqual(models);
 		expect(store.getState().thinkingLevels).toEqual(["off", "low", "high"]);
+		expect(store.getState().scopedModels).toEqual(scopedModels);
 	});
 
 	it("applyReplace replaces document root", () => {
