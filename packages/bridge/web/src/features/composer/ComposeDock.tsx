@@ -24,6 +24,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
+import { selectRenderDiverged } from "../../infra/state/ui.ts";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
 import cardStyles from "./ComposeCard.module.css";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -80,6 +81,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// disabled during compaction.
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const isCompacting = useStore((s) => s.document.status.isCompacting);
+	const sendLocked = useStore(selectRenderDiverged);
 	const isBusy = isStreaming || isCompacting;
 	const connected = useStore((s) => s.connection.kind === "connected");
 	const model = useStore((s) => s.document.status.model);
@@ -325,6 +327,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					onDiscardSteer={rpc.discardSteer}
 					isBusy={isBusy}
 					isCompacting={isCompacting}
+					sendLocked={sendLocked}
 					onStop={handleStop}
 					model={model}
 					models={models}

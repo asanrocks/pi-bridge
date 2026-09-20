@@ -88,7 +88,10 @@ of `newSession`.
 - `abort` clears queued steering text before waiting for pi to stop.
 - `discardSteer` clears queued steering text without aborting the run.
 - `setModel`, `setThinkingLevel`, `renameSession`, and `navigate` update the
-  Session and reconcile or patch the Document as needed.
+  Session and reconcile or patch the Document as needed. `navigate` is the
+  server-side mutation lock enforcement point: it throws while the Document
+  is streaming or compacting, because branching swaps the LLM context under
+  the in-flight turn (`agent.state.messages` is rebuilt from the new branch).
 - `dispose` aborts and flushes the current runtime, unsubscribes from pi, and
   disposes the runtime.
 
