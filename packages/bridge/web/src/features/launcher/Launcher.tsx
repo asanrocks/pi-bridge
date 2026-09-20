@@ -28,6 +28,8 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const projectId = useStore((s) => s.currentProjectId);
 	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
 	const models = useStore((s) => s.models);
+	/** The daemon's global `enabledModels` scope — the home's Pinned group. */
+	const scopedModels = useStore((s) => s.scopedModels);
 	const rpc = useRpc();
 	const active = useMemo(
 		() => activeSessions.slice().sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
@@ -92,6 +94,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				<HomeCompose
 					projectId={projectId}
 					models={models}
+					scopedModels={scopedModels}
 					defaultModel={project?.defaultModel ?? null}
 					defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
 					connected={connection.kind === "connected"}

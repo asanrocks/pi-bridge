@@ -8,7 +8,14 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
-import type { Document, ModelInfo, ProjectInfo, SessionInfo, SessionListCursor } from "../../../../src/core/types.ts";
+import type {
+	Document,
+	ModelInfo,
+	ProjectInfo,
+	ScopedModelInfo,
+	SessionInfo,
+	SessionListCursor,
+} from "../../../../src/core/types.ts";
 import type { ComposerDraft } from "./composer.ts";
 import type { ClientStore } from "./store.ts";
 
@@ -67,6 +74,10 @@ export interface ProtocolSlice {
 	/** Active/streaming sessions across all Projects (ADR 11). */
 	activeSessions: SessionInfo[];
 	models: ModelInfo[];
+	/** The daemon's global `enabledModels` scope (getDaemonInfo) — the Project
+	 * home's pre-session "Pinned" group. An attached session uses its
+	 * Document's `scopedModels` instead. */
+	scopedModels: ScopedModelInfo[];
 	thinkingLevels: string[];
 	/** Dev mode — when true, browser console.* calls are relayed to server. */
 	devMode: boolean;
@@ -106,7 +117,7 @@ export interface ProtocolSlice {
 	) => void;
 	/** Drop all sidebar folder pages (reconnect — the daemon may have restarted). */
 	resetSessionPages: () => void;
-	setModels: (models: ModelInfo[], thinkingLevels: string[]) => void;
+	setModels: (models: ModelInfo[], thinkingLevels: string[], scopedModels: ScopedModelInfo[]) => void;
 	setDevMode: (mode: boolean) => void;
 	applyReplace: (doc: Document) => void;
 }
@@ -173,6 +184,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	projects: [],
 	activeSessions: [],
 	models: [],
+	scopedModels: [],
 	thinkingLevels: [],
 	devMode: false,
 
@@ -227,7 +239,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	resetSessionPages: () => set({ sessionPages: {} }),
 
-	setModels: (models, thinkingLevels) => set({ models, thinkingLevels }),
+	setModels: (models, thinkingLevels, scopedModels) => set({ models, thinkingLevels, scopedModels }),
 
 	setDevMode: (devMode) => set({ devMode }),
 

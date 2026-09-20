@@ -95,6 +95,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	getDaemonInfo: async () => ({
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
+		scopedModels: [],
 		thinkingLevels: ["off", "low", "medium", "high"],
 		devMode: false,
 	}),

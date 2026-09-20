@@ -248,10 +248,14 @@ registry instead of a disk scan, is global across Projects, is not paginated,
 and returns the same row shape ordered by timestamp.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
-model and thinking defaults, available model metadata, supported thinking
-levels, and dev-mode state. Model defaults are resolved from each Project's
-settings and the shared model runtime; they are display data and do not pin a
-future `newSession` request when the client omits an override.
+model and thinking defaults, available model metadata, the daemon's global
+`enabledModels` scope, supported thinking levels, and dev-mode state. Model
+defaults are resolved from each Project's settings and the shared model
+runtime; they are display data and do not pin a future `newSession` request
+when the client omits an override. The scope is global settings only — a
+project-level `.pi/settings.json` override is not reflected — and exists so the
+Project home can render curated models before a Session (and its Document)
+exists; an attached Session's own scope arrives with its initial sync.
 
 ### Files and repository detail
 
