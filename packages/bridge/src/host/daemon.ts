@@ -89,6 +89,8 @@ interface FileMeta {
 	sessionId: string;
 	name?: string;
 	firstMessageText?: string;
+	lastMessageText?: string;
+	lastActivityAt?: string;
 	messageCount?: number;
 }
 
@@ -439,6 +441,7 @@ export class Daemon {
 			};
 		}
 		const doc = activation?.manager.document;
+		const live = doc ? documentSummary(doc) : undefined;
 		return {
 			projectId: project.id,
 			sessionId: meta?.sessionId ?? activation?.ref.sessionId ?? entry.stem,
@@ -447,7 +450,11 @@ export class Daemon {
 			isStreaming: activation ? activation.manager.document.status.isStreaming : false,
 			name: meta?.name ?? (doc ? doc.status.name || undefined : undefined),
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
-			firstMessageText: meta?.firstMessageText ?? (doc ? firstUserText(doc) : undefined),
+			firstMessageText: meta?.firstMessageText ?? live?.firstMessageText,
+			// The live preview/activity win over the last flush for an active row;
+			// an inactive row has only the file scan.
+			lastMessageText: live?.lastMessageText ?? meta?.lastMessageText,
+			lastActivityAt: live?.lastActivityAt ?? meta?.lastActivityAt,
 			messageCount: meta?.messageCount ?? (doc ? doc.status.stats.messages || undefined : undefined),
 		};
 	}
@@ -1042,6 +1049,8 @@ function parseSessionFile(filePath: string): FileMeta | null {
 		let sessionId: string | null = null;
 		let name: string | undefined;
 		let firstMessageText: string | undefined;
+		let lastMessageText: string | undefined;
+		let lastActivityAt: string | undefined;
 		let messageCount = 0;
 		let foundHeader = false;
 
@@ -1066,14 +1075,22 @@ function parseSessionFile(filePath: string): FileMeta | null {
 					}
 				}
 
+				if (typeof entry.timestamp === "string" && entry.timestamp) {
+					if (!lastActivityAt || entry.timestamp > lastActivityAt) lastActivityAt = entry.timestamp;
+				}
+
 				if (entry.type !== "message") continue;
 				messageCount++;
 
-				if (!firstMessageText) {
-					const msg = entry.message;
-					if (msg?.role === "user") {
-						firstMessageText = extractSimpleText(msg.content);
-					}
+				const msg = entry.message;
+				if (msg?.role === "user" && !firstMessageText) {
+					firstMessageText = extractSimpleText(msg.content);
+				}
+				// Most recent user/assistant text; thinking and tool-result blocks are
+				// ignored so the preview matches the live-document extractor.
+				if (msg?.role === "user" || msg?.role === "assistant") {
+					const text = firstTextBlock(msg.content);
+					if (text) lastMessageText = text;
 				}
 			} catch {
 				// skip malformed lines
@@ -1086,6 +1103,8 @@ function parseSessionFile(filePath: string): FileMeta | null {
 			sessionId: sessionId ?? basename(filePath),
 			name,
 			firstMessageText: firstMessageText || undefined,
+			lastMessageText: lastMessageText ? clampPreview(lastMessageText) : undefined,
+			lastActivityAt,
 			messageCount: messageCount || undefined,
 		};
 	} catch {
@@ -1110,25 +1129,56 @@ function extractSimpleText(content: unknown): string {
 	return "";
 }
 
+/** First `text` block of a durable message content. Thinking blocks are
+ * ignored so the preview matches the live-document extractor. */
+function firstTextBlock(content: unknown): string | undefined {
+	if (typeof content === "string") return content || undefined;
+	if (Array.isArray(content)) {
+		for (const item of content) {
+			const block = item as { type?: string; text?: string };
+			if (block.type === "text" && block.text) return block.text;
+		}
+	}
+	return undefined;
+}
+
 // ── Document-derived metadata (unflushed active sessions) ────────────────
 
 const PREVIEW_MAX = 120;
 
-/** First user-message text from a live document, clamped to one line. */
-function firstUserText(doc: Document): string | undefined {
+/** Launcher-facing summary derived from a live Document (an unflushed or
+ * active Session): the first user text, the most recent user/assistant message
+ * text, and the latest entry timestamp. Text is clamped to one line. */
+function documentSummary(doc: Document): {
+	firstMessageText?: string;
+	lastMessageText?: string;
+	lastActivityAt?: string;
+} {
 	let first: string | undefined;
 	let firstTs = "";
+	let last: string | undefined;
+	let lastTs: string | undefined;
+	let lastActivityAt: string | undefined;
 	for (const entry of Object.values(doc.entries)) {
-		if (entry.kind !== "message" || entry.role !== "user") continue;
 		const ts = entry.timestamp ?? "";
-		if (first !== undefined && firstTs !== "" && ts >= firstTs) continue;
+		if (ts && (!lastActivityAt || ts > lastActivityAt)) lastActivityAt = ts;
+		if (entry.kind !== "message") continue;
 		const text = extractFirstText(entry.content);
-		if (text) {
+		if (!text) continue;
+		if (entry.role === "user" && (first === undefined || firstTs === "" || ts < firstTs)) {
 			first = text;
 			firstTs = ts;
 		}
+		if (lastTs === undefined || ts >= lastTs) {
+			last = text;
+			lastTs = ts;
+		}
 	}
-	return first ? clampPreview(first) : undefined;
+	return {
+		firstMessageText: first ? clampPreview(first) : undefined,
+		lastMessageText: last ? clampPreview(last) : undefined,
+		lastActivityAt,
+	};
 }
 
 function extractFirstText(content: Content[]): string | undefined {
