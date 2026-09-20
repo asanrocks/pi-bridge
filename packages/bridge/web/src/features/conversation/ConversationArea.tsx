@@ -43,7 +43,15 @@ export const ConversationArea = memo(function ConversationArea({
 	// the viewport tracking pauses follow and the jump button becomes the
 	// return-to-live gesture.
 	const isDiverged = useStore(selectRenderDiverged);
-	const { awayFromBottom, newContentBelow, jumpToBottom, goLive } = useViewportTracking(vm, isStreaming, isDiverged);
+	// Column element observed by the geometry anchor (§1 in the hook): its
+	// width is the rewrap driver — a width change is what needs a restore.
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	const { awayFromBottom, newContentBelow, jumpToBottom, goLive } = useViewportTracking(
+		vm,
+		isStreaming,
+		isDiverged,
+		scrollContainerRef,
+	);
 
 	// entriesRef for the sibling pager — updated via Zustand subscribe
 	// (not useStore) to avoid re-rendering ConversationArea on every
@@ -60,7 +68,7 @@ export const ConversationArea = memo(function ConversationArea({
 
 	if (vm.turns.length === 0) {
 		return (
-			<div className={styles.scrollContainer}>
+			<div className={styles.scrollContainer} ref={scrollContainerRef}>
 				<div className={styles.empty}>No messages yet. Send a prompt to begin.</div>
 			</div>
 		);
@@ -69,7 +77,7 @@ export const ConversationArea = memo(function ConversationArea({
 	const lastTurn = vm.turns[vm.turns.length - 1];
 
 	return (
-		<div className={styles.scrollContainer}>
+		<div className={styles.scrollContainer} ref={scrollContainerRef}>
 			{vm.turns.map((turn) => {
 				switch (turn.kind) {
 					case "user":
