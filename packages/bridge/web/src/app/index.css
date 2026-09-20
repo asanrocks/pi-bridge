@@ -88,11 +88,40 @@
   --color-portal-border: #c8c3b8;
 
   /* ── Radius scale ───────────────────────────────────────────────────── */
-  --radius-xs: 2px;   /* tiny — pager buttons, edit chips */
+  --radius-xs: 2px;   /* tiny — pager buttons, edit chips, inline diff marks */
   --radius-sm: 4px;   /* small — inputs, cards, code blocks */
   --radius-md: 6px;   /* medium — portals, dropdowns */
-  --radius-lg: 8px;   /* large — available, not currently used */
   --radius-xl: 16px;  /* extra large — composer card (rounder, softer) */
+  --radius-full: 999px; /* pills — fully rounded chips (compose status pill) */
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  /* Two steps only: UI-transition durations are visually indistinguishable
+     inside ±50ms, so finer-grained values are noise. Cadence animations
+     (streaming pulse, cursor blink) are not transitions and keep literal
+     durations. */
+  --dur-fast: 0.15s;  /* hover/fade/transform feedback, toast entrance */
+  --dur-slow: 0.3s;   /* larger geometry moves (composer expansion) */
+
+  /* ── Elevation (shadows are structural, not a second color palette) ── */
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.15);   /* small floating controls */
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);  /* popovers, panels, portals */
+  /* Bespoke, kept inline: the composer card's two-layer ring shadow (its own
+     rest/hover/focus spec), the completion dropdown's upward shadow, and the
+     mirrored drawer edge shadows (2px/-2px horizontal) — directional or
+     composite specs with exactly one consumer each. */
+
+  /* ── Letter tracking ────────────────────────────────────────────────── */
+  --tracking-caps: 0.04em; /* uppercase structural labels — the one spec */
+
+  /* ── Z ladder (shell layering; intra-component stacking stays literal) */
+  --z-pane: 20;          /* docked sidebar rail, history pane */
+  --z-topbar: 30;        /* fixed top bar */
+  --z-float: 35;         /* jump-to-bottom button, floats over conversation */
+  --z-dock: 40;          /* composer dock, resize handles, edge reveal strip */
+  --z-overlay: 50;       /* sidebar fullscreen/peek, completion dropdown */
+  --z-toast: 80;         /* toast tray */
+  --z-drawer: 90;        /* mobile drawer; panel = +1 over backdrop */
+  --z-portal: 100;       /* portals (viewer, pickers); panel = +1 over overlay */
 
   /* ── Font-size scale (separate from Tailwind --text-* to avoid
         overriding Tailwind's default text utilities) ─────────────────── */
@@ -196,6 +225,15 @@ input, textarea {
 	outline-offset: 1px;
 }
 
+/* Streaming-pulse: the one shared spec for liveness dots (sidebar rows,
+   launcher rows, composer status). Modules reference this global keyframe;
+   each consumer wraps its own animation declaration in a
+   prefers-reduced-motion: no-preference guard. */
+@keyframes streaming-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
+}
+
 /* Mobile body baseline: 14px for density. The PRD's 16px floor is the
    desktop long-form reading baseline; below the measure cap (48rem) the
    shorter mobile viewing distance makes 14px perceptually equivalent,
@@ -276,7 +314,7 @@ input, textarea {
 	backdrop-filter: none;
 	opacity: 0;
 	pointer-events: none;
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 [data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
 	opacity: 1;

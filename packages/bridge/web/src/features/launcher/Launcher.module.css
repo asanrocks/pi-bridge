@@ -28,7 +28,7 @@
 	font-weight: bold;
 	text-transform: uppercase;
 	color: var(--color-muted-foreground);
-	letter-spacing: 0.04em;
+	letter-spacing: var(--tracking-caps);
 }
 
 /* Empty state (no projects / no active sessions, connected). */
@@ -96,17 +96,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
 	.dotStreaming {
-		animation: launcherDotPulse 1.5s infinite;
-	}
-}
-
-@keyframes launcherDotPulse {
-	0%,
-	100% {
-		opacity: 1;
-	}
-	50% {
-		opacity: 0.4;
+		animation: streaming-pulse 1.5s infinite;
 	}
 }
 

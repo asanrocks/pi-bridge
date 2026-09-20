@@ -12,10 +12,11 @@ import {
 	type ParsedProviderError,
 	segmentBlocks,
 } from "../../../../src/viewmodel/index.ts";
+import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
-import { formatDuration, formatTimestamp } from "./format.ts";
+import { formatDuration } from "./format.ts";
 import { GitChangeView } from "./GitChangeView.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
 import styles from "./turns.module.css";
