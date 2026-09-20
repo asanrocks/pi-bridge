@@ -67,7 +67,7 @@ state channel.
 | `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
 | `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
-| `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, thinkingLevels, devMode }`; no attachment and no Document push. |
+| `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, scopedModels, thinkingLevels, devMode }`; no attachment and no Document push. |
 | `listFiles` | Project plus `prefix` | `{ ok: true, entries: { path, isDirectory }[] }`; paths resolve against the named Project cwd, so it works without an attachment. |
 | `readFile` | Attached Session | `{ ok: true, path, content, truncated, bytes }`; relative paths resolve against the attached Project cwd and are read fresh from disk. |
 | `gitShow` | Attached Session | `{ ok: true, output, truncated }`; the validated commit is read from the attached Project cwd. |

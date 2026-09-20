@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ImageContent, ModelInfo, ModelRef } from "../../../../src/core/index.ts";
+import type { ImageContent, ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -56,6 +56,7 @@ function saveHomeModelChoice(projectId: string, choice: HomeModelChoice | null):
 export const HomeCompose = memo(function HomeCompose({
 	projectId,
 	models,
+	scopedModels,
 	defaultModel,
 	defaultThinkingLevel,
 	connected,
@@ -63,6 +64,9 @@ export const HomeCompose = memo(function HomeCompose({
 }: {
 	projectId: string;
 	models: ModelInfo[];
+	/** The daemon's global `enabledModels` scope from getDaemonInfo — the
+	 * pre-session Pinned group. Not project-specific (see GetDaemonInfoReply). */
+	scopedModels: ScopedModelInfo[];
 	/** The model a fresh session resolves to (ProjectInfo.defaultModel from
 	 * getDaemonInfo) — display only. The send still omits `model` when unset,
 	 * so the daemon keeps resolving (settings/auth changes stay live). */
@@ -141,16 +145,18 @@ export const HomeCompose = memo(function HomeCompose({
 		[projectId, choice],
 	);
 
-	// Ctrl+P cycles the same provider-deduped list the session dock uses;
-	// cycling from the (unpicked) default starts at the default's position.
+	// Ctrl+P cycles the scoped list when configured, else the same
+	// provider-deduped list the session dock uses; cycling from the (unpicked)
+	// default starts at the default's position.
 	const cycleModels = useMemo(() => {
+		if (scopedModels.length > 0) return scopedModels;
 		const seen = new Set<string>();
 		return models.filter((m) => {
 			if (seen.has(m.provider)) return false;
 			seen.add(m.provider);
 			return true;
 		});
-	}, [models]);
+	}, [scopedModels, models]);
 
 	const handleCycleModel = useCallback(
 		(direction: "forward" | "backward") => {
@@ -205,7 +211,7 @@ export const HomeCompose = memo(function HomeCompose({
 				textareaRef={textareaRef}
 				model={effectiveModel}
 				models={models}
-				scopedModels={[]}
+				scopedModels={scopedModels}
 				thinkingLevel={effectiveLevel}
 				thinkingLevels={thinkingLevels}
 				onSetModel={handleSetModel}

@@ -39,8 +39,12 @@ browse branches in History. A steerer can do the following:
   save, or Escape to cancel.
 - Choose a model and thinking level from the model picker. The picker is
   searchable, grouped by provider, marks the selected model, and filters the
-  thinking slider to levels supported by that model. Ctrl/Cmd+P cycles models;
-  Shift reverses the cycle. The controls remain available whenever connected.
+  thinking slider to levels supported by that model. A curated group sits at
+  the top: "Pinned" when the Session's scope is configured, else "Suggested"
+  (one representative per provider). On Project home, where no Session exists,
+  Pinned comes from the daemon's global `enabledModels`. Ctrl/Cmd+P cycles
+  models; Shift reverses the cycle. The controls remain available whenever
+  connected.
 - Attach PNG, JPEG, WebP, or GIF images by file picker, paste, or drag and
   drop. Attachments are resized when necessary, show thumbnail chips, and can
   be removed individually. The per-message attachment cap and per-file
@@ -98,7 +102,10 @@ Project home is an unattached, compose-first surface. It shows the expanded
 first prompt is sent. The first prompt, images, and explicitly chosen
 pre-session model and thinking level are admitted together. The draft is
 scoped to the Project, and the model choice is persisted in one local Project
-slot. An unset choice leaves model resolution to the daemon. The home has no
+slot. An unset choice leaves model resolution to the daemon. Its picker's
+Pinned group uses the daemon's global `enabledModels` scope; a project-level
+`.pi/settings.json` override is not reflected until the Session attaches and
+its own scope arrives. The home has no
 collapsed compose bar, session ledger, Stop button, or attached-session
 controls.
 
