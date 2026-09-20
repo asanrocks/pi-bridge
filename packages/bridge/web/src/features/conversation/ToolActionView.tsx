@@ -5,7 +5,7 @@
 // strip), below it the capped content region. All kinds share the identical
 // card; the tinted row's tint is the only kind-specific surface. When the content
 // is capped, a persistent bottom fade signals the clipping (data must never
-// disappear silently); the clickable "show all" lives in the hover controls.
+// disappear silently); the clickable "Show all" lives in the hover controls.
 
 import { memo, useCallback, useMemo } from "react";
 import {
@@ -140,7 +140,7 @@ const ToolActionView = memo(function ToolActionView({
 	} = useDetailsCap(actionKey, isExpanded && !isShell);
 	const handleUncap = useCallback(() => toggleUncap(actionKey), [toggleUncap, actionKey]);
 	// Shell cap: the output tail-slice bound (BashCardBody), not panel
-	// clipping — drives the top-bar "show all" control.
+	// clipping — drives the top-bar "Show all" control.
 	const capped = isShell
 		? isUncapped
 			? "uncapped"

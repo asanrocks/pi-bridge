@@ -102,7 +102,7 @@ export const TruncationNotice = memo(function TruncationNotice({
 			<span>{`truncated — ${notice}`}</span>
 			{fullPath && (
 				<button type="button" className={styles.noticePath} onClick={handleCopy} title={fullPath}>
-					{copied ? "copied" : "full output"}
+					{copied ? "Copied" : "Full output"}
 				</button>
 			)}
 		</div>
@@ -183,7 +183,7 @@ export const CardControls = memo(function CardControls({
 			)}
 			{capped !== "none" && (
 				<button type="button" className={styles.cardCtrlBtn} onClick={onToggleCap}>
-					{capped === "uncapped" ? "\u25B4 collapse" : "\u25BE show all"}
+					{capped === "uncapped" ? "\u25B4 Collapse" : "\u25BE Show all"}
 				</button>
 			)}
 		</div>
