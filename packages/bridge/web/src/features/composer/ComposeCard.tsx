@@ -61,6 +61,9 @@ export interface ComposeCardProps {
 	isBusy?: boolean;
 	/** Send disabled (compaction blocks sends; steering does not). */
 	isCompacting?: boolean;
+	/** Send disabled while peeking another branch (mutation lock). The
+	 * tooltip is the affordance; Enter-to-send is gated with it. */
+	sendLocked?: boolean;
 	onStop?: () => void;
 
 	// ── Model picker ──
@@ -106,6 +109,7 @@ export const ComposeCard = memo(function ComposeCard({
 	onDiscardSteer,
 	isBusy = false,
 	isCompacting = false,
+	sendLocked = false,
 	onStop,
 	model,
 	models,
@@ -140,9 +144,9 @@ export const ComposeCard = memo(function ComposeCard({
 
 	const hasContent = value.trim().length > 0 || images.length > 0;
 	const handleSend = useCallback(() => {
-		if (!hasContent) return;
+		if (!hasContent || sendLocked) return;
 		onCommit();
-	}, [hasContent, onCommit]);
+	}, [hasContent, sendLocked, onCommit]);
 
 	// Focus moving to something inside the card (e.g. the attach button or
 	// the hidden file input keeping the click chain inside) is not a blur.
@@ -327,15 +331,16 @@ export const ComposeCard = memo(function ComposeCard({
 
 						{/* Send is always available: during streaming it queues a steer;
 						    when idle it starts a normal turn. Disabled when
-						    disconnected, empty, compacting, or mid-commit. Stop appears
-						    alongside Send during streaming/compaction. */}
+						    disconnected, empty, compacting, mid-commit, or peeking
+						    another branch (sendLocked — back to live to send). Stop
+						    appears alongside Send during streaming/compaction. */}
 						<button
 							type="button"
 							className={styles.composerSendBtn}
 							onClick={handleSend}
-							disabled={!connected || !hasContent || isCompacting || sending}
-							aria-label="Send"
-							title="Send"
+							disabled={!connected || !hasContent || isCompacting || sendLocked || sending}
+							aria-label={sendLocked ? "Send (back to live to send)" : "Send"}
+							title={sendLocked ? "Back to live to send" : "Send"}
 						>
 							➤
 						</button>
