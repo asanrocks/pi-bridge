@@ -379,11 +379,31 @@ This section is normative for additions to the web UI. It is the authority
 for new buttons, chips, action rows, and Markdown hosts.
 
 - **Tokens are authoritative.** All design colors, surfaces, text levels,
-  accents, status colors, action hues, overlay colors, radii, and font sizes
-  are declared in the `@theme` block in `web/src/app/index.css`. Components
-  consume `var(--color-...)`, `var(--kind-...)`, `var(--radius-...)`, and
-  `var(--fs-...)`; they do not introduce raw hex colors. Shadow rgba values
+  accents, status colors, action hues, overlay colors, radii, font sizes,
+  motion durations, elevation shadows, uppercase tracking, and the z-index
+  ladder are declared in the `@theme` block in `web/src/app/index.css`.
+  Components consume `var(--color-...)`, `var(--kind-...)`, `var(--radius-...)`,
+  `var(--fs-...)`, `var(--dur-...)`, `var(--shadow-...)`, `var(--tracking-...)`,
+  and `var(--z-...)`; they do not introduce raw hex colors. Shadow rgba values
   are structural elevation, not a second color palette.
+- **Motion has two transition steps.** UI transitions use `--dur-fast`
+  (0.15s — hover/fade/transform feedback, toast entrance) or `--dur-slow`
+  (0.3s — larger geometry moves like composer expansion); nothing in between,
+  because ±50ms is visually indistinguishable. Cadence animations are not
+  transitions: the shared `streaming-pulse` keyframe (liveness dots — sidebar,
+  launcher, composer) and the cursor `blink` keep literal durations, and every
+  consumer wraps its own animation declaration in a
+  `prefers-reduced-motion: no-preference` guard.
+- **Elevation and layering are tokenized.** `--shadow-1` (small floating
+  controls) and `--shadow-2` (popovers, panels, portals) cover the ambient
+  shadows; a bespoke two-layer ring shadow is the composer card's own
+  rest/hover/focus spec, and the upward completion-dropdown shadow and
+  mirrored drawer edge shadows stay inline — each is directional or composite
+  with exactly one consumer. Intra-component stacking (a slider thumb, a
+  floating copy action) uses literal z-index; the `--z-*` ladder is only for
+  shell layering (panes → topbar → float → dock → overlay → toast → drawer →
+  portal), where each portal/drawer panel sits one step above its backdrop via
+  `calc(token + 1)`.
 - **Use the relative scale for inline content.** Streamdown's inline code,
   table cells, superscripts, subscripts, and headings are restated as `em`
   ratios so they scale with their host. Block code stays at the shared code
@@ -422,8 +442,8 @@ for new buttons, chips, action rows, and Markdown hosts.
   URLs, code tokens, labels, and button text must wrap or ellipsize inside
   their host. The document body is proportional; literal code and terminal
   I/O are monospace. Keep ordinary text tracking at zero and never introduce
-  negative letter spacing; the existing compact uppercase section labels use
-  only their established small positive tracking.
+  negative letter spacing; the existing compact uppercase section labels share
+  one tracking token, `--tracking-caps`.
 - **Surface hierarchy is restrained.** The page is warm off-white, the
   Sidebar/TopBar are a warmer chrome surface, user turns have a light blue
   tint, and the composer is the raised white surface. Cards are reserved for
