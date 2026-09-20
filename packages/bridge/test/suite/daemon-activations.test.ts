@@ -593,6 +593,50 @@ describe("daemon: session activation", () => {
 		ws.close();
 	});
 
+	it("listActiveSessions previews the live document's latest message and activity", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const entries: Document["entries"] = {
+			m1: {
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01Z",
+				kind: "message",
+				role: "user",
+				content: [{ type: "text", text: "first prompt" }],
+			},
+			m2: {
+				id: "m2",
+				parentId: "m1",
+				timestamp: "2026-01-01T00:00:02Z",
+				kind: "message",
+				role: "assistant",
+				content: [{ type: "text", text: "latest reply" }],
+			},
+		};
+		const factory: NonNullable<DaemonOptions["managerFactory"]> = async (opts) => {
+			const stub = makeStubManager({ ...opts, entries, sessionId: "sess-live-preview" });
+			stubs.set(stub.sessionId, stub);
+			return stub.manager;
+		};
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: factory });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "newSession", projectId, text: "first prompt" });
+		await waitForReply(frames, id);
+
+		const listId = send(ws, { verb: "listActiveSessions" });
+		const reply = (await waitForReply(frames, listId)) as unknown as {
+			sessions: Array<{ firstMessageText?: string; lastMessageText?: string; lastActivityAt?: string }>;
+		};
+		expect(reply.sessions[0]?.firstMessageText).toBe("first prompt");
+		expect(reply.sessions[0]?.lastMessageText).toBe("latest reply");
+		expect(reply.sessions[0]?.lastActivityAt).toBe("2026-01-01T00:00:02Z");
+
+		ws.close();
+	});
+
 	it("two newSession calls yield two independent sessions", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		let factoryCalls = 0;
@@ -1363,6 +1407,76 @@ describe("daemon: session listing", () => {
 		expect(createdRow).toBeDefined();
 		expect(createdRow?.active).toBe(true);
 		expect(createdRow?.sessionId).toBe(created.session.sessionId);
+
+		ws.close();
+	});
+
+	it("reports the latest message and last activity from a durable file", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const stem = "2026-01-01T00-00-00-000Z_durable-latest";
+		const file = join(sessionDirFor(a, agentDir), `${stem}.jsonl`);
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(
+			file,
+			`${[
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "durable-latest",
+					timestamp: "2026-01-01T00:00:00Z",
+					cwd: a,
+				}),
+				JSON.stringify({
+					type: "message",
+					id: "m1",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:01Z",
+					message: { role: "user", content: "first prompt", timestamp: 0 },
+				}),
+				JSON.stringify({
+					type: "message",
+					id: "m2",
+					parentId: "m1",
+					timestamp: "2026-01-01T00:00:02Z",
+					message: { role: "assistant", content: [{ type: "text", text: "latest reply" }], timestamp: 0 },
+				}),
+				// A trailing tool result must not become the preview.
+				JSON.stringify({
+					type: "message",
+					id: "m3",
+					parentId: "m2",
+					timestamp: "2026-01-01T00:00:03Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "t1",
+						toolName: "read",
+						content: [{ type: "text", text: "tool output" }],
+						timestamp: 0,
+					},
+				}),
+			].join("\n")}\n`,
+		);
+
+		const { port } = await startDaemon({ agentDir, allow: [a] });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "listSessions", projectId });
+		const reply = (await waitForReply(frames, id)) as unknown as {
+			sessions: Array<{
+				stem: string;
+				firstMessageText?: string;
+				lastMessageText?: string;
+				lastActivityAt?: string;
+			}>;
+		};
+		const row = reply.sessions.find((s) => s.stem === stem);
+		expect(row?.firstMessageText).toBe("first prompt");
+		// The trailing tool result is skipped; the assistant reply is the preview.
+		expect(row?.lastMessageText).toBe("latest reply");
+		// Activity tracks every entry, including the tool result.
+		expect(row?.lastActivityAt).toBe("2026-01-01T00:00:03Z");
 
 		ws.close();
 	});

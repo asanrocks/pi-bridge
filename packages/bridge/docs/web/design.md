@@ -92,8 +92,9 @@ and reserves the live composer footprint at its bottom.
 ### Launcher and Project home
 
 The global launcher at `/` lists configured Projects with their working
-directories and active Sessions. Active rows show a liveness dot, name or
-first-message fallback, Project, relative time, and a first-message preview;
+directories and active Sessions, ordered newest-activity-first. Active rows
+show a liveness dot, name or first-message fallback, Project, relative time
+tracked to the Session's last activity, and a latest-message preview;
 streaming rows use the streaming color and pulse. Selecting a Project opens
 its Project home at `/<projectId>`.
 

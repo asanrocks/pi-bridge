@@ -577,6 +577,14 @@ export interface SessionInfo {
 	name?: string;
 	timestamp: string;
 	firstMessageText?: string;
+	/** Most recent user/assistant message text (one line, clamped) — the
+	 * launcher's preview. A live activation reads it from its Document, so it is
+	 * fresher than the last flush; inactive rows use the file scan. */
+	lastMessageText?: string;
+	/** Latest entry timestamp of the Session. The active-session list uses it
+	 * for the row's activity time and ordering; `timestamp` stays the durable
+	 * sort key (mtime / header creation). */
+	lastActivityAt?: string;
 	messageCount?: number;
 }
 

@@ -241,9 +241,12 @@ canonical stem. The cursor is exclusive and compound: `{ sortTimeMs, stem }`.
 The reply reports `sessions`, `hasMore`, and the last row as `nextCursor`.
 
 `SessionInfo` carries `projectId`, durable `sessionId` when known, stem,
-`active`, `isStreaming`, timestamp, and available name, first-message preview,
-and message count. A durable file supplies metadata; an unflushed active
-Session supplies the live Document. `listActiveSessions` uses the Activation
+`active`, `isStreaming`, timestamp, and available name, first-message text,
+latest-message preview, message count, and last-activity time. A durable file
+supplies metadata; an unflushed active Session supplies the live Document. For
+an active row the live latest-message preview and last-activity time win over
+the file scan; `timestamp` remains the durable sort key (mtime / header
+creation). `listActiveSessions` uses the Activation
 registry instead of a disk scan, is global across Projects, is not paginated,
 and returns the same row shape ordered by timestamp.
 
