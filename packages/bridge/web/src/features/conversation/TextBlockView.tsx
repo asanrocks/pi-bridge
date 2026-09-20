@@ -6,8 +6,12 @@
 // Copy is attached here — per message, not per turn: a merged turn holds
 // several messages, so the turn header cannot copy "the message". The
 // button uses the same .toolbarBtn chip spec as the user-message Copy,
-// floating at the segment's top-right, revealed on hover/focus (always
-// visible on touch) and copying this block's markdown source.
+// floating at the segment's top-right, revealed on hover/focus. On touch
+// (hover: none) it can't hover-reveal, so it drops into the flow and
+// floats right — text wraps around it instead of being occluded. It
+// precedes the markdown in DOM for that float to sit top-right (see
+// turns.module.css); on desktop the absolute positioning makes the order
+// invisible. Copies this block's markdown source.
 
 import { memo, useCallback, useDeferredValue, useState } from "react";
 import { useStore } from "../../infra/state/store.tsx";
@@ -51,8 +55,6 @@ export const TextBlockView = memo(function TextBlockView({
 
 	return (
 		<div className={`${styles.textSegment} ${styles.markdownContent}`}>
-			<MarkdownBlock text={deferredText} isProvisional={isProvisional} />
-			{showCursor && isProvisional && <span className={styles.streamingCursor}>|</span>}
 			{text.length > 0 && (
 				<button
 					type="button"
@@ -64,6 +66,8 @@ export const TextBlockView = memo(function TextBlockView({
 					{copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 				</button>
 			)}
+			<MarkdownBlock text={deferredText} isProvisional={isProvisional} />
+			{showCursor && isProvisional && <span className={styles.streamingCursor}>|</span>}
 		</div>
 	);
 });
