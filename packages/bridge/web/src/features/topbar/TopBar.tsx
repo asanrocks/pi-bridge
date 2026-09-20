@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
+import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import type { ConnectionState } from "../../infra/state/store.ts";
 import styles from "./TopBar.module.css";
 
@@ -48,7 +49,7 @@ export function TopBar({
 		}
 	}, [editing]);
 
-	const chip = connectionChip(connection);
+	const status = connectionStatus(connection);
 
 	return (
 		<div className={styles.topBar}>
@@ -95,10 +96,15 @@ export function TopBar({
 					{name || "pi-bridge"}
 				</button>
 			)}
-			{chip && (
-				<button type="button" className={`${styles.connChip} ${chip.cls}`} onClick={onRetry} title={chip.title}>
+			{status && (
+				<button
+					type="button"
+					className={`${styles.connChip} ${CHIP_TONE[status.tone]}`}
+					onClick={onRetry}
+					title={status.detail}
+				>
 					<span className={styles.connDot} aria-hidden="true" />
-					{chip.label}
+					{status.label}
 				</button>
 			)}
 			<button
@@ -126,33 +132,9 @@ export function TopBar({
 	);
 }
 
-function connectionChip(c: ConnectionState): {
-	label: string;
-	cls: string;
-	title: string;
-} | null {
-	switch (c.kind) {
-		case "connected":
-			return null;
-		case "connecting":
-			return { label: "Connecting…", cls: styles.connMuted, title: "Connecting to the daemon" };
-		case "reconnecting":
-			return {
-				label: `Reconnecting (${c.attempt})`,
-				cls: styles.connWarn,
-				title: "Connection dropped — retrying",
-			};
-		case "unreachable":
-			return {
-				label: "Offline",
-				cls: styles.connErr,
-				title: "Can't reach pi-bridge — click to retry",
-			};
-		case "init_failed":
-			return {
-				label: "Error",
-				cls: styles.connErr,
-				title: c.error || "Daemon unresponsive",
-			};
-	}
-}
+/** Severity → chip CSS class; the Launcher maps the same tones to its own. */
+const CHIP_TONE = {
+	muted: styles.connMuted,
+	warn: styles.connWarn,
+	err: styles.connErr,
+} as const;
