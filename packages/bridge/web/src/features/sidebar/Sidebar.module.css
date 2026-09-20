@@ -123,7 +123,10 @@
 /* Fold button: chevron + name, one click target. Toggling is its only job —
    navigation to a Project home lives on the + button beside it. Quiet by
    construction — dimmed text, no fill at rest; hover darkens the text
-   rather than painting a tinted row. */
+   rather than painting a tinted row. Weight 600 is deliberate: the
+   section header (xs/600) → folder (sm/600) → session (md/400) ladder
+   makes the folder read as a branch header without being louder in
+   color than the sessions under it. */
 .sidebarFolderRow {
 	display: flex;
 	align-items: center;
@@ -134,6 +137,7 @@
 	padding: 6px 4px;
 	cursor: pointer;
 	font-size: var(--fs-sm);
+	font-weight: 600;
 	font-family: inherit;
 	color: var(--color-muted-foreground);
 	background: none;
@@ -147,14 +151,20 @@
 	color: var(--color-foreground);
 }
 
-/* New-session button: the folder's one navigation target — opens the
-   Project home (the compose surface). Square icon slot sized to the row. */
+/* New-session button (folder rows) and all-projects button (header): the
+   folder's one navigation target — opens the Project home (the compose
+   surface). Fixed 24×24 icon slot, not auto-height: the class serves two
+   rows with different cross-axis behavior (stretch in a folder row,
+   center in .headerActions), and auto-height made the header variant
+   collapse to the bare 12px SVG while folder rows grew to the row height. */
 .sidebarFolderNewBtn {
 	flex-shrink: 0;
+	align-self: center;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	width: 24px;
+	height: 24px;
 	padding: 0;
 	background: none;
 	border: none;
@@ -333,11 +343,15 @@
 	color: var(--color-error-hover);
 }
 
-/* Group label: a quiet sentence-case sub-label under its section, flush
-   with the rows. No hairlines — hierarchy is gap + weight only (bold
-   uppercase section header above, regular sentence-case label here). */
+/* Group label: a quiet sentence-case sub-label under its section,
+   aligned with the session *names* column — not the rows' left edge —
+   so it reads as belonging to the names it groups (row text starts at
+   6px list inset + 10px row padding + 6px dot + 6px gap = 28px from the
+   pane edge; minus the list inset, that's 22px here). No hairlines —
+   hierarchy is gap + weight only (bold uppercase section header above,
+   regular sentence-case label here). */
 .sidebarGroupHeader {
-	margin: 10px 10px 2px;
+	margin: 10px 10px 2px 22px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
 	letter-spacing: 0.5px;
