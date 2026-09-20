@@ -15,6 +15,7 @@
 
 import { memo, useMemo } from "react";
 import { useRpc } from "../../infra/net/useRpc.ts";
+import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
@@ -35,51 +36,24 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
-	if (connection.kind === "connecting") {
+	// Wording and tone come from the shared connectionStatus mapping (the
+	// TopBar chip is the other consumer). Auto-retrying states show a hint;
+	// init_failed does not self-retry, connecting has nothing to retry yet.
+	const status = connectionStatus(connection);
+	if (status) {
 		return (
 			<div className={styles.state}>
-				<div className={styles.stateTitle}>Connecting to pi-bridge…</div>
-			</div>
-		);
-	}
-	if (connection.kind === "reconnecting") {
-		return (
-			<div className={styles.state}>
-				<div className={styles.stateTitle}>Reconnecting…</div>
-				<div className={styles.stateSub}>attempt {connection.attempt}</div>
-				<button type="button" className={styles.stateBtn} onClick={retry}>
-					Retry now
-				</button>
-			</div>
-		);
-	}
-	if (connection.kind === "unreachable") {
-		return (
-			<div className={styles.state}>
-				<div className={styles.stateWarn}>⚠</div>
-				<div className={styles.stateTitle}>Can't reach pi-bridge</div>
-				<div className={styles.stateSub}>
-					pi-bridge isn't running at {location.host}, or the connection was dropped.
-				</div>
-				<button type="button" className={styles.stateBtn} onClick={retry}>
-					Retry now
-				</button>
-				<div className={styles.stateHint}>auto-retrying…</div>
-			</div>
-		);
-	}
-	if (connection.kind === "init_failed") {
-		return (
-			<div className={styles.state}>
-				<div className={styles.stateWarn}>⚠</div>
-				<div className={styles.stateTitle}>Daemon unresponsive</div>
-				<div className={styles.stateSub}>
-					Connected, but the server didn't respond.
-					{connection.error ? ` (${connection.error})` : ""}
-				</div>
-				<button type="button" className={styles.stateBtn} onClick={retry}>
-					Retry
-				</button>
+				{status.tone === "err" && <div className={styles.stateWarn}>⚠</div>}
+				<div className={styles.stateTitle}>{status.label}</div>
+				<div className={styles.stateSub}>{status.detail}</div>
+				{connection.kind !== "connecting" && (
+					<button type="button" className={styles.stateBtn} onClick={retry}>
+						Retry now
+					</button>
+				)}
+				{(connection.kind === "reconnecting" || connection.kind === "unreachable") && (
+					<div className={styles.stateHint}>auto-retrying…</div>
+				)}
 			</div>
 		);
 	}
