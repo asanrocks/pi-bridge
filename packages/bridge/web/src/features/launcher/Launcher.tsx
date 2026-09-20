@@ -36,14 +36,15 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
-	// Wording and tone come from the shared connectionStatus mapping (the
-	// TopBar chip is the other consumer). Auto-retrying states show a hint;
-	// init_failed does not self-retry, connecting has nothing to retry yet.
+	// Wording and visible state come from the shared connectionStatus mapping
+	// (the TopBar icon is the other consumer). The warn glyph marks the
+	// failed phase; auto-retrying states show a hint; init_failed does not
+	// self-retry; connecting has nothing to retry yet.
 	const status = connectionStatus(connection);
 	if (status) {
 		return (
 			<div className={styles.state}>
-				{status.tone === "err" && <div className={styles.stateWarn}>⚠</div>}
+				{status.phase === "failed" && <div className={styles.stateWarn}>⚠</div>}
 				<div className={styles.stateTitle}>{status.label}</div>
 				<div className={styles.stateSub}>{status.detail}</div>
 				{connection.kind !== "connecting" && (

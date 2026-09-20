@@ -70,43 +70,15 @@
 	border-color: var(--color-secondary);
 }
 
-/* Connection chip (T4) — shown only on down states. Always-on signal for
-   the attached case; the Launcher renders the full panel when unattached.
-   Uses the topBarBtn spec (ghost surface, same height/size) so the retry
-   control reads as one of the bar's buttons; tone classes color it. */
-.connChip {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	font-size: var(--fs-sm);
-	font-family: inherit;
-	padding: 0 12px;
-	min-height: 36px;
-	border-radius: var(--radius-sm);
-	border: 1px solid var(--color-border);
-	background: none;
-	color: var(--color-secondary);
-	cursor: pointer;
-	white-space: nowrap;
-	user-select: none;
-}
-
-.connDot {
-	display: inline-block;
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: currentColor;
-	flex-shrink: 0;
-}
-
+/* Connection icon — shown only on down states. Icon-only broken-link button
+   on the .topBarBtn spec (no chip surface); the Launcher renders the full
+   text panel when unattached. Motion grammar (see connectionStatus.ts):
+   moving = trying, still = failed. Hue is secondary: muted while first
+   connecting, error red once dropped/broken — never the streaming orange.
+   Rhythm (2s slow reach, 0.8s fast retry) is deliberately unlike the 1.5s
+   streaming-pulse so even the animations don't rhyme. */
 .connMuted {
 	color: var(--color-muted-foreground);
-}
-
-.connWarn {
-	color: var(--color-streaming);
-	border-color: var(--color-streaming);
 }
 
 .connErr {
@@ -114,6 +86,39 @@
 	border-color: var(--color-error);
 }
 
-.connChip:hover {
-	color: var(--color-foreground);
+/* topBarBtn:hover would gray the red out on hover — re-assert the state
+   hue so the pointer never mutes a down-state signal. (The muted tone is
+   identical to the default hover and needs no override.) */
+.connErr:hover {
+	color: var(--color-error);
+	border-color: var(--color-error);
+}
+
+@keyframes conn-reach {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.connTrying {
+		animation: conn-reach 2s ease-in-out infinite;
+	}
+
+	.connTryingErr {
+		animation: conn-reach 0.8s ease-in-out infinite;
+	}
+}
+
+/* Reduced-motion fallback: animation is gone, so the trying/failed
+   distinction falls back to steady dimness vs full-strength red. */
+@media (prefers-reduced-motion: reduce) {
+	.connTrying,
+	.connTryingErr {
+		opacity: 0.5;
+	}
 }
