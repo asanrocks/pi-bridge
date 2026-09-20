@@ -5,7 +5,9 @@
 // mobile or desktop-with-sidebar-hidden — hover peeks the drawer there).
 // Right edge: history toggle (toggles right HistoryPane) — symmetric with the
 // hamburger so each side pane has its toggle on its own side. Between them:
-// inline-edit session name and a connection chip (down states only).
+// inline-edit session name and the connection icon (down states only) — an
+// icon-only broken-link button on the .topBarBtn spec: motion = trying,
+// stillness = failed; click retries; text lives in tooltip/aria-label only.
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
@@ -99,12 +101,38 @@ export function TopBar({
 			{status && (
 				<button
 					type="button"
-					className={`${styles.connChip} ${CHIP_TONE[status.tone]}`}
+					className={`${styles.topBarBtn} ${CONN_TONE[status.tone]} ${
+						status.phase === "trying" ? (status.tone === "err" ? styles.connTryingErr : styles.connTrying) : ""
+					}`}
 					onClick={onRetry}
 					title={status.detail}
+					aria-label={status.label}
 				>
-					<span className={styles.connDot} aria-hidden="true" />
-					{status.label}
+					<svg
+						viewBox="0 0 24 24"
+						width="18"
+						height="18"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						role="img"
+						aria-hidden="true"
+					>
+						{/* Broken chain-link: the two halves of the classic link glyph,
+						    pulled apart along the diagonal so the joint is visibly
+						    open. Motion (trying) makes the halves reach for each
+						    other; stillness (failed) leaves the gap. */}
+						<path
+							d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+							transform="translate(-1.7 -1.7)"
+						/>
+						<path
+							d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+							transform="translate(1.7 1.7)"
+						/>
+					</svg>
 				</button>
 			)}
 			<button
@@ -132,9 +160,8 @@ export function TopBar({
 	);
 }
 
-/** Severity → chip CSS class; the Launcher maps the same tones to its own. */
-const CHIP_TONE = {
+/** Tone → icon color class; the Launcher maps phases to its own classes. */
+const CONN_TONE = {
 	muted: styles.connMuted,
-	warn: styles.connWarn,
 	err: styles.connErr,
 } as const;
