@@ -23,14 +23,18 @@ export const BashHeader = memo(function BashHeader({ command, lang }: { command:
 		};
 	}, [command, lang]);
 
-	if (!result) return <div className={styles.cardHeader}>{command}</div>;
+	if (!result) return <div className={`${styles.cardHeader} codeTokens`}>{command}</div>;
 
 	// Same treatment decisions as CodeSnippet: no theme bg (the card surface
-	// shows through — ADR 07 §Styling invariants #1), theme fg as the root
-	// color, per-token colors with the (currently inert) dark-mode custom
-	// property carried along for the day a theme toggle exists.
+	// shows through — ADR 07 §Styling invariants #1), and both themes' token
+	// colors as custom properties (--code-c / --shiki-dark, plus the root pair)
+	// for the .codeTokens rules in app/index.css to resolve through the OS
+	// preference.
 	return (
-		<div className={styles.cardHeader} style={{ color: result.fg }}>
+		<div
+			className={`${styles.cardHeader} codeTokens`}
+			style={{ "--code-fg": result.fg, "--shiki-dark-fg": result.darkFg } as React.CSSProperties}
+		>
 			{result.lines.map((line, lineIdx) => (
 				// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
 				<span key={lineIdx} style={{ display: "block" }}>
@@ -39,8 +43,8 @@ export const BashHeader = memo(function BashHeader({ command, lang }: { command:
 					) : (
 						line.tokens.map((token, tokIdx) => {
 							const style: Record<string, string> = {};
-							if (token.color) style.color = token.color;
-							if (token.htmlStyle) Object.assign(style, token.htmlStyle);
+							if (token.color) style["--code-c"] = token.color;
+							if (token.darkColor) style["--shiki-dark"] = token.darkColor;
 							return (
 								// biome-ignore lint/suspicious/noArrayIndexKey: static token list
 								<span key={tokIdx} style={style}>

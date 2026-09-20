@@ -37,23 +37,31 @@ Object.assign(bundledLanguages, extraLangs);
 
 // ---------------------------------------------------------------------------
 // Public token shape — a plain object returned by highlightTokens()
+//
+// Both themes' colors travel to the DOM as custom properties, not as inline
+// `color` declarations: `--code-c` / `--code-fg` carry the light values and
+// `--shiki-dark` / `--shiki-dark-fg` the dark ones, and the `.codeTokens` rules
+// in app/index.css pick through the OS preference's media query. An inline
+// `color` would win over it, which is why the earlier single-theme shape could
+// not be themed without a re-render. (Streamdown's markdown path does the same thing
+// through its own span classes and Tailwind's dark: variant.)
+// Backgrounds are deliberately absent: code hosts keep their surface
+// transparent so the surrounding card tone shows through.
 // ---------------------------------------------------------------------------
 
 export interface HighlightedToken {
 	content: string;
 	color?: string;
-	htmlStyle?: Record<string, string>;
+	darkColor?: string;
 }
 
 export interface HighlightedLine {
 	tokens: HighlightedToken[];
-	bg?: string;
 }
 
 export interface HighlightResult {
-	bg: string;
 	fg: string;
-	rootStyle?: string;
+	darkFg: string;
 	lines: HighlightedLine[];
 }
 
@@ -108,13 +116,10 @@ export async function highlightTokens(code: string, language: string): Promise<H
 
 	const langOk = await ensureLanguage(language);
 	if (!langOk) {
-		const lines = code.split("\n");
 		return {
-			bg: "transparent",
 			fg: "inherit",
-			lines: lines.map((line) => ({
-				tokens: [{ content: line }],
-			})),
+			darkFg: "inherit",
+			lines: code.split("\n").map((line) => ({ tokens: [{ content: line }] })),
 		};
 	}
 
@@ -130,30 +135,18 @@ export async function highlightTokens(code: string, language: string): Promise<H
 		for (let tokIdx = 0; tokIdx < lightLine.length; tokIdx++) {
 			const lt = lightLine[tokIdx];
 			const dt = darkLine[tokIdx] ?? lt;
-			const token: HighlightedToken = {
-				content: lt.content,
-				color: lt.color,
-			};
-			if (dt.color && dt.color !== lt.color) {
-				token.htmlStyle = { "--shiki-dark": dt.color };
-			}
-			if (dt.bgColor && dt.bgColor !== lt.bgColor) {
-				if (!token.htmlStyle) token.htmlStyle = {};
-				token.htmlStyle["--shiki-dark-bg"] = dt.bgColor;
-			}
-			tokens.push(token);
+			tokens.push({ content: lt.content, color: lt.color, darkColor: dt.color });
 		}
 		lines.push({ tokens });
 	}
 
 	const lightTheme = hl.getTheme(LIGHT_THEME);
 	const darkTheme = hl.getTheme(DARK_THEME);
-	const rootStyle = darkTheme?.bg ? `--shiki-dark-bg:${darkTheme.bg}` : undefined;
+	const fg = lightTheme?.fg ?? "inherit";
 
 	return {
-		bg: lightTheme?.bg ?? "transparent",
-		fg: lightTheme?.fg ?? "inherit",
-		rootStyle,
+		fg,
+		darkFg: darkTheme?.fg ?? fg,
 		lines,
 	};
 }

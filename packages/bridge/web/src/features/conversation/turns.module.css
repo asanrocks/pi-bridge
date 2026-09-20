@@ -318,7 +318,7 @@
 	padding: 3px 10px;
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	color: color-mix(in srgb, var(--color-fg) 60%, transparent);
+	color: color-mix(in srgb, var(--color-foreground) 60%, transparent);
 	border-left: 2px solid color-mix(in srgb, var(--color-error) 40%, transparent);
 }
 
