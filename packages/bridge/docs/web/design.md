@@ -191,8 +191,16 @@ safe-area insets. The selection model and folder contents are unchanged.
 The TopBar is fixed between the Sidebar and History gutters. Its left control
 is the Sidebar hamburger when the Sidebar is hidden or on mobile. Its center
 is the editable Session name, falling back to `pi-bridge`. Its right control
-opens History. A down-state connection chip sits beside the name and retries
-when clicked. In desktop rail mode the Sidebar edge is the close affordance;
+opens History. A down-state connection icon sits beside the name and retries
+when clicked: an icon-only broken-chain-link button on the topbar button
+spec, with no text — the state phrase lives in the tooltip and aria-label.
+Its visible grammar is two-state: an animated link (opacity pulse; slow in
+muted gray while first connecting, fast in error red while retrying) means a
+retry loop is running, and a still red link means the connection has given
+up. The icon never uses the streaming orange or the liveness-dot vocabulary,
+and all motion is gated behind `prefers-reduced-motion`, falling back to
+steady half-opacity for trying and full red for failed. In desktop rail mode
+the Sidebar edge is the close affordance;
 the topbar hamburger is not duplicated there.
 
 ### Conversation
