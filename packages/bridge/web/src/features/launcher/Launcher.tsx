@@ -19,6 +19,7 @@ import { useStore } from "../../infra/state/store.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
+import { sortByLastActivity } from "./sortByLastActivity.ts";
 
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
 	const connection = useStore((s) => s.connection);
@@ -31,10 +32,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	/** The daemon's global `enabledModels` scope — the home's Pinned group. */
 	const scopedModels = useStore((s) => s.scopedModels);
 	const rpc = useRpc();
-	const active = useMemo(
-		() => activeSessions.slice().sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
-		[activeSessions],
-	);
+	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	if (connection.kind === "connecting") {
@@ -152,6 +150,10 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				<div className={styles.rows}>
 					{active.map((session) => {
 						const label = session.name || session.firstMessageText || session.stem;
+						// Preview the latest message; fall back to the first when the copy
+						// only has one (or the file scan predates the field).
+						const preview = session.lastMessageText ?? session.firstMessageText;
+						const when = session.lastActivityAt ?? session.timestamp;
 						const dotCls = [styles.dot, session.isStreaming ? styles.dotStreaming : ""].filter(Boolean).join(" ");
 						return (
 							<div key={`${session.projectId}/${session.stem}`} className={styles.row}>
@@ -170,11 +172,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 											<bdi>{session.projectId}</bdi>
 										</span>
 										{session.isStreaming && <span className={styles.streaming}>streaming</span>}
-										<span className={styles.rowTime}>{relativeTime(session.timestamp)}</span>
+										<span className={styles.rowTime}>{relativeTime(when)}</span>
 									</div>
-									{session.firstMessageText && (
-										<div className={styles.rowPreview}>{session.firstMessageText}</div>
-									)}
+									{preview && <div className={styles.rowPreview}>{preview}</div>}
 								</button>
 							</div>
 						);
