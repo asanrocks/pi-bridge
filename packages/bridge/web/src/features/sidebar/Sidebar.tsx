@@ -21,7 +21,7 @@
 //     └─ SessionRow     — one session leaf (+ row menu)
 // ============================================================================
 
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
@@ -101,7 +101,10 @@ export const Sidebar = memo(function Sidebar({
 		newSessionRef,
 		onModeChange,
 	});
-	const { expanded, toggleFolder } = useFolderExpansion(currentProjectId, currentStem);
+	// The Projects header and the per-folder rows share the tri-state fold
+	// record (folded / active / open); the header fans out across all ids.
+	const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
+	const { folds, cycleFolder, cycleAllFolders } = useFolderExpansion(projectIds, currentProjectId, currentStem);
 	const { peekOpen, showPeek, hideNow, peekDrawerRef } = usePeekDrawer(mode, hamburgerHover);
 
 	// Live overshoot preview from the rail's resize handle: crossing below
@@ -188,8 +191,9 @@ export const Sidebar = memo(function Sidebar({
 			currentStem={currentStem}
 			activeSessions={activeSessions}
 			sessionPages={sessionPages}
-			expanded={expanded}
-			onToggleFolder={toggleFolder}
+			folds={folds}
+			onToggleAllFolders={cycleAllFolders}
+			onToggleFolder={cycleFolder}
 			onOpenSession={handleOpenSession}
 			onOpenProject={onOpenProject}
 			onCloseSession={handleCloseSession}
