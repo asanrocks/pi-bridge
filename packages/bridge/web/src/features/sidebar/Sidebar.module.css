@@ -107,45 +107,27 @@
 }
 
 /* ── Folder tree ─────────────────────────────────────────────────────────
-   A Project is a foldable branch; sessions are indented leaves. The whole
-   tree lives in .sidebarList (which owns the horizontal inset) and scrolls
-   there. */
+   A Project is a foldable branch; sessions are flat leaves — no extra
+   indent, hierarchy is carried by the chevron, the section header, and
+   the row fill geometry. The whole tree lives in .sidebarList (which owns
+   the horizontal inset) and scrolls there. */
 
-/* Disclosure header, not a row: the folder toggles folding and nothing
-   else, so it never competes with session rows for selection chrome.
-   Quiet by construction — dimmed text, no fill at rest; hover darkens the
-   text rather than painting a tinted row. */
+/* Folder row group: the fold button (chevron + name — one target) plus the
+   new-session button. */
 .sidebarFolderRowGroup {
 	display: flex;
 	align-items: stretch;
 	width: 100%;
 }
 
-/* Chevron-only fold toggle: a square hit area matching the row's height,
-   so the fold and the navigation (the name button beside it) are separate
-   targets. Same spec role as the other square sidebar actions. */
-.sidebarFolderToggle {
-	flex-shrink: 0;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 24px;
-	margin-left: 4px;
-	padding: 0;
-	background: none;
-	border: none;
-	cursor: pointer;
-	color: var(--color-muted-foreground);
-}
-
-.sidebarFolderToggle:hover {
-	color: var(--color-foreground);
-}
-
+/* Fold button: chevron + name, one click target. Toggling is its only job —
+   navigation to a Project home lives on the + button beside it. Quiet by
+   construction — dimmed text, no fill at rest; hover darkens the text
+   rather than painting a tinted row. */
 .sidebarFolderRow {
 	display: flex;
 	align-items: center;
-	gap: 4px;
+	gap: 6px;
 	flex: 1;
 	min-width: 0;
 	text-align: left;
@@ -165,15 +147,25 @@
 	color: var(--color-foreground);
 }
 
-/* Project home (browsed without an attached session): accent text is the
-   only trace — folder-exclusive chrome that cannot be misread as row
-   selection. */
-.sidebarFolderRow.sidebarFolderCurrent {
-	color: var(--color-accent);
+/* New-session button: the folder's one navigation target — opens the
+   Project home (the compose surface). Square icon slot sized to the row. */
+.sidebarFolderNewBtn {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	padding: 0;
+	background: none;
+	border: none;
+	cursor: pointer;
+	color: var(--color-muted-foreground);
 }
 
-.sidebarFolderRow.sidebarFolderCurrent:hover {
-	color: var(--color-accent-hover);
+.sidebarFolderNewBtn:hover {
+	color: var(--color-foreground);
+	background: var(--color-muted);
+	border-radius: var(--radius-sm);
 }
 
 .sidebarChevron {
@@ -186,12 +178,17 @@
 	transform: rotate(90deg);
 }
 
-/* Leaves: indented under the folder row. No hairline or other chrome —
-   the liveness dot is the visual signal (minimalist). Two sibling
-   containers use this: the always-visible pinned rows and the folded
-   history. */
+/* Middle fold state (active rows only): diagonal — children exist but the
+   history stays hidden. */
+.sidebarChevronMid {
+	transform: rotate(45deg);
+}
+
+/* Leaves: flush with the folder row — no indent. No hairline or other
+   chrome — the liveness dot is the visual signal (minimalist). Two sibling
+   containers use this: the pinned rows and the history. */
 .sidebarFolderChildren {
-	margin-left: 15px;
+	width: 100%;
 }
 
 /* Quiet in-folder status line (loading / empty folder). */
@@ -340,7 +337,7 @@
    with the rows. No hairlines — hierarchy is gap + weight only (bold
    uppercase section header above, regular sentence-case label here). */
 .sidebarGroupHeader {
-	margin: 10px 10px 2px 13px;
+	margin: 10px 10px 2px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
 	letter-spacing: 0.5px;
@@ -370,8 +367,7 @@
 }
 
 /* Load-more row: same quiet language as .sidebarFolderMsg (sentence-case,
-   small, muted) but interactive — hover darkens like a row. Sits inside
-   .sidebarFolderChildren, so it inherits the leaves' indent. */
+   small, muted) but interactive — hover darkens like a row. */
 .sidebarLoadMore {
 	display: block;
 	width: 100%;
@@ -389,6 +385,27 @@
 
 .sidebarLoadMore:hover {
 	background: var(--color-muted);
+	color: var(--color-foreground);
+}
+
+/* Fold-all toggle: the section header's label doubles as the button that
+   cycles every folder's fold state. Inherits the header's typography. */
+.sidebarSectionToggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	text-transform: inherit;
+	letter-spacing: inherit;
+	background: none;
+	border: none;
+	cursor: pointer;
+	user-select: none;
+}
+
+.sidebarSectionToggle:hover {
 	color: var(--color-foreground);
 }
 
@@ -410,13 +427,17 @@
 /* Section header: bold uppercase, flush. No separator line — sections
    break by a generous gap above (suppressed on the first, which sits at
    the sidebar top). Gap > group gap > row gap carries the hierarchy.
-   user-select: none — label + action buttons are pane chrome. */
+   user-select: none — label + action buttons are pane chrome. Left
+   padding matches the folder rows' chevron column: the header sits
+   outside .sidebarList (no 6px inset), so 10px here puts its 12px
+   chevron exactly where the folder chevrons start, and the label text
+   lands on the folder names' text column. */
 .sidebarSectionHeader {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	margin-top: 16px;
-	padding: 4px 10px 4px 13px;
+	padding: 4px 10px;
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	color: var(--color-muted-foreground);
