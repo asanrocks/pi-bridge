@@ -1,16 +1,4 @@
-// formatTimestamp — HH:MM from an ISO string. Shared by user/assistant turns.
-
-export function formatTimestamp(iso: string): string {
-	try {
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return "";
-		const hh = String(d.getHours()).padStart(2, "0");
-		const mm = String(d.getMinutes()).padStart(2, "0");
-		return `${hh}:${mm}`;
-	} catch {
-		return "";
-	}
-}
+// formatTimestamp moved to infra/lib/time.ts (shared with HistoryPane).
 
 // formatGitIdentity — ADR 10 stamp chip text for a user-turn header.
 // "⎇ main @ a1b2c3d" normally; "⎇ a1b2c3d" for detached HEAD; "⎇ main"

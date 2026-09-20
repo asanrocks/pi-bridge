@@ -13,7 +13,7 @@
 	top: 0;
 	right: 0;
 	bottom: 0;
-	z-index: 20;
+	z-index: var(--z-pane);
 	background: var(--color-sidebar);
 	border-left: 1px solid var(--color-border);
 	display: flex;
@@ -28,7 +28,7 @@
 .backdrop {
 	position: fixed;
 	inset: 0;
-	z-index: 90;
+	z-index: var(--z-drawer);
 	background: var(--color-overlay);
 	border: none;
 	cursor: pointer;
@@ -42,7 +42,7 @@
 	right: 0;
 	bottom: 0;
 	width: min(100%, 56rem);
-	z-index: 91;
+	z-index: calc(var(--z-drawer) + 1);
 	background: var(--color-sidebar);
 	border-left: 1px solid var(--color-border);
 	display: flex;
@@ -72,7 +72,7 @@
 	font-weight: 600;
 	color: var(--color-muted-foreground);
 	text-transform: uppercase;
-	letter-spacing: 0.5px;
+	letter-spacing: var(--tracking-caps);
 }
 
 /* Close button — identical chrome to the Sidebar's .sidebarAddBtn (+), so the
@@ -320,7 +320,7 @@
 	background: var(--color-background);
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-xs);
-	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+	box-shadow: var(--shadow-2);
 	padding: 4px;
 	min-width: 200px;
 	max-width: min(320px, calc(100% - 16px));

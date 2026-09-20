@@ -31,7 +31,7 @@
 	position: fixed;
 	right: calc(var(--history-w, 0px) + 20px);
 	bottom: calc(var(--composer-h, 64px) + 16px);
-	z-index: 35;
+	z-index: var(--z-float);
 	width: 36px;
 	height: 36px;
 	border-radius: 50%;
@@ -41,16 +41,16 @@
 	background: var(--color-surface-raised);
 	border: 1px solid var(--color-border);
 	color: var(--color-secondary);
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+	box-shadow: var(--shadow-1);
 	cursor: pointer;
 	opacity: 0;
 	visibility: hidden;
 	transform: translateY(8px);
 	pointer-events: none;
 	transition:
-		opacity 0.18s ease,
-		transform 0.18s ease,
-		visibility 0s linear 0.18s;
+		opacity var(--dur-fast) ease,
+		transform var(--dur-fast) ease,
+		visibility 0s linear var(--dur-fast);
 }
 
 .jumpToBottom[data-visible="true"] {
@@ -59,8 +59,8 @@
 	transform: translateY(0);
 	pointer-events: auto;
 	transition:
-		opacity 0.18s ease,
-		transform 0.18s ease,
+		opacity var(--dur-fast) ease,
+		transform var(--dur-fast) ease,
 		visibility 0s;
 }
 
@@ -97,8 +97,8 @@
 	opacity: 0;
 	transform: scale(0.4);
 	transition:
-		opacity 0.15s ease,
-		transform 0.15s ease;
+		opacity var(--dur-fast) ease,
+		transform var(--dur-fast) ease;
 }
 
 .jumpToBottom[data-new="true"] .jumpDot {

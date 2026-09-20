@@ -24,6 +24,7 @@ import {
 	newestLeafInSubtree,
 	type PlacedNode,
 } from "../../../../src/viewmodel/index.ts";
+import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
@@ -368,7 +369,7 @@ const NodeRow = memo(function NodeRow({
 	const top = node.row * ROW_HEIGHT;
 	const dotLeft = laneX(node.lane) - DOT_RADIUS;
 	const text = node.node.text || "(empty)";
-	const time = formatTime(node.node.timestamp);
+	const time = formatTimestamp(node.node.timestamp);
 	const drafts = node.node.discardedDrafts;
 	const hasDrafts = drafts.length > 0;
 	const isExpanded = expandedDrafts.has(node.node.id);
@@ -457,7 +458,7 @@ const NodeRow = memo(function NodeRow({
 						>
 							<span className={styles.draftDot} />
 							<span className={styles.draftText}>{d.text || "(empty)"}</span>
-							<span className={styles.draftTime}>{formatTime(d.timestamp)}</span>
+							<span className={styles.draftTime}>{formatTimestamp(d.timestamp)}</span>
 						</button>
 					))}
 				</div>
@@ -469,18 +470,6 @@ const NodeRow = memo(function NodeRow({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatTime(iso: string): string {
-	try {
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return "";
-		const hh = String(d.getHours()).padStart(2, "0");
-		const mm = String(d.getMinutes()).padStart(2, "0");
-		return `${hh}:${mm}`;
-	} catch {
-		return "";
-	}
-}
 
 /** Full message text for hover tooltips. Unlike the viewmodel's previewText
  *  (first line, ≤80 chars — the right thing for the row label), this joins

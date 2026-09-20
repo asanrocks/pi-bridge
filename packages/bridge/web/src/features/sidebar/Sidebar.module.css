@@ -11,7 +11,7 @@
 	top: 0;
 	left: 0;
 	bottom: 0;
-	z-index: 20;
+	z-index: var(--z-pane);
 	background: var(--color-sidebar);
 	border-right: 1px solid var(--color-border);
 	display: flex;
@@ -23,14 +23,14 @@
 }
 
 /* Fullscreen mode: pure overlay above the whole shell (TopBar included —
-   z-index 50 > 30), entered by dragging the rail past its max (desktop) or
+   --z-overlay > --z-topbar), entered by dragging the rail past its max (desktop) or
    by the TopBar hamburger (mobile, its only open mode). Covers the full
    viewport; safe-area insets on mobile. The conversation keeps full width
    underneath (--sidebar-w stays 0). */
 .sidebarFullscreen {
 	position: fixed;
 	inset: 0;
-	z-index: 50;
+	z-index: var(--z-overlay);
 	background: var(--color-sidebar);
 	display: flex;
 	flex-direction: column;
@@ -71,7 +71,7 @@
 	top: 0;
 	left: 0;
 	bottom: 0;
-	z-index: 50;
+	z-index: var(--z-overlay);
 	background: var(--color-sidebar);
 	border-right: 1px solid var(--color-border);
 	box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
@@ -93,7 +93,7 @@
 	left: 0;
 	bottom: 0;
 	width: 12px;
-	z-index: 40;
+	z-index: var(--z-dock);
 	cursor: col-resize;
 	background: transparent;
 	touch-action: none;
@@ -181,7 +181,7 @@
 .sidebarChevron {
 	flex-shrink: 0;
 	color: var(--color-muted-foreground);
-	transition: transform 0.12s ease;
+	transition: transform var(--dur-fast) ease;
 }
 
 .sidebarChevronOpen {
@@ -354,7 +354,7 @@
 	margin: 10px 10px 2px 22px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
-	letter-spacing: 0.5px;
+	letter-spacing: var(--tracking-caps);
 }
 
 .sidebarItemRow {
@@ -456,7 +456,7 @@
 	font-weight: 600;
 	color: var(--color-muted-foreground);
 	text-transform: uppercase;
-	letter-spacing: 0.5px;
+	letter-spacing: var(--tracking-caps);
 	user-select: none;
 }
 
@@ -517,13 +517,8 @@
 
 @media (prefers-reduced-motion: no-preference) {
 	.sidebarLiveDotStreaming {
-		animation: sidebarDotPulse 1.5s infinite;
+		animation: streaming-pulse 1.5s infinite;
 	}
-}
-
-@keyframes sidebarDotPulse {
-	0%, 100% { opacity: 1; }
-	50% { opacity: 0.4; }
 }
 
 /* ── cwd picker popover (Instances [+] when allowlist > 1) ──
@@ -533,7 +528,7 @@
 .portalOverlay {
 	position: fixed;
 	inset: 0;
-	z-index: 100;
+	z-index: var(--z-portal);
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -542,13 +537,13 @@
 
 .cwdPopover {
 	position: fixed;
-	z-index: 101;
+	z-index: calc(var(--z-portal) + 1);
 	min-width: 200px;
 	max-width: 320px;
 	background: var(--color-portal-bg);
 	border: 1px solid var(--color-portal-border);
 	border-radius: var(--radius-md);
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+	box-shadow: var(--shadow-2);
 	display: flex;
 	flex-direction: column;
 	padding: 4px;
