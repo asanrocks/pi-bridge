@@ -118,17 +118,29 @@ export const SidebarContent = memo(function SidebarContent({
 					<span>Projects</span>
 				</button>
 				<span className={styles.headerActions}>
-					{/* Back to the global project picker. Hidden while already there. */}
+					{/* Back to the global project picker. Hidden while already there.
+					    Same ghost icon-button spec as the folders' new-session
+					    button — pane-level actions share one style. */}
 					{currentProjectId !== null && (
 						<button
 							type="button"
-							className={styles.sidebarAddBtn}
+							className={styles.sidebarFolderNewBtn}
 							onClick={onShowLauncher}
 							title="All projects"
 							aria-label="All projects"
 						>
-							<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">
-								<path d="M3.5 3.5a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H4.5a1 1 0 01-1-1V3.5zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1V7a1 1 0 01-1 1H12a1 1 0 01-1-1V3.5zM3.5 11a1 1 0 011-1H8a1 1 0 011 1v3.5a1 1 0 01-1 1H4.5a1 1 0 01-1-1V11zm7.5 0a1 1 0 011-1h3.5a1 1 0 011 1v3.5a1 1 0 01-1 1H12a1 1 0 01-1-1V11z" />
+							<svg
+								viewBox="0 0 16 16"
+								width="12"
+								height="12"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="1.5"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M13.5 8H2.5M7.5 2.5L2.5 8l5 5.5" />
 							</svg>
 						</button>
 					)}
