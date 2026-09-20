@@ -10,7 +10,7 @@
 	left: var(--sidebar-w, 0px);
 	right: var(--history-w, 0px);
 	bottom: var(--vv-keyboard, 0px);
-	z-index: 40;
+	z-index: var(--z-dock);
 	/* The card's bottom gap + home-indicator safe area live in the wrapper's
 	   own padding so offsetHeight (published as --composer-h) reliably
 	   includes them — margin would be ambiguous under margin-collapse.

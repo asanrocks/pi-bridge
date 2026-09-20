@@ -45,7 +45,7 @@
 	   bottom-anchored, but the low-alpha drop's visible upper spread still
 	   reads as lift. */
 	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.20);
-	transition: box-shadow 0.2s ease;
+	transition: box-shadow var(--dur-fast) ease;
 }
 
 .composerCard:hover {
@@ -112,17 +112,12 @@
 
 @media (prefers-reduced-motion: no-preference) {
 	.composerDotOrange {
-		animation: dotPulse 1.5s infinite;
+		animation: streaming-pulse 1.5s infinite;
 	}
 }
 
 .composerDotRed {
 	background: var(--color-error);
-}
-
-@keyframes dotPulse {
-	0%, 100% { opacity: 1; }
-	50% { opacity: 0.4; }
 }
 
 /* ── Body (textarea + control row) — the expanded card ───────────────── */
@@ -143,7 +138,7 @@
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	text-transform: uppercase;
-	letter-spacing: 0.02em;
+	letter-spacing: var(--tracking-caps);
 }
 
 .editHeaderLabel {
@@ -383,7 +378,7 @@
 	border-radius: var(--radius-sm);
 	cursor: pointer;
 	white-space: nowrap;
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 .composerCostBtn:hover {
@@ -397,11 +392,11 @@
 }
 
 .costPopover {
-	z-index: 101;
+	z-index: calc(var(--z-portal) + 1);
 	background: var(--color-portal-bg);
 	border: 1px solid var(--color-portal-border);
 	border-radius: var(--radius-md);
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+	box-shadow: var(--shadow-2);
 	padding: 8px 12px;
 	font-size: var(--fs-xs);
 	color: var(--color-secondary);
@@ -471,7 +466,7 @@
 	height: 100%;
 	background: var(--color-accent);
 	border-radius: var(--radius-sm);
-	transition: width 0.3s ease;
+	transition: width var(--dur-slow) ease;
 }
 
 .composerContextPct {
@@ -500,7 +495,7 @@
 	border-radius: var(--radius-sm);
 	cursor: pointer;
 	white-space: nowrap;
-	transition: background-color 0.15s ease;
+	transition: background-color var(--dur-fast) ease;
 }
 
 .composerModelBtn:hover {
@@ -581,7 +576,7 @@
 	   approach as the model-picker portal. */
 .completionDropdown {
 	position: fixed;
-	z-index: 50;
+	z-index: var(--z-overlay);
 	background: var(--color-background);
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-md);
@@ -663,7 +658,7 @@
 	height: 6px;
 	gap: 2px;
 	overflow: hidden;
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 }
 
 .thinkingLevelSegment {
@@ -672,7 +667,7 @@
 	flex: 1 1 0;
 	height: 100%;
 	min-width: 0;
-	border-radius: 999px;
+	border-radius: var(--radius-full);
 }
 
 .thinkingLevelOff { color: var(--color-thinking-off); }
@@ -737,7 +732,7 @@
 .portalOverlay {
 	position: fixed;
 	inset: 0;
-	z-index: 100;
+	z-index: var(--z-portal);
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -746,13 +741,13 @@
 
 .portal {
 	position: fixed;
-	z-index: 101;
+	z-index: calc(var(--z-portal) + 1);
 	width: 320px;
 	max-height: 360px;
 	background: var(--color-portal-bg);
 	border: 1px solid var(--color-portal-border);
 	border-radius: var(--radius-md);
-	box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+	box-shadow: var(--shadow-2);
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
