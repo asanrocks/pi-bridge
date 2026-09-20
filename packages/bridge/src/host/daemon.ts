@@ -11,6 +11,7 @@ import {
 	findInitialModel,
 	getAgentDir,
 	ModelRuntime,
+	resolveModelScopeWithDiagnostics,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -21,6 +22,7 @@ import type {
 	ModelRef,
 	PrefixCursor,
 	ProjectInfo,
+	ScopedModelInfo,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
@@ -113,6 +115,9 @@ export class Daemon {
 	/** Per-project settings (pi resolves defaults from the Project cwd's
 	 * settings.json — the default model can differ per Project). */
 	private projectSettings = new Map<string, SettingsManager>();
+	/** Daemon-wide global settings (cwd-independent): the `enabledModels` scope
+	 * reported by `getDaemonInfo` for the Project home's Pinned group. */
+	private globalSettings: SettingsManager | null = null;
 	private connections = new Set<Connection>();
 	private activations = new Map<string, Activation>();
 	private activationByAddress = new Map<string, string>();
@@ -165,6 +170,14 @@ export class Daemon {
 				// Unreadable settings degrade to the model-runtime defaults below.
 			}
 		}
+		// Global settings are cwd-independent; created even when no Projects are
+		// configured so `getDaemonInfo` can still report the global model scope.
+		try {
+			this.globalSettings = SettingsManager.create(process.cwd(), this.agentDir);
+		} catch {
+			this.globalSettings = null;
+		}
+
 		// Duplicate session ids are unsupported input: fail startup rather than
 		// serve two addresses that would collide in the activation registry.
 		this.assertNoSessionIdConflicts();
@@ -775,6 +788,7 @@ export class Daemon {
 		getDaemonInfo: async () => {
 			const runtime = this.modelRuntime;
 			let models: ModelInfo[] = [];
+			let scopedModels: ScopedModelInfo[] = [];
 			if (runtime) {
 				models = runtime.getAvailableSnapshot().map((m) => ({
 					provider: m.provider,
@@ -785,6 +799,20 @@ export class Daemon {
 					supportedThinkingLevels: getSupportedThinkingLevels(m),
 					contextWindow: m.contextWindow,
 				}));
+				// Global scope only (settings.json `enabledModels`): the Project home
+				// has no session Document to read `/scopedModels` from. A project-level
+				// override in `.pi/settings.json` is deliberately ignored here — the
+				// post-attach initial sync carries the project's actual scope.
+				const patterns = this.globalSettings?.getGlobalSettings().enabledModels;
+				if (patterns && patterns.length > 0) {
+					const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, runtime);
+					scopedModels = resolved.map((sm) => ({
+						provider: sm.model.provider,
+						id: sm.model.id,
+						name: sm.model.name ?? sm.model.id,
+						thinkingLevel: sm.thinkingLevel,
+					}));
+				}
 			}
 			const projects: ProjectInfo[] = await Promise.all(
 				[...this.projects.values()].map(async (p) => {
@@ -797,7 +825,7 @@ export class Daemon {
 					};
 				}),
 			);
-			return { projects, models, thinkingLevels: THINKING_LEVELS, devMode: this.devMode };
+			return { projects, models, scopedModels, thinkingLevels: THINKING_LEVELS, devMode: this.devMode };
 		},
 	};
 

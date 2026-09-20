@@ -630,6 +630,12 @@ export interface GetDaemonInfoReply {
 	ok: true;
 	projects: ProjectInfo[];
 	models: ModelInfo[];
+	/** The daemon's global `enabledModels` scope (settings.json), resolved
+	 * against the same catalogue as `models`. The Project home renders it as
+	 * the picker's "Pinned" group before a session exists. Project-level
+	 * `enabledModels` overrides in `.pi/settings.json` are intentionally not
+	 * reflected — this is the global scope only. */
+	scopedModels: ScopedModelInfo[];
 	thinkingLevels: string[];
 	devMode: boolean;
 }

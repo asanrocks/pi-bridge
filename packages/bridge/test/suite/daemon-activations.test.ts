@@ -219,6 +219,33 @@ function makeProjectRoots(): { root: string; agentDir: string; a: string; b: str
 	return { root, agentDir, a, b };
 }
 
+/** A faux provider with two models and stored auth on a fresh ModelRuntime —
+ * enough to exercise getDaemonInfo's catalogue and scope resolution. */
+async function makeFauxRuntime(): Promise<ModelRuntime> {
+	const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
+	const authStorage = AuthStorage.inMemory();
+	const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
+	await modelRuntime.setRuntimeApiKey("faux", "faux-key");
+	modelRuntime.registerProvider("faux", {
+		baseUrl: faux.getModel("faux-1")!.baseUrl,
+		apiKey: "faux-key",
+		api: faux.api,
+		models: faux.models.map((m) => ({
+			id: m.id,
+			name: m.name,
+			api: m.api,
+			reasoning: m.reasoning,
+			input: m.input,
+			cost: m.cost,
+			contextWindow: m.contextWindow,
+			maxTokens: m.maxTokens,
+			baseUrl: m.baseUrl,
+		})),
+	});
+	cleanups.push(() => faux.unregister());
+	return modelRuntime;
+}
+
 /** Factory that records stubs by session id, mirroring the daemon's injected
  * manager factory seam (`CreateManagerOptions`). */
 function stubMediator(): NonNullable<DaemonOptions["managerFactory"]> {
@@ -410,27 +437,7 @@ describe("daemon: projects", () => {
 			JSON.stringify({ defaultProvider: "faux", defaultModel: "faux-2", defaultThinkingLevel: "high" }),
 		);
 
-		const faux = registerFauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
-		const authStorage = AuthStorage.inMemory();
-		const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
-		await modelRuntime.setRuntimeApiKey("faux", "faux-key");
-		modelRuntime.registerProvider("faux", {
-			baseUrl: faux.getModel("faux-1")!.baseUrl,
-			apiKey: "faux-key",
-			api: faux.api,
-			models: faux.models.map((m) => ({
-				id: m.id,
-				name: m.name,
-				api: m.api,
-				reasoning: m.reasoning,
-				input: m.input,
-				cost: m.cost,
-				contextWindow: m.contextWindow,
-				maxTokens: m.maxTokens,
-				baseUrl: m.baseUrl,
-			})),
-		});
-		cleanups.push(() => faux.unregister());
+		const modelRuntime = await makeFauxRuntime();
 
 		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
 		const ws = await openClient(port);
@@ -471,6 +478,30 @@ describe("daemon: projects", () => {
 		expect(reply2.projects[0]?.defaultThinkingLevel).toBe("medium");
 
 		ws2.close();
+		ws.close();
+	});
+
+	it("getDaemonInfo reports the global enabledModels scope, ignoring project overrides", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["faux-1"] }));
+		// A project-level override exists but is deliberately not reported: the
+		// Project home shows the global scope, and the post-attach initial sync
+		// carries the project's actual `/scopedModels`.
+		mkdirSync(join(a, ".pi"), { recursive: true });
+		writeFileSync(join(a, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["faux-2"] }));
+
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const id = send(ws, { verb: "getDaemonInfo" });
+		const reply = (await waitForReply(frames, id)) as unknown as {
+			scopedModels: Array<{ provider: string; id: string; name: string }>;
+		};
+		expect(reply.scopedModels).toEqual([{ provider: "faux", id: "faux-1", name: expect.any(String) }]);
+
 		ws.close();
 	});
 
