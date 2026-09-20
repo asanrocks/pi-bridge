@@ -7,7 +7,7 @@
 	   spans the full width there. */
 	left: var(--sidebar-w, 0px);
 	right: var(--history-w, 0px);
-	z-index: 30;
+	z-index: var(--z-topbar);
 	height: var(--topbar-h);
 	display: flex;
 	align-items: center;

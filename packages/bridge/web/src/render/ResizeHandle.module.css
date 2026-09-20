@@ -1,7 +1,7 @@
 /* ResizeHandle — invisible 12px hit strip, 2px accent indicator on hover.
    Position (left/right offset, full height) is inline from the component —
-   it tracks the live pane width. z-index sits above the panes (20) and the
-   TopBar (30) so the strip stays grabbable along its whole height, including
+   it tracks the live pane width. z-index sits at --z-dock, above the panes
+   (--z-pane) and the TopBar (--z-topbar) so the strip stays grabbable along its whole height, including
    across the TopBar's edge; the TopBar's 12px start padding keeps its
    leftmost controls clear of the 6px overlap on the conversation side. */
 .handle {
@@ -14,7 +14,7 @@
 	   letting top/bottom stretch the element full-height. Without it the
 	   handle collapses to 0px tall — in the DOM, but unhoverable. */
 	height: auto;
-	z-index: 40;
+	z-index: var(--z-dock);
 	cursor: col-resize;
 	background: transparent;
 	/* <hr> element: neutralize the UA's default horizontal-rule chrome. */
@@ -34,7 +34,7 @@
 	width: 2px;
 	background: var(--color-accent);
 	opacity: 0;
-	transition: opacity 0.15s ease;
+	transition: opacity var(--dur-fast) ease;
 }
 
 .handle:hover::after,
