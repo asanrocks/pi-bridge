@@ -198,6 +198,12 @@ viewport adds a dot to the floating jump button; tool and thinking churn alone
 does not. The jump button returns to the live end. History anchors and
 keyboard focus scrolls account for the fixed TopBar and composer.
 
+The first paint of a session's content (open, launcher switch, cold URL load,
+re-attach after reconnect) lands by rule, never at the previous session's
+viewport position: a streaming session lands at the live end with follow
+armed; an idle session lands top-anchored on the last user turn of the active
+path (falling back to the live end when the session has no user turns).
+
 ### Compose dock
 
 `ComposeDock` is fixed at the bottom between the Sidebar and History gutters,
