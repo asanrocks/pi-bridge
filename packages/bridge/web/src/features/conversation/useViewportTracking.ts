@@ -36,9 +36,12 @@ interface ViewportTracking {
 	newContentBelow: boolean;
 	/** Jump button handler: animate to the live end and re-arm follow. */
 	jumpToBottom: () => void;
+	/** Return-to-live handler (peek): unpin the rendering leaf, then anchor
+	 * at the live end once the live projection has rendered. */
+	goLive: () => void;
 }
 
-export function useViewportTracking(vm: ViewModel, isStreaming: boolean): ViewportTracking {
+export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiverged: boolean): ViewportTracking {
 	// True while the user has deliberately scrolled up (reading), pausing
 	// auto-scroll. Cleared by reaching the live end (any means) or the jump
 	// button.
@@ -182,6 +185,12 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: vm is the content-change signal; expanded* state is a deliberate omission
 	useEffect(() => {
+		// While peeking (rendering leaf pinned off the live path) the auto-scroll
+		// machinery pauses entirely: the VM describes the peeked path, whose keys
+		// don't track live growth, and the viewport belongs to the reader. Refs
+		// are deliberately left stale — returning to live sees changed keys and
+		// §3 re-runs once (the go-live pending flag handles the scroll).
+		if (isDiverged) return;
 		// Fire on either (a) a structural change (new entries/blocks — covers
 		// block-appending events) or (b) streaming intra-block content growth
 		// (text/thinking deltas) while the turn is in-flight. The latter is the
@@ -223,7 +232,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 		// leave lastScrollHeightRef stale for the next handler invocation.
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [vm, structKey, streamingKey, textKey, isStreaming]);
+	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged]);
 
 	// ---------------------------------------------------------------------------
 	// 4. Anchor scroll — history-pane selection after a navigation
@@ -321,5 +330,35 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 		setNewContentBelow(false);
 	}, []);
 
-	return { awayFromBottom, newContentBelow, jumpToBottom };
+	// ---------------------------------------------------------------------------
+	// 7. Go live (the jump button's peek meaning)
+	// ---------------------------------------------------------------------------
+	// Unpin the rendering leaf and anchor at the live end once the live
+	// projection has rendered. The scroll can't happen inline: the peeked
+	// content is still mounted in this tick, and the live path's height isn't
+	// known until the store flip re-projects and React commits. The pending
+	// flag makes the §3 effect (which re-runs on the projection change) do the
+	// scroll — same retry pattern as the §4 anchor. Live growth that landed
+	// while peeking is included, so this is "catch up with everything".
+	const goLivePendingRef = useRef(false);
+	const goLive = useCallback(() => {
+		goLivePendingRef.current = true;
+		userScrolledUpRef.current = false;
+		smoothJumpRef.current = false;
+		setNewContentBelow(false);
+		getStore().getState().setRenderLeaf(null);
+	}, []);
+
+	useEffect(() => {
+		if (!goLivePendingRef.current || isDiverged) return;
+		goLivePendingRef.current = false;
+		window.scrollTo(0, document.documentElement.scrollHeight);
+		lastScrollTopRef.current = window.scrollY;
+		lastScrollHeightRef.current = document.documentElement.scrollHeight;
+		// The isDiverged flip IS the projection-change signal: setRenderLeaf(null)
+		// flips it, the store subscribers re-render, and this effect runs after
+		// that same commit — the live content's height is final here.
+	}, [isDiverged]);
+
+	return { awayFromBottom, newContentBelow, jumpToBottom, goLive };
 }

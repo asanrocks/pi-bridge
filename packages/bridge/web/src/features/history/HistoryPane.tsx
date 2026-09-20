@@ -28,6 +28,7 @@ import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
+import { resolveRenderLeafTarget, selectRenderDiverged } from "../../infra/state/ui.ts";
 import { type PaneResizeController, ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
 import styles from "./HistoryPane.module.css";
 
@@ -155,7 +156,22 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 	const leafId = document.status.leafId;
 	const entries = document.entries;
 	const isBusy = useStore((s) => s.document.status.isStreaming || s.document.status.isCompacting);
+	const renderLeafId = useStore((s) => s.renderLeafId);
 	const rpc = useRpc();
+
+	// The rendered (peeked) user-path set, for the second row highlight. Only
+	// user-message rows exist in the graph, so membership of the rendered
+	// entry-id chain is the whole check.
+	const renderedPathIds = useMemo(() => {
+		if (renderLeafId === null) return null;
+		const ids = new Set<string>();
+		let cursor: string | null = renderLeafId;
+		while (cursor) {
+			ids.add(cursor);
+			cursor = entries[cursor]?.parentId ?? null;
+		}
+		return ids;
+	}, [renderLeafId, entries]);
 
 	const layout: LaneLayout = useMemo(() => {
 		const tree = computeHistoryTree(document);
@@ -207,33 +223,46 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 		});
 	}, []);
 
-	// Decoupled look/go (Q3): clicking a node has two possible effects —
-	//   (a) look: anchor-scroll the conversation to it (setScrollToEntryId),
-	//       always safe — pure client scroll;
-	//   (b) go:   navigate/branch the active path to the subtree's newest leaf,
-	//       racy mid-stream — navigate rewrites agent.state.messages while a
-	//       turn is in-flight (manager.ts:431) and tryReconcile is suppressed
-	//       during streaming (manager.ts:330).
-	// During streaming: on-path nodes do look-only (they're already on the
-	// active branch, so `go` would be a no-op anyway — the scroll is the
-	// whole effect). Off-path nodes can't be scrolled (not rendered — the VM
-	// only projects the active path) and branching is the racy part, so they
-	// stay disabled (NodeRow disabled flag) with a "jump after reply" tooltip.
-	// newestLeafInSubtree is NOT computed for the look-only path: it can
-	// return an off-path leaf even for an on-path ancestor (a sibling subtree
-	// with a newer timestamp), which is irrelevant to a pure scroll.
+	// Click matrix (peek model):
+	//   diverged (rendering leaf pinned)      → re-target the peek: pin the
+	//       subtree's newest leaf (setRenderLeaf clamps uncommitted targets);
+	//       browse never mutates the session.
+	//   synced + busy, on-path node           → look-only anchor scroll (the
+	//       node is already rendered; navigating would be a no-op and a fork
+	//       mid-turn would race the run — manager.navigate rejects it).
+	//   synced + busy, off-path node          → peek (was: disabled row).
+	//   synced + idle                          → navigate/branch the active path
+	//       to the subtree's newest leaf (today's behavior).
+	const diverged = useStore(selectRenderDiverged);
 	const selectEntry = useCallback(
 		(entryId: string, isOnPath: boolean) => {
-			if (isBusy) {
-				if (!isOnPath) return; // safety net; off-path rows are disabled at the row
-				getStore().getState().setScrollToEntryId(entryId);
+			const s = getStore().getState();
+			const targetLeaf = newestLeafInSubtree(entryId, entries);
+			if (diverged || (isBusy && !isOnPath)) {
+				// Peek re-target. Anchor at what will actually render, not the
+				// clicked id: a pending in-flight entry (e.g. the live branch's
+				// mid-turn node, clicked while peeking) clamps to a committed
+				// ancestor and never appears on the peeked path — anchoring the
+				// raw id would strand §4's pending scroll forever. null (the pin
+				// normalized to follow-live) means the clicked node sits on the
+				// live path and renders after the flip. undefined (pin was a
+				// no-op) means the view is unchanged — no anchor at all.
+				s.setRenderLeaf(targetLeaf);
+				const pinned = resolveRenderLeafTarget(entries, targetLeaf, s.document.status.leafId);
+				if (pinned !== undefined) s.setScrollToEntryId(pinned ?? entryId);
 				return;
 			}
-			const targetLeaf = newestLeafInSubtree(entryId, entries);
-			getStore().getState().setScrollToEntryId(entryId);
-			void rpc.navigate(targetLeaf);
+			s.setScrollToEntryId(entryId);
+			if (isBusy) return; // on-path look-only: the scroll above is the effect
+			void rpc.navigate(targetLeaf).then((reply) => {
+				// The daemon is the enforcement point: a turn may have started
+				// between the idle check above and the RPC (a steer from the
+				// composer, or another tab). The branch never rendered — drop the
+				// anchor instead of stranding §4's pending scroll.
+				if (!reply?.ok) s.setScrollToEntryId(null);
+			});
 		},
-		[isBusy, entries, rpc],
+		[diverged, isBusy, entries, rpc],
 	);
 
 	if (layout.nodes.length === 0) {
@@ -300,10 +329,10 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 							node={n}
 							gutterWidth={gutterWidth}
 							isCurrentLeaf={n.node.id === currentNodeId}
+							isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
 							onSelectEntry={selectEntry}
 							onToggleDrafts={toggleDrafts}
 							expandedDrafts={expandedDrafts}
-							isBusy={isBusy}
 							entries={entries}
 						/>
 					))}
@@ -339,31 +368,28 @@ const HistoryHeader = memo(function HistoryHeader() {
 // the flex columns start after the graph. Text owns the flex remainder and
 // truncates with CSS ellipsis — no JS preview slicing.
 //
-// Disabled logic (Q3): during streaming, off-path rows are disabled (can't
-// branch mid-stream; not rendered so can't scroll either); on-path rows stay
-// clickable for look-only anchoring. Non-streaming: all rows clickable (full
-// navigate). The drafts badge stays interactive even on a disabled row so a
-// draft's popover can still open — drafts are off-path by definition and
-// their rows are individually disabled, not the badge.
+// All rows are clickable in every state (peek model): the click matrix in
+// selectEntry decides navigate vs peek vs look-only anchor. The rendered
+// (peeked) path gets a second row highlight alongside the live-path one.
 // ---------------------------------------------------------------------------
 
 const NodeRow = memo(function NodeRow({
 	node,
 	gutterWidth,
 	isCurrentLeaf,
+	isOnRenderedPath,
 	onSelectEntry,
 	onToggleDrafts,
 	expandedDrafts,
-	isBusy,
 	entries,
 }: {
 	node: PlacedNode;
 	gutterWidth: number;
 	isCurrentLeaf: boolean;
+	isOnRenderedPath: boolean;
 	onSelectEntry: (entryId: string, isOnPath: boolean) => void;
 	onToggleDrafts: (keeperId: string) => void;
 	expandedDrafts: Set<string>;
-	isBusy: boolean;
 	entries: Record<string, Entry>;
 }) {
 	const top = node.row * ROW_HEIGHT;
@@ -373,14 +399,11 @@ const NodeRow = memo(function NodeRow({
 	const drafts = node.node.discardedDrafts;
 	const hasDrafts = drafts.length > 0;
 	const isExpanded = expandedDrafts.has(node.node.id);
-	// Off-path rows are disabled during streaming (can't branch mid-turn).
-	// On-path rows stay clickable for look-only anchoring.
-	const disabledByStreaming = isBusy && !node.isOnActivePath;
 	const rowCls = [
 		styles.row,
 		node.isOnActivePath ? styles.rowOnPath : "",
+		isOnRenderedPath ? styles.rowOnRenderedPath : "",
 		isCurrentLeaf ? styles.rowCurrent : "",
-		disabledByStreaming ? styles.rowDisabled : "",
 	]
 		.filter(Boolean)
 		.join(" ");
@@ -394,22 +417,18 @@ const NodeRow = memo(function NodeRow({
 			{/* biome-ignore lint/a11y/useSemanticElements: a real <button> can't contain the drafts badge <button> — invalid interactive-content nesting, same constraint backdropBtn works around; a div role=button is the semantic compromise */}
 			<div
 				role="button"
-				tabIndex={disabledByStreaming ? -1 : 0}
-				aria-disabled={disabledByStreaming || undefined}
+				tabIndex={0}
 				aria-label={text === "(empty)" ? "Empty message" : text}
 				className={rowCls}
 				style={{ top, height: ROW_HEIGHT }}
-				onClick={() => {
-					if (!disabledByStreaming) onSelectEntry(node.node.id, node.isOnActivePath);
-				}}
+				onClick={() => onSelectEntry(node.node.id, node.isOnActivePath)}
 				onKeyDown={(e) => {
-					if (disabledByStreaming) return;
 					if (e.key === "Enter" || e.key === " ") {
 						e.preventDefault();
 						onSelectEntry(node.node.id, node.isOnActivePath);
 					}
 				}}
-				title={disabledByStreaming ? "Jump after reply" : fullMessageText(entries, node.node.id) || node.node.text}
+				title={fullMessageText(entries, node.node.id) || node.node.text}
 			>
 				<span className={styles.dotCell} style={{ left: dotLeft, width: DOT_RADIUS * 2 }}>
 					<span
@@ -453,8 +472,7 @@ const NodeRow = memo(function NodeRow({
 							type="button"
 							className={styles.draftRow}
 							onClick={() => onSelectEntry(d.id, false)}
-							disabled={isBusy}
-							title={isBusy ? "Jump after reply" : fullMessageText(entries, d.id) || d.text}
+							title={fullMessageText(entries, d.id) || d.text}
 						>
 							<span className={styles.draftDot} />
 							<span className={styles.draftText}>{d.text || "(empty)"}</span>

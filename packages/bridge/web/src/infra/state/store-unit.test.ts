@@ -5,8 +5,9 @@
 // address with no Project.
 
 import { describe, expect, it } from "vitest";
-import type { SessionInfo } from "../../../../src/core/index.ts";
+import type { Entry, SessionInfo } from "../../../../src/core/index.ts";
 import { createClientStore } from "./store.ts";
+import { resolveRenderLeafTarget } from "./ui.ts";
 
 function session(stem: string): SessionInfo {
 	return {
@@ -24,6 +25,25 @@ function openAndDirty(store: ReturnType<typeof createClientStore>) {
 	store.getState().setActiveSessionId("sess-a");
 	store.getState().setFocusedTurnId("turn-1");
 	store.getState().setDraft({ kind: "compose", text: "unsent" });
+}
+
+function seedEntry(store: ReturnType<typeof createClientStore>, id: string, parentId: string | null, ord?: number) {
+	const doc = store.getState().document;
+	store.getState().applyReplace({
+		...doc,
+		entries: {
+			...doc.entries,
+			[id]: {
+				id,
+				parentId,
+				timestamp: "2024-01-01T00:00:00Z",
+				kind: "message",
+				role: "user",
+				content: [],
+				...(ord !== undefined ? { ord } : {}),
+			},
+		},
+	});
 }
 
 describe("clearCurrentSession", () => {
@@ -69,6 +89,127 @@ describe("clearCurrentSession", () => {
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
 		expect(s.document.entries).toEqual({});
+	});
+
+	it("clears the rendered-leaf override (peek is session-scoped)", () => {
+		const store = createClientStore();
+		seedEntry(store, "c1", null, 0);
+		store.getState().setRenderLeaf("c1");
+		expect(store.getState().renderLeafId).toBe("c1");
+
+		store.getState().clearCurrentSession();
+		expect(store.getState().renderLeafId).toBeNull();
+	});
+});
+
+describe("setRenderLeaf (peek pin)", () => {
+	it("pins a committed entry and returns to live with null", () => {
+		const store = createClientStore();
+		seedEntry(store, "c1", null, 0);
+		seedEntry(store, "c2", "c1", 1);
+
+		store.getState().setRenderLeaf("c1");
+		expect(store.getState().renderLeafId).toBe("c1");
+		store.getState().setRenderLeaf(null);
+		expect(store.getState().renderLeafId).toBeNull();
+	});
+
+	it("clamps an uncommitted (pending) target to its nearest committed ancestor", () => {
+		const store = createClientStore();
+		seedEntry(store, "c1", null, 0);
+		seedEntry(store, "p1", "c1"); // provisional — no ord
+
+		store.getState().setRenderLeaf("p1");
+		expect(store.getState().renderLeafId).toBe("c1");
+	});
+
+	it("normalizes pinning the live leaf to follow-live", () => {
+		const store = createClientStore();
+		seedEntry(store, "c1", null, 0);
+		store.getState().applyReplace({
+			...store.getState().document,
+			status: { ...store.getState().document.status, leafId: "c1" },
+		});
+
+		store.getState().setRenderLeaf("c1");
+		expect(store.getState().renderLeafId).toBeNull();
+	});
+
+	it("is a no-op when no committed entry exists in the chain", () => {
+		const store = createClientStore();
+		seedEntry(store, "p1", null); // provisional root — nothing committed
+
+		store.getState().setRenderLeaf("p1");
+		expect(store.getState().renderLeafId).toBeNull();
+	});
+});
+
+describe("setActiveSessionId × peek pin", () => {
+	it("clears the rendered-leaf override when a different session activates", () => {
+		const store = createClientStore();
+		store.getState().setActiveSessionId("sess-a");
+		seedEntry(store, "c1", null, 0);
+		store.getState().setRenderLeaf("c1");
+		expect(store.getState().renderLeafId).toBe("c1");
+
+		// The pinned id belongs to sess-a's tree; carrying it into sess-b would
+		// leave that session diverged (mutation-locked) on a dangling pin.
+		store.getState().setActiveSessionId("sess-b");
+		expect(store.getState().renderLeafId).toBeNull();
+	});
+
+	it("keeps the override when the same session re-activates (reconnect replace)", () => {
+		const store = createClientStore();
+		store.getState().setActiveSessionId("sess-a");
+		seedEntry(store, "c1", null, 0);
+		store.getState().setRenderLeaf("c1");
+
+		store.getState().setActiveSessionId("sess-a");
+		expect(store.getState().renderLeafId).toBe("c1");
+	});
+});
+
+describe("resolveRenderLeafTarget", () => {
+	function entriesOf(...specs: [id: string, parentId: string | null, ord?: number][]) {
+		return Object.fromEntries(
+			specs.map(([id, parentId, ord]) => [
+				id,
+				{
+					id,
+					parentId,
+					timestamp: "2024-01-01T00:00:00Z",
+					kind: "message",
+					role: "user",
+					content: [],
+					...(ord !== undefined ? { ord } : {}),
+				},
+			]),
+		) as unknown as Record<string, Entry>;
+	}
+
+	it("returns a committed target as-is", () => {
+		const entries = entriesOf(["c1", null, 0], ["c2", "c1", 1]);
+		expect(resolveRenderLeafTarget(entries, "c2", null)).toBe("c2");
+	});
+
+	it("clamps an uncommitted target to its nearest committed ancestor", () => {
+		const entries = entriesOf(["c1", null, 0], ["p1", "c1"], ["p2", "p1"]);
+		expect(resolveRenderLeafTarget(entries, "p2", null)).toBe("c1");
+	});
+
+	it("returns null when the walk reaches the live leaf first", () => {
+		const entries = entriesOf(["c1", null, 0], ["p1", "c1"]);
+		expect(resolveRenderLeafTarget(entries, "p1", "p1")).toBeNull();
+	});
+
+	it("returns undefined when nothing committed exists beneath", () => {
+		const entries = entriesOf(["p1", null]);
+		expect(resolveRenderLeafTarget(entries, "p1", null)).toBeUndefined();
+	});
+
+	it("returns undefined for an unknown id", () => {
+		const entries = entriesOf(["c1", null, 0]);
+		expect(resolveRenderLeafTarget(entries, "gone", null)).toBeUndefined();
 	});
 });
 

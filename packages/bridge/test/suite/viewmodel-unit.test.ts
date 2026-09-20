@@ -2389,3 +2389,99 @@ describe("beautifyShellCommand — quote awareness (piece scanner front-end)", (
 		]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// View-leaf override (web peek) — render an off-path branch without moving
+// the live leaf; forkPointId marks the divergence.
+// ---------------------------------------------------------------------------
+
+describe("computeViewModel view-leaf override", () => {
+	function forkedDoc() {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", {
+				role: "user",
+				content: [{ type: "text", text: "root" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:01:00Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "reply one" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("u2", "a1", "2024-01-01T00:02:00Z", "message", {
+				role: "user",
+				content: [{ type: "text", text: "live follow-up" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("a2", "u2", "2024-01-01T00:03:00Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "live answer" }],
+			}),
+		);
+		// Sibling branch off a1 — not on the live path.
+		doc.entries["u2b"] = makeEntry("u2b", "a1", "2024-01-01T00:04:00Z", "message", {
+			role: "user",
+			content: [{ type: "text", text: "peeked follow-up" }],
+		}) as unknown as Document["entries"][string];
+		doc.entries["a2b"] = makeEntry("a2b", "u2b", "2024-01-01T00:05:00Z", "message", {
+			role: "assistant",
+			content: [{ type: "text", text: "peeked answer" }],
+		}) as unknown as Document["entries"][string];
+		return doc;
+	}
+
+	function vmOver(doc: Document, viewLeafId?: string | null) {
+		return computeViewModel({ document: doc, models: [], viewLeafId });
+	}
+
+	it("follows the live leaf when the override is null/undefined", () => {
+		const doc = forkedDoc();
+		for (const override of [undefined, null]) {
+			const vm = vmOver(doc, override);
+			expect(vm.leafEntryId).toBe("a2");
+			expect(vm.forkPointId).toBeNull();
+			expect(vm.turns.map((t) => t.entryId)).toEqual(["u1", "a1", "u2", "a2"]);
+		}
+	});
+
+	it("projects the peeked path without touching status.leafId", () => {
+		const doc = forkedDoc();
+		const vm = vmOver(doc, "a2b");
+		expect(doc.status.leafId).toBe("a2"); // live state untouched
+		expect(vm.leafEntryId).toBe("a2b");
+		expect(vm.turns.map((t) => t.entryId)).toEqual(["u1", "a1", "u2b", "a2b"]);
+		// Sibling pager position reflects the rendered path, not the live one.
+		const u2b = vm.turns.find((t) => t.entryId === "u2b");
+		expect(u2b).toBeDefined();
+		expect(u2b?.kind === "user" && u2b.currentSiblingIndex).toBe(1);
+	});
+
+	it("reports the fork point as the deepest shared entry", () => {
+		const doc = forkedDoc();
+		expect(vmOver(doc, "a2b").forkPointId).toBe("a1");
+		// A peeked ancestor of the live leaf diverges at itself.
+		expect(vmOver(doc, "u2").forkPointId).toBe("u2");
+		// The live leaf itself is not a divergence.
+		expect(vmOver(doc, "a2").forkPointId).toBeNull();
+	});
+
+	it("falls back to the live leaf for an unknown override id", () => {
+		const doc = forkedDoc();
+		const vm = vmOver(doc, "deleted-entry");
+		expect(vm.leafEntryId).toBe("a2");
+		expect(vm.forkPointId).toBeNull();
+	});
+
+	it("produces a distinct pathKey for the peeked path", () => {
+		const doc = forkedDoc();
+		expect(vmOver(doc, "a2b").pathKey).not.toBe(vmOver(doc).pathKey);
+	});
+});

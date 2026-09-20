@@ -7,6 +7,7 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
+import type { Entry } from "../../../../src/core/types.ts";
 import type { ClientStore } from "./store.ts";
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,41 @@ export function migrateExpandKeys(sets: ExpandKeySets, oldId: string, newId: str
 }
 
 // ---------------------------------------------------------------------------
+// Rendered-leaf override (peek)
+// ---------------------------------------------------------------------------
+
+/** Diverged = the rendered leaf is pinned away from the live leaf. The
+ * mutation lock is derived from this — no separate mode flag to drift. When
+ * the daemon navigates to exactly the pinned entry, equality re-syncs the
+ * client by ground truth. */
+export function selectRenderDiverged(s: ClientStore): boolean {
+	return s.renderLeafId !== null && s.renderLeafId !== s.document.status.leafId;
+}
+
+/** Peek-target resolution: the nearest committed (sealed, `ord`-carrying)
+ * ancestor-or-self of `id`. Returns null when the walk reaches the live leaf
+ * first (the target IS live — the pin normalizes to follow-live), undefined
+ * when nothing committed exists beneath (the pin is a no-op — a target that
+ * would dangle at seal). Shared by `setRenderLeaf` (the pin) and the
+ * HistoryPane click matrix (the anchor — scroll to what will actually render,
+ * not to a clicked id that can be a pending entry stranded off the rendered
+ * path). */
+export function resolveRenderLeafTarget(
+	entries: Record<string, Entry>,
+	id: string,
+	liveLeafId: string | null,
+): string | null | undefined {
+	let cursor: string | null = id;
+	while (cursor) {
+		if (cursor === liveLeafId) return null;
+		const entry: Entry | undefined = entries[cursor];
+		if (entry && entry.ord !== undefined) return cursor;
+		cursor = entry?.parentId ?? null;
+	}
+	return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Slice shape
 // ---------------------------------------------------------------------------
 
@@ -120,6 +156,17 @@ export interface UiSlice {
 	 * after failure.
 	 */
 	pullTick: number;
+
+	/** Rendered-leaf override for read-only branch peeking. `null` = follow
+	 * the live leaf (`status.leafId`); a non-null id pins the projection to
+	 * that entry's root→leaf path. Peek never mutates the session: the value
+	 * is UI-ephemeral, cleared on session teardown or when a different session
+	 * activates (`setActiveSessionId` — a pinned id belongs to one session's
+	 * tree), and every mutating verb (send/edit/navigate) is gated on
+	 * `selectRenderDiverged`. Only committed entries (with `ord`) are accepted — a `pending:` id would dangle at
+	 * seal. `setRenderLeaf(null)` is the single return-to-live gesture. */
+	renderLeafId: string | null;
+	setRenderLeaf: (id: string | null) => void;
 
 	// History pane (docked right on desktop, drawer on mobile)
 	historyOpen: boolean;
@@ -188,6 +235,8 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 	historyOpen: false,
 	scrollToEntryId: null,
 
+	renderLeafId: null,
+
 	fileViewerPath: null,
 
 	notifications: [],
@@ -210,6 +259,14 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 
 	setHistoryOpen: (historyOpen) => set({ historyOpen }),
 	setScrollToEntryId: (scrollToEntryId) => set({ scrollToEntryId }),
+
+	setRenderLeaf: (id) =>
+		set((s) => {
+			if (id === null) return { renderLeafId: null };
+			const target = resolveRenderLeafTarget(s.document.entries, id, s.document.status.leafId);
+			// undefined: no committed entry beneath — nothing to render (no-op).
+			return target === undefined ? s : { renderLeafId: target };
+		}),
 
 	openFileViewer: (path) => set({ fileViewerPath: path }),
 	closeFileViewer: () => set({ fileViewerPath: null }),
