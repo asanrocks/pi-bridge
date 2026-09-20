@@ -1,631 +1,342 @@
 # pi-bridge architecture
 
-The high-level overview. Read this first; the ADRs and `AGENTS.md` own the
-detail. This document defines the architecture such that new features (a TUI
-client, a binary transport, server-side auto-respond) slot into existing
-categories without restructuring.
+This document is the high-level current-truth description of pi-bridge. It
+explains the problem, the central model, the layer boundaries, and the
+invariants that let a browser or another client observe and steer a pi
+Session without reimplementing pi's event loop.
 
-> **Navigation model is now ADR 11.** Where this document describes an
-> `Instance` as the client-facing navigation/reconnect handle, read
-> [ADR 11](./11-adr-projects.md) instead: the client-facing domain is
-> `Project` + `Session`, addressed by `(projectId, stem)`; the runtime
-> (`Instance`) is an internal, never-on-the-wire activation. The Document
-> layer, sync model, and invariants below are unchanged.
+## 1. Problem and central insight
 
-## 1. System overview
+A pi Session is durable JSONL plus a live event loop. A client needs a stable
+conversation while the Session is streaming, reconnecting, branching, and
+being viewed by more than one client. Sending raw events makes every client
+rebuild the same state machine and makes late join, lazy content, and partial
+turns transport concerns.
 
-### Logical model
+pi-bridge instead synchronizes a **Document**. The host owns one canonical
+Document for one live Session. pi remains the durable backing store and the
+source of events; the bridge projects events and durable entries into
+immutable patches. A client holds a `DocumentMirror`, applies the same patches,
+and pulls only the lazy values it needs. A reconnect gets an authoritative
+initial sync rather than a replay of an event history.
 
-pi-bridge presents agent session state as a **Document** — a single,
-synchronized data structure that clients observe and steer through.
+This separation gives each concern one owner:
 
+- pi owns persistence, model execution, tool execution, and event ordering.
+- the host owns Project routing, live Activations, the canonical Document, and
+  the WebSocket protocol.
+- core owns the wire-safe types and pure Document, patch, and sync functions.
+- the web client owns the URL projection, cache seed, ViewModel, and rendering.
+
+## 2. Domain model
+
+A **Project** is static daemon configuration: one canonical, allowlisted
+working directory and its pi Session storage namespace. A **Session** is one
+conversation inside a Project. Its public address is `(projectId, stem)`, where
+`stem` is a normalized relative path below the Project's Session directory.
+The durable `sessionId` from the pi header is the cache identity, not the URL
+address.
+
+An **Activation** is the daemon-internal live runtime for exactly one Session.
+It contains one Manager and one canonical Document. An Activation is never
+rebound to another Session and is never sent over the wire. Several
+Connections may attach to the same Activation; each Connection has at most one
+attached Session. A dormant Session is represented by its file and is opened
+into an Activation on demand. An idle Activation is collected when it has no
+Connections and is not streaming or compacting, subject to the host's idle
+collection policy.
+
+The daemon enforces the important ownership rules at its boundaries:
+
+- Project ids and stems are validated before filesystem resolution.
+- Existing and intermediate symlinks must remain inside the Project's Session
+  namespace.
+- One address has at most one live Activation, including while creation or
+  collection is in flight.
+- A durable `sessionId` cannot be claimed by two Project/stem addresses.
+
+The browser navigates by URL:
+
+```text
+/                              launcher and global active Sessions
+/<projectId>                   Project home and floating compose draft
+/<projectId>/<relative-stem>   one Session
 ```
+
+The URL is the navigation source of truth. The Project home is unattached and
+can admit the first prompt through `newSession`; there is no empty daemon
+Session created only to hold a draft.
+
+## 3. Layers and ownership
+
+```text
+pi runtime
+  | ordered events and durable entries
+  v
+Manager: canonical Document for one Session
+  | unfiltered patches and initial-sync frame
+  v
+Connection: one WebSocket, subscriptions, RPC demux, compact transport
+  | replace/patch pushes, registry pushes, RPC replies
+  v
+BridgeClient + DocumentMirror: browser-side replica and typed RPC
+  | store root, ViewModel, pull queue, URL and cache orchestration
+  v
+React web client: Session reading, steering, and rendering
+```
+
+The layers are logically separate even though the daemon runs them in one
+Node process.
+
+**Core and ViewModel.** `core` is pure and browser-safe. It defines the
+Document and Entry types, JSON Patch plus `append`, event application,
+reconciliation, mirror operations, lazy-path filtering, compact transport, and
+cache/sync policy. The ViewModel is also pure and maps the active Document
+branch into turns, actions, git observations, sibling navigation, and pull
+requests. Neither layer knows about WebSockets, the DOM, or the filesystem.
+
+**Host.** The Manager subscribes to pi, applies events in order, reconciles
+against durable entries at settle boundaries, and sends patches to its
+listeners. A Connection owns one WebSocket and one attachment. It filters
+lazy paths using its own subscriptions, handles `pull`, demultiplexes typed
+RPC verbs, and sends initial sync before later live patches. The Daemon owns
+Projects, Activation reservations and collection, Connection registration,
+Project/session queries, and HTTP serving.
+
+**Web.** `BridgeClient` is the only browser-side wire envelope owner. Its
+DocumentMirror applies `replace` and `patch` pushes with immutable structural
+sharing. The web store holds the current Document root, the current
+Project/stem address, Project metadata, active Session snapshots, draft and
+UI state. The route-driven connection layer seeds an optional cache mirror,
+opens the URL address, promotes the target after an address-bearing initial
+sync, and reissues visible lazy pulls.
+
+## 4. Data model
+
+The canonical value is:
+
+```text
 Document {
-  status: { leafId, name, model: ModelRef{provider, modelId}, thinkingLevel, isStreaming, isCompacting, stats, contextUsage, pendingSteer }
-  entries: Record<id, Entry>   // committed (immutable) + in-flight (provisional id)
+  status: Status
+  entries: Record<id, Entry>
   scopedModels: ScopedModelInfo[]
 }
 ```
 
-The Document is the **canonical session state machine**. pi provides durable
-persistence; the bridge owns transient state (in-flight content, partial tool
-calls, connection state). Clients sync to a Document, not a raw event stream.
-Late-joiners and reconnecting clients receive a replace snapshot, not a
-replay of history.
+`status` contains the selected leaf, Session name, model identity, thinking
+level, streaming and compaction flags, token/cost statistics, context usage,
+and pending steer messages. `entries` contains the complete wire-safe union:
+messages, tool results, user bash executions, compaction and branch summaries,
+model and thinking-level changes, labels, Session info, and custom entries.
+Committed entries are immutable. During a turn, streamed entries live beside
+them under provisional ids such as `pending:message` and
+`pending:<toolCallId>`.
 
-State changes flow as **Patch** batches (json-patch ops + one semantic op:
-`append` for string concat during streaming). Each Patch is an atomic
-transaction — after applying it, the Document is domain-valid. Multi-op
-transitions (commit rename + metadata) are grouped into one Patch.
+The event path is delta-driven:
 
-Two pure functions produce all Patches:
+- `applyEvent(document, event)` creates provisional skeletons, updates status,
+  appends streamed strings, and applies authoritative end values.
+- `reconcile(document, piEntries, options)` walks the complete durable list in
+  file order, discovers silent entries, repairs status, assigns `ord`, and
+  seals provisional entries by moving them to durable ids.
 
-- **`applyEvent(doc, event) → Patch | null`** — consumes `AgentSessionEvent`s
-  in real time. Delta-driven: content starts as a skeleton (`add`), grows via
-  `append`, and finalizes via `replace` with the authoritative final value.
-- **`reconcile(doc, piEntries, opts?) → Patch | null`** — called at seals
-  (`turn_end`, `agent_settled`) and by idle-state verbs. Diffs pi's durable entries against the
-  Document: renames provisional ids to pi ids, discovers silent entries
-  (model changes, compactions — entries whose events don't carry their id),
-  repairs status drift (`model`/`thinkingLevel`/`contextUsage`/`name` via `opts`, `stats` recomputed).
+A seal is one atomic Patch. The patch includes the move, durable metadata,
+any needed lazy backfill, and related status changes. Cancellation finalizes
+assistant and tool-result entries as aborted or error entries; it does not
+remove a partial entry.
 
-The Document transitions through four states:
+`ord` is the zero-based position in the complete durable Session entry list.
+It is sync and cache metadata, not render order. It is assigned only when the
+ordered list is available, so a provisional or newly observed entry may lack
+it until reconciliation or initial-sync construction.
 
-```
-bootstrap ──► idle ──► streaming ──► sealing ──► idle
-initFromEntries   │     applyEvent    reconcile      │
-                  │     (per event)   (at turn_end/  │
-                  │                   agent_settled) │
-                  └──────────────────────────────────┘
-```
+Laziness is a wire projection, not a canonical storage property. The canonical
+Document holds real values. Thinking text, tool-call arguments, tool-result
+content, and tool-result details are null only in a wire or cache projection
+when they have not been pulled. Text, metadata, summaries, and Session state
+are wire-eager. Git stamps are ordinary custom entries: they persist, seal,
+cache, and synchronize through the same Document while remaining inert in pi
+context.
 
-**Laziness is a wire projection, not a storage property.** The canonical
-Document always holds real content. On the wire, content-bearing fields are
-`null`. Clients pull what they need: pulling an in-flight entry opens a live
-subscription (streams until commit); pulling a committed entry is one-shot.
-The lazy fields: `ThinkingContent.thinking`,
-`ToolCallBlock.arguments`, `ToolResultEntry.content`, `ToolResultEntry.details`.
-Text fields are wire-eager (never null) per ADR 07.
+## 5. Sync model
 
-### Physical model (ADR 06)
+### Push and RPC channels
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ pi (durable storage + event loop)                       │
-│   SessionManager ── getEntries()                        │
-│   AgentSession ─── subscribe(AgentSessionEvent)         │
-└──────┬────────────────────────────────────┬─────────────┘
-       │ events                             │ durable state
-       ▼                                    ▼
-┌─────────────────────────────────────────────────────────┐
-│ Manager (in-process)                                    │
-│   canonical Document, applyEvent, reconcile             │
-│   onPatch / onReplace callbacks  ◄── test seam          │
-│   typed verbs: prompt, abort, setModel, …               │
-└──────┬──────────────────────────────────────────────────┘
-       │ callbacks (unfiltered Patch batches)
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│ Connection (per-client)                                 │
-│   per-socket subscriptions, lazy filtering              │
-│   RPC demux: session → Manager, daemon → Daemon         │
-│   pull → self                                           │
-└──────┬──────────────────────────────────────────────────┘
-       │ push (replace + patch) + RPC (call + reply)
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│ BridgeClient + DocumentMirror (browser)                 │
-│   local document copy, typed verb methods, RPC demux    │
-│   pull orchestration, rendering                         │
-└─────────────────────────────────────────────────────────┘
-```
+One WebSocket carries two typed channels. Frames with an `id` are RPC calls or
+replies. Frames without an `id` are server pushes. RPC replies carry
+acknowledgement, query data, or an error; Document state arrives only through
+pushes.
 
-| Component | Runtime | Owns |
-|---|---|---|
-| pi | Node | durable history (jsonl), AgentSession, model selection, tool execution |
-| Manager | Node | canonical Document, event→Patch pipeline, `onPatch`/`onReplace`/`onExit`/`onSettled` callbacks, typed session verbs |
-| Connection | Node | WebSocket, subscription set, RPC demux, pull handler, `CompactCodec` |
-| Daemon | Node | Manager list (`Map<instanceId, Manager>`), Connection list, WS/HTTP server, `ModelRuntime`, session-file mtime cache, daemon verbs (`listSessions`, `getDaemonInfo`, `listFiles`, `readFile`, `listInstances`, `console`) + routing verbs (`switchInstance`, `newInstance`, `killInstance`) |
-| BridgeClient | browser | DocumentMirror, RPC pending map, typed verb methods |
+The push contract is:
 
-State flow: pi → Manager (events + durable state), Manager → Connection
-(callbacks), Connection → BridgeClient (wire: replace + patch push, RPC
-call/reply). Steering flows the reverse path: BridgeClient → Connection →
-Manager → pi.
+- `replace` carries a `SessionRef` and a complete wire-projected Document.
+- `patch` carries ordered Patch operations. Only a cursor-aware initial-sync
+  patch carries a `SessionRef`; live patches do not.
+- `sessions_changed` carries the refreshed first page for one Project.
+- `active_sessions_changed` carries the global active or streaming Session
+  snapshot.
 
-The Manager, Connection, and Daemon run in the same process but are
-logically separate. The `createManager` factory exposes the Manager alone for
-tests and embedding. The `Daemon` class creates Managers on demand, creates Connections
-on WS connect, and wires them together via `attach`/`detach`. The canonical Document lives in the
-Manager and outlives any transport. The Manager callbacks (`onPatch`,
-`onReplace`, `onExit`, `onSettled`) are the integration-test seam.
+The host sends exactly one initial-sync frame when a Connection attaches. The
+frame is sent before later live patches and before the successful navigation
+reply. `openSession` resolves a Project/stem address; `newSession` admits the
+first prompt before attaching. `detach` releases the Connection without
+creating a new address.
 
-## 2. Manager
+### Prefix sync and cache
 
-The Manager owns one pi runtime (`AgentSessionRuntime`) and one canonical
-Document (1:1 with a session file on disk). It exposes typed session verbs and
-`onPatch`/`onReplace` callbacks that replace the old `BridgeBus`.
+The durable entry list is the ordering authority. The browser cache stores only
+committed, lazy-stripped entries with `ord`, keyed by durable `sessionId` and
+position. It derives a `PrefixCursor` from a contiguous prefix:
 
-### Bootstrap
-
-At startup, the Manager hydrates the Document from pi's durable state:
-
-```
-initFromEntries(sessionManager.getEntries()) → Document
-```
-
-This is a one-time pure projection. All entries are at their pi ids, content
-populated, `status` fields derived from the latest entries (model from
-`model_change` entries, thinking level from `thinking_level_change` entries,
-name from `session_info` entries). No events are replayed.
-
-### Event pipeline
-
-The Manager subscribes to pi's `session.subscribe(AgentSessionEvent)`. Each
-event is processed synchronously, in order:
-
-1. `applyEvent(document, event) → Patch | null` — maps the event to Patch ops.
-   Applies the Patch to the canonical Document immediately.
-2. If the event is `turn_end` or `agent_settled`: `reconcile(document,
-   sessionManager.getEntries(), { model, thinkingLevel, contextUsage }) → Patch | null` — diffs pi's durable state
-   against the Document and reconciles `status` via `opts`. Applies the resulting Patch immediately.
-3. Each non-null Patch is dispatched to all `onPatch` listeners.
-
-### Session verbs
-
-The Manager exposes typed methods for all session-level operations. Their
-effects are observed via `onPatch`/`onReplace` callbacks, **not** RPC
-replies. The reply carries only the failure channel.
-
-| Verb | Effect | Patch source |
-|---|---|---|
-| `prompt(text)` | Starts a turn | pi-event-driven (`applyEvent`) |
-| `abort()` | Cancels in-flight turn, waits for settle | pi-event-driven |
-| `discardSteer()` | Clears queued steer messages (`queue_update`) | `applyEvent` (`queue_update` → `pendingSteer`) |
-| `setModel(provider, id)` | Resolves model via `ModelRuntime.getModel`, calls session.setModel | `reconcile` (idle) + seal `reconcile` discovers silent `model_change` entry |
-| `setThinkingLevel(level)` | Calls session.setThinkingLevel | event-driven (`thinking_level_changed`) + `reconcile` |
-| `renameSession(name)` | Calls session.setSessionName | event-driven (`session_info_changed` updates status.name) + `reconcile` |
-| `navigate(entryId)` | Calls sessionManager.branch, sets leafId | synchronous leafId patch |
-| `switchSession(path)` | Tear-down old session, create new via runtime.switchSession | `replace` push to all Connections |
-| `newSession()` | Create empty session via runtime.newSession | `replace` push to all Connections |
-
-**Idle-state reconcile:** `setModel`, `setThinkingLevel`, `renameSession`,
-call `reconcile` immediately when called while idle (no turn in-flight),
-ensuring silent entries appear without waiting for the next turn.
-`navigate` sets `leafId` directly — it does not call `reconcile` because
-`reconcile` would reset it to the last committed entry, which is wrong for
-branch positions.
-
-**`switchSession` / `newSession`:** These call `runtime.switchSession()` /
-`runtime.newSession()`, which tear down the old session and create a new one.
-The Manager sets `runtime.setRebindSession(callback)`, which re-bootstraps
-the canonical Document from the new session's entries, re-subscribes to
-events, and pushes `replace` to all attached Connections. The Manager object
-persists; only its internal runtime and Document are replaced.
-
-### Callbacks (replaces BridgeBus)
-
-```ts
-interface Manager {
-  document: Document;
-  readonly liveSessionId: string;
-  readonly cwd: string;
-  onPatch(listener: (patch: Patch) => void): () => void;
-  onReplace(listener: (document: Document) => void): () => void;
-  onExit(listener: () => void): () => void;
-  onSettled(listener: () => void): () => void;
-  addConnection(onPatch, onReplace, onExit): void;
-  removeConnection(onPatch, onReplace, onExit): void;
+```text
+PrefixCursor {
+  sessionId
+  lastKnownId
+  entryCount
 }
 ```
 
-- `onPatch` — called for each `applyEvent`/`reconcile` emission.
-- `onReplace` — called on bootstrap and after `switchSession`/`newSession` (via `rebindSession`).
-- `onExit` — called during `manager.dispose()` after abort-save, before `runtime.dispose()`; Connections send `instance_exit`.
-- `onSettled` — called on `turn_end`/`agent_settled` (first turn after `newSession` flushes file); Connections push `sessions_changed`.
-- `addConnection` — registers callbacks + triggers an immediate `onReplace`
-  push to the new Connection only. This replaces the old `Init` snapshot.
+The server validates the cursor against the current Session id, length, and
+anchor. A valid cursor produces one address-bearing multi-operation patch for
+the missing committed suffix, current provisional skeletons, full status, and
+scoped models. An absent or invalid cursor produces one address-bearing
+replace. Either form repairs the mirror's authority; a replace also repairs
+the Session's cache records and removes stale suffixes.
 
-These callbacks are the **integration-test seam**. Tests subscribe to
-`onPatch`/`onReplace` to observe Document changes without WebSockets.
+A client may seed a candidate mirror while opening another address, but the
+current mirror is promoted only when the initial-sync frame names the target
+`SessionRef`. A failed open leaves the current mirror and route intact. Cache
+absence, corruption, or a stale cursor changes performance only: the server
+falls back to replace.
 
-## 3. Connection + Daemon
+### Lazy pulls and transport compaction
 
-### Daemon
+The web ViewModel declares pending lazy paths while rendering. One pull-loop
+drainer deduplicates them against the mirror and in-flight requests, sends one
+batch, and ingests the values. Pulling a provisional field also subscribes the
+Connection to later updates on that path; pulling a committed field is
+one-shot. The Connection filters live patches per subscription and sanitizes
+lazy fields embedded inside parent add/replace values, so filtered replay and
+fresh wire initialization converge.
 
-The Daemon is a singleton that owns a list of Managers and Connections.
-On startup it creates a Manager, scans the session directory (cached), and
-starts a WS/HTTP server. On WS connect, it creates a Connection attached to
-the Manager.
+At the WebSocket boundary, `CompactCodec` may encode consecutive ordinary
+single-append patches to one path as bare JSON strings. The first append primes
+the path. Replace, initial-sync frames, multi-operation patches, non-append
+operations, broadcasts, RPC replies, and attachment changes clear the codec
+state. The decoder restores the full append operation before the mirror sees
+it.
 
-Daemon verbs (handled by the Daemon, bypass the Manager):
+## 6. State machines
 
-| Verb | Reply | Notes |
-|---|---|---|
-| `listSessions` | `{ ok, sessions: SessionInfo[], hasMore }` | Mtime-cached per-file, filtered by `cwd`, paginated (`max`/`ts` cursor), live sessions excluded |
-| `getDaemonInfo` | `{ ok, models: ModelInfo[], thinkingLevels: string[], cwdAllowlist: string[], devMode: boolean }` | Queries shared `ModelRuntime` (`getAvailableSnapshot()` + `getSupportedThinkingLevels`); `ModelInfo` carries `providerName`/`reasoning`/`supportedThinkingLevels`/`contextWindow` |
-| `listFiles` | `{ ok, entries: { path, isDirectory }[] }` | Prefix match against instance cwd |
-| `readFile` | `{ ok, path, content, truncated, bytes }` | Fresh disk read for the web file viewer; relative paths resolve against the attached instance cwd, `~` expands; capped at 256 KB with `truncated: true` |
-| `listInstances` | `{ ok, instances: InstanceInfo[] }` | Enriched from each Manager's `Document` (`lastActivityAt`/`preview`/`messageCount`) |
-| `console` | `{ ok }` | Dev-mode only (`--dev`); relay `console.*` from browser |
+### Document lifecycle
 
-Routing verbs (Daemon-owned, per-Connection, side-effectful — mutate the instance registry via `Connection.attach`/`Manager.dispose`; never touch the WebSocket directly):
-
-| Verb | Reply | Notes |
-|---|---|---|
-| `switchInstance` | `{ ok }` | Detach from old Manager, attach to target (`replace` push) |
-| `newInstance` | `{ ok, instanceId }` | Spawn new Manager, attach conn (`replace` push) |
-| `killInstance` | `{ ok }` | `manager.dispose()` → abort save → `instance_exit` push → teardown |
-
-The Daemon creates a shared `ModelRuntime` (`ModelRuntime.create({ authPath })`) and injects it
-into `createManager` (`modelRuntime`), so all Managers share the same catalog and auth.
-
-### Connection
-
-The Connection owns one WebSocket, attached to one Manager. It:
-
-- Subscribes to Manager callbacks (`onPatch`/`onReplace`), filters patches
-  against per-connection subscriptions via `filterPatchForSocket`, and sends
-  them as push frames.
-- Demuxes incoming RPC frames by `verb`: session verbs → Manager, daemon
-  verbs → Daemon, `pull` → self.
-- Owns the `pull` handler: reads Manager's canonical Document, registers
-  subscriptions for provisional entries.
-- Owns the RPC demux — the only place that inspects `id` on incoming frames.
-  The Manager never sees `id` values or WebSockets.
-
-### Wire protocol (ADR 06: dual channel)
-
-One WebSocket carrying two sub-channels. Framing rule: a frame with an `id`
-is an RPC (client→server call with server→client reply); a frame without an
-`id` is a push notification (server→client, unsolicited).
-
-**Push (server → client, no `id`):**
-
-| Kind | Payload | When |
-|---|---|---|
-| `replace` | `{ document: Document }` | Re-attachment (`switchInstance`), `switchSession`, `newSession` (fresh `Connection` has `attachedManager=null` — no auto-push on connect) |
-| `sessions_changed` | `{ sessions, hasMore }` | Daemon push on `agent_settled`/`renameSession`/`switchSession`/`newSession` |
-| `instance_exit` | `{ instanceId }` | Only to Connections attached to the killed Manager (last frame) |
-| `patch` | `{ ops: PatchOp[] }` | Each `applyEvent`/`reconcile` emission |
-
-`replace` is always auto-pushed — the server sends it, the client replaces
-its DocumentMirror wholesale. No client→server `Init` message.
-
-**RPC (client → server, with reply):**
-
-```
-// Request
-{ "id": "1", "verb": "prompt", "text": "Fix the buffer overflow" }
-
-// Success reply
-{ "id": "1", "ok": true }
-
-// Error reply
-{ "id": "1", "ok": false, "error": "bad model" }
+```text
+bootstrap --initFromEntries--> idle
+idle --live pi event--> streaming
+streaming --turn_end / agent_settled--> sealing
+sealing --reconcile and seal--> idle
+idle --idle Session verb--> idle
 ```
 
-| Verb | Handler | Reply carries |
-|---|---|---|
-| `prompt` | Manager | `{ ok, error? }` |
-| `abort` | Manager | `{ ok, error? }` |
-| `discardSteer` | Manager | `{ ok, error? }` |
-| `setModel` | Manager | `{ ok, error? }` |
-| `setThinkingLevel` | Manager | `{ ok, error? }` |
-| `renameSession` | Manager | `{ ok, error? }` |
-| `navigate` | Manager | `{ ok, error? }` |
-| `switchSession` | Manager | `{ ok, error? }` |
-| `newSession` | Manager | `{ ok, error? }` |
-| `listSessions` | Daemon | `{ ok, sessions: SessionInfo[], hasMore? }` |
-| `getDaemonInfo` | Daemon | `{ ok, models: ModelInfo[], thinkingLevels: string[], cwdAllowlist: string[], devMode: boolean }` |
-| `listFiles` | Daemon | `{ ok, entries: { path, isDirectory }[] }` |
-| `readFile` | Daemon | `{ ok, path, content, truncated, bytes }` |
-| `listInstances` | Daemon | `{ ok, instances: InstanceInfo[] }` |
-| `switchInstance` | Daemon (routing) | `{ ok, error? }` |
-| `newInstance` | Daemon (routing) | `{ ok, instanceId }` |
-| `killInstance` | Daemon (routing) | `{ ok, error? }` |
-| `pull` | Connection | `{ ok, values: { entryId, fieldPath, value }[] }` |
-| `console` | Daemon | `{ ok }` (dev-mode relay `console.*` from browser) |
+The event loop is serial. `applyEvent` and `reconcile` are synchronous pure
+projections; the host applies each resulting Patch before dispatching the next
+one. `setModel`, `setThinkingLevel`, and `renameSession` reconcile immediately
+when idle. `navigate` changes `status.leafId` directly so reconciliation does
+not undo a selected branch.
 
-**`pull`** is a Connection-local RPC. Its reply carries the current lazy
-values. Its side effect — registering the requested paths in the
-Connection's subscription set — is internal to the Connection. The Manager
-is not involved. Subscription GC is implicit: when the provisional entry
-commits, the id disappears, and future patch filtering naturally drops ops
-on the old path.
+### Connection and Activation lifecycle
 
-Replies never carry Document state. Document changes arrive exclusively via
-push.
+```text
+Connection: connecting -> connected
+            connected --socket drop--> reconnecting -> unreachable
+            connected --init failure--> init_failed
 
-## 4. BridgeClient + DocumentMirror
-
-### BridgeClient
-
-A typed, transport-injected client wrapping the WebSocket. Lives in `core`
-(browser-safe).
-
-```ts
-bridge.prompt("Fix the buffer overflow")        // → Promise<RpcReply>
-bridge.abort()                                  // → Promise<RpcReply>
-bridge.discardSteer()                           // → Promise<RpcReply>
-bridge.setModel("openai", "gpt-5")              // → Promise<RpcReply>
-bridge.setThinkingLevel("high")                 // → Promise<RpcReply>
-bridge.renameSession("fix-buf")                 // → Promise<RpcReply>
-bridge.navigate(entryId)                        // → Promise<RpcReply>
-bridge.switchSession(sessionId)                 // → Promise<RpcReply>
-bridge.newSession()                             // → Promise<RpcReply>
-bridge.listSessions()                           // → Promise<RpcReply>
-bridge.getDaemonInfo()                          // → Promise<RpcReply>
-bridge.listFiles(prefix)                        // → Promise<RpcReply>
-bridge.readFile(path)                          // → Promise<RpcReply>
-bridge.listInstances()                          // → Promise<RpcReply>
-bridge.switchInstance(id)                       // → Promise<RpcReply>
-bridge.newInstance(cwd)                         // → Promise<RpcReply>
-bridge.killInstance(id)                         // → Promise<RpcReply>
-bridge.pull(requests)                           // → Promise<RpcReply>
-
-bridge.mirror                                   // → DocumentMirror (read-only)
-bridge.onPush = (msg) => { ... }                // → push callback
+Attachment: detached --openSession/newSession--> attached(Project, stem)
+            attached --openSession(other address)--> attached(other address)
+            attached --detach--> detached
 ```
 
-`BridgeClient` owns two internal objects:
-- `DocumentMirror` — receives push frames (`replace`, `patch`) and maintains
-  the client-side Document.
-- Pending-RPC map (`Map<id, {resolve, reject}>`) — correlates reply frames
-  to outstanding promises. Rejected on `disconnect()` only.
-
-Demux: on each received frame, check `id`. Present → resolve/reject pending
-RPC. Absent → `replace` or `patch` → dispatch to `DocumentMirror`.
-
-No `web` code constructs wire frames by hand. `BridgeClient` is the only
-place that touches the envelope.
-
-### DocumentMirror
-
-A pure, browser-safe class in `core`:
-
-| Method | Purpose |
-|---|---|
-| `applyReplace(snapshot)` | Replace entire mirror with server snapshot (new root, immutable-persistent) |
-| `applyPatch(ops)` | Apply incremental Patch batch (returns new root, structural sharing) |
-| `needsPull(pending)` | Return subset of pending fields whose value is still `null` |
-| `ingestPullResponse(values)` | Set lazy fields to received values (new root) |
-
-The mirror is the client's single source of truth for rendering. It converges
-to the canonical Document over time but is never treated as authoritative.
-
-### Pull orchestration (pull queue)
-
-Components declare pending pulls during render by appending lazy-field paths to a per-render pull queue. The connection layer drains the queue after each render pass:
-
-1. Components append wanted `(entryId, fieldPath)` pairs during render.
-2. Drain: filter through `needsPull()` + `loadingPaths` (in-flight dedup).
-3. One batched `bridge.pull(requests)`.
-4. `DocumentMirror.ingestPullResponse(values)` + `onPush` re-render. No component calls `pull` directly.
-
-### Reconnect
-
-On disconnect, the client opens a new WebSocket, creates a new `BridgeClient`, and drives re-attachment: `getDaemonInfo` + `listInstances` → if stored `attachedInstanceId` still alive, `switchInstance(id)` → `replace` push. A fresh `Connection` has `attachedManager = null` — `replace` is a consequence of re-attachment, not automatic (multi-instance, §9). All lazy fields are `null` again; the pull loop re-drains pulls for what's on screen. `BridgeClient` rejects all pending RPC promises.
-
-## 5. Cross-cutting topics
-
-### Session lifecycle
-
-The happy path through all components during a single turn:
-
-```
-1. BridgeClient → Connection: RPC { id, verb: "prompt", text }
-2. Connection → Manager: manager.prompt(text)
-3. pi emits agent_start
-4. Manager: applyEvent → Patch { isStreaming: true } → onPatch listeners
-5. Connection: filters against subscriptions → sends Patch push
-6. BridgeClient: applies to DocumentMirror, fires onPush
-
-7. pi emits message_start (assistant)
-8. Manager: applyEvent → Patch { add skeleton } → onPatch → Connection → BridgeClient
-
-9. pi emits message_update (text_delta, thinking_delta, toolcall_*)
-10. Manager: applyEvent → Patch { append/replace } → onPatch → Connection
-11. Connection: filters against per-socket subscriptions → sends to each socket
-12. BridgeClient: applies to DocumentMirror (content streams in-place)
-
-13. pi emits tool_execution_start, tool_execution_update, tool_execution_end
-14. Manager: applyEvent → Patch (add/update tool results) → …
-
-15. pi emits message_end
-16. Manager: applyEvent → Patch (final metadata) → …
-
-17. pi emits turn_end
-18. Manager: applyEvent (no-ops for turn_end) + reconcile → Patch (rename,
-    silent entries, status repair) → …
-19. BridgeClient: provisional ids renamed, entries now committed
-
-20. pi emits agent_settled
-21. Manager: applyEvent → Patch { isStreaming: false } + reconcile (catches
-    compaction entries) → …
-22. Connection: sends RPC reply { id, ok: true }
-```
-
-Abort follows a similar lifecycle. Aborted messages commit with
-`stopReason: "aborted"`; aborted tool calls commit an error result. Every
-in-flight entry eventually commits — none are discarded.
-
-### Laziness end-to-end
-
-The lazy content contract spans all four components:
-
-1. **Manager** — the canonical Document holds real values in all content
-   fields. Laziness does not exist here.
-2. **Connection** — `snapshotForWire()` nulls lazy fields before sending
-   `replace`. `filterPatchForSocket()` drops Patch ops touching lazy fields
-   the socket hasn't subscribed to. `pull` resolves real values from the
-   canonical Document on demand.
-3. **BridgeClient** — `DocumentMirror` tracks which fields are `null` (not yet
-   fetched). `needsPull()` filters wanted fields. `ingestPullResponse()` sets
-   them. The UI renders `null` as a loading placeholder.
-
-### Multi-client
-
-The system is multi-client by construction:
-
-- **Manager callbacks** — all Connections receive the same Patch sequence.
-- **Transport** — each Connection is an independent subscriber with its own
-  subscription set. Lazy filtering is per-Connection; one client pulling a
-  field does not affect another.
-- **No cross-client state** — clients are anonymous to each other.
-
-Steering is single-writer: only `prompt` is surfaced. Multi-writer
-collaboration is not designed for.
-
-## 6. Testing
-
-Tests are a first-class design concern. Three architectural decisions make
-comprehensive testing possible without a real provider or WebSocket:
-
-### Manager callbacks as integration-test seam
-
-Tests subscribe to `manager.onPatch`/`manager.onReplace` in-process — the
-same interface Connections subscribe to. A test drives a turn through the
-Manager's typed methods, subscribes to callbacks, and asserts the exact Patch
-sequence. No WebSocket, no network, same production code path. This decouples
-logic verification from transport verification.
-
-### Injectable dependencies
-
-The server factory (`createManager`) accepts pi-facing dependencies as
-optional parameters: `modelRuntime`, `settingsManager`,
-`sessionManager`, `model`, `customTools`, `sessionPath`, `cwd`, `agentDir`. Tests inject
-memory-backed fakes (`ModelRuntime.inMemory()`, `SettingsManager.inMemory()`)
-and a jsonl-fixture-resumed `SessionManager`. Production and test paths are
-the same function call with different arguments.
-
-### Fixture-resumed pi instances
-
-Integration tests resume a real `SessionManager` from a jsonl session fixture,
-then drive turns through the production `AgentSession` loop with a faux
-provider. This exercises the full event pipeline — `applyEvent` + `reconcile`
-at real seal points — catching event ordering, interleaving, and timing
-issues.
-
-### Test split (23 files)
-
-| File | Kind | What |
-|---|---|---|
-| `accounting.test.ts` | Unit | `sessionAccounting` cost ledger |
-| `bridge-client.test.ts` | Unit | `BridgeClient` RPC demux, disconnect, push handling (mock transport) |
-| `client-mirror.test.ts` | Unit | `DocumentMirror.applyReplace`, `applyPatch`, `needsPull`, `ingestPullResponse` |
-| `compact-codec.test.ts` | Unit | `CompactCodec` streaming-append compaction |
-| `composer-draft.test.ts` | Unit | Composer draft (`idle`/`compose`/`edit`) + blur/expand rules |
-| `convergence.test.ts` | Unit | Invariant 12 (snapshot ≡ filtered replay), subscribed-client diff |
-| `document-unit.test.ts` | Unit | `applyEvent`, `reconcile`, `initFromEntries` with hand-built inputs |
-| `event-roundtrip.test.ts` | Unit | Patches survive `JSON.parse(JSON.stringify(e))` — WS-seam insurance |
-| `integration-gaps.test.ts` | Unit | `filterPatchForSocket`, lazy-filtering + sanitization |
-| `model-ref-disambiguation.test.ts` | Unit | `ModelRef` provider disambiguation |
-| `property-invariant.test.ts` | Unit | Invariants: committed entries immutable, domain-valid, structural sharing |
-| `store-unit.test.ts` | Unit | Store selectors, `migrateExpandKeys`, `loadingPaths` dedup |
-| `tree-unit.test.ts` | Unit | `HistoryTree` / `LaneLayout` (Pass 1 + Pass 2) |
-| `viewmodel-unit.test.ts` | Unit | `computeViewModel`: leaf-path, turn merging, siblings, newest-leaf walk |
-| `pull-queue.test.ts` | Unit | `planPull`, `actionPulls`, pull-queue scheduling |
-| `connection-daemon.test.ts` | Integration | Connection RPC routing (prompt, daemon/routing verbs, pull, setModel), in-process WS pair |
-| `manager-verbs.test.ts` | Integration | Manager verbs: setModel, setThinkingLevel, renameSession, navigate, abort, idle reconcile |
-| `mirror-integration.test.ts` | Integration | Tool execution, concurrent tools, abort, errors |
-| `multi-instance.test.ts` | Integration | Multi-instance routing (`switchInstance`/`newInstance`/`killInstance`, `instance_exit`) |
-| `navigation-e2e.test.ts` | Integration | Navigate + mirror sync, prompt-from-branch, multi-navigate, idempotency |
-| `streaming-edge-cases.test.ts` | Integration | Streaming tool updates, concurrent tools, abort mid-stream/tool, silent entries, steering |
-| `walking-skeleton.test.ts` | Integration | Resume + faux turn through `DocumentMirror` + Manager patches |
-
-Full harness and fixture design: `test/suite/harness.ts`.
+Connection recovery refreshes daemon metadata and active Sessions, reads the
+current URL, optionally seeds the address from IndexedDB, and resolves the
+address again. An Activation may continue a turn after its last Connection
+detaches. Collection happens only after the host's attachment, streaming, and
+compaction conditions are checked; collection never deletes the Session file.
 
 ## 7. Invariants
 
-The load-bearing constraints. Violating one is expensive to undo.
+These are the load-bearing rules for changes across layers:
 
-1. **The Manager holds the canonical Document.** pi is the durable backing
-   store. No other code path writes the canonical Document.
-2. **Committed entries are immutable.** `entries` only grows. In-flight entries
-   (provisional ids) are the only mutable content.
-3. **Patch is the transaction boundary.** After each Patch, the Document is
-   domain-valid. Multi-op transitions (commit rename + metadata) are grouped
-   into one Patch.
-4. **`core` is pure and browser-safe.** No `node:*`, no `fs`, no `net`, no DOM.
-   `import type` only for coding-agent coupling. Enforced by the browser-smoke
-   gate.
-5. **Manager callbacks are the only state channel** from Manager to
-   Connections. No direct Document access across the boundary except the
-   `replace` push and `pull` resolution. The callbacks are the
-   integration-test seam.
-6. **pi's event loop is serial; the bridge adds no concurrency.** Events
-   processed one at a time, in order. `applyEvent` and `reconcile` are
-   synchronous.
-7. **Thinking, tool arguments, and tool results are lazy on the wire; `TextContent.text` is wire-eager (never null).** `null` means "not
-   fetched." The canonical Document always holds real values; lazy stripping
-   happens only at the wire boundary (`snapshotForWire` + value-recursive
-   sanitization in `filterPatchForSocket`). After a pull, lazy
-   fields in the canonical document are never `null` for committed entries;
-   genuinely-absent values normalize to `""` (redacted thinking) or `{}`
-   (absent tool result details).
-8. **Cancellation finalizes, never discards.** Aborted entries commit with
-   aborted/error content. Partial streaming content is replaced, not removed.
-9. **pi drives the turn loop.** The bridge adds observation and wire, not turn
-   lifecycle. `prompt` always uses `streamingBehavior: "steer"`.
-10. **Reconnect replaces state wholesale.** No retained op history. `replace`
-    snapshot + re-pull for what's on screen.
-11. **Components declare pending pulls, the pull loop is the sole fetcher.** Components
-    append lazy-field paths to the per-render pull queue during render.
-    The connection layer drains the queue after each render pass,
-    issues one batched pull, and ingests results into the mirror. No
-    component calls `pull` directly.
-12. **filterPatchForSocket sanitizes embedded lazy content (convergence invariant).** Parent-path op
-    values (entry-root adds, block-level replaces) may embed lazy subfields;
-    the filter strips them from the wire value for unsubscribed sockets. A
-    client replaying the filtered patch stream converges to the same document
-    as one re-initialized from `snapshotForWire`.
-13. **Manager verbs' effects are observed via push, not reply.** The reply
-    carries only the failure channel. Document changes arrive as `patch` or
-    `replace`. Replies never carry Document state.
-14. **Fallible Manager verbs are reactive.** The Manager waits for pi's
-    outcome before emitting a push. Synchronous-throw verbs (`setModel`,
-    `setThinkingLevel`, `navigate`) reply `ok:false` immediately.
-15. **No code constructs wire frames by hand.** `BridgeClient` wraps the
-    transport on the client; `Connection.demux` routes to typed handlers
-    on the server.
-16. **Idle-state verbs reconcile immediately.** `setModel`, `setThinkingLevel`,
-    and `renameSession` trigger an immediate `reconcile` (or direct status
-    update) when called while idle. `navigate` sets `leafId` directly — it
-    does not call `reconcile` because `reconcile` would reset it to the last
-    committed entry, which is wrong for branch positions.
-17. **Domain objects flow through canonical types.** All data crossing the RPC
-    boundary (RPC replies, server push payloads) is typed with a canonical
-    domain type from `src/core/types.ts`. Cast from `unknown` directly to the
-    domain type — no `Record<string, unknown>` intermediate, no inline
-    anonymous types for domain data. Shapes nested inside `JsonValue` (tool
-    call arguments, verb-specific payloads) are exempt but must use `?:` for
-    fields that arrive incrementally during streaming.
+1. **The Manager owns the canonical Document.** No other path writes that
+   canonical root; pi is the durable backing store.
+2. **Committed entries are immutable.** Only provisional entries change during
+   streaming, and every provisional eventually seals or is finalized by pi.
+3. **A Patch is the transaction boundary.** Every complete Patch leaves a
+   domain-valid Document; seal moves and metadata changes are one transaction.
+4. **Core and ViewModel are pure and browser-safe.** They have no filesystem,
+   network, DOM, or Node runtime dependency.
+5. **The pi event loop is serial.** The bridge observes event order and adds
+   no competing turn lifecycle.
+6. **A Manager serves exactly one Session.** An Activation is never rebound;
+   Project/stem resolution and activation reservations enforce exclusivity.
+7. **Lazy values exist only at the wire/cache boundary.** The canonical
+   Document contains real values; null in a projection means not pulled.
+8. **Cancellation finalizes.** Aborted turns produce durable or pending error
+   outcomes instead of silently removing entries.
+9. **The bridge observes pi's turn loop.** `prompt` uses steering semantics;
+   pushes report effects and RPC replies do not carry Document state.
+10. **Initial sync precedes live patches.** A valid cursor selects a delta;
+    otherwise the server sends replace. The address-bearing frame establishes
+    the active Session and cache identity.
+11. **Reconnect replaces authority, then repulls.** No operation history is
+    retained across a WebSocket; visible lazy values are requested again.
+12. **The pull loop is the sole fetcher.** Components declare pending paths;
+    no component calls the pull RPC directly.
+13. **Filtered delivery converges.** Lazy filtering sanitizes parent values as
+    well as leaf operations, so filtered replay matches a fresh projection.
+14. **Wire frames have one owner.** BridgeClient and Connection construct the
+    envelopes; feature code uses typed methods and push data.
+15. **The URL selects navigation.** The client does not maintain a competing
+    session navigation state machine; initial sync commits the resolved
+    Project/stem address.
+16. **The cache is disposable derived state.** Server validation and
+    authoritative initial sync determine correctness, not IndexedDB contents.
 
-18. **Document is immutable-persistent.** Every `applyPatch`/`applyReplace`/`ingestPullResponse` returns a new root with structural sharing; `Object.is` on the root is the change signal. Unchanged subtrees keep reference identity, so selectors and `React.memo` stay cheap.
+## 8. Test design
 
-## 8. Deliberate omissions
+Tests preserve the same boundaries used in production.
 
-- **No sequence numbers on Patch.** WebSocket is reliable-ordered; reconnect
-  uses full `replace` snapshot.
-- **No subprocess adapter.** The bridge runs pi in-process via the SDK.
-- **No multi-writer steering.** Only `prompt` is surfaced. Multi-client is
-  first-class in the plumbing (fan-out) but steering is single-writer.
-- **No auth/network posture.** localhost-only; remote access via SSH tunnel.
-- **No wire protocol schema versioning.** Reconnect replaces state wholesale.
+- Pure unit tests exercise `applyEvent`, `reconcile`, patch application,
+  immutable mirror updates, lazy filtering, compact transport, cursor/cache
+  policy, git-stamp parsing, and ViewModel/tree projection with hand-built
+  inputs.
+- Raw-object integration tests subscribe to Manager patch callbacks and use
+  Connection/Daemon seams without requiring a real network. Initial-sync tests
+  assert cursor validation, SessionRef pairing, subscription reset, and
+  ordering before RPC replies.
+- Fixture-resumed integration tests use the production `createManager` path
+  with injected memory services and a faux provider. They drive full turns,
+  parallel tools, aborts, silent entries, navigation, Project activation,
+  and collection. This catches event ordering and seal interleavings that
+  isolated reducers cannot.
+- Web store, route, candidate-mirror, pull-loop, and cache tests remain
+  browser-independent where possible. The web TypeScript gate and the curated
+  browser-smoke bundle protect the core/ViewModel boundary.
 
-## 9. Invariant addendum: Multi-instance (2026-07-21)
+The important test oracle is convergence: a mirror seeded from cache and
+advanced by a valid initial-sync patch must equal the server's full initial
+projection after lazy values are pulled. The same Document behavior is checked
+through direct callbacks, the wire protocol, and the browser store.
 
-The multi-instance work (N Managers, N Connections, attachment routing) does
-not break the existing invariants, with one scoped relaxation.
+## 9. Documentation map
 
-### §7.13 spirit: kill-discovery
+Read the documentation in this order: [glossary](glossary.md), this overview,
+[core data model](core/data-model.md), [host runtime](host/runtime.md), and
+[web architecture](web/architecture.md), then the [active ADRs](adr/0008-object-kernel.md)
+and [activation lifetime](adr/0012-activation-lifetime.md).
 
-Kill (`killInstance` → `manager.dispose()`) is a **routing verb** (Daemon-owned, side-effectful),
-not a Manager verb. It is technically outside §7.13's literal scope. However,
-the *spirit* of §7.13 ("effects observed via push, not reply") is preserved:
-the `instance_exit` push is emitted via the Manager's `onExit` callback
-to *attached* Connections, keeping the "Manager callbacks are the only state
-channel" rule (§7.5). The Daemon never touches the WebSocket.
-
-The scoped relaxation: killed tabs learn about the loss via the `instance_exit`
-*push*, not via the next RPC reply. This deviates from the PRD's original
-"on their next RPC" wording but preserves the invariant's spirit more
-faithfully. See ADR 06 addendum for the `onExit`/`instance_exit` design.
-
-### §7.10 no-auto-replace on connect
-
-A fresh Connection now has `attachedManager = null` — nothing is pushed on
-connect. The `replace` push is now a *consequence of re-attachment*, not
-automatic. This is a behavioral change from v1 (reconnect no longer auto-
-recovers the document). The client drives re-attachment from its stored
-`attachedInstanceId` via `switchInstance`. This is consistent with §7.10's literal scope (transport
-reconnect replaces state wholesale — it just happens via client-driven
-`switchInstance` RPC + resulting `replace` push).
-
-### ADR 07.5 framing
-
-The literal rule (store holds exactly one Document root) still holds. The
-parenthetical "v1 is one session per browser context" is outdated; the store
-tracks the *attached* instance's document. A single root suffices because the
-store only holds one instance's document at a time.
+The tree has two tiers. Permanent docs outside `docs/adr/` state current
+mechanisms and invariants and are refreshed in place. ADRs in `docs/adr/` are
+change records moving through Proposed, Accepted, and Implemented states;
+once merged, their current-truth content is folded into the permanent docs
+and the file is deleted — git history is the decision record.
+An ADR is a historical citation, never the owner of current behavior.
