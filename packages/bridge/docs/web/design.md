@@ -49,7 +49,11 @@ browse branches in History. A steerer can do the following:
 - Complete file paths in the composer. Tab opens a Project-scoped list for a
   path-like token; arrows, Enter, Tab, and Escape operate the list. Directory
   completion continues into the next path segment. This works on Project home
-  before a Session is attached as well as inside a Session.
+  before a Session is attached as well as inside a Session. On touch, where
+  there is no Tab key, the list auto-opens on a typing pause once the caret
+  token is path-like (a stricter predicate than Tab's: no empty or URL/scheme
+  token), and a tap accepts a row; it stays non-modal and dismisses like the
+  keyboard-triggered list.
 - Edit a past user message into a fork. Edit is available from the user-turn
   toolbar or `e` when that turn is keyboard-focused. The edited text is sent
   from the original parent, producing a sibling variant; the original message
