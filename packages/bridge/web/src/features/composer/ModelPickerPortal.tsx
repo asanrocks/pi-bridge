@@ -182,7 +182,7 @@ export function ModelPickerPortal({
 						ref={inputRef}
 						className={styles.portalSearchInput}
 						type="text"
-						placeholder="Search models..."
+						placeholder="Search models…"
 						value={search}
 						onChange={(e) => {
 							setSearch(e.target.value);
