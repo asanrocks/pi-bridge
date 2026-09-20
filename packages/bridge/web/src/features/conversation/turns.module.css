@@ -340,9 +340,9 @@
    Copy chip) anchored at the segment's top-right, offset into the gap
    above. Only placement and reveal live here — size, border, hover, and
    tap-target growth are owned by .toolbarBtn. Solid-bg override: the chip
-   floats over markdown, and .toolbarBtn's transparent bg would let text
-   show through (this rule sits after .toolbarBtn in the file, so the
-   override holds). */
+   floats over markdown on desktop, and .toolbarBtn's transparent bg would
+   let text show through (this rule sits after .toolbarBtn in the file, so
+   the override holds). */
 .msgCopyBtn {
 	position: absolute;
 	top: -8px;
@@ -359,7 +359,16 @@
 }
 
 @media (hover: none) {
+	/* Touch has no hover, so the overlay would sit permanently over the
+	   first line's text. Drop into the flow and float right instead: text
+	   wraps around the chip rather than under it. The float only lands at
+	   the segment's top-right because the button precedes the markdown in
+	   DOM order (floats can't rise above their flow position). */
 	.msgCopyBtn {
+		position: static;
+		float: right;
+		margin-left: 8px;
+		margin-bottom: 4px;
 		opacity: 1;
 	}
 }
