@@ -1,15 +1,27 @@
 // ============================================================================
-// usePathCompletion — file-path tab-completion for a compose surface. Owns
-// the token extraction, dropdown navigation, and acceptance editing; the
+// usePathCompletion — file-path completion for a compose surface. Owns the
+// token extraction, dropdown navigation, and acceptance editing; the
 // completion source is injected (`complete`) — useComposeCapabilities supplies
 // the Project-scoped `listFiles` RPC (ADR 12).
+//
+// Two triggers feed one state machine:
+//   - `handleKeyDown` (Tab) — explicit, works on any pointer.
+//   - a debounced auto-open on touch (`pointer: coarse`), where no Tab key
+//     exists. Its predicate is stricter (pure `pathToken.ts`), because it
+//     fires from ordinary typing rather than a deliberate key.
 //
 // `handleKeyDown` returns true when the event was consumed (dropdown open,
 // or the Tab trigger fired); the card calls it before its own key handling.
 // ============================================================================
 
-import { type ReactNode, useCallback, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { PathCompletion } from "./PathCompletion.tsx";
+import { type CaretToken, isAutoOpenToken, isPathToken, tokenAtCaret } from "./pathToken.ts";
+
+/** Debounce before the touch auto-open fires: long enough to clear a typing
+ *  burst, short enough to feel immediate on a pause. */
+const AUTO_OPEN_DEBOUNCE_MS = 300;
 
 export interface PathCompletionEntry {
 	path: string;
@@ -40,36 +52,23 @@ export function usePathCompletion(options: {
 		setIndex(0);
 	}, []);
 
-	// Extract the path-like token before the cursor
-	const getPathPrefix = useCallback((): { prefix: string; start: number } | null => {
+	const readToken = useCallback((): CaretToken | null => {
 		const el = textareaRef.current;
 		if (!el) return null;
-		const cursor = el.selectionStart;
-		const before = value.slice(0, cursor);
-
-		let start = -1;
-		for (let i = before.length - 1; i >= 0; i--) {
-			const ch = before[i];
-			if (ch === " " || ch === "\t" || ch === '"' || ch === "'" || ch === "=") {
-				start = i + 1;
-				break;
-			}
-		}
-		if (start === -1) start = 0;
-
-		const token = before.slice(start);
-		if (
-			token === "" ||
-			token.startsWith("/") ||
-			token.startsWith("./") ||
-			token.startsWith("../") ||
-			token.startsWith("~/") ||
-			token.includes("/")
-		) {
-			return { prefix: token, start };
-		}
-		return null;
+		return tokenAtCaret(value, el.selectionStart);
 	}, [value, textareaRef]);
+
+	// Tab trigger. Includes the empty token (Tab on an empty line lists the cwd).
+	const getPathPrefix = useCallback((): CaretToken | null => {
+		const t = readToken();
+		return t && isPathToken(t.token) ? t : null;
+	}, [readToken]);
+
+	// Touch auto-open trigger: stricter (see pathToken.ts).
+	const getAutoPrefix = useCallback((): CaretToken | null => {
+		const t = readToken();
+		return t && isAutoOpenToken(t.token) ? t : null;
+	}, [readToken]);
 
 	const fetchCompletions = useCallback(
 		async (prefix: string, start: number) => {
@@ -87,6 +86,22 @@ export function usePathCompletion(options: {
 		},
 		[complete, close],
 	);
+
+	// Touch: no Tab key, so open on a typing pause once the caret token is
+	// path-like. The fetch runs even while the list is open: soft keyboards
+	// that do not emit per-key keydowns never hit the close-on-character branch
+	// in `handleKeyDown`, and refetching keeps the list in step with the prefix.
+	const coarsePointer = useMediaQuery("(pointer: coarse)");
+	useEffect(() => {
+		if (!coarsePointer || value === "") return;
+		const timer = setTimeout(() => {
+			const el = textareaRef.current;
+			if (!el || document.activeElement !== el) return;
+			const info = getAutoPrefix();
+			if (info) void fetchCompletions(info.token, info.start);
+		}, AUTO_OPEN_DEBOUNCE_MS);
+		return () => clearTimeout(timer);
+	}, [value, coarsePointer, getAutoPrefix, fetchCompletions, textareaRef]);
 
 	// Accept a completion — replace the token from start to cursor
 	const accept = useCallback(
@@ -167,7 +182,7 @@ export function usePathCompletion(options: {
 				const pathInfo = getPathPrefix();
 				if (pathInfo) {
 					e.preventDefault();
-					void fetchCompletions(pathInfo.prefix, pathInfo.start);
+					void fetchCompletions(pathInfo.token, pathInfo.start);
 					return true;
 				}
 			}
