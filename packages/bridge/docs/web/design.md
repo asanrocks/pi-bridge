@@ -124,23 +124,43 @@ no Session is attached.
 
 ### Sidebar
 
-The Sidebar is a Project tree with two kinds of children in each expanded
-Project folder:
+The Sidebar is a Project tree. Each folder is a tri-state fold — folded
+(nothing below the row), active (only the pinned rows), open (pinned rows
+plus history) — cycled by clicking the folder row (chevron + name are one
+target; the name does not navigate). The chevron mirrors the state: right
+(folded), diagonal (active only), down (open). Missing fold state defaults
+to `active`, so a fresh Project shows liveness without history. A folder
+with no pinned active rows has only two states: the active step is skipped
+in the cycle and a stale persisted `active` renders folded, since "active
+only" is indistinguishable from folded there. The `Projects` header label
+is the fold-all toggle: it applies one uniform state to every folder — the
+smallest step strictly above every folder's current effective state, up
+the ladder `folded` → `active` → `open` (the `active` step exists only
+when some folder has pinned rows), wrapping to `folded` at the top. A
+click therefore always changes every folder — no dead clicks — and
+fold/unfold mixing never survives a click. Each folder also
+has exactly one navigation affordance, the `+` button, which opens the
+Project home — the compose surface where the first prompt creates the
+Session (there is no empty-Session creation path). Folder children sit
+flush-left with the folder row; hierarchy is carried by the chevron and
+row fills, not indentation.
 
-- Active Sessions are pinned first and always remain visible when the folder
-  history is folded. A green dot means active and an orange pulsing dot means
-  streaming. The attached `(Project, stem)` row is the only selected row and
-  uses the accent tint.
-- Dormant Session history is fetched when a folder expands, ordered into
+Folder children:
+
+- Active Sessions are pinned first and remain visible in the `active` and
+  `open` states. A green dot means active and an orange pulsing dot means
+  streaming. The attached `(Project, stem)` row is the only selected row
+  and uses the accent tint; a folder row never does — it is a fold control,
+  not a target.
+- Dormant Session history is fetched when a folder unfolds, ordered into
   `Today`, `This week`, and `Earlier`, and shown with relative timestamps.
-  `Load more` requests the next page. A dormant row has a muted status dot and
-  no close action.
+  `Load more` requests the next page. A dormant row has a muted status dot
+  and no close action.
 
-The Project name opens the Project home; its chevron only folds the history.
 The active rows and history rows open Sessions. A live row menu exposes
-`Close` without confirmation. The Projects header returns to the global
-launcher. Empty, loading, failed-with-retry, and no-session states occupy the
-same quiet message position in the folder.
+`Close` without confirmation. The grid action beside the `Projects` header
+returns to the global launcher. Empty, loading, failed-with-retry, and
+no-session states occupy the same quiet message position in the folder.
 
 On desktop the Sidebar has three modes: hidden, a docked resizable rail, and
 full-screen overlay. The rail width is persisted and bounded for readable
