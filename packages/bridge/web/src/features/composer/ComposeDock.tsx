@@ -305,7 +305,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	return (
 		<div className={styles.composer} ref={dockRef}>
 			{!expanded ? (
-				<ComposeBar dot={dot} placeholder="Type a message..." onClick={handleBarClick} disabled={!connected} />
+				<ComposeBar dot={dot} placeholder="Type a message…" onClick={handleBarClick} disabled={!connected} />
 			) : (
 				<ComposeCard
 					{...capabilities.cardProps}
@@ -313,7 +313,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					onChange={setDraftText}
 					onCommit={handleCommit}
 					connected={connected}
-					placeholder={isEditing ? "Edit your message..." : "Type a message..."}
+					placeholder={isEditing ? "Edit your message…" : "Type a message…"}
 					onBlurOutside={blurDraft}
 					onEscape={handleEscape}
 					textareaRef={textareaRef}

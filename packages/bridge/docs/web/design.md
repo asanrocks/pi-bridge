@@ -319,7 +319,7 @@ The trailing group auto-expands while streaming so new actions are visible,
 but its action details remain collapsed. A manual group or action toggle adds
 that element to the frozen set, so later streaming renders do not override
 user intent. Each action has its own triangle. Long details use a separate
-`show all` control; the normal details region is capped at 300px and signals
+`Show all` control; the normal details region is capped at 300px and signals
 clipping with a fade. Touch inputs keep hover controls visible.
 
 Action rows use four semantic hues: edit and write share the mutate hue,
@@ -335,7 +335,7 @@ highlighted file content; write shows written content; edit shows a unified
 diff; bash and PowerShell show command output with tail/full controls; grep,
 find, and ls show argument and result rows; unknown tools use the fallback
 argument and output renderer. Copy, line wrapping, Markdown rendering for
-Markdown files, and `show all` are card-local controls. Tool arguments and
+Markdown files, and `Show all` are card-local controls. Tool arguments and
 results can arrive while a call is streaming, so a card renders available
 content without waiting for a path or command annotation.
 
@@ -344,6 +344,34 @@ to a one-line first-line preview and expands inline as Markdown beside its
 triangle. Redacted or empty thinking is a static muted label. Git-change cards
 can appear inside an action group after the action that observed the change;
 the group summary and legend include the git hue.
+
+## Typography
+
+No webfonts are loaded; the client uses two system stacks, declared at the
+consumption sites (body plus the few controls that reset inheritance — there
+are no `--font-*` tokens):
+
+- **Prose and UI:** `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+  Helvetica, Arial, sans-serif`. The document body, composer, and all control
+  chrome.
+- **Literal text:** `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+  monospace`. Reserved for code, terminal I/O, file paths, and model names —
+  never for labels or prose.
+
+Sizes come from the five-step `--fs-*` token scale: `--fs-xs` (11px — meta,
+group headers), `--fs-sm` (12px — action summaries, sidebar rows), `--fs-md`
+(13px — small body, code, card content), `--fs-lg` (14px — empty states,
+dropdowns), `--fs-xl` (16px — body and composer, the reading baseline). The
+mobile breakpoint drops only `--fs-xl` to 14px; Markdown inline content scales
+relatively (see the inline-scale invariant below).
+
+Weights use a narrow range and never lighter than the default: `400` default,
+`500` soft emphasis on launcher rows and headings, `600` for labels — section
+headers, chips, badges, composer buttons, `700` reserved for the TopBar session
+title and Markdown strong text. Body line-height is `1.6` with unitless
+line-heights throughout so Markdown scales with its host;
+`-webkit-font-smoothing: antialiased`; italics appear only on muted metadata in
+action cards and composer placeholders.
 
 ## Styling Invariants
 
@@ -372,6 +400,12 @@ for new buttons, chips, action rows, and Markdown hosts.
   one border and surface, keep copy actions compact, and do not alter tool
   cards by accident. App link behavior belongs in `AppMarkdown` and its link
   renderer.
+- **Capitalization follows string role.** Sentence case for actions, controls,
+  tooltips, and empty states (`Show all`, `Retry now`, `Load more`). Uppercase —
+  only via `text-transform`, never typed caps — for short structural labels
+  (section headers, mode badges), always with small positive tracking. Data
+  (timestamps, paths, model names, status values) takes natural formatting with
+  no case transformation. Ellipses use the `…` character, not `...`.
 - **Every feature owns a CSS module.** Feature components and their CSS stay
   co-located. Shared rendering primitives own their own modules. Global CSS
   is reserved for tokens, base elements, shell custom properties, focus, and
