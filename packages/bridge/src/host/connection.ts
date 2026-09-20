@@ -18,6 +18,7 @@ import type {
 	PullRequest,
 	ReadFileRequest,
 	RenameSessionRequest,
+	ScopedModelInfo,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
@@ -52,6 +53,7 @@ export interface DaemonVerbs {
 			reasoning: boolean;
 			supportedThinkingLevels?: string[];
 		}[];
+		scopedModels: ScopedModelInfo[];
 		thinkingLevels: string[];
 		devMode: boolean;
 	}>;
