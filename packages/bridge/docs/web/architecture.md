@@ -69,7 +69,10 @@ The protocol slice contains:
   the durable Session cache key from ADR 09, not the URL address;
 - `currentProjectId` and `currentStem`, the address currently represented by
   the tab. A null stem is the Project home and a null Project is the launcher;
-- `connection`, a discriminated `ConnectionState`;
+- `connection`, a discriminated `ConnectionState`. Its wording and severity
+  live in `infra/state/connectionStatus.ts` — the single mapping consumed by
+  both down-state surfaces (the TopBar chip and the Launcher full panel), so
+  no other module phrases connection state;
 - `projects`, models, thinking levels, and `devMode` from daemon information;
 - `activeSessions`, the global active/streaming Session snapshot; and
 - `sessionPages`, lazily fetched Project history pages. Each page is
