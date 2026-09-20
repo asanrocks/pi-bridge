@@ -63,8 +63,8 @@ be used in code names outside the history tree.
 ## A. Addressing & lifetime
 
 What exists, how it is named, how long it lives. Owned by
-[ADR 11](11-adr-projects.md); lifetime amendments proposed by
-[ADR 12](12-adr-activation-lifetime.md).
+[host runtime](host/runtime.md); proposed lifetime changes are recorded in
+[ADR 12](adr/0012-activation-lifetime.md).
 
 1. A **Project** *(bound)* is a served directory; it is the address space
    for Sessions. Its id is the validated last path segment; its session
@@ -90,8 +90,8 @@ does not claim it.
 
 ## B. Runtime topology
 
-Which processes and links exist. Owned by [ADR 06](06-component-model.md),
-as amended by ADR 11.
+Which processes and links exist. Defined by [host runtime](host/runtime.md)
+and [core protocol](core/protocol.md).
 
 1. A **Daemon** *(bound)* is the server process: it owns the Projects, the
    activation registry, and the Connections.
@@ -100,13 +100,15 @@ as amended by ADR 11.
 4. An Activation is implemented by a Manager *(bound)*.
 5. A **verb** *(bound, after HTTP)* is an RPC request type. Verbs are
    session, navigation, or query verbs.
-6. A Connection processes verbs one at a time, in order; work that would
-   block the ordering (a running turn, a slow spawn) runs outside it.
+6. A Connection demultiplexes verbs: attached Session verbs route to its
+   Manager, daemon verbs route to the Daemon, and `pull` is Connection-local.
+   Each handler owns its asynchronous work and replies through the same
+   Connection.
 
 ## C. Document sync
 
-How Session content travels. Owned by [ADR 02](02-data-model.md) (Document,
-wire protocol) and [ADR 09](09-adr-incremental-sync.md) (cache, cursor).
+How Session content travels. Defined by the [core data model](core/data-model.md),
+[core protocol](core/protocol.md), and [incremental sync](core/sync.md).
 
 1. A **Document** *(bound)* is the canonical content of a Session: status
    plus entry map. Clients sync to a Document, not to an event stream.
@@ -144,8 +146,8 @@ wire protocol) and [ADR 09](09-adr-incremental-sync.md) (cache, cursor).
 
 ## D. Rendering
 
-How a Document becomes UI. Owned by [ADR 07](07-adr-client-architecture.md)
-and [PRD 04](04-prd-web-ui.md); spans `src/viewmodel/` and `web/`.
+How a Document becomes UI. Defined by [web architecture](web/architecture.md)
+and [web design](web/design.md).
 
 1. A **ViewModel** *(bound, MVVM)* is the projection of a Document into
    renderable form.
@@ -181,8 +183,8 @@ Two components legitimately span domains; they are sanctioned exceptions,
 not precedents:
 
 - **Activation** (A ∩ B) — the hinge. All cross-domain sentences pass
-  through it: "a Connection holds a refcount on an Activation", "an
-  Activation serves a Session".
+  through it: "a Connection attaches to an Activation", "an Activation serves
+  a Session", and the Daemon tracks which Connections are attached.
 - **`BridgeClient`** (B ∩ C) — the client-side seam: typed RPC (topology)
   wrapped around a `DocumentMirror` (sync).
 
