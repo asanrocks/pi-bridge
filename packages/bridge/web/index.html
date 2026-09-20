@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <!-- The app follows the OS preference for its theme (see the media-gated
+         dark token block in src/app/index.css). This meta is what keeps the
+         pre-stylesheet canvas — and native scrollbars and form controls — on
+         the OS side instead of flashing white while the stylesheet loads. -->
+    <meta name="color-scheme" content="light dark" />
     <title>pi-bridge</title>
   </head>
   <body>

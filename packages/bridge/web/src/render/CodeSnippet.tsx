@@ -34,33 +34,33 @@ export const CodeSnippet = memo(function CodeSnippet({ code, language, className
 		};
 	}, [code, lang]);
 
-	const rootStyle = useMemo(() => {
+	const hostStyle = useMemo(() => {
 		if (!result) return undefined;
 		// No `background`: shiki's theme bg (#fff) would bypass the token
 		// system and read colder than the warm page tone. Keep the <pre>
 		// transparent so the surrounding card surface (--color-background)
 		// shows through, matching Streamdown's markdown code-block path.
 		// (ADR 07 §Styling invariants #1 — tokens are authoritative.)
-		const s: Record<string, string> = { color: result.fg };
-		if (result.rootStyle) {
-			for (const part of result.rootStyle.split(";")) {
-				const sep = part.indexOf(":");
-				if (sep > 0) s[part.slice(0, sep).trim()] = part.slice(sep + 1).trim();
-			}
-		}
-		return s;
+		//
+		// Colors go out as custom properties, not inline `color`: the
+		// .codeTokens rules in app/index.css resolve the light/dark pair through
+		// the OS preference, so a theme change re-paints without re-highlighting.
+		return { "--code-fg": result.fg, "--shiki-dark-fg": result.darkFg } as React.CSSProperties;
 	}, [result]);
 
 	if (!result) {
 		return (
-			<pre className={className} style={{ overflow: "auto", whiteSpace }}>
+			<pre className={`codeTokens${className ? ` ${className}` : ""}`} style={{ overflow: "auto", whiteSpace }}>
 				<code>{code}</code>
 			</pre>
 		);
 	}
 
 	return (
-		<pre className={className} style={{ overflow: "auto", whiteSpace, ...rootStyle }}>
+		<pre
+			className={`codeTokens${className ? ` ${className}` : ""}`}
+			style={{ overflow: "auto", whiteSpace, ...hostStyle }}
+		>
 			<code>
 				{result.lines.map((line, lineIdx) => (
 					// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
@@ -70,10 +70,8 @@ export const CodeSnippet = memo(function CodeSnippet({ code, language, className
 						) : (
 							line.tokens.map((token, tokIdx) => {
 								const style: Record<string, string> = {};
-								if (token.color) style.color = token.color;
-								if (token.htmlStyle) {
-									Object.assign(style, token.htmlStyle);
-								}
+								if (token.color) style["--code-c"] = token.color;
+								if (token.darkColor) style["--shiki-dark"] = token.darkColor;
 								return (
 									// biome-ignore lint/suspicious/noArrayIndexKey: static token list
 									<span key={tokIdx} style={style}>
