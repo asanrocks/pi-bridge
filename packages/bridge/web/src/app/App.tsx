@@ -12,10 +12,10 @@
 //   - useModelCycling (composer)  — the Ctrl+P / picker model cycle
 //   - useKeyboardRing (app)       — AppKeyHandlers over vm + store + rpc
 // What stays here is genuinely shell-level: the status notification wiring,
-// the busy-guarded navigate, the TopBar, and the launcher/conversation fork.
+// the branch-select matrix (useBranchSelect), the TopBar, and the
+// launcher/conversation fork.
 // ============================================================================
 
-import { useCallback } from "react";
 import { liveActivityPhase } from "../../../src/viewmodel/index.ts";
 import { ComposeDock } from "../features/composer/ComposeDock.tsx";
 import { useComposerCommit } from "../features/composer/useComposerCommit.ts";
@@ -27,7 +27,7 @@ import { useSidebarShell } from "../features/sidebar/useSidebarShell.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
 import { FileViewer } from "../features/viewer/FileViewer.tsx";
 import { useConnection } from "../infra/net/useConnection.ts";
-import { useRpc } from "../infra/net/useRpc.ts";
+import { useBranchSelect, useRpc } from "../infra/net/useRpc.ts";
 import { useDraftGuard } from "../infra/persist/draftPersistence.ts";
 import { StoreProvider, useStore } from "../infra/state/store.tsx";
 import { useViewModel } from "../infra/state/useViewModel.ts";
@@ -59,6 +59,9 @@ function AppInner() {
 
 	const vm = useViewModel();
 	const rpc = useRpc();
+	// Branch selection matrix (navigate when idle + live, peek otherwise) —
+	// shared by the conversation pager and the keyboard ring.
+	const handleBranchSelect = useBranchSelect();
 	const { commit, beginEdit } = useComposerCommit(rpc);
 	const cycleModel = useModelCycling();
 	const sidebar = useSidebarShell();
@@ -68,30 +71,18 @@ function AppInner() {
 	// consumed inside the features that render them.
 	const statusName = useStore((s) => s.document.status.name);
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
-	const isCompacting = useStore((s) => s.document.status.isCompacting);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
 	const historyOpen = useStore((s) => s.historyOpen);
 	const setHistoryOpen = useStore((s) => s.setHistoryOpen);
 
 	// ── Status notification ──────────────────────────────────────────────
-	const isBusy = isStreaming || isCompacting;
 	const activityPhase = isStreaming ? liveActivityPhase(vm) : null;
 	useStatusNotifications({
 		isStreaming,
 		statusName,
 		activity: { emoji: activityPhase === "thinking" ? "🧠" : activityPhase === "tool" ? "🔧" : "💬" },
 	});
-
-	// Branch navigation (conversation pager + history pane): blocked while a
-	// turn is in flight — a fork mid-turn would race the run.
-	const handleNavigate = useCallback(
-		(entryId: string) => {
-			if (isBusy) return;
-			rpc.navigate(entryId);
-		},
-		[isBusy, rpc],
-	);
 
 	// ── Keyboard ring (document-level, via useAppKeybindings) ────────────
 	useAppKeybindings(
@@ -101,7 +92,7 @@ function AppInner() {
 			onOpenSession: rpc.openSession,
 			onOpenProject: rpc.openProject,
 			beginEdit,
-			navigate: handleNavigate,
+			navigate: handleBranchSelect,
 			sidebarToggle: sidebar.toggle,
 			newSession: sidebar.newSession,
 		}),
@@ -137,7 +128,7 @@ function AppInner() {
 							<ConversationArea
 								vm={vm}
 								isStreaming={isStreaming}
-								onNavigate={handleNavigate}
+								onSelectBranch={handleBranchSelect}
 								onEdit={beginEdit}
 							/>
 							{/* The dock's one prop is the commit callback, shared with
