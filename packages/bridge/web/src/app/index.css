@@ -3,15 +3,27 @@
 
 /* ==========================================================================
    Design tokens — single source of truth.
-   All colors live in the --color-* namespace (Tailwind v4 @theme): streamdown's
-   precompiled styles.css reads --color-background etc. directly, Tailwind
-   generates bg-/text-/border- utilities from them, and CSS modules reference
-   them via var(--color-*). One declaration site, three consumers.
-   Streamdown's expected names (background, foreground, sidebar, muted,
-   muted-foreground, border, primary, secondary, accent, card, card-foreground)
-   are mapped 1:1; app-specific extensions (user-bg, on-accent, surface-raised,
-   think, code-bg, error/success/streaming/warning, overlay, portal-*) live
-   in the same namespace for consistency.
+   All colors live in the --color-* namespace (Tailwind v4 @theme). Three
+   consumers, one declaration site:
+     - Tailwind generates the color utilities from these names. That includes
+       the utilities Streamdown uses: its JS carries the class names
+       (`bg-sidebar`, `bg-background/50`, `text-muted-foreground`,
+       `border-border`, `dark:bg-[var(--shiki-dark-bg,…)]`), and the @source
+       scan below generates them against these tokens. Streamdown's own
+       styles.css is animation keyframes only.
+     - CSS modules reference them via var(--color-*).
+     - index.css's own Streamdown element overrides reference them.
+   Tailwind prunes theme variables no generated utility references, so a token
+   nothing consumes is emitted nowhere. The --color-card* trio is kept anyway:
+   Streamdown names card surfaces in its component API, so the tokens reserve
+   the contract for a version whose JS actually emits bg-card/border-card.
+   Names shared with Streamdown (background, foreground, sidebar, muted,
+   muted-foreground, border, primary, secondary, accent, card, card-foreground,
+   card-border) are mapped 1:1; app-specific extensions (user-bg, on-accent,
+   surface-raised, think, code-bg, error/success/streaming/warning, overlay,
+   portal-*) live in the same namespace for consistency. Tokens that are pure
+   restatements of another token are declared as var() aliases so a retune
+   cannot diverge — the alias resolves through the dark override too.
    Status palette (success/streaming/error) matches the PRD's status-dot table
    (#4ade80 / #fb923c / #ef4444); the previous darker material-palette values
    were stale from the pre-light-theme era.
@@ -21,6 +33,17 @@
    was ~2.5:1). muted-foreground is pinned to the AA floor on the sidebar,
    which caps the lightness gap from secondary — the step is perceptible but
    narrow by necessity.
+   Theme model: this block is the LIGHT authority; the
+   `@media (prefers-color-scheme: dark) { :root { … } }` block below restates
+   every literal-valued token here for dark. Aliases need no dark entry (they
+   resolve through what they point at), and
+   `scripts/check-bridge-styling-tokens.mjs` enforces that the two sets stay in
+   step. Nothing outside those two blocks declares a color, and the OS
+   preference is the only trigger — the app follows it automatically, with no
+   stored preference, no theme state, and no script. The one prerequisite is
+   the `<meta name="color-scheme">` in web/index.html: it is what keeps the
+   pre-stylesheet canvas (and native scrollbars/controls) dark instead of
+   flashing white on a cold load.
    ========================================================================== */
 
 @theme {
@@ -32,10 +55,10 @@
   --color-muted-foreground: #6a6a6a;      /* meta, timestamps, group headers (WCAG AA) */
   --color-border: #d4cfc7;                /* hairlines */
   --color-secondary: #5a5a5a;             /* secondary text (WCAG AA; darker than muted for hierarchy) */
-  --color-primary: #2c2c2c;               /* streamdown: primary actions (= foreground) */
-  --color-card: #f0ede8;                 /* streamdown: card surface (= sidebar) */
-  --color-card-foreground: #2c2c2c;       /* streamdown: card text (= foreground) */
-  --color-card-border: #d4cfc7;           /* tool card border */
+  --color-primary: var(--color-foreground);        /* streamdown: primary actions */
+  --color-card: var(--color-sidebar);              /* streamdown: card surface */
+  --color-card-foreground: var(--color-foreground); /* streamdown: card text */
+  --color-card-border: var(--color-border);        /* tool card border */
   --color-code-bg: #f2efe9;              /* inline code background (warm tint) */
 
   /* ── Accent ──────────────────────────────────────────────────────────── */
@@ -84,7 +107,7 @@
 
   /* ── Overlays & portals ─────────────────────────────────────────────── */
   --color-overlay: rgba(0, 0, 0, 0.3);
-  --color-portal-bg: #faf9f6;
+  --color-portal-bg: var(--color-background);
   --color-portal-border: #c8c3b8;
 
   /* ── Radius scale ───────────────────────────────────────────────────── */
@@ -105,10 +128,19 @@
   /* ── Elevation (shadows are structural, not a second color palette) ── */
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.15);   /* small floating controls */
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);  /* popovers, panels, portals */
-  /* Bespoke, kept inline: the composer card's two-layer ring shadow (its own
-     rest/hover/focus spec), the completion dropdown's upward shadow, and the
-     mirrored drawer edge shadows (2px/-2px horizontal) — directional or
-     composite specs with exactly one consumer each. */
+  /* Directional and composite elevation. These began as inline literals
+     (each with exactly one consumer), but dark mode has to restate every one
+     of them: a black drop shadow vanishes against a near-black page, and the
+     card's 0.5px hairline ring must invert polarity (a black ring on a dark
+     card is invisible). So elevation is tokenized throughout — geometry and
+     pigment stay together in one spec per role, and the dark block restates
+     the whole set. */
+  --shadow-edge-left: 2px 0 8px rgba(0, 0, 0, 0.15);    /* docked pane, left edge */
+  --shadow-edge-right: -2px 0 8px rgba(0, 0, 0, 0.15);  /* docked pane, right edge */
+  --shadow-compose-rest: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.20);
+  --shadow-compose-hover: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+  --shadow-compose-focus: 0 4px 24px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+  --shadow-drop-up: 0 -4px 12px rgba(0, 0, 0, 0.1);     /* completion dropdown, upward */
 
   /* ── Letter tracking ────────────────────────────────────────────────── */
   --tracking-caps: 0.04em; /* uppercase structural labels — the one spec */
@@ -135,6 +167,98 @@
 /* Scan streamdown's bundled JS for Tailwind utility class names so they
    survive Tailwind's tree-shaking. */
 @source "../../../../../node_modules/streamdown/dist";
+
+/* ==========================================================================
+   Dark theme — the counterpart of @theme, same names, same roles, selected by
+   the OS preference alone.
+   Every literal-valued token above is restated here (aliases are not: they
+   resolve through the token they alias, which this block moves). Unlayered, so
+   it outranks the @theme layer — the same channel the mobile --fs-xl override
+   uses lower down.
+   The ladder is not an inversion of the light one. Surfaces are a warm
+   near-black family (#191713 page, #242119 chrome, #2a2720 tertiary) because
+   the light theme's warmth is a hue decision, not a lightness one; chrome sits
+   ABOVE the page here (it sits below it in light) so the panes still read as a
+   distinct surface, and --color-surface-raised steps further than its light
+   counterpart because a 1.05:1 elevation step is invisible on near-black.
+   Text: foreground #e8e4dc is the light theme's --color-muted, so the reading
+   hierarchy is rebuilt against a dark backdrop rather than dimmed from the
+   light one — secondary 8.1:1 and muted-foreground 5.8:1 on the page (both
+   >= their light values), muted-foreground 5.2:1 on chrome.
+   Accents and status invert direction: --color-on-accent becomes dark ink on a
+   lightened accent, --color-error-hover brightens instead of darkening (in
+   dark, hover must increase, not reduce, contrast), and the status hues move
+   up in lightness (error #ef4444 -> #f87171, warning #f9a825 -> #fbbf24,
+   mutate #d6336c -> #e0629a) to clear 4.5:1 as text — they are dots in the
+   light theme but diff lines, error rows, and labels here.
+   --action-tint moves 6% -> 7%: alpha compositing over near-black moves
+   luminance less per unit alpha, so 7% reproduces the light theme's row delta
+   (1.082 vs 1.088 for the mutate hue) instead of a weaker one.
+   Verified with a WCAG pass over every text/mark/surface pair above: all text
+   pairs >= 4.5:1, thinking marks >= 3:1, surface separations >= 1.05:1 and at
+   least the light theme's value (the raised card is the one deliberate
+   exception — elevation over text contrast).
+   ========================================================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    /* ── Surface & text ─────────────────────────────────────────────────── */
+    --color-background: #191713;          /* warm near-black page tone */
+    --color-foreground: #e8e4dc;          /* primary text (12.8:1 on raised) */
+    --color-sidebar: #242119;             /* chrome, above the page in dark */
+    --color-muted: #2a2720;               /* tertiary surface, hovers, code base */
+    --color-muted-foreground: #9a9285;    /* meta (5.8:1 page, 5.2:1 chrome) */
+    --color-border: #3a352c;              /* hairlines (1.47:1, as in light) */
+    --color-secondary: #b5aea1;           /* secondary text (8.1:1 on page) */
+    --color-code-bg: #221f1a;             /* inline code background (warm tint) */
+
+    /* ── Accent ──────────────────────────────────────────────────────────── */
+    --color-accent: #7fa8cf;              /* lightened: 7.2:1 on page, 6.4:1 on chrome */
+    --color-accent-hover: #94b8da;
+    --color-accent-soft: #24303c;         /* attached-instance row tint */
+    --color-on-accent: #16150f;           /* dark ink on the lightened accent */
+    --color-surface-raised: #23201a;      /* composer card, above the page */
+
+    /* ── User message ───────────────────────────────────────────────────── */
+    --color-user-bg: #1a212a;
+    --color-user-border: #2f4256;
+
+    /* ── Status ─────────────────────────────────────────────────────────── */
+    --color-success: #4ade80;             /* unchanged: already 10.3:1 on dark */
+    --color-streaming: #fb923c;           /* unchanged: 7.9:1 on dark */
+    --color-error: #f87171;               /* lightened from #ef4444: 6.5:1 as text */
+    --color-error-hover: #fca5a5;         /* hover brightens in dark */
+    --color-warning: #fbbf24;             /* lightened from #f9a825: 10.7:1 */
+    /* Thinking spectrum, lightened per hue; each clears 3:1 on the page and the
+       gray -> teal -> blue -> indigo -> violet -> rose progression is preserved. */
+    --color-thinking-minimal: #5fb3c7;
+    --color-thinking-low: #5a9fcb;
+    --color-thinking-medium: #7f92d4;
+    --color-thinking-high: #a78bfa;
+    --color-thinking-xhigh: #d8b4fe;
+    --color-thinking-max: #f0abfc;
+    --color-mutate: #e0629a;              /* rose: file mutation (5.4:1 as text) */
+
+    /* ── Action tint & overlays ─────────────────────────────────────────── */
+    --action-tint: 7%;                    /* see the block comment: matches the light row delta */
+    --color-overlay: rgba(0, 0, 0, 0.6);  /* modal/drawer backdrop, stronger on dark */
+    --color-portal-border: #464034;
+
+    /* ── Elevation ─────────────────────────────────────────────────────── */
+    /* Same geometry, stronger pigment; the composer's hairline ring inverts to
+       a white ring, because a black one disappears against the dark card. */
+    --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-edge-left: 2px 0 8px rgba(0, 0, 0, 0.45);
+    --shadow-edge-right: -2px 0 8px rgba(0, 0, 0, 0.45);
+    --shadow-compose-rest: 0 4px 24px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
+    --shadow-compose-hover: 0 4px 24px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.20);
+    --shadow-compose-focus: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.20);
+    --shadow-drop-up: 0 -4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
 
 /* ==========================================================================
    Base element styles.
@@ -182,6 +306,9 @@ body {
    by the Composer's ResizeObserver so the conversation's bottom padding
    tracks the live composer footprint. */
 :root {
+	/* Native widgets (scrollbars, textarea caret, form controls) need this to
+	   follow the theme; the dark block below flips it. */
+	color-scheme: light;
 	--topbar-h: 48px;
 	--sidebar-w: 0px;
 	--history-w: 0px;
@@ -330,6 +457,33 @@ input, textarea {
 	background: transparent;
 	border: 0;
 	border-radius: 0;
+}
+
+/* ── Shiki token colors for our own code hosts (CodeSnippet, BashHeader,
+   EditCardBody's diff rows). The highlighter is theme-agnostic: it emits the
+   light color of every token as `--code-c` (and the root foreground as
+   `--code-fg`), plus `--shiki-dark` / `--shiki-dark-fg` for the dark theme.
+   Inline `color` is not used because an inline declaration outranks any media
+   query — the custom properties let the cascade decide, so an OS preference
+   change re-paints without re-highlighting. `.codeTokens` is the one global
+   hook class (each host declares it on its root, next to its module class);
+   the light declaration is the fallback for a host that ever renders without
+   the custom properties. Streamdown's markdown code blocks do not need this:
+   its own span classes read `--sdm-c` and `--shiki-dark` through Tailwind's
+   `dark:` variant, whose default media query this block matches. */
+.codeTokens {
+	color: var(--code-fg, inherit);
+}
+.codeTokens span {
+	color: var(--code-c, inherit);
+}
+@media (prefers-color-scheme: dark) {
+	.codeTokens {
+		color: var(--shiki-dark-fg, var(--code-fg, inherit));
+	}
+	.codeTokens span {
+		color: var(--shiki-dark, var(--code-c, inherit));
+	}
 }
 
 /* ── Typography scale: relative, not absolute (ADR 07 §Styling invariants
