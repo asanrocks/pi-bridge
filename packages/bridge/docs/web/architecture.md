@@ -51,7 +51,10 @@ code. The host-side ownership model is described in [host runtime](../host/runti
 The feature components consume ViewModel data and store selectors. Conversation
 turn rendering, composer behavior, pane layout, and visual tokens belong to the
 companion web design document; this architecture document only states their
-ownership boundaries.
+ownership boundaries. The theme is a visual-token concern documented there and
+needs no client code at all: the dark ladder is a media-gated `:root` block
+beside `@theme` in `web/src/app/index.css`, so the app simply follows the OS
+preference, with no stored preference and no state.
 
 ## Client Store
 

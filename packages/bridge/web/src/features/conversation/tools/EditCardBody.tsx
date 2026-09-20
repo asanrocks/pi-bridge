@@ -9,7 +9,7 @@
 
 import { diffLines, diffWords } from "diff";
 import { memo, useEffect, useMemo, useState } from "react";
-import type { HighlightResult } from "../../../render/shiki.ts";
+import type { HighlightedToken, HighlightResult } from "../../../render/shiki.ts";
 import { highlightTokens } from "../../../render/shiki.ts";
 import styles from "../actions.module.css";
 import { type ActionDetailsProps, extToLang, normalizeEditArgs } from "./args.ts";
@@ -236,12 +236,16 @@ function renderDiffContent(
 						: styles.editDiffNew;
 
 			elements.push(
-				<div
-					key={`line-${hunkIdx}-${li}`}
-					className={`${styles.editDiffLine} ${lineClass}`}
-					style={hlLine?.bg ? ({ "--shiki-dark-bg": hlLine.bg } as React.CSSProperties) : undefined}
-				>
-					{hlLine && !noHighlight ? renderHighlightedTokens(hlLine.tokens) : line.text}
+				<div key={`line-${hunkIdx}-${li}`} className={`${styles.editDiffLine} ${lineClass}`}>
+					{hlLine && !noHighlight ? (
+						// `.codeTokens` is the shared per-token color scope (app/index.css):
+						// it resolves each token's light/dark custom properties through the
+						// OS preference without touching this row's own semantic color,
+						// which the line-class above supplies (removed/added/context).
+						<span className="codeTokens">{renderHighlightedTokens(hlLine.tokens)}</span>
+					) : (
+						line.text
+					)}
 				</div>,
 			);
 			globalLineIdx++;
@@ -265,13 +269,11 @@ function renderWordParts(parts: WordPart[]): React.ReactNode[] {
 	);
 }
 
-function renderHighlightedTokens(
-	tokens: Array<{ content: string; color?: string; htmlStyle?: Record<string, string> }>,
-): React.ReactNode[] {
+function renderHighlightedTokens(tokens: HighlightedToken[]): React.ReactNode[] {
 	return tokens.map((t, ti) => {
 		const style: Record<string, string> = {};
-		if (t.color) style.color = t.color;
-		if (t.htmlStyle) Object.assign(style, t.htmlStyle);
+		if (t.color) style["--code-c"] = t.color;
+		if (t.darkColor) style["--shiki-dark"] = t.darkColor;
 		return (
 			// biome-ignore lint/suspicious/noArrayIndexKey: static token list from shiki
 			<span key={ti} style={Object.keys(style).length > 0 ? style : undefined}>

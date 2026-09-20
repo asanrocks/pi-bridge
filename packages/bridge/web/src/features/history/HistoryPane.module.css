@@ -48,7 +48,7 @@
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+	box-shadow: var(--shadow-edge-right);
 	/* Notch / home-indicator safe areas. Right-attached, so only
 	   top/bottom/right insets matter (left matters once the 56rem cap
 	   kicks in on landscape tablets). */

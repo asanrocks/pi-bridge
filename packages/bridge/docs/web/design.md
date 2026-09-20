@@ -425,11 +425,14 @@ for new buttons, chips, action rows, and Markdown hosts.
 - **Tokens are authoritative.** All design colors, surfaces, text levels,
   accents, status colors, action hues, overlay colors, radii, font sizes,
   motion durations, elevation shadows, uppercase tracking, and the z-index
-  ladder are declared in the `@theme` block in `web/src/app/index.css`.
+  ladder are declared in the two theme blocks in `web/src/app/index.css`:
+  `@theme` (light) and the media-gated dark block (see Theming below).
   Components consume `var(--color-...)`, `var(--kind-...)`, `var(--radius-...)`,
   `var(--fs-...)`, `var(--dur-...)`, `var(--shadow-...)`, `var(--tracking-...)`,
-  and `var(--z-...)`; they do not introduce raw hex colors. Shadow rgba values
-  are structural elevation, not a second color palette.
+  and `var(--z-...)`; they do not introduce raw hex colors or color functions.
+  Elevation pigments are structural, not a second color palette. A token that
+  merely restates another token's value is declared as a `var()` alias so a
+  retune cannot diverge — and so it follows the dark block for free.
 - **Motion has two transition steps.** UI transitions use `--dur-fast`
   (0.15s — hover/fade/transform feedback, toast entrance) or `--dur-slow`
   (0.3s — larger geometry moves like composer expansion); nothing in between,
@@ -440,10 +443,14 @@ for new buttons, chips, action rows, and Markdown hosts.
   `prefers-reduced-motion: no-preference` guard.
 - **Elevation and layering are tokenized.** `--shadow-1` (small floating
   controls) and `--shadow-2` (popovers, panels, portals) cover the ambient
-  shadows; a bespoke two-layer ring shadow is the composer card's own
-  rest/hover/focus spec, and the upward completion-dropdown shadow and
-  mirrored drawer edge shadows stay inline — each is directional or composite
-  with exactly one consumer. Intra-component stacking (a slider thumb, a
+  shadows; the composer card's two-layer ring shadow has one token per state
+  (`--shadow-compose-rest` / `-hover` / `-focus`), and the upward
+  completion-dropdown shadow and the mirrored drawer edge shadows are tokens
+  too (`--shadow-drop-up`, `--shadow-edge-left` / `-right`). Geometry and
+  pigment stay together in one spec per role; dark mode has to restate every
+  one of them (a black drop shadow vanishes on a near-black page, and the
+  card's hairline ring inverts to a white ring), which is why these are tokens
+  rather than the inline literals they began as. Intra-component stacking (a slider thumb, a
   floating copy action) uses literal z-index; the `--z-*` ladder is only for
   shell layering (panes → topbar → float → dock → overlay → toast → drawer →
   portal), where each portal/drawer panel sits one step above its backdrop via
@@ -494,6 +501,49 @@ for new buttons, chips, action rows, and Markdown hosts.
   individual actions, dialogs, file viewing, and repeated rows; page sections
   are not nested cards. Radius stays in the token scale, with the composer as
   the deliberate larger-radius exception.
+
+### Theming
+
+The app ships one light ladder and one dark ladder over the same token names,
+selected by the OS preference alone. Both declaration sites are in
+`web/src/app/index.css`: `@theme` holds light, and an unlayered
+`@media (prefers-color-scheme: dark) { :root { … } }` block restates every
+literal-valued token. There is no stored preference, no theme state, and no
+script — the browser is the control. The one prerequisite is
+`<meta name="color-scheme">` in `web/index.html`, which keeps the
+pre-stylesheet canvas and native widgets on the OS side instead of flashing
+white. Aliases (`--color-card`, `--kind-*`, `--color-think`) appear only in
+`@theme` and resolve through whatever the dark block moved.
+`scripts/check-bridge-styling-tokens.mjs` enforces the pairing: every
+literal-valued `--color-*`, `--shadow-*`, and `--action-tint` in `@theme` needs
+a dark counterpart, every dark declaration must exist in `@theme`, every
+`var(--x)` reference must resolve, and `prefers-color-scheme` may appear only in
+`app/index.css` — a feature module branching on it could disagree with the rest
+of the app.
+
+Colors that come from JavaScript do not use inline `color`. The Shiki
+highlighter is theme-agnostic: it emits each token's light color as `--code-c`
+(and the root foreground as `--code-fg`) beside `--shiki-dark` /
+`--shiki-dark-fg`, and the `.codeTokens` rules in `index.css` resolve the pair
+through the same media query — the technique Streamdown's own spans use. An
+inline `color` declaration would outrank the media query, so an OS preference
+change would leave that host stale; with the properties in the cascade it is a
+repaint. (Tailwind's `dark:` variant is left on its default media query for the
+same reason: Streamdown's code-block spans carry
+`dark:text-[var(--shiki-dark,…)]`, and that utility must follow the same
+preference as the token block.)
+
+The dark ladder is not an inversion of the light one. Surfaces are a warm
+near-black family (chrome sits above the page in dark, below it in light) and
+`--color-surface-raised` steps further than its light counterpart because a
+1.05:1 elevation step is invisible on near-black. Text is rebuilt against the
+dark backdrop rather than dimmed from the light one. Accents and status invert
+direction: `--color-on-accent` becomes dark ink, `--color-error-hover`
+brightens rather than darkens, and the status hues move up in lightness so they
+clear AA as text (they are dots in light, but diff lines and error rows here).
+`--action-tint` rises from 6% to 7% because alpha compositing over near-black
+moves luminance less per unit alpha. Every text pair clears 4.5:1, the thinking
+marks clear 3:1, and the elevation step is preserved.
 
 ## Keyboard and Notifications
 
