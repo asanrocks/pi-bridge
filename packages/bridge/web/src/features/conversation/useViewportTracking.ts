@@ -10,19 +10,22 @@
 // the next auto-scroll yanks the reader off their chosen position.
 //
 // Owns, in dependency order:
-//   1. the scroll listener (intent detection + geometry mirror)
-//   2. the session landing (first paint of a session's content: streaming →
+//   1. the geometry anchor (capture/restore of the reading position across
+//      column reflow — pane open/resize, window resize below the measure cap)
+//   2. the scroll listener (intent detection + geometry mirror)
+//   3. the session landing (first paint of a session's content: streaming →
 //      live end + follow, idle → anchor on the last user turn)
-//   3. auto-scroll on structural change / streaming growth
-//   4. the history-pane anchor scroll (scrollToEntryId, set on navigation)
-//   5. the keyboard focus scroll (focusedTurnId, j/k/g/G)
-//   6. the jump-to-bottom button handler
+//   4. auto-scroll on structural change / streaming growth
+//   5. the history-pane anchor scroll (scrollToEntryId, set on navigation)
+//   6. the keyboard focus scroll (focusedTurnId, j/k/g/G)
+//   7. the jump-to-bottom button handler
+//   8. the go-live handler (peek return)
 //
 // Exposes only what the renderer needs: the two button-driving booleans
 // (awayFromBottom, newContentBelow) and jumpToBottom.
 // ============================================================================
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 
@@ -41,7 +44,12 @@ interface ViewportTracking {
 	goLive: () => void;
 }
 
-export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiverged: boolean): ViewportTracking {
+export function useViewportTracking(
+	vm: ViewModel,
+	isStreaming: boolean,
+	isDiverged: boolean,
+	scrollContainerRef: RefObject<HTMLDivElement | null>,
+): ViewportTracking {
 	// True while the user has deliberately scrolled up (reading), pausing
 	// auto-scroll. Cleared by reaching the live end (any means) or the jump
 	// button.
@@ -62,19 +70,143 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	const smoothJumpRef = useRef(false);
 
 	// ---------------------------------------------------------------------------
-	// 1. Scroll listener — intent detection
+	// 1. Geometry anchor — keep the reading position through column reflow
+	// ---------------------------------------------------------------------------
+	// Opening/resizing a docked pane (sidebar, history) republishes a gutter
+	// CSS var; the measure-capped conversation column narrows, text re-wraps,
+	// and every turn's height changes. The browser keeps the raw scrollY pixel
+	// offset through a reflow — native scroll anchoring only compensates DOM
+	// mutations, not geometry changes — so the text under your eye slides by
+	// the accumulated rewrap delta. This reimplements anchoring for geometry
+	// changes:
+	//   - capture: the deepest DOM element under the viewport-top probe plus
+	//     its viewport-relative top (identity = live node reference — a CSS
+	//     reflow moves boxes but never mutates the DOM, so the node survives
+	//     without any React-level identity scheme), kept continuously fresh
+	//     on every scroll event and programmatic scroll. The enclosing turn
+	//     (`data-turn-key`) is recorded alongside as fallback identity;
+	//   - restore: on a column WIDTH change (height-only growth is streaming
+	//     or expansion, not rewrap), scroll the recorded point of the
+	//     recorded element back to the same viewport position. If React has
+	//     replaced the node meanwhile (streaming delta, lazy pull, expand
+	//     toggle — `isConnected` detects it), degrade to pinning the recorded
+	//     turn's boundary; if that is gone too, keep the offset.
+	// Scroll bookkeeping, shared with the §2 listener: pre-updating both refs
+	// around a programmatic scroll makes its event read as no net movement.
+	const lastScrollTopRef = useRef(0);
+	const lastScrollHeightRef = useRef(0);
+	const anchorRef = useRef<{
+		el: HTMLElement;
+		relTop: number;
+		turnKey: string | null;
+		turnRelTop: number | null;
+	} | null>(null);
+	const columnWidthRef = useRef(0);
+
+	const captureAnchor = useCallback(() => {
+		// Probe just below the fixed TopBar: elementFromPoint is a cheap hit
+		// test that yields the deepest element under the probe — usually the
+		// paragraph or inline span actually carrying the line being read, so
+		// the pin is as fine-grained as native scroll anchoring's.
+		const topbarH = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-h")) || 0;
+		const probeY = topbarH + 1;
+		let el: HTMLElement | null = null;
+		let turnKey: string | null = null;
+		let turnRelTop: number | null = null;
+		const container = scrollContainerRef.current;
+		if (container) {
+			// Probe the column's center — window center can sit in a docked pane.
+			// Only content inside the column qualifies: a hit on the container
+			// itself (the margin gap between turns) or on an overlay portal
+			// (open menu) falls through to the turn scan below.
+			const rect = container.getBoundingClientRect();
+			const hit = document.elementFromPoint(rect.left + rect.width / 2, probeY);
+			if (hit instanceof HTMLElement && hit !== container && container.contains(hit)) {
+				el = hit;
+				const turnEl = hit.closest("[data-turn-key]");
+				if (turnEl instanceof HTMLElement && turnEl.dataset.turnKey) {
+					turnKey = turnEl.dataset.turnKey;
+					turnRelTop = turnEl.getBoundingClientRect().top;
+				}
+			}
+		}
+		// Gap between turns or covered probe: fall back to the first turn
+		// starting below the probe — pin its boundary exactly.
+		if (!el) {
+			for (const t of document.querySelectorAll<HTMLElement>("[data-turn-key]")) {
+				if (t.getBoundingClientRect().bottom > probeY) {
+					el = t;
+					turnKey = t.dataset.turnKey ?? null;
+					turnRelTop = t.getBoundingClientRect().top;
+					break;
+				}
+			}
+		}
+		if (!el) {
+			anchorRef.current = null;
+			return;
+		}
+		anchorRef.current = { el, relTop: el.getBoundingClientRect().top, turnKey, turnRelTop };
+	}, [scrollContainerRef]);
+
+	const restoreAnchor = useCallback(() => {
+		const anchor = anchorRef.current;
+		if (!anchor) return;
+		// Live reference first. If the node was replaced (isConnected false),
+		// degrade to the recorded turn boundary; if that is gone too (session
+		// switched, turn pruned), keep the offset.
+		let el: HTMLElement | null = anchor.el.isConnected ? anchor.el : null;
+		let relTop = anchor.relTop;
+		if (!el && anchor.turnKey && anchor.turnRelTop !== null) {
+			const turnEl = document.querySelector(`[data-turn-key="${CSS.escape(anchor.turnKey)}"]`);
+			if (turnEl instanceof HTMLElement) {
+				el = turnEl;
+				relTop = anchor.turnRelTop;
+			}
+		}
+		if (!el) return;
+		const target = el.getBoundingClientRect().top + window.scrollY - relTop;
+		window.scrollTo(0, Math.max(0, target));
+		lastScrollTopRef.current = window.scrollY;
+		lastScrollHeightRef.current = document.documentElement.scrollHeight;
+	}, []);
+
+	// The observer lives on the column element (swapped by ConversationArea's
+	// empty-state branch — hasTurns re-attaches on that flip). Width-only
+	// filter: height callbacks are content growth, not rewrap.
+	const hasTurns = vm.turns.length > 0;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: hasTurns is the re-attach signal — the observed element is swapped by ConversationArea's empty-state branch, so the observer must re-attach on that flip even though the dep is unread inside.
+	useEffect(() => {
+		const el = scrollContainerRef.current;
+		if (!el) return;
+		captureAnchor();
+		const ro = new ResizeObserver((entries) => {
+			const width = entries[entries.length - 1]?.contentRect.width ?? 0;
+			if (width <= 0) return; // display:none or unmounted
+			const prev = columnWidthRef.current;
+			columnWidthRef.current = width;
+			if (prev === 0 || Math.abs(width - prev) < 1) return;
+			restoreAnchor();
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [hasTurns, captureAnchor, restoreAnchor, scrollContainerRef]);
+
+	// ---------------------------------------------------------------------------
+	// 2. Scroll listener — intent detection
 	// ---------------------------------------------------------------------------
 	// Track scrollHeight alongside scrollTop and skip the state update
 	// whenever the document shrank — that scroll is a clamp or layout shift,
 	// not user intent. Programmatic scrolls (auto-scroll, navigation anchors)
 	// land where the state already agrees or manage the state at their call
-	// site, so they need no special handling here.
-	const lastScrollTopRef = useRef(0);
-	const lastScrollHeightRef = useRef(0);
+	// site, so they need no special handling here. Every event also refreshes
+	// the geometry anchor (§1), so the reading position is always current
+	// when a width change needs it.
 	useEffect(() => {
 		// The viewport (document) is the scroll container — see App.module.css.
 		// Attach to window and read document metrics.
 		const handleScroll = () => {
+			captureAnchor();
 			const st = window.scrollY;
 			const sh = document.documentElement.scrollHeight;
 			const shrank = sh < lastScrollHeightRef.current - 2;
@@ -114,20 +246,20 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 
 		window.addEventListener("scroll", handleScroll, { passive: true });
 		return () => window.removeEventListener("scroll", handleScroll);
-	}, []);
+	}, [captureAnchor]);
 
 	// ---------------------------------------------------------------------------
-	// 2. Session landing — the first paint of a session's content
+	// 3. Session landing — the first paint of a session's content
 	// ---------------------------------------------------------------------------
 	// When a session's content first appears (open, launcher switch, cold URL
 	// load, re-attach after reconnect), the landing position is a rule, not a
 	// leftover of the previous session's viewport state:
 	//   - streaming session → live end with follow armed. The auto-scroll
-	//     effect (§3) performs the scroll on the struct change; this effect
-	//     only resets the reading state BEFORE §3 runs in the same commit,
+	//     effect (§4) performs the scroll on the struct change; this effect
+	//     only resets the reading state BEFORE §4 runs in the same commit,
 	//     which is why it is declared above it.
 	//   - idle session → top-anchored on the last user turn of the active
-	//     path (the "you are here" marker), via the §4 anchor machinery.
+	//     path (the "you are here" marker), via the §5 anchor machinery.
 	//     Degenerate case (no user turns) falls back to the live end.
 	// activeSessionId flips on the initial-sync frame, and the pipeline
 	// applies the frame's document synchronously in the same handler, so this
@@ -142,7 +274,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 		if (landedSessionRef.current === activeSessionId) return;
 		landedSessionRef.current = activeSessionId;
 		// The previous session's reading state must not leak: follow is armed
-		// unconditionally here (the §1 scroll handler re-pauses on user intent).
+		// unconditionally here (the §2 scroll handler re-pauses on user intent).
 		userScrolledUpRef.current = false;
 		smoothJumpRef.current = false;
 		setNewContentBelow(false);
@@ -159,7 +291,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	}, [activeSessionId, vm, isStreaming]);
 
 	// ---------------------------------------------------------------------------
-	// 3. Auto-scroll — follow the live end on growth, never on reading actions
+	// 4. Auto-scroll — follow the live end on growth, never on reading actions
 	// ---------------------------------------------------------------------------
 	// Only structural changes (entries added/removed, new streaming blocks)
 	// drive re-scroll. Content-only changes (lazy pull ingests, expand toggles)
@@ -189,7 +321,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 		// machinery pauses entirely: the VM describes the peeked path, whose keys
 		// don't track live growth, and the viewport belongs to the reader. Refs
 		// are deliberately left stale — returning to live sees changed keys and
-		// §3 re-runs once (the go-live pending flag handles the scroll).
+		// §4 re-runs once (the go-live pending flag handles the scroll).
 		if (isDiverged) return;
 		// Fire on either (a) a structural change (new entries/blocks — covers
 		// block-appending events) or (b) streaming intra-block content growth
@@ -235,7 +367,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged]);
 
 	// ---------------------------------------------------------------------------
-	// 4. Anchor scroll — history-pane selection after a navigation
+	// 5. Anchor scroll — history-pane selection after a navigation
 	// ---------------------------------------------------------------------------
 	// When the tree dialog selects a message, navigate sets `scrollToEntryId`;
 	// after the VM re-renders with the new leaf path, scroll the matching turn
@@ -275,7 +407,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	}, [scrollToEntryId, vm, isStreaming]);
 
 	// ---------------------------------------------------------------------------
-	// 5. Keyboard focus scroll (j/k/g/G)
+	// 6. Keyboard focus scroll (j/k/g/G)
 	// ---------------------------------------------------------------------------
 	// Unlike the tree-dialog anchor above, the target is usually already
 	// rendered (no navigate RPC), so this lands immediately — BUT a branch
@@ -306,7 +438,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	}, [focusedTurnId, vm]);
 
 	// ---------------------------------------------------------------------------
-	// 6. Jump to bottom (the floating button)
+	// 7. Jump to bottom (the floating button)
 	// ---------------------------------------------------------------------------
 	// Smooth — the button is a deliberate single action, unlike rapid j/k
 	// focus scrolls which stay instant. Consequences of async animation: no
@@ -331,14 +463,14 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean, isDiver
 	}, []);
 
 	// ---------------------------------------------------------------------------
-	// 7. Go live (the jump button's peek meaning)
+	// 8. Go live (the jump button's peek meaning)
 	// ---------------------------------------------------------------------------
 	// Unpin the rendering leaf and anchor at the live end once the live
 	// projection has rendered. The scroll can't happen inline: the peeked
 	// content is still mounted in this tick, and the live path's height isn't
 	// known until the store flip re-projects and React commits. The pending
-	// flag makes the §3 effect (which re-runs on the projection change) do the
-	// scroll — same retry pattern as the §4 anchor. Live growth that landed
+	// flag makes the §4 effect (which re-runs on the projection change) do the
+	// scroll — same retry pattern as the §5 anchor. Live growth that landed
 	// while peeking is included, so this is "catch up with everything".
 	const goLivePendingRef = useRef(false);
 	const goLive = useCallback(() => {

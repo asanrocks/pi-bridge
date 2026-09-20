@@ -219,6 +219,19 @@ viewport position: a streaming session lands at the live end with follow
 armed; an idle session lands top-anchored on the last user turn of the active
 path (falling back to the live end when the session has no user turns).
 
+Opening or resizing a docked pane narrows the measure-capped column and
+re-wraps text; the browser keeps the raw scroll offset through the reflow
+(native scroll anchoring compensates only DOM mutations, not geometry
+changes), which would slide the text under the reader's eye. The viewport
+capture/restore anchor compensates: the deepest DOM element at the viewport
+top plus its relative offset is kept current on every scroll (the live node
+is the identity — a reflow moves boxes but does not mutate the DOM), and a
+column width change (a ResizeObserver width filter — height growth is
+content, not rewrap) scrolls that point of that element back to the same
+viewport position. If React replaced the captured node meanwhile, the anchor
+degrades to the enclosing turn's boundary; with no anchor at all it keeps
+the offset.
+
 ### Compose dock
 
 `ComposeDock` is fixed at the bottom between the Sidebar and History gutters,
