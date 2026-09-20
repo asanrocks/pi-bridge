@@ -63,23 +63,35 @@ browse branches in History. A steerer can do the following:
   from the original parent, producing a sibling variant; the original message
   attachments are retained. Editing is blocked while streaming or compacting.
 - Browse sibling variants with the user-message pager. The pager shows the
-  current sibling position and navigates to the newest leaf below the chosen
-  sibling. `h` and `l` perform the same previous/next sibling action for a
-  focused user turn. There is no separate regenerate button: regeneration is
-  represented by edit-to-fork plus the sibling pager.
+  current sibling position. When the session is idle and following the live
+  leaf, selecting a sibling navigates to the newest leaf below it; while
+  streaming/compacting or already peeking, selecting is a read-only peek
+  re-target instead. `h` and `l` perform the same previous/next sibling
+  action for a focused user turn. There is no separate regenerate button:
+  regeneration is represented by edit-to-fork plus the sibling pager.
 - Navigate to Sessions and branches. Opening another Session is allowed while
   the current Session streams; the old stream continues without the tab
-  attached. Branch navigation through a pager, History, or `h`/`l` is blocked
-  while streaming or compacting because it would race the in-flight turn.
-  Closing a live Session is destructive and unconfirmed: it stops and flushes
-  the live runtime while preserving its history file. Closing the currently
-  viewed Session lands on that Project home.
+  attached. Branch navigation through a pager, History, or `h`/`l` is a real
+  branch switch only when idle and following the live leaf; otherwise it
+  degrades to a peek. The daemon additionally rejects `navigate` while a
+  turn is in flight; a rejected selection drops its pending scroll anchor. Closing a live Session is destructive and unconfirmed:
+  it stops and flushes the live runtime while preserving its history file.
+  Closing the currently viewed Session lands on that Project home.
+- Peek a branch without moving the effective leaf. The rendering leaf
+  (`renderLeafId` in the UI slice) can pin any committed entry's root-to-leaf
+  path while `leafId` stays authoritative; the daemon never learns about a
+  peek. Peek is browse-only: send, edit, and navigate are blocked while the
+  rendering leaf differs from the live leaf (divergence is ground truth —
+  the daemon navigating onto the pinned entry re-syncs the client). The
+  jump button becomes the return-to-live gesture while peeking. The pin is
+  session-scoped: activating a different Session clears it (a same-id
+  snapshot restore on reconnect keeps it).
 
 The UI distinguishes three busy cases. Streaming permits steering and
 Session switching, shows Stop, and drives live conversation updates.
-Compacting shows Stop but disables Send, edit, and branch navigation.
-Disconnected state makes Send, attachments, and model selection unavailable;
-drafts remain local and are kept for retry.
+Compacting shows Stop but disables Send and edit; browsing stays available
+through peek. Disconnected state makes Send, attachments, and model selection
+unavailable; drafts remain local and are kept for retry.
 
 ## Shell Layout
 
@@ -195,7 +207,10 @@ renderer.
 The viewport follows structural and streaming text growth while the reader is
 at the bottom. Scrolling upward pauses follow. New readable text below the
 viewport adds a dot to the floating jump button; tool and thinking churn alone
-does not. The jump button returns to the live end. History anchors and
+does not. The jump button returns to the live end. While peeking, auto-follow
+pauses and the jump button is always visible as the return-to-live gesture:
+clicking it unpins the rendering leaf and anchors at the live end, catching up
+with everything that landed while peeking. History anchors and
 keyboard focus scrolls account for the fixed TopBar and composer.
 
 The first paint of a session's content (open, launcher switch, cold URL load,
@@ -250,13 +265,21 @@ off-path aborted re-edit drafts; opening it reveals the individual drafts.
 The pane scrolls to the active row when opened but does not keep repositioning
 the reader on every new leaf.
 
-Selection separates looking from branching:
+Selection is state-dependent, and every row is clickable in every state:
 
-- When idle, selecting any row anchors the conversation to it and navigates to
-  the newest leaf in that subtree.
-- During streaming or compaction, an on-path row remains usable for
-  look-only anchor scrolling. Off-path rows and their draft rows are disabled
-  with a `Jump after reply` title until the reply settles.
+- When idle and following the live leaf, selecting any row anchors the
+  conversation to it and navigates to the newest leaf in that subtree (a real
+  branch switch).
+- During streaming or compaction, an on-path row is look-only anchor
+  scrolling; an off-path row (or a draft row) peeks the subtree's newest leaf
+  instead of navigating.
+- While already peeking, any selection re-targets the peeked path. The
+  scroll anchor follows the clamped committed leaf (resolveRenderLeafTarget),
+  never the raw clicked id — a pending target would never render on the
+  peeked path and would strand the anchor.
+
+The rendered path gets a neutral row highlight alongside the live path's
+accent so both are legible where they share ancestors.
 
 ### File viewer
 

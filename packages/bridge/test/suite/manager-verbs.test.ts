@@ -192,6 +192,40 @@ describe("Manager verbs", () => {
 		await expect(h.manager.navigate("nonexistent-id")).rejects.toThrow();
 	});
 
+	it("navigate rejects while a turn is in flight (server-side mutation lock)", async () => {
+		const h = await createVerbHarness(false);
+		harnesses.push(h);
+
+		// Gated faux response: hold the turn open so streaming state is real.
+		let releaseTurn: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		h.faux.setResponses([() => gate.then(() => fauxAssistantMessage("done"))]);
+
+		const promptPromise = h.manager.prompt("hello");
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (h.manager.document.status.isStreaming) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+
+		// Client-side discipline aside, the daemon is the enforcement point:
+		// a raw RPC or second tab must not fork mid-turn.
+		await expect(h.manager.navigate(null)).rejects.toThrow(/in flight/);
+		const committed = Object.keys(h.manager.document.entries).filter((id) => !id.startsWith("pending:"));
+		if (committed.length > 0) {
+			await expect(h.manager.navigate(committed[0])).rejects.toThrow(/in flight/);
+		}
+
+		releaseTurn!();
+		await promptPromise;
+		await expect(h.manager.navigate(null)).resolves.toBeUndefined();
+	});
+
 	// ── fresh session allocation (ADR 11) ────────────────────────────────
 
 	it("allocates a fresh session inside the Manager's agentDir session directory", async () => {

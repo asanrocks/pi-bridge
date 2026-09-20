@@ -167,6 +167,7 @@ function clearedSessionState() {
 		draft: { kind: "idle" } as ComposerDraft,
 		composerExpanded: false,
 		focusedTurnId: null as string | null,
+		renderLeafId: null as string | null,
 	};
 }
 
@@ -190,7 +191,15 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	setConnectionState: (connection) => set({ connection }),
 
-	setActiveSessionId: (activeSessionId) => set({ activeSessionId }),
+	setActiveSessionId: (activeSessionId) =>
+		set((s) =>
+			// A session change invalidates the peek pin: the pinned entry id
+			// belongs to the previous session's tree, and carrying it over would
+			// leave the new session diverged (mutation-locked) with a dangling
+			// pin. Same-id re-activation (reconnect replace) keeps it — committed
+			// ids stay valid across a snapshot restore.
+			s.activeSessionId === activeSessionId ? s : { activeSessionId, renderLeafId: null },
+		),
 
 	setProjects: (projects) => set({ projects }),
 

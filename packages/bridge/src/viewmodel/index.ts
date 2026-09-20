@@ -40,6 +40,10 @@ import type {
 export interface ViewModel {
 	turns: TurnVM[];
 	leafEntryId: string | null;
+	/** Deepest entry shared by the rendered path and the live path — the
+	 * divergence point. `null` when the rendered path IS the live path (no
+	 * peek). Render-only orientation aid; never fed back into the pipeline. */
+	forkPointId: string | null;
 	/** Structural identity of the leaf path (entry ids + provisional content
 	 * counts). Stable when the path is unchanged. The renderer's auto-scroll
 	 * reads this instead of re-walking the document during render. */
@@ -280,6 +284,12 @@ export interface ToolResultSnapshot {
 export interface ViewModelInput {
 	document: Document;
 	models: ModelInfo[];
+	/** Rendered-leaf override (web peek): project the path from this entry
+	 * instead of `status.leafId`. `null`/`undefined` follows the live leaf.
+	 * Only committed entries (with `ord`) are valid targets — callers enforce
+	 * this (store `setRenderLeaf`); an unknown id falls back to the live leaf
+	 * so a stale override can never blank the view. */
+	viewLeafId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +319,8 @@ export interface ViewModelInput {
  */
 export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel): ViewModel {
 	const { document: doc } = input;
-	const path = projectLeafPath(doc);
+	const viewLeaf = resolveViewLeaf(doc, input.viewLeafId);
+	const path = projectLeafPath(doc, viewLeaf);
 	const toolResultMap = buildToolResultMap(doc.entries);
 
 	const prevTurns = new Map<string, TurnVM>();
@@ -548,20 +559,50 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 
 	return {
 		turns,
-		leafEntryId: doc.status.leafId,
-		pathKey: leafPathKey(doc),
-		streamingKey: leafStreamingKey(doc),
-		textKey: leafTextKey(doc),
+		leafEntryId: viewLeaf,
+		forkPointId: viewLeaf === null || viewLeaf === doc.status.leafId ? null : computeForkPoint(doc, viewLeaf),
+		pathKey: leafPathKey(doc, viewLeaf),
+		streamingKey: leafStreamingKey(doc, viewLeaf),
+		textKey: leafTextKey(doc, viewLeaf),
 	};
+}
+
+// ============================================================================
+// View-leaf override (web peek)
+// ============================================================================
+
+/** Effective leaf for a projection: the override when it resolves to a known
+ * entry, the live leaf otherwise. `null`/`undefined` override = follow live. */
+function resolveViewLeaf(doc: Document, viewLeafId: string | null | undefined): string | null {
+	if (viewLeafId === null || viewLeafId === undefined) return doc.status.leafId;
+	return doc.entries[viewLeafId] ? viewLeafId : doc.status.leafId;
+}
+
+/** Deepest entry on both the live path and the rendered path — where a peek
+ * diverged from live. Walks the live path into a set, then the rendered path
+ * leaf→root; the first live hit is the deepest shared entry. */
+function computeForkPoint(doc: Document, viewLeafId: string): string | null {
+	const live = new Set<string>();
+	let cursor = doc.status.leafId;
+	while (cursor) {
+		live.add(cursor);
+		cursor = doc.entries[cursor]?.parentId ?? null;
+	}
+	cursor = viewLeafId;
+	while (cursor) {
+		if (live.has(cursor)) return cursor;
+		cursor = doc.entries[cursor]?.parentId ?? null;
+	}
+	return null; // disjoint paths — impossible in one session tree, defensive
 }
 
 // ============================================================================
 // Leaf-path projection
 // ============================================================================
 
-function projectLeafPath(doc: Document): Entry[] {
+function projectLeafPath(doc: Document, viewLeafId?: string | null): Entry[] {
 	const path: Entry[] = [];
-	let cursor: string | null = doc.status.leafId;
+	let cursor: string | null = resolveViewLeaf(doc, viewLeafId);
 	while (cursor) {
 		const entry = doc.entries[cursor];
 		if (!entry) break;
@@ -587,10 +628,10 @@ function projectLeafPath(doc: Document): Entry[] {
  * - `provCounts` are content-block counts for `pending:` entries on the path;
  *   they change as streaming assistant messages append blocks.
  */
-export function leafPathKey(doc: Document): string {
+export function leafPathKey(doc: Document, viewLeafId?: string | null): string {
 	const entries = doc.entries;
 	const pathIds: string[] = [];
-	let cursor: string | null = doc.status.leafId;
+	let cursor: string | null = resolveViewLeaf(doc, viewLeafId);
 	while (cursor) {
 		const entry = entries[cursor];
 		if (!entry) break;
@@ -618,8 +659,8 @@ export function leafPathKey(doc: Document): string {
  * The renderer gates this with `isStreaming` so completed-turn lazy pulls of
  * `thinking` (which also change this key) stay excluded.
  */
-export function leafStreamingKey(doc: Document): string {
-	const leafId = doc.status.leafId;
+export function leafStreamingKey(doc: Document, viewLeafId?: string | null): string {
+	const leafId = resolveViewLeaf(doc, viewLeafId);
 	if (!leafId) return "";
 	const entry = doc.entries[leafId];
 	if (!entry || entry.kind !== "message") return "";
@@ -645,9 +686,9 @@ export function leafStreamingKey(doc: Document): string {
  * with a thinking or tool block does not change the key until its first text
  * block lands.
  */
-export function leafTextKey(doc: Document): string {
+export function leafTextKey(doc: Document, viewLeafId?: string | null): string {
 	const parts: string[] = [];
-	let cursor: string | null = doc.status.leafId;
+	let cursor: string | null = resolveViewLeaf(doc, viewLeafId);
 	while (cursor) {
 		const entry = doc.entries[cursor];
 		if (!entry) break;
@@ -670,12 +711,19 @@ export function leafTextKey(doc: Document): string {
  * changes, and the two external inputs that are not part of the Document
  * (`scope` — the current session stem, so a session switch re-projects even
  * onto an identical document — and `pullTick`, so lazy-pull ingests
- * re-project). Keeping this beside leafPathKey/leafStreamingKey means a new
- * `Status` field that affects the projection gets added in one place, next
+ * re-project). `viewLeafId` is the rendered-leaf override (web peek): it must
+ * be in the key or a peek/un-peek over an unchanged document would hit a
+ * stale cache entry. Keeping this beside leafPathKey/leafStreamingKey means a
+ * new `Status` field that affects the projection gets added in one place, next
  * to the code that reads it, instead of in a hand-maintained list in a
  * component.
  */
-export function viewModelCacheKey(doc: Document, scope: string | null, pullTick: number): string {
+export function viewModelCacheKey(
+	doc: Document,
+	scope: string | null,
+	pullTick: number,
+	viewLeafId?: string | null,
+): string {
 	const status = doc.status;
 	return [
 		leafPathKey(doc),
@@ -688,6 +736,10 @@ export function viewModelCacheKey(doc: Document, scope: string | null, pullTick:
 		String(scope),
 		String(pullTick),
 		String(JSON.stringify(status.contextUsage)),
+		// Normalized so null (explicit follow-live) and undefined (no override)
+		// share one key — they resolve to the same projection. Entry ids are
+		// never empty strings, so "" unambiguously means "following live".
+		viewLeafId ?? "",
 	].join("::");
 }
 

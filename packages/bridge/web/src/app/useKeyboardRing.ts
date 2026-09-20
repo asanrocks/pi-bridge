@@ -26,7 +26,8 @@ export interface KeyboardRingDeps {
 	onOpenProject: (projectId: string) => void;
 	/** Begin edit mode for a past user message (useComposerCommit). */
 	beginEdit: (entryId: string, index: number, text: string) => void;
-	/** Navigate to an entry (branch switching); busy-guarded. */
+	/** Branch-target selection (useBranchSelect matrix): navigate when idle
+	 * and live, read-only peek re-target while busy or diverged. */
 	navigate: (entryId: string) => void;
 	sidebarToggle: () => void;
 	/** Open the sidebar's new-session surface (Alt+N with >1 Project). */
@@ -38,7 +39,8 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 
 	const onExpandComposer = useCallback(() => {
 		const s = getStore().getState();
-		if (s.document.status.isStreaming || s.document.status.isCompacting) return;
+		// Expanding to type is always safe — sending (a steer) is allowed while
+		// streaming, so blocking the expand was an inconsistency, not a lock.
 		if (s.connection.kind !== "connected") return;
 		if (!s.composerExpanded) s.setComposerExpanded(true);
 	}, []);
@@ -109,7 +111,6 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 	const onBranchSibling = useCallback(
 		(direction: "prev" | "next") => {
 			const s = getStore().getState();
-			if (s.document.status.isStreaming || s.document.status.isCompacting) return;
 			const id = s.focusedTurnId;
 			if (!id) return;
 			const turn = vm.turns.find((t) => turnKeyOf(t) === id && t.kind === "user");
@@ -120,8 +121,10 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 			if (!target) return;
 			const leafId = newestLeafInSubtree(target, s.document.entries);
 			// Repoint focus to the target sibling so the ring follows the branch
-			// across the async navigate (the old sibling leaves the active path
-			// and would otherwise drop focus, breaking consecutive h/l).
+			// across the async select (the old sibling leaves the rendered path
+			// and would otherwise drop focus, breaking consecutive h/l). The
+			// useBranchSelect matrix picks navigate (idle + live) or a read-only
+			// peek re-target (busy / already peeking).
 			s.setFocusedTurnId(target);
 			navigate(leafId);
 		},
