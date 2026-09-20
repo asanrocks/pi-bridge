@@ -44,16 +44,16 @@
 	   Claude's (drop 3.5/7.5%, ring 0.15/0.3) for prominence on the warm page;
 	   bottom-anchored, but the low-alpha drop's visible upper spread still
 	   reads as lift. */
-	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.20);
+	box-shadow: var(--shadow-compose-rest);
 	transition: box-shadow var(--dur-fast) ease;
 }
 
 .composerCard:hover {
-	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+	box-shadow: var(--shadow-compose-hover);
 }
 
 .composerCard:focus-within {
-	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+	box-shadow: var(--shadow-compose-focus);
 }
 
 @media (max-width: 48rem) {
@@ -582,7 +582,7 @@
 	border-radius: var(--radius-md);
 	max-height: 180px;
 	overflow-y: auto;
-	box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+	box-shadow: var(--shadow-drop-up);
 }
 
 .completionItem {
