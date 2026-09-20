@@ -27,8 +27,7 @@ import { flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
 import { openSessionAddress } from "./sessionBoot.ts";
 
-const CONNECTION_TOAST_ID = "connection";
-// After this many failed reconnect attempts, copy shifts to "Can't reach".
+// After this many failed reconnect attempts, state shifts to "unreachable".
 const UNREACHABLE_THRESHOLD = 5;
 // If the init RPC (getDaemonInfo + listActiveSessions) doesn't resolve in this
 // window, treat it as init_failed rather than hanging in "connecting".
@@ -110,16 +109,15 @@ export function useConnection(): { retry: () => void } {
 
 			if (clientRef.current !== client) return;
 
-			// Success: mark connected, reset the doom counter, clear the toast.
+			// Success: mark connected and reset the doom counter. The down-state
+			// affordances (TopBar chip / Launcher panel) react to the state alone.
 			wasConnectedRef.current = true;
 			attemptRef.current = 0;
-			store.getState().dismissToast(CONNECTION_TOAST_ID);
 			store.getState().setConnectionState({ kind: "connected" });
 		} catch (err) {
 			if (clientRef.current !== client) return;
 			const msg = err instanceof Error ? err.message : String(err);
 			getStore().getState().setConnectionState({ kind: "init_failed", error: msg });
-			getStore().getState().pushToast(CONNECTION_TOAST_ID, `Daemon unresponsive: ${msg}`);
 		} finally {
 			if (timer) clearTimeout(timer);
 		}
@@ -185,11 +183,6 @@ export function useConnection(): { retry: () => void } {
 				next = { kind: "connecting" };
 			}
 			store.getState().setConnectionState(next);
-
-			if (wasConnected || unreachable) {
-				const msg = unreachable ? "Can't reach pi-bridge — retrying" : "Reconnecting…";
-				store.getState().pushToast(CONNECTION_TOAST_ID, msg);
-			}
 
 			const delay = backoff(attempt - 1);
 			reconnectTimerRef.current = setTimeout(() => {
