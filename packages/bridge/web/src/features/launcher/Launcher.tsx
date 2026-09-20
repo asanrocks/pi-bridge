@@ -52,7 +52,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 					</button>
 				)}
 				{(connection.kind === "reconnecting" || connection.kind === "unreachable") && (
-					<div className={styles.stateHint}>auto-retrying…</div>
+					<div className={styles.stateHint}>Auto-retrying…</div>
 				)}
 			</div>
 		);

@@ -1,5 +1,5 @@
 // BashCardBody — the bash card's three-state content: collapsed row shows a
-// one-line command; expanded shows the status line, XX// header, and "... N earlier lines" + the output tail; "show all" (the
+// one-line command; expanded shows the status line, XX// header, and "… N earlier lines" + the output tail; "Show all" (the
 // top-bar cap toggle) shows the command plus the whole output. No inner
 // scroll window — the cap is line-count-based (BASH_TAIL_LINES), unlike
 // the byte/panel-cap the other card kinds use.
@@ -17,7 +17,7 @@ import { BASH_TAIL_LINES, bashTailPreview, parseBashResult } from "./resultText.
 export const BashCardBody = memo(function BashCardBody({ action, resultText }: ActionDetailsProps) {
 	const wrap = useStore((s) => s.cardWrap);
 	// Tail-vs-full follows the skeleton's cap toggle (same store key the
-	// top-bar "show all" control flips).
+	// top-bar "Show all" control flips).
 	const actionKey = `${action.entryId}:b${action.blockIndex}`;
 	const isUncapped = useStore(useCallback((s) => s.uncappedDetails.has(actionKey), [actionKey]));
 

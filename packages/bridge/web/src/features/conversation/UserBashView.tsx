@@ -20,7 +20,7 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 	const wrap = useStore((s) => s.cardWrap);
 	const toggleCardWrap = useStore((s) => s.toggleCardWrap);
 	const toggleCardMarkdown = useStore((s) => s.toggleCardMarkdown);
-	// Tail-vs-full cap (same store key the top-bar "show all" control
+	// Tail-vs-full cap (same store key the top-bar "Show all" control
 	// flips); line-count-based like the tool bash card — no scroll window.
 	const isUncapped = useStore(useCallback((s) => s.uncappedDetails.has(actionKey), [actionKey]));
 	const toggleUncap = useStore((s) => s.toggleUncapDetails);
@@ -63,7 +63,7 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 					</div>
 					<div className={styles.actionDetailsWrap}>
 						{/* No max-height cap: the middle state is the tail slice, and
-						    "show all" means the whole output (line-count cap, not a
+						    "Show all" means the whole output (line-count cap, not a
 						    scroll window). */}
 						<div className={styles.actionDetails} style={{ maxHeight: "none" }}>
 							{output && (
