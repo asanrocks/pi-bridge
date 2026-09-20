@@ -10,6 +10,7 @@
 import { memo, useEffect, useRef } from "react";
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
+import { selectRenderDiverged } from "../../infra/state/ui.ts";
 import { ChevronDownIcon } from "../../render/icons.tsx";
 import { AssistantTurnView } from "./AssistantTurnView.tsx";
 import styles from "./conversation.module.css";
@@ -22,21 +23,27 @@ import { useViewportTracking } from "./useViewportTracking.ts";
 interface ConversationAreaProps {
 	vm: ViewModel;
 	isStreaming: boolean;
-	onNavigate: (entryId: string) => void;
+	/** Branch-target selection (useBranchSelect matrix): navigate when idle
+	 * and live, read-only rendering-leaf re-target while busy or peeking. */
+	onSelectBranch: (entryId: string) => void;
 	onEdit: (entryId: string, index: number, text: string) => void;
 }
 
 export const ConversationArea = memo(function ConversationArea({
 	vm,
 	isStreaming,
-	onNavigate,
+	onSelectBranch,
 	onEdit,
 }: ConversationAreaProps) {
 	// Expand/collapse toggles are pure store actions — read here instead of
 	// threaded from the shell.
 	const onToggleGroup = useStore((s) => s.toggleActionGroup);
 	const onToggleAction = useStore((s) => s.toggleAction);
-	const { awayFromBottom, newContentBelow, jumpToBottom } = useViewportTracking(vm, isStreaming);
+	// Peek state: when the rendering leaf is pinned away from the live leaf,
+	// the viewport tracking pauses follow and the jump button becomes the
+	// return-to-live gesture.
+	const isDiverged = useStore(selectRenderDiverged);
+	const { awayFromBottom, newContentBelow, jumpToBottom, goLive } = useViewportTracking(vm, isStreaming, isDiverged);
 
 	// entriesRef for the sibling pager — updated via Zustand subscribe
 	// (not useStore) to avoid re-rendering ConversationArea on every
@@ -71,7 +78,7 @@ export const ConversationArea = memo(function ConversationArea({
 								key={turn.entryId}
 								turn={turn}
 								entriesRef={entriesRef}
-								onNavigate={onNavigate}
+								onNavigate={onSelectBranch}
 								onEdit={onEdit}
 							/>
 						);
@@ -103,13 +110,19 @@ export const ConversationArea = memo(function ConversationArea({
 			<button
 				type="button"
 				className={styles.jumpToBottom}
-				onClick={jumpToBottom}
-				data-visible={awayFromBottom ? "true" : "false"}
+				onClick={isDiverged ? goLive : jumpToBottom}
+				data-visible={awayFromBottom || isDiverged ? "true" : "false"}
 				data-new={newContentBelow ? "true" : "false"}
-				tabIndex={awayFromBottom ? 0 : -1}
-				aria-hidden={!awayFromBottom}
-				aria-label={newContentBelow ? "Jump to new messages" : "Jump to bottom"}
-				title={newContentBelow ? "Jump to new messages" : "Jump to bottom"}
+				tabIndex={awayFromBottom || isDiverged ? 0 : -1}
+				aria-hidden={!awayFromBottom && !isDiverged}
+				aria-label={isDiverged ? "Back to live" : newContentBelow ? "Jump to new messages" : "Jump to bottom"}
+				title={
+					isDiverged
+						? "Back to live (following the current branch again)"
+						: newContentBelow
+							? "Jump to new messages"
+							: "Jump to bottom"
+				}
 			>
 				<ChevronDownIcon size={16} />
 				<span className={styles.jumpDot} aria-hidden="true" />
