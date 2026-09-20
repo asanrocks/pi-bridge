@@ -11,10 +11,12 @@
 //
 // Owns, in dependency order:
 //   1. the scroll listener (intent detection + geometry mirror)
-//   2. auto-scroll on structural change / streaming growth
-//   3. the history-pane anchor scroll (scrollToEntryId, set on navigation)
-//   4. the keyboard focus scroll (focusedTurnId, j/k/g/G)
-//   5. the jump-to-bottom button handler
+//   2. the session landing (first paint of a session's content: streaming →
+//      live end + follow, idle → anchor on the last user turn)
+//   3. auto-scroll on structural change / streaming growth
+//   4. the history-pane anchor scroll (scrollToEntryId, set on navigation)
+//   5. the keyboard focus scroll (focusedTurnId, j/k/g/G)
+//   6. the jump-to-bottom button handler
 //
 // Exposes only what the renderer needs: the two button-driving booleans
 // (awayFromBottom, newContentBelow) and jumpToBottom.
@@ -112,7 +114,49 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 	}, []);
 
 	// ---------------------------------------------------------------------------
-	// 2. Auto-scroll — follow the live end on growth, never on reading actions
+	// 2. Session landing — the first paint of a session's content
+	// ---------------------------------------------------------------------------
+	// When a session's content first appears (open, launcher switch, cold URL
+	// load, re-attach after reconnect), the landing position is a rule, not a
+	// leftover of the previous session's viewport state:
+	//   - streaming session → live end with follow armed. The auto-scroll
+	//     effect (§3) performs the scroll on the struct change; this effect
+	//     only resets the reading state BEFORE §3 runs in the same commit,
+	//     which is why it is declared above it.
+	//   - idle session → top-anchored on the last user turn of the active
+	//     path (the "you are here" marker), via the §4 anchor machinery.
+	//     Degenerate case (no user turns) falls back to the live end.
+	// activeSessionId flips on the initial-sync frame, and the pipeline
+	// applies the frame's document synchronously in the same handler, so this
+	// effect always sees the new session's VM.
+	const activeSessionId = useStore((s) => s.activeSessionId);
+	const landedSessionRef = useRef<string | null>(null);
+	useEffect(() => {
+		if (!activeSessionId) {
+			landedSessionRef.current = null;
+			return;
+		}
+		if (landedSessionRef.current === activeSessionId) return;
+		landedSessionRef.current = activeSessionId;
+		// The previous session's reading state must not leak: follow is armed
+		// unconditionally here (the §1 scroll handler re-pauses on user intent).
+		userScrolledUpRef.current = false;
+		smoothJumpRef.current = false;
+		setNewContentBelow(false);
+		if (isStreaming) return;
+		let lastUserId: string | null = null;
+		for (const t of vm.turns) if (t.kind === "user") lastUserId = t.entryId;
+		if (lastUserId) {
+			getStore().getState().setScrollToEntryId(lastUserId);
+			return;
+		}
+		window.scrollTo(0, document.documentElement.scrollHeight);
+		lastScrollTopRef.current = window.scrollY;
+		lastScrollHeightRef.current = document.documentElement.scrollHeight;
+	}, [activeSessionId, vm, isStreaming]);
+
+	// ---------------------------------------------------------------------------
+	// 3. Auto-scroll — follow the live end on growth, never on reading actions
 	// ---------------------------------------------------------------------------
 	// Only structural changes (entries added/removed, new streaming blocks)
 	// drive re-scroll. Content-only changes (lazy pull ingests, expand toggles)
@@ -182,7 +226,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 	}, [vm, structKey, streamingKey, textKey, isStreaming]);
 
 	// ---------------------------------------------------------------------------
-	// 3. Anchor scroll — history-pane selection after a navigation
+	// 4. Anchor scroll — history-pane selection after a navigation
 	// ---------------------------------------------------------------------------
 	// When the tree dialog selects a message, navigate sets `scrollToEntryId`;
 	// after the VM re-renders with the new leaf path, scroll the matching turn
@@ -222,7 +266,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 	}, [scrollToEntryId, vm, isStreaming]);
 
 	// ---------------------------------------------------------------------------
-	// 4. Keyboard focus scroll (j/k/g/G)
+	// 5. Keyboard focus scroll (j/k/g/G)
 	// ---------------------------------------------------------------------------
 	// Unlike the tree-dialog anchor above, the target is usually already
 	// rendered (no navigate RPC), so this lands immediately — BUT a branch
@@ -253,7 +297,7 @@ export function useViewportTracking(vm: ViewModel, isStreaming: boolean): Viewpo
 	}, [focusedTurnId, vm]);
 
 	// ---------------------------------------------------------------------------
-	// 5. Jump to bottom (the floating button)
+	// 6. Jump to bottom (the floating button)
 	// ---------------------------------------------------------------------------
 	// Smooth — the button is a deliberate single action, unlike rapid j/k
 	// focus scrolls which stay instant. Consequences of async animation: no
