@@ -118,9 +118,9 @@ The launcher also owns the connection down-state panels:
   fact that automatic retry continues.
 - Daemon unresponsive shows the initialization error and a `Retry` action.
 
-The attached topbar mirrors these states with a compact clickable connection
-chip; the launcher panel remains the full explanation when no Session is
-attached.
+The attached topbar mirrors these states with a clickable connection chip in
+the top-bar button spec; the launcher panel remains the full explanation when
+no Session is attached.
 
 ### Sidebar
 
