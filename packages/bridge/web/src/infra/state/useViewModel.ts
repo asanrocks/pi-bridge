@@ -26,19 +26,24 @@ export function useViewModel(): ViewModel {
 	const models = useStore((s) => s.models);
 	const scope = useStore((s) => s.currentStem);
 	const pullTick = useStore((s) => s.pullTick);
+	// Rendered-leaf override (peek). `null` follows the live leaf; the key
+	// includes it, so peek/un-peek over an unchanged document re-projects.
+	const renderLeafId = useStore((s) => s.renderLeafId);
 
 	const cacheRef = useRef<{ key: string; vm: ViewModel } | null>(null);
 	return useMemo(() => {
-		const key = viewModelCacheKey(doc, scope, pullTick);
+		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId);
 		if (cacheRef.current?.key === key) {
 			return cacheRef.current.vm;
 		}
 		// Identity preservation (ADR 07 invariant 3c): computeViewModel reuses
 		// unchanged TurnVM/block references from the previous VM, so memo'd
-		// children skip re-render on irrelevant recomputations.
+		// children skip re-render on irrelevant recomputations. The previous VM
+		// may be the live projection while peeking (or vice versa) — shared
+		// prefix turns are reused across the switch, which is the point.
 		const prevVm = cacheRef.current?.vm;
-		const vm = computeViewModel({ document: doc, models }, prevVm);
+		const vm = computeViewModel({ document: doc, models, viewLeafId: renderLeafId }, prevVm);
 		cacheRef.current = { key, vm };
 		return vm;
-	}, [doc, models, scope, pullTick]);
+	}, [doc, models, scope, pullTick, renderLeafId]);
 }

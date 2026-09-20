@@ -474,6 +474,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		},
 
 		async navigate(entryId: string | null) {
+			// Server-side mutation lock: branching swaps the LLM context under the
+			// running turn (agent.state.messages is rebuilt below), so a navigate
+			// during an in-flight turn or compaction would corrupt the run. The
+			// client disables this path, but the daemon is the enforcement point —
+			// a second tab or raw RPC must not fork mid-turn either.
+			if (document.status.isStreaming || document.status.isCompacting) {
+				throw new Error("Cannot navigate while a turn is in flight");
+			}
 			if (entryId === null) {
 				sessionManager.resetLeaf();
 			} else {

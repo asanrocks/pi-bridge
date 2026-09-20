@@ -124,7 +124,7 @@ describe("tool card streaming — content visible before annotation key", () => 
 			"tail\n\n[Showing lines 41-60 of 100. Full output: /tmp/pi-bash1.log]",
 		);
 		expect(html).toContain("truncated — Showing lines 41-60 of 100");
-		expect(html).toContain("full output");
+		expect(html).toContain("Full output");
 		expect(html).not.toContain("Full output:");
 	});
 
@@ -324,9 +324,9 @@ describe("card controls", () => {
 	});
 
 	test("cap toggle renders show-all when capped, collapse when uncapped", () => {
-		expect(renderControls({ capped: "capped" })).toContain("show all");
-		expect(renderControls({ capped: "uncapped" })).toContain("collapse");
-		expect(renderControls({ capped: "none" })).not.toContain("show all");
+		expect(renderControls({ capped: "capped" })).toContain("Show all");
+		expect(renderControls({ capped: "uncapped" })).toContain("Collapse");
+		expect(renderControls({ capped: "none" })).not.toContain("Show all");
 	});
 });
 

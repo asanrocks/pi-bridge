@@ -166,7 +166,7 @@
 }
 
 .row:hover {
-	background: var(--color-muted);
+	background: color-mix(in srgb, var(--color-muted-foreground) 12%, transparent);
 }
 
 .rowDisabled {
@@ -176,6 +176,17 @@
 
 .rowDisabled:hover {
 	background: none;
+}
+
+/* Rendered (peeked) path — translucent neutral so the lanes stay visible
+   under the highlight. Declared before .rowOnPath so a row on BOTH paths
+   keeps the live accent: the accent then visually ends at the fork point. */
+.rowOnRenderedPath {
+	background: color-mix(in srgb, var(--color-muted-foreground) 8%, transparent);
+}
+
+.rowOnRenderedPath:hover {
+	background: color-mix(in srgb, var(--color-muted-foreground) 14%, transparent);
 }
 
 .rowOnPath {

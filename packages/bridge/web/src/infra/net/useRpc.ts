@@ -21,6 +21,7 @@ import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { prepareSwitch } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
+import { selectRenderDiverged } from "../state/ui.ts";
 import { getGlobalClient } from "./client.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
 import { projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
@@ -295,6 +296,31 @@ export async function listFilesRpc(
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Branch-target selection matrix, shared by the conversation sibling pager
+ * and the keyboard ring: when the session is idle and the rendering leaf
+ * follows the live leaf, this is a real branch switch (navigate RPC); while
+ * busy or peeking it degrades to a read-only rendering-leaf re-target —
+ * browse never mutates. Callers pass the subtree's newest leaf
+ * (`newestLeafInSubtree`); `setRenderLeaf` clamps uncommitted targets to
+ * their nearest committed ancestor.
+ */
+export function useBranchSelect() {
+	const { navigate } = useRpc();
+	return useCallback(
+		(targetLeaf: string | null) => {
+			const s = getStore().getState();
+			const busy = s.document.status.isStreaming || s.document.status.isCompacting;
+			if (!busy && !selectRenderDiverged(s)) {
+				void navigate(targetLeaf);
+				return;
+			}
+			s.setRenderLeaf(targetLeaf);
+		},
+		[navigate],
+	);
 }
 
 /** ADR 10 v2: fetch `git show --stat` output for a recorded commit. Returns

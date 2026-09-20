@@ -66,6 +66,26 @@ describe("viewModelCacheKey", () => {
 		expect(viewModelCacheKey(doc(), "stem", 1)).not.toBe(base);
 	});
 
+	it("changes with the rendered-leaf override (peek); null and undefined share the live key", () => {
+		const entries: Document["entries"] = {
+			u1: {
+				id: "u1",
+				parentId: null,
+				timestamp: "2024-01-01T00:00:00Z",
+				kind: "message",
+				role: "user",
+				content: [],
+			},
+		};
+		const d: Document = { ...doc(), entries, status: { ...doc().status, leafId: "u1" } };
+		const live = viewModelCacheKey(d, "stem", 0);
+		// A pinned override re-keys even over an unchanged document (peek);
+		// returning to live (null) re-keys back to the no-override key.
+		expect(viewModelCacheKey(d, "stem", 0, "u1")).not.toBe(live);
+		expect(viewModelCacheKey(d, "stem", 0, null)).toBe(live);
+		expect(viewModelCacheKey(d, "stem", 0, undefined)).toBe(live);
+	});
+
 	it("is stable across fields the projection does not read", () => {
 		const base = viewModelCacheKey(doc(), "stem", 0);
 		// pendingSteer/scopedModels are not projected (the renderer reads them
@@ -273,9 +293,16 @@ describe("liveActivityPhase", () => {
 			"u1",
 		);
 		expect(liveActivityPhase(userLeaf)).toBe("text");
-		expect(liveActivityPhase({ turns: [], leafEntryId: null, pathKey: "", streamingKey: "", textKey: "" })).toBe(
-			"text",
-		);
+		expect(
+			liveActivityPhase({
+				turns: [],
+				leafEntryId: null,
+				forkPointId: null,
+				pathKey: "",
+				streamingKey: "",
+				textKey: "",
+			}),
+		).toBe("text");
 	});
 
 	it("walks backwards to the latest block with a live signal", () => {

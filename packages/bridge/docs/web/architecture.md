@@ -81,9 +81,9 @@ The protocol slice contains:
 
 `clearCurrentSession` is the one teardown operation for leaving a Session. It
 clears the Document, `activeSessionId`, address, session-scoped expansion and
-freeze state, pull state, and draft state. It can retain a Project id to land
-on that Project's home. Detach, a Project switch, and a failed open use this
-boundary rather than partially clearing fields.
+freeze state, pull state, draft state, and the rendered-leaf override. It can
+retain a Project id to land on that Project's home. Detach, a Project switch,
+and a failed open use this boundary rather than partially clearing fields.
 
 The composer slice contains `draft`, a discriminated union:
 
@@ -102,13 +102,26 @@ streaming and pending-steer state, which is the deliberate cross-slice seam.
 
 The UI slice contains ephemeral view state: `focusedTurnId`, action and detail
 expansion sets, `cardWrap` and `cardMarkdown`, frozen action-group and action
-sets, `loadingPaths`, `pullTick`, history and file-viewer state, and toast
-notifications. Expansion keys use the first action's entry and block index;
-action keys use the entry and block index. Manual toggles add keys to the
-corresponding frozen set, preventing streaming auto-expansion from overriding
-user intent. A provisional-to-durable `move` rewrites expansion, frozen,
-uncapped-detail, loading-path, and focused-turn keys through
-`migrateExpandKeys` and `migrateFocusedTurnId`.
+sets, `loadingPaths`, `pullTick`, the rendered-leaf override, history and
+file-viewer state, and toast notifications. Expansion keys use the first
+action's entry and block index; action keys use the entry and block index.
+Manual toggles add keys to the corresponding frozen set, preventing streaming
+auto-expansion from overriding user intent. A provisional-to-durable `move`
+rewrites expansion, frozen, uncapped-detail, loading-path, and focused-turn
+keys through `migrateExpandKeys` and `migrateFocusedTurnId`.
+
+`renderLeafId` is the rendered-leaf override behind read-only branch peeking.
+`null` follows the live leaf; a non-null value pins the projection to a
+committed entry's root-to-leaf path without touching `status.leafId` — the
+daemon never learns about a peek. `setRenderLeaf` accepts only committed
+entries (sealed entries carry `ord`), clamping a `pending:` target to its
+nearest committed ancestor, and normalizes pinning the live leaf back to
+`null`. Divergence (`selectRenderDiverged`) is the mutation lock: while the
+rendering leaf is pinned away from the live leaf, send, edit, and branch
+navigation are blocked; the jump button is the return-to-live gesture. The
+pin is session-scoped — `setActiveSessionId` clears it whenever a different
+session activates (a same-id snapshot restore keeps it), so a pin can never
+dangle into another session's tree and mutation-lock it.
 
 The slices are deliberately one store rather than independent stores:
 `clearCurrentSession` resets protocol, composer, and session-scoped UI state,
@@ -120,19 +133,24 @@ connection and event paths.
 ## ViewModel Projection
 
 `src/viewmodel/` is the pure projection boundary from a Document to renderable
-data. `useViewModel` selects the Document, model catalog, current stem, and
-`pullTick`, then memoizes `computeViewModel` using `viewModelCacheKey`. Its
-cache key combines the leaf path identity, streaming text/thinking lengths,
-relevant status fields, the current stem, and the pull tick. The stem matters
-even when two Documents are structurally equal; the pull tick matters when
-lazy values arrive without a new path shape.
+data. `useViewModel` selects the Document, model catalog, current stem,
+`pullTick`, and the UI slice's rendered-leaf override, then memoizes
+`computeViewModel` using `viewModelCacheKey`. Its cache key combines the leaf
+path identity, streaming text/thinking lengths, relevant status fields, the
+current stem, the pull tick, and the override. The stem matters even when two
+Documents are structurally equal; the pull tick matters when lazy values
+arrive without a new path shape; the override matters so peek and un-peek
+re-project over an unchanged Document (null and absent override share one
+key — they resolve identically).
 
-The projection first walks `status.leafId` through `parentId` and reverses the
-result into chronological order. Only that active leaf path becomes the
-conversation ViewModel. It joins tool-result entries to their tool calls,
-keeps lazy values nullable until pulled, and returns display descriptors for
-user, assistant, system, user-bash, and git-change turns. Consecutive assistant
-entries merge into one assistant turn. Text does not split the turn; the flat
+The projection first walks the effective leaf — the rendered-leaf override
+when it resolves to a known entry, `status.leafId` otherwise — through
+`parentId` and reverses the result into chronological order. Only that path
+becomes the conversation ViewModel. It joins tool-result entries to their tool
+calls, keeps lazy values nullable until pulled, and returns display
+descriptors for user, assistant, system, user-bash, and git-change turns.
+Consecutive assistant entries merge into one assistant turn. Text does not
+split the turn; the flat
 block sequence preserves text/action order for the renderer.
 
 Assistant identity is `turnKey`, not merely `entryId`: it is the first entry id
@@ -240,8 +258,11 @@ original console call.
 `discardSteer`, model and thinking changes, rename, and branch navigation),
 address operations (`openSession`, `openProject`, `newSession`, `detach`, and
 `closeSession`), Project/session listing, and Project file completion. It
-centralizes failure toasts. `listFilesRpc` and `gitShowRpc` are small
-store-free helper paths for the composer and git-change viewer.
+centralizes failure toasts. `useBranchSelect` is the branch-target selection
+matrix over `navigate`: a real branch switch when idle and following the live
+leaf, a read-only rendering-leaf re-target while busy or already peeking.
+`listFilesRpc` and `gitShowRpc` are small store-free helper paths for the
+composer and git-change viewer.
 
 A session switch can have old-session patches in flight until the target's
 initial sync arrives. `prepareSwitch` seeds a candidate mirror when it has a

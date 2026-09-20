@@ -22,6 +22,7 @@ import { useCallback } from "react";
 import type { ImageContent } from "../../../../src/core/index.ts";
 import { requestNotificationPermission } from "../../infra/lib/notificationPermission.ts";
 import { getStore } from "../../infra/state/store.tsx";
+import { selectRenderDiverged } from "../../infra/state/ui.ts";
 
 export interface RpcForCommit {
 	navigate: (entryId: string | null) => Promise<unknown>;
@@ -47,6 +48,14 @@ export function useComposerCommit(rpc: RpcForCommit) {
 		// the draft and surface why instead of silently dropping it.
 		if (s.connection.kind !== "connected" || !s.currentStem) {
 			s.pushToast("draft:offline", "Not connected; draft kept");
+			return;
+		}
+		// Peek lock (ground truth): while the rendering leaf is pinned away
+		// from the live leaf, every mutation is blocked — a send would steer
+		// (or fork onto) a branch the user is not looking at. The draft is
+		// kept; the jump button's "back to live" re-arms sending.
+		if (selectRenderDiverged(s)) {
+			s.pushToast("draft:peek", "Viewing another branch — back to live to send");
 			return;
 		}
 		if (draft.kind === "edit") {
@@ -88,6 +97,7 @@ export function useComposerCommit(rpc: RpcForCommit) {
 	const beginEdit = useCallback((entryId: string, index: number, text: string) => {
 		const s = getStore().getState();
 		if (s.document.status.isStreaming || s.document.status.isCompacting) return;
+		if (selectRenderDiverged(s)) return; // peek is browse-only
 		if (s.draft.kind === "edit") return; // already editing
 		s.beginEdit(entryId, index, text);
 	}, []);
