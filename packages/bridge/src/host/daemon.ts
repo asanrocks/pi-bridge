@@ -1297,6 +1297,11 @@ function listFiles(prefix: string, cwd: string): Array<{ path: string; isDirecto
 		if (rest === "" || rest === "/") {
 			searchDir = home + rest;
 			fileFilter = "";
+		} else if (rest.endsWith("/")) {
+			// A trailing slash names a directory itself; dirname would strip
+			// the empty final component and list the parent instead.
+			searchDir = (home + rest).replace(/\/+$/, "");
+			fileFilter = "";
 		} else {
 			searchDir = dirname(home + rest);
 			fileFilter = basename(rest);
@@ -1328,8 +1333,8 @@ function listFiles(prefix: string, cwd: string): Array<{ path: string; isDirecto
 			}
 
 			const entryPath =
-				prefix.endsWith("/") || prefix === ""
-					? prefix + entry.name
+				prefix.endsWith("/") || prefix === "" || prefix === "~"
+					? (prefix === "~" ? "~/" : prefix) + entry.name
 					: prefix.slice(0, prefix.lastIndexOf("/") + 1) + entry.name;
 
 			results.push({ path: entryPath, isDirectory });
