@@ -59,6 +59,7 @@ const ToolActionView = memo(function ToolActionView({
 	const toggleCardWrap = useStore((s) => s.toggleCardWrap);
 	const toggleCardMarkdown = useStore((s) => s.toggleCardMarkdown);
 	const cwd = useCwd();
+	const openFileViewer = useStore((s) => s.openFileViewer);
 	const handleToggle = useCallback(() => onToggleAction(actionKey), [onToggleAction, actionKey]);
 	const kind = kindForTool(action.toolName);
 
@@ -75,6 +76,11 @@ const ToolActionView = memo(function ToolActionView({
 	const liveSummary = makeActionSummary(action.toolName, args, cwd);
 	const header = makeActionHeader(action.toolName, args, cwd);
 	const recArgs = args && typeof args === "object" && !Array.isArray(args) ? (args as ToolArgs) : null;
+	// Generic open-in-viewer affordance: any call whose args carry a string
+	// `path` (read/write/edit, unknown tools) gets the eye control. The
+	// viewer re-reads from disk at click time — for directory-listing tools
+	// whose path is a directory, the viewer shows the read error instead.
+	const viewPath = typeof recArgs?.path === "string" && recArgs.path !== "" ? (recArgs.path as string) : null;
 	const isShell = SHELL_TOOLS.has(action.toolName);
 	const liveCmd = isShell && typeof recArgs?.command === "string" ? (recArgs.command as string) : null;
 	const timeout = isShell && typeof recArgs?.timeout === "number" ? (recArgs.timeout as number) : null;
@@ -180,6 +186,10 @@ const ToolActionView = memo(function ToolActionView({
 							showMarkdown={showMarkdown}
 							markdown={cardMarkdown}
 							capped={capped}
+							viewPath={viewPath}
+							onOpenView={() => {
+								if (viewPath !== null) openFileViewer(viewPath);
+							}}
 							onToggleWrap={toggleCardWrap}
 							onToggleMarkdown={toggleCardMarkdown}
 							onToggleCap={handleUncap}
