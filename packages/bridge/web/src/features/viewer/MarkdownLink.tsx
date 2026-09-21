@@ -47,7 +47,7 @@ export const MarkdownLink = memo(function MarkdownLink({
 				className={LINK_CLASSES}
 				data-streamdown="link"
 				title={`Open file: ${target.path}`}
-				onClick={() => openFileViewer(target.path)}
+				onClick={() => openFileViewer(target.path, target.line)}
 			>
 				{children}
 			</button>

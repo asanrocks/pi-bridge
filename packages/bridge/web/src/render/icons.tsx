@@ -73,3 +73,17 @@ export function CheckIcon({ size = 16, className }: IconProps) {
 		</svg>
 	);
 }
+
+/** Eye — "view" affordance: open the referenced file in the in-app viewer. */
+export function EyeIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" color="currentColor" className={className} aria-hidden="true">
+			<path
+				clipRule="evenodd"
+				fill="currentColor"
+				fillRule="evenodd"
+				d="M8 3.25C4.66 3.25 1.85 5.42 1 8.5c.85 3.08 3.66 5.25 7 5.25s6.15-2.17 7-5.25c-.85-3.08-3.66-5.25-7-5.25zM2.6 8.5C3.4 6.2 5.5 4.75 8 4.75s4.6 1.45 5.4 3.75c-.8 2.3-2.9 3.75-5.4 3.75S3.4 10.8 2.6 8.5zM8 5.75a2.75 2.75 0 1 0 0 5.5 2.75 2.75 0 0 0 0-5.5zm-1.25 2.75a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0z"
+			/>
+		</svg>
+	);
+}

@@ -28,6 +28,19 @@ describe("classifyHref", () => {
 		expect(classifyHref("file:///home/u/%zz.md")).toEqual({ kind: "file", path: "/home/u/%zz.md" });
 	});
 
+	it("parses trailing line anchors from paths", () => {
+		expect(classifyHref("src/foo.ts:98")).toEqual({ kind: "file", path: "src/foo.ts", line: 98 });
+		expect(classifyHref("src/foo.ts:98:12")).toEqual({ kind: "file", path: "src/foo.ts", line: 98 });
+		expect(classifyHref("/abs/file.md#L7")).toEqual({ kind: "file", path: "/abs/file.md", line: 7 });
+		expect(classifyHref("file:///home/u/a.md#L3")).toEqual({ kind: "file", path: "/home/u/a.md", line: 3 });
+		// Line-only anchor, no path — nothing to open.
+		expect(classifyHref(":98")).toBeNull();
+	});
+
+	it("keeps ports on URLs even when they look like line anchors", () => {
+		expect(classifyHref("http://host:8080")).toEqual({ kind: "url", url: "http://host:8080" });
+	});
+
 	it("strips markdown fragments from file paths", () => {
 		expect(classifyHref("README.md#section")).toEqual({ kind: "file", path: "README.md" });
 		expect(classifyHref("docs/a.md#heading")).toEqual({ kind: "file", path: "docs/a.md" });

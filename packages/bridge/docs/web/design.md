@@ -336,7 +336,25 @@ the daemon origin. Each open performs a fresh read from the attached
 Project's working directory. The viewer shows the resolved absolute path,
 loads Markdown as rendered prose and other files as syntax-highlighted code,
 and reports the server's 256 KB truncation. Escape, the close button, or the
-dimmed backdrop closes it.
+dimmed backdrop closes it. Code files render a line-number gutter: each
+gutter line is a two-column grid (fixed number column, wrapping content
+column), so wrapped code never flows under the number.
+
+The viewer header carries the same display toggles as tool cards — `wrap`
+for code files, `preview` for Markdown files — driving the shared `cardWrap`
+and `cardMarkdown` preferences, so one preference governs card and viewer
+rendering alike. With preview off, a Markdown file renders as highlighted
+raw Markdown in the guttered code view.
+
+A trailing line anchor on a file link — `path.ts:98`, `path.ts:98:12`, or the
+GitHub-style `#L98` — opens the viewer scrolled to that line with the line
+tinted; the anchor is stripped before the path resolves. Markdown files skip
+the gutter and anchors (heading fragments remain stripped). Links whose
+scheme and trailing port look like a line anchor (`http://host:8080`) stay
+URLs. The same open path serves tool cards: any card whose call arguments
+carry a string `path` gets an open-in-viewer eye in the hover controls, and
+the click reads the file as it exists at click time — not what the call
+produced (the card shows what the tool did; the viewer shows the file now).
 
 External URLs open a confirmation dialog before a new tab is opened. An
 incomplete link whose target is still streaming is styled but inert. Both the
@@ -406,7 +424,8 @@ highlighted file content; write shows written content; edit shows a unified
 diff; bash and PowerShell show command output with tail/full controls; grep,
 find, and ls show argument and result rows; unknown tools use the fallback
 argument and output renderer. Copy, line wrapping, Markdown rendering for
-Markdown files, and `Show all` are card-local controls. Tool arguments and
+Markdown files, `Show all`, and the open-in-viewer eye (when the call's
+arguments carry a `path`) are card-local controls. Tool arguments and
 results can arrive while a call is streaming, so a card renders available
 content without waiting for a path or command annotation.
 
