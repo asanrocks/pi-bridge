@@ -179,8 +179,8 @@ full-screen overlay. The rail width is persisted and bounded for readable
 rows. Dragging below its minimum hides it; dragging above its maximum previews
 and enters the overlay. While hidden, hovering the topbar hamburger opens a
 temporary peek drawer; clicking the drawer pins the rail. A 12px left-edge
-drag zone can reveal and size the rail. Selecting a Session dismisses a peek
-or mobile overlay.
+drag zone can reveal and size the rail. Any pick that navigates — opening a
+Session or a Project home — dismisses a peek or mobile overlay.
 
 On mobile the Sidebar has only hidden and full-screen overlay modes. The
 overlay covers the shell, closes from its corner button or Escape, and uses
