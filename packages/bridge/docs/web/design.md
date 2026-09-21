@@ -175,28 +175,48 @@ returns to the global launcher. Empty, loading, failed-with-retry, and
 no-session states occupy the same quiet message position in the folder.
 
 On desktop the Sidebar has three modes: hidden, a docked resizable rail, and
-full-screen overlay. The rail width is persisted and bounded for readable
-rows. Dragging below its minimum hides it; dragging above its maximum previews
-and enters the overlay. While hidden, hovering the topbar hamburger opens a
-temporary peek drawer; clicking the drawer pins the rail. The pane carries
-a corner toggle at the TopBar hamburger's exact position in every open mode
-(peek: hamburger pins the rail; fullscreen and rail: an ✕ that dismisses or
-hides), so the same screen corner toggles the sidebar throughout. A 12px left-edge
-drag zone can reveal and size the rail. Any pick that navigates — opening a
-Session or a Project home — dismisses a peek or mobile overlay.
+full-screen overlay — the shared side-pane model (below; the History pane
+uses the same one, mirrored). The rail width is persisted and bounded for
+readable rows. Dragging below its minimum hides it; dragging above its
+maximum previews and enters the overlay. While hidden, hovering the topbar
+hamburger opens a temporary peek drawer; clicking the drawer pins the rail.
+The pane carries a corner toggle at the TopBar hamburger's exact position in
+every open mode (peek: hamburger pins the rail; fullscreen and rail: an ✕
+that dismisses or hides), so the same screen corner toggles the sidebar
+throughout. A 12px left-edge drag zone can reveal and size the rail. Any
+pick that navigates — opening a Session or a Project home — dismisses a peek
+or mobile overlay.
 
 On mobile the Sidebar has only hidden and full-screen overlay modes. The
 overlay covers the shell, closes from its corner button or Escape, and uses
 safe-area insets. The selection model and folder contents are unchanged.
+
+#### Side-pane model
+
+The Sidebar's pane behavior lives in a shared shell (`render/PaneShell` +
+`usePaneMode`), so the History pane is the same machinery mirrored to the
+right edge: a tri-mode state machine (hidden / rail / fullscreen, rail
+desktop-only, rail visibility persisted), a resizable rail with
+drag-past-min/past-max snapping whose live preview uses the release
+predicate, an edge-reveal drag zone on the pane's own screen edge, a
+hover-peek drawer fed by the pane's TopBar toggle, and Escape dismissal of
+the fullscreen overlay. Each pane supplies its bounds, its header chrome
+(the toggle affordance per mode), and its content; the content's navigation
+picks dismiss transient surfaces (fullscreen backs off to the rail on
+desktop, closes on mobile; the peek hides).
 
 ### Topbar
 
 The TopBar is fixed between the Sidebar and History gutters. Its left control
 is the Sidebar hamburger when the Sidebar is hidden or on mobile. Its center
 is the editable Session name, falling back to `pi-bridge`. Its right control
-opens History. A down-state connection icon sits beside the name and retries
-when clicked: an icon-only broken-chain-link button on the topbar button
-spec, with no text — the state phrase lives in the tooltip and aria-label.
+is the History clock, symmetric with the hamburger: shown when a session is
+open and the History pane is hidden, hidden when the pane has a surface of
+its own, and hover-peeks the pane while it is hidden. It is not shown on the
+launcher, where there is no history. A down-state connection icon sits beside
+the name and retries when clicked: an icon-only broken-chain-link button on
+the topbar button spec, with no text — the state phrase lives in the tooltip
+and aria-label.
 Its visible grammar is two-state: an animated link (opacity pulse; slow in
 muted gray while first connecting, fast in error red while retrying) means a
 retry loop is running, and a still red link means the connection has given
@@ -276,10 +296,14 @@ from Send and can be changed while connected.
 ### History pane
 
 History is a persistent spatial reference, not a modal workflow. The TopBar
-clock control and Ctrl/Cmd+H toggle it. On desktop it is a docked, resizable
-right pane that publishes `--history-w`; the TopBar and conversation clear the
-same gutter. On mobile it is a right drawer with a dismiss backdrop and
-safe-area insets, so it contributes no layout gutter.
+clock control and Ctrl/Cmd+H toggle it. The pane uses the shared side-pane
+model (see Sidebar) mirrored to the right edge: on desktop a docked,
+resizable rail that publishes `--history-w` (the TopBar and conversation
+clear the same gutter), with drag-past-bounds snapping, a right-edge reveal
+zone, and a hover-peek drawer off the TopBar clock; on mobile only hidden
+and a full-screen overlay with safe-area insets. Rail visibility is
+persisted, and any row pick dismisses a peek or backs a fullscreen overlay
+off to the rail so the picked conversation surface is visible.
 
 The pane renders a git-log-style graph of user-message branches. SVG vertical
 lineage and cubic fork curves sit beneath fixed-height DOM rows containing a

@@ -1,42 +1,6 @@
-/* Desktop panel (>=768px): fixed left rail, full height. Its own
-   .sidebarList scrolls internally, independent of the document scroll.
-   Width is set inline from the resize controller and matches the
-   --sidebar-w value the same controller publishes, so the .body gutter
-   clears it exactly. Spans the full viewport height (top:0) so it shares
-   width with — rather than sits below — the TopBar, which now binds its
-   left edge to --sidebar-w. Mobile renders .sidebarFullscreen instead
-   (already position: fixed, inset: 0). No padding-top of its own: the
-   corner toggle row (.overlayHeader) opens the pane and supplies the
-   6px, so the toggle lands exactly at the shared (12, 6) hamburger box. */
-.sidebar {
-	position: fixed;
-	top: 0;
-	left: 0;
-	bottom: 0;
-	z-index: var(--z-pane);
-	background: var(--color-sidebar);
-	border-right: 1px solid var(--color-border);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-}
-
-/* Fullscreen mode: pure overlay above the whole shell (TopBar included —
-   --z-overlay > --z-topbar), entered by dragging the rail past its max (desktop) or
-   by the TopBar hamburger (mobile, its only open mode). Covers the full
-   viewport; safe-area insets on mobile. The conversation keeps full width
-   underneath (--sidebar-w stays 0). */
-.sidebarFullscreen {
-	position: fixed;
-	inset: 0;
-	z-index: var(--z-overlay);
-	background: var(--color-sidebar);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-		env(safe-area-inset-left);
-}
+/* Container surfaces (rail / fullscreen overlay / hover-peek drawer /
+   edge-reveal strip) live in render/PaneShell.module.css; this module keeps
+   only the sidebar's own chrome and content. */
 
 /* Overlay toggle row — shared by the fullscreen overlay (close ✕) and the
    hover-peek drawer (hamburger, pins the rail open). Docked LEFT at the
@@ -59,44 +23,8 @@
 	height: 36px;
 }
 
-/* Hover-peek drawer (desktop, hidden mode): same content as the rail, a
-   full-height overlay above the whole shell (TopBar included, z 50 — same
-   layer as fullscreen) while the pointer is over the hamburger or the
-   drawer. Width inline from the resize controller (the stored rail width);
-   the conversation keeps full width underneath — overlay, not gutter. The
-   overlay toggle row pins the rail open when clicked. */
-.sidebarPeek {
-	position: fixed;
-	top: 0;
-	left: 0;
-	bottom: 0;
-	z-index: var(--z-overlay);
-	background: var(--color-sidebar);
-	border-right: 1px solid var(--color-border);
-	box-shadow: var(--shadow-edge-left);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-}
-
-/* Edge-reveal strip (desktop, hidden): a 12px drag zone at the far left,
-   full viewport height — same geometry as the rail's resize handle (its
-   comment on the TopBar overlap applies here too: the TopBar's 12px start
-   padding keeps the hamburger clear). Always invisible: the col-resize
-   cursor is the only affordance. The drag is pointer-absolute — the implied
-   width is the pointer's x, and the rail appears only once that exceeds
-   the min width; before that the drag previews closed. */
-.sidebarRevealStrip {
-	position: fixed;
-	top: 0;
-	left: 0;
-	bottom: 0;
-	width: 12px;
-	z-index: var(--z-dock);
-	cursor: col-resize;
-	background: transparent;
-	touch-action: none;
-}
+/* Edge-reveal strip, fullscreen overlay, and the peek drawer container are
+   PaneShell surfaces (render/PaneShell.module.css). */
 .sidebarList {
 	flex: 1;
 	overflow-y: auto;

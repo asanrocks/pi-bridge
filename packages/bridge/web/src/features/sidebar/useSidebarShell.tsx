@@ -1,17 +1,22 @@
 // ============================================================================
 // useSidebarShell — the Sidebar's container hook: composes the presentational
 // Sidebar (which stays props-only) with its store data and RPC actions, and
-// owns the shell chrome that used to live in App — the mode mirror (TopBar
-// hamburger visibility), the raw hamburger hover signal, and the imperative
-// handles the Sidebar populates (hamburger toggle, Alt+N new-session
-// surface). App consumes { sidebar, mode, toggle, newSession,
-// setHamburgerHover }; new sidebar wiring grows here, not in the shell.
+// owns the shell chrome that used to live in App — the mode (owned here via
+// usePaneMode so it survives any future pane unmounts; reported to App for
+// TopBar hamburger visibility) and the imperative handles (hamburger toggle,
+// Alt+N new-session surface). App consumes { sidebar, mode, toggle,
+// newSession, setHamburgerHover }; new sidebar wiring grows here, not in the
+// shell.
 // ============================================================================
 
 import { useCallback, useRef, useState } from "react";
+import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
-import { Sidebar, type SidebarMode } from "./Sidebar.tsx";
+import { usePaneMode } from "../../render/usePaneMode.ts";
+import { Sidebar } from "./Sidebar.tsx";
+
+const SIDEBAR_BREAKPOINT = "(min-width: 768px)";
 
 export function useSidebarShell() {
 	const projects = useStore((s) => s.projects);
@@ -20,11 +25,19 @@ export function useSidebarShell() {
 	const activeSessions = useStore((s) => s.activeSessions);
 	const sessionPages = useStore((s) => s.sessionPages);
 	const rpc = useRpc();
+	const isWide = useMediaQuery(SIDEBAR_BREAKPOINT);
 
-	const [mode, setMode] = useState<SidebarMode>("hidden");
 	const [hamburgerHover, setHamburgerHover] = useState(false);
 	const toggleRef = useRef<() => void>(() => {});
+	// Alt+N with several Projects: ensure the sidebar is open so its project
+	// list is reachable (a session is started from a Project's home prompt).
 	const newSessionRef = useRef<() => void>(() => {});
+	const { mode, setMode, dismissOverlay } = usePaneMode({
+		isWide,
+		persistenceKey: "pi-bridge:sidebar-open",
+		toggleRef,
+		openRef: newSessionRef,
+	});
 
 	// Opening a session is an attach, not a retarget (ADR 11): the daemon
 	// resolves-or-creates the activation and rebinds this connection — the
@@ -45,9 +58,10 @@ export function useSidebarShell() {
 			onShowLauncher={() => void rpc.detach()}
 			onLoadFolder={rpc.loadFolderSessions}
 			onLoadMoreFolder={rpc.loadMoreFolderSessions}
-			toggleRef={toggleRef}
-			newSessionRef={newSessionRef}
-			onModeChange={setMode}
+			mode={mode}
+			setMode={setMode}
+			isWide={isWide}
+			dismissOverlay={dismissOverlay}
 			hamburgerHover={hamburgerHover}
 		/>
 	);

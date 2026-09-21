@@ -3,7 +3,9 @@
 // Launcher), HistoryPane, FileViewer. The shell owns only chrome composition;
 // per-area wiring lives with its area:
 //   - useSidebarShell (sidebar)  — Sidebar props + the chrome handles
-//                                  (mode mirror, hamburger toggle, Alt+N)
+//                                  (mode, hamburger toggle, Alt+N)
+//   - useHistoryPaneShell        — same pattern for the history pane
+//                                  (mode, clock toggle, hover signal)
 //   - ComposeDock / Launcher      — self-sufficient (store + useRpc); the
 //                                  dock's one prop is the commit callback,
 //                                  shared with the keyboard ring
@@ -21,7 +23,7 @@ import { ComposeDock } from "../features/composer/ComposeDock.tsx";
 import { useComposerCommit } from "../features/composer/useComposerCommit.ts";
 import { useModelCycling } from "../features/composer/useModelCycling.ts";
 import { ConversationArea } from "../features/conversation/ConversationArea.tsx";
-import { HistoryPane } from "../features/history/HistoryPane.tsx";
+import { useHistoryPaneShell } from "../features/history/useHistoryPaneShell.tsx";
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { useSidebarShell } from "../features/sidebar/useSidebarShell.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
@@ -65,6 +67,7 @@ function AppInner() {
 	const { commit, beginEdit } = useComposerCommit(rpc);
 	const cycleModel = useModelCycling();
 	const sidebar = useSidebarShell();
+	const history = useHistoryPaneShell();
 
 	// Status the shell renders directly (TopBar title, busy guard,
 	// notifications). Models, registry lists, and composer status are
@@ -73,8 +76,6 @@ function AppInner() {
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
-	const historyOpen = useStore((s) => s.historyOpen);
-	const setHistoryOpen = useStore((s) => s.setHistoryOpen);
 
 	// ── Status notification ──────────────────────────────────────────────
 	const activityPhase = isStreaming ? liveActivityPhase(vm) : null;
@@ -95,6 +96,7 @@ function AppInner() {
 			navigate: handleBranchSelect,
 			sidebarToggle: sidebar.toggle,
 			newSession: sidebar.newSession,
+			historyToggle: history.toggle,
 		}),
 	);
 
@@ -110,7 +112,9 @@ function AppInner() {
 				showSidebarToggle={sidebar.mode === "hidden"}
 				onSidebarToggle={sidebar.toggle}
 				onSidebarHover={sidebar.setHamburgerHover}
-				onHistory={() => setHistoryOpen(!historyOpen)}
+				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
+				onHistory={history.toggle}
+				onHistoryHover={history.setHistoryHover}
 				onRename={async (name) => {
 					await rpc.renameSession(name);
 				}}
@@ -140,7 +144,10 @@ function AppInner() {
 					)}
 				</div>
 			</div>
-			{hasOpenSession && <HistoryPane />}
+			{/* HistoryPane — the shared PaneShell on the right (mode owned by
+			    useHistoryPaneShell, so it survives the pane's unmount when no
+			    session is open) */}
+			{hasOpenSession && history.pane}
 			<FileViewer />
 		</div>
 	);

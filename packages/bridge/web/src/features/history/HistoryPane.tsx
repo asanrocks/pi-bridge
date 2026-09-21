@@ -1,13 +1,9 @@
 // ============================================================================
-// HistoryPane — git-log-style branch graph of user messages, as a docked
-// right pane (desktop) / right drawer (mobile). Replaces the prior centered
-// modal: history is a spatial reference you orient by, not a transient
-// action — so it stays open, shares the viewport with the conversation, and
-// publishes --history-w so the TopBar and .body gutter track it.
-//
-// Graph rendering (lane layout, fork curves, node rows) is unchanged from the
-// former TreeDialog; only the container changed (docked pane / drawer vs.
-// modal) and the click semantics (see selectEntry).
+// HistoryPane — git-log-style branch graph of user messages, as the right
+// side pane. Container is the shared PaneShell (hidden / docked rail /
+// fullscreen overlay, drag-overshoot, edge-reveal, hover-peek — the Sidebar's
+// UX, mirrored); this module supplies the pane's bounds, its header chrome,
+// and the graph body. Mode lives with useHistoryPaneShell.
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,11 +21,11 @@ import {
 	type PlacedNode,
 } from "../../../../src/viewmodel/index.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
-import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { resolveRenderLeafTarget, selectRenderDiverged } from "../../infra/state/ui.ts";
-import { type PaneResizeController, ResizeHandle, usePaneResize } from "../../render/ResizeHandle.tsx";
+import { PaneShell } from "../../render/PaneShell.tsx";
+import type { PaneMode } from "../../render/usePaneMode.ts";
 import styles from "./HistoryPane.module.css";
 
 // ---------------------------------------------------------------------------
@@ -57,13 +53,10 @@ const MIN_TEXT_W = 220;
 /** Default desktop docked-pane width (also the resize double-click reset).
  *  Bounds keep the graph's fixed columns (gutter + time + MIN_TEXT_W)
  *  reachable; the upper bound is additionally viewport-capped at 45%.
- *  Published as --history-w so the TopBar and .body right gutter track it.
- *  Mobile uses a drawer (no gutter, no handle). */
+ *  Published as --history-w so the TopBar and .body right gutter track it. */
 const PANE_DEFAULT_W = 400;
 const PANE_MIN_W = 280;
 const PANE_MAX_W = 560;
-
-const PANE_BREAKPOINT = "(min-width: 768px)";
 
 function laneX(lane: number): number {
 	return GRAPH_PAD_LEFT + lane * LANE_WIDTH;
@@ -87,71 +80,69 @@ function forkPath(f: Fork): string {
 }
 
 // ---------------------------------------------------------------------------
-// HistoryPane
+// HistoryPane — the shared PaneShell on the right side: tri-mode, resizable
+// rail, drag-overshoot, edge-reveal, hover-peek. The pane supplies only
+// bounds, header chrome, and the graph body.
 // ---------------------------------------------------------------------------
 
-export const HistoryPane = memo(function HistoryPane() {
-	const open = useStore((s) => s.historyOpen);
-	const isWide = useMediaQuery(PANE_BREAKPOINT);
-
-	// Resizable pane (desktop): owns the width, persists it, and publishes
-	// --history-w so the TopBar (left/right bindings) and .body (right
-	// gutter) clear the docked pane. 0 when closed or mobile (drawer is
-	// off-canvas, like the sidebar overlay).
-	const resize = usePaneResize({
-		cssVar: "--history-w",
-		storageKey: "pi-bridge:history-w",
-		defaultWidth: PANE_DEFAULT_W,
-		min: PANE_MIN_W,
-		max: PANE_MAX_W,
-		active: isWide && open,
-	});
-
-	if (!open) return null;
-	if (isWide) return <HistoryPaneDocked resize={resize} />;
-	return <HistoryPaneDrawer />;
-});
-
-// ---------------------------------------------------------------------------
-// HistoryPaneDocked — desktop: fixed right rail, full height, inline chrome.
-// The handle is a fixed-position sibling (not a child) so the pane's
-// overflow: hidden can't clip it; it centers on the pane border.
-// ---------------------------------------------------------------------------
-
-const HistoryPaneDocked = memo(function HistoryPaneDocked({ resize }: { resize: PaneResizeController }) {
+export const HistoryPane = memo(function HistoryPane({
+	isWide,
+	mode,
+	setMode,
+	historyHover,
+}: {
+	isWide: boolean;
+	mode: PaneMode;
+	setMode: React.Dispatch<React.SetStateAction<PaneMode>>;
+	/** Raw hover signal from the TopBar history button — drives the peek
+	 *  drawer (PaneShell owns it). */
+	historyHover: boolean;
+}) {
 	return (
-		<>
-			<div className={styles.pane} style={{ width: resize.width }}>
-				<HistoryPaneBody />
-			</div>
-			<ResizeHandle controller={resize} edge="left" label="Resize history pane" />
-		</>
+		<PaneShell
+			side="right"
+			isWide={isWide}
+			mode={mode}
+			setMode={setMode}
+			cssVar="--history-w"
+			storageKey="pi-bridge:history-w"
+			defaultWidth={PANE_DEFAULT_W}
+			min={PANE_MIN_W}
+			max={PANE_MAX_W}
+			label="history"
+			hoverSignal={historyHover}
+			renderHeader={(variant, actions) => (
+				// The peek's pin wears the pane's own clock glyph (the TopBar
+				// toggle's icon); rail/fullscreen carry the ✕ close.
+				<HistoryHeader
+					onClose={variant === "peek" ? actions.pin : variant === "rail" ? actions.hide : actions.dismiss}
+					dock={variant === "peek"}
+				/>
+			)}
+		>
+			{(api) => <HistoryPaneBody open={mode !== "hidden"} onPick={api.dismissAfterPick} />}
+		</PaneShell>
 	);
 });
 
 // ---------------------------------------------------------------------------
-// HistoryPaneDrawer — mobile: slide-over from the right + dismiss backdrop.
-// ---------------------------------------------------------------------------
-
-const HistoryPaneDrawer = memo(function HistoryPaneDrawer() {
-	const close = useCallback(() => getStore().getState().setHistoryOpen(false), []);
-	return (
-		<>
-			<button type="button" className={styles.backdrop} onClick={close} aria-label="Close history" />
-			<div className={styles.drawer}>
-				<HistoryPaneBody />
-			</div>
-		</>
-	);
-});
-
-// ---------------------------------------------------------------------------
-// HistoryPaneBody — shared header + scrollable graph. The layout recomputes
+// HistoryPaneBody — the scrollable graph. The layout recomputes
 // from the document on each render (the graph is small — tens of nodes — so
 // the cost is negligible and the streaming-append case just extends the SVG).
 // ---------------------------------------------------------------------------
 
-const HistoryPaneBody = memo(function HistoryPaneBody() {
+const HistoryPaneBody = memo(function HistoryPaneBody({
+	open,
+	onPick,
+}: {
+	/** True in every open mode (rail / peek / fullscreen) — drives the
+	 *  scroll-to-active-row effect on open. */
+	open: boolean;
+	/** Dismiss transient surfaces after a row pick (PaneShell's
+	 *  dismissAfterPick: mobile fullscreen closes, desktop fullscreen backs
+	 *  off to the rail, the peek drawer hides). */
+	onPick: () => void;
+}) {
 	const document = useStore((s) => s.document);
 	const leafId = document.status.leafId;
 	const entries = document.entries;
@@ -202,7 +193,6 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 	// every leaf change while open would fight a user who scrolled up to
 	// browse older branches; the "current" dot highlight (currentNodeId,
 	// computed in render) tracks the leaf without moving the scroll.
-	const open = useStore((s) => s.historyOpen);
 	useEffect(() => {
 		if (!open || currentRow < 0) return;
 		const el = containerRef.current;
@@ -236,6 +226,10 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 	const diverged = useStore(selectRenderDiverged);
 	const selectEntry = useCallback(
 		(entryId: string, isOnPath: boolean) => {
+			// Any row pick dismisses transient surfaces first — in fullscreen the
+			// picked conversation surface is behind the overlay, in the peek the
+			// drawer would otherwise linger on its grace delay.
+			onPick();
 			const s = getStore().getState();
 			const targetLeaf = newestLeafInSubtree(entryId, entries);
 			if (diverged || (isBusy && !isOnPath)) {
@@ -262,16 +256,11 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 				if (!reply?.ok) s.setScrollToEntryId(null);
 			});
 		},
-		[diverged, isBusy, entries, rpc],
+		[diverged, isBusy, entries, rpc, onPick],
 	);
 
 	if (layout.nodes.length === 0) {
-		return (
-			<>
-				<HistoryHeader />
-				<div className={styles.empty}>No messages yet.</div>
-			</>
-		);
+		return <div className={styles.empty}>No messages yet.</div>;
 	}
 
 	const graphWidth = GRAPH_PAD_LEFT + layout.laneCount * LANE_WIDTH + GRAPH_PAD_RIGHT;
@@ -283,77 +272,105 @@ const HistoryPaneBody = memo(function HistoryPaneBody() {
 	const totalHeight = layout.rowCount * ROW_HEIGHT;
 
 	return (
-		<>
-			<HistoryHeader />
-			<div className={styles.scroll} ref={containerRef}>
-				<div
-					className={styles.content}
-					style={
-						{
-							height: totalHeight,
-							["--canvas-w" as string]: `${canvasWidth}px`,
-							["--gutter-width" as string]: `${gutterWidth}px`,
-							["--time-col-w" as string]: `${TIME_COL_W}px`,
-							["--col-gap" as string]: `${COL_GAP}px`,
-							["--drafts-badge-w" as string]: `${DRAFTS_BADGE_W}px`,
-							["--row-right-pad" as string]: `${ROW_RIGHT_PAD}px`,
-						} as React.CSSProperties
-					}
-				>
-					<svg className={styles.graph} width={graphWidth} height={totalHeight} aria-hidden="true">
-						{/* Vertical lineage lines */}
-						{layout.lineages.map((l: Lineage) => (
-							<line
-								key={`line-${l.lane}:${l.startRow}-${l.endRow}`}
-								x1={laneX(l.lane)}
-								y1={rowY(l.startRow)}
-								x2={laneX(l.lane)}
-								y2={rowY(l.endRow)}
-								className={styles.lineageLine}
-							/>
-						))}
-						{/* Fork curves */}
-						{layout.forks.map((f: Fork) => (
-							<path
-								key={`fork-${f.fromLane}:${f.fromRow}-${f.toLane}:${f.toRow}`}
-								d={forkPath(f)}
-								className={styles.forkCurve}
-								fill="none"
-							/>
-						))}
-					</svg>
-					{/* DOM rows — dots + meta + text, absolutely positioned over the SVG */}
-					{layout.nodes.map((n) => (
-						<NodeRow
-							key={n.node.id}
-							node={n}
-							gutterWidth={gutterWidth}
-							isCurrentLeaf={n.node.id === currentNodeId}
-							isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
-							onSelectEntry={selectEntry}
-							onToggleDrafts={toggleDrafts}
-							expandedDrafts={expandedDrafts}
-							entries={entries}
+		<div className={styles.scroll} ref={containerRef}>
+			<div
+				className={styles.content}
+				style={
+					{
+						height: totalHeight,
+						["--canvas-w" as string]: `${canvasWidth}px`,
+						["--gutter-width" as string]: `${gutterWidth}px`,
+						["--time-col-w" as string]: `${TIME_COL_W}px`,
+						["--col-gap" as string]: `${COL_GAP}px`,
+						["--drafts-badge-w" as string]: `${DRAFTS_BADGE_W}px`,
+						["--row-right-pad" as string]: `${ROW_RIGHT_PAD}px`,
+					} as React.CSSProperties
+				}
+			>
+				<svg className={styles.graph} width={graphWidth} height={totalHeight} aria-hidden="true">
+					{/* Vertical lineage lines */}
+					{layout.lineages.map((l: Lineage) => (
+						<line
+							key={`line-${l.lane}:${l.startRow}-${l.endRow}`}
+							x1={laneX(l.lane)}
+							y1={rowY(l.startRow)}
+							x2={laneX(l.lane)}
+							y2={rowY(l.endRow)}
+							className={styles.lineageLine}
 						/>
 					))}
-				</div>
+					{/* Fork curves */}
+					{layout.forks.map((f: Fork) => (
+						<path
+							key={`fork-${f.fromLane}:${f.fromRow}-${f.toLane}:${f.toRow}`}
+							d={forkPath(f)}
+							className={styles.forkCurve}
+							fill="none"
+						/>
+					))}
+				</svg>
+				{/* DOM rows — dots + meta + text, absolutely positioned over the SVG */}
+				{layout.nodes.map((n) => (
+					<NodeRow
+						key={n.node.id}
+						node={n}
+						gutterWidth={gutterWidth}
+						isCurrentLeaf={n.node.id === currentNodeId}
+						isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
+						onSelectEntry={selectEntry}
+						onToggleDrafts={toggleDrafts}
+						expandedDrafts={expandedDrafts}
+						entries={entries}
+					/>
+				))}
 			</div>
-		</>
+		</div>
 	);
 });
 
 // ---------------------------------------------------------------------------
-// HistoryHeader — title + close. The close button toggles historyOpen in the
-// store (the TopBar button does the same from the other end).
+// HistoryHeader — title + toggle. The action is variant-dependent (rail ✕
+// hides, fullscreen ✕ dismisses, peek clock pins the rail — the pane's own
+// TopBar glyph, the escape hatch from hover-only access); PaneShell passes
+// the resolved one. Matches the Sidebar's section-header chrome: a quiet
+// uppercase label with an action button in the right slot, no chrome bar /
+// border-bottom, so the two panes share a top-edge treatment.
 // ---------------------------------------------------------------------------
 
-const HistoryHeader = memo(function HistoryHeader() {
-	const close = useCallback(() => getStore().getState().setHistoryOpen(false), []);
+const HistoryHeader = memo(function HistoryHeader({
+	onClose,
+	dock,
+}: {
+	onClose: () => void;
+	/** Peek variant — the button pins the rail open rather than closing. */
+	dock: boolean;
+}) {
 	return (
 		<div className={styles.header}>
 			<span className={styles.title}>History</span>
-			<button type="button" className={styles.closeBtn} onClick={close} aria-label="Close history">
-				×
+			<button
+				type="button"
+				className={styles.closeBtn}
+				onClick={onClose}
+				aria-label={dock ? "Open history pane" : "Close history"}
+				title={dock ? "Open history pane" : "Close history"}
+			>
+				{dock ? (
+					<svg
+						viewBox="0 0 24 24"
+						width="18"
+						height="18"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						aria-hidden="true"
+					>
+						<circle cx="12" cy="12" r="9" />
+						<path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+					</svg>
+				) : (
+					"×"
+				)}
 			</button>
 		</div>
 	);

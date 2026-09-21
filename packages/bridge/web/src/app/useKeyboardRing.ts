@@ -32,10 +32,23 @@ export interface KeyboardRingDeps {
 	sidebarToggle: () => void;
 	/** Open the sidebar's new-session surface (Alt+N with >1 Project). */
 	newSession: () => void;
+	/** Toggle the history pane (Ctrl/Cmd+H) — its shell hook's imperative
+	 *  handle, same pattern as sidebarToggle. */
+	historyToggle: () => void;
 }
 
 export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
-	const { vm, beginEdit, navigate, onCycleModel, onOpenSession, onOpenProject, sidebarToggle, newSession } = deps;
+	const {
+		vm,
+		beginEdit,
+		navigate,
+		onCycleModel,
+		onOpenSession,
+		onOpenProject,
+		sidebarToggle,
+		newSession,
+		historyToggle,
+	} = deps;
 
 	const onExpandComposer = useCallback(() => {
 		const s = getStore().getState();
@@ -165,10 +178,7 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 	}, [onOpenProject, newSession]);
 
 	const onToggleSidebar = useCallback(() => sidebarToggle(), [sidebarToggle]);
-	const onToggleHistory = useCallback(() => {
-		const s = getStore().getState();
-		s.setHistoryOpen(!s.historyOpen);
-	}, []);
+	const onToggleHistory = useCallback(() => historyToggle(), [historyToggle]);
 
 	return {
 		onCycleModel,

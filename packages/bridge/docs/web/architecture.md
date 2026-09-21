@@ -30,7 +30,9 @@ The web source is divided by responsibility:
   unread counting, media queries, notification permission, and image
   preparation.
 - `render/` contains shared rendering primitives, Markdown, code highlighting,
-  icons, and shared resize/result helpers.
+  icons, shared resize/result helpers, and the side-pane shell (`PaneShell` +
+  `usePaneMode`/`usePeekDrawer`/`useEdgeReveal`) that both docked panes
+  (Sidebar, HistoryPane) render into.
 - `features/<area>/` owns an area and its wiring: launcher, topbar, sidebar,
   conversation, composer, history, and viewer. Components and area hooks stay
   together, so RPC and store composition belongs with the area that uses it.
@@ -39,7 +41,8 @@ The web source is divided by responsibility:
 creates the ViewModel, composes the TopBar, Sidebar, conversation or Launcher,
 history pane, file viewer, and toast surface, and supplies the callbacks that
 are genuinely shared by the keyboard ring and a feature. `useSidebarShell`
-keeps Sidebar composition and its chrome handles in the sidebar area.
+and `useHistoryPaneShell` keep their pane's composition and chrome handles
+(mode ownership, TopBar toggle, hover signal) in its own area.
 `ComposeDock` and `Launcher` acquire their own store and RPC dependencies.
 
 The web application imports `src/core` and `src/viewmodel` with source-relative

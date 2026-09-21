@@ -1,0 +1,102 @@
+/* PaneShell — the shared side-pane containers (Sidebar left, HistoryPane
+   right). Side-specific geometry (docking edge, border side, shadow
+   direction) keys off [data-side] so one class serves both panes; content
+   and header chrome stay with each pane's own module. */
+
+/* Docked rail (desktop): fixed column on the pane's edge, full viewport
+   height (top: 0) so it shares width with — rather than sits below — the
+   TopBar, which binds its edge to the pane's width var. Its scrollable
+   content scrolls internally, independent of the document scroll. Width is
+   set inline from the resize controller and matches the published var, so
+   the .body gutter clears it exactly. */
+.pane {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	z-index: var(--z-pane);
+	background: var(--color-sidebar);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.pane[data-side="left"] {
+	left: 0;
+	border-right: 1px solid var(--color-border);
+}
+
+.pane[data-side="right"] {
+	right: 0;
+	border-left: 1px solid var(--color-border);
+}
+
+/* Fullscreen mode: pure overlay above the whole shell (TopBar included —
+   --z-overlay > --z-topbar), entered by dragging the rail past its max
+   (desktop) or by the pane's TopBar toggle (mobile, its only open mode).
+   Covers the full viewport; safe-area insets on mobile. The conversation
+   keeps full width underneath (the pane's width var stays 0). */
+.paneFullscreen {
+	position: fixed;
+	inset: 0;
+	z-index: var(--z-overlay);
+	background: var(--color-sidebar);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+		env(safe-area-inset-left);
+}
+
+/* Hover-peek drawer (desktop, hidden mode): the pane content as a full-height
+   overlay above the whole shell (TopBar included) while the pointer is over
+   the TopBar toggle or the drawer. Width inline from the resize controller
+   (the stored rail width); the conversation keeps full width underneath —
+   overlay, not gutter. */
+.panePeek {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	z-index: var(--z-overlay);
+	background: var(--color-sidebar);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.panePeek[data-side="left"] {
+	left: 0;
+	border-right: 1px solid var(--color-border);
+	box-shadow: var(--shadow-edge-left);
+}
+
+.panePeek[data-side="right"] {
+	right: 0;
+	border-left: 1px solid var(--color-border);
+	box-shadow: var(--shadow-edge-right);
+}
+
+/* Edge-reveal strip (desktop, hidden): a 12px drag zone at the pane's screen
+   edge, full viewport height — same geometry as the rail's resize handle
+   (the TopBar's edge padding keeps its toggle clear). Always invisible: the
+   col-resize cursor is the only affordance. The drag is pointer-absolute —
+   the implied width is the pointer's distance from the edge, and the rail
+   appears only once that exceeds the min width; before that the drag
+   previews closed. */
+.revealStrip {
+	position: fixed;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	z-index: var(--z-dock);
+	cursor: col-resize;
+	background: transparent;
+	touch-action: none;
+}
+
+.revealStrip[data-side="left"] {
+	left: 0;
+}
+
+.revealStrip[data-side="right"] {
+	right: 0;
+}
