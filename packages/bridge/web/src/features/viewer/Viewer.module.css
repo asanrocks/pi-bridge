@@ -54,11 +54,35 @@
 }
 
 .viewerPath {
+	flex: 1;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: var(--fs-sm);
 	color: var(--color-secondary);
 	overflow-wrap: anywhere;
 	min-width: 0;
+}
+
+.viewerToggle {
+	flex-shrink: 0;
+	background: none;
+	border: none;
+	padding: 1px 5px;
+	font: inherit;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	user-select: none;
+}
+
+.viewerToggle:hover {
+	color: var(--color-secondary);
+	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+}
+
+/* Toggle state: on reads brighter than off (same treatment as cardCtrlBtn). */
+.viewerToggle[data-on] {
+	color: var(--color-secondary);
 }
 
 .viewerClose {
@@ -112,6 +136,31 @@
 .viewerBody pre code {
 	font-size: var(--fs-sm);
 	line-height: 1.5;
+}
+
+/* Line-number gutter (CodeSnippet lineNumbers): each gutter line is a
+   two-column grid — fixed number column, content column free to wrap —
+   so wrapped code never flows under the number. Gutter CSS is scoped to
+   the viewer; other CodeSnippet callers don't pass lineNumbers. */
+.viewerBody pre code .line[data-gutter="true"] {
+	display: grid;
+	grid-template-columns: 4ch minmax(0, 1fr);
+	column-gap: 1.5ch;
+}
+
+.viewerBody pre code .lineNo {
+	text-align: right;
+	color: var(--color-muted-foreground);
+	user-select: none;
+	font-variant-numeric: tabular-nums;
+}
+
+.viewerBody pre code .lineText {
+	min-width: 0;
+}
+
+.viewerBody pre code .line[data-active="true"] {
+	background: var(--color-muted);
 }
 
 /* ── External-link confirm dialog ────────────────────────────────────── */
