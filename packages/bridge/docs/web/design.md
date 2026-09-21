@@ -178,7 +178,10 @@ On desktop the Sidebar has three modes: hidden, a docked resizable rail, and
 full-screen overlay. The rail width is persisted and bounded for readable
 rows. Dragging below its minimum hides it; dragging above its maximum previews
 and enters the overlay. While hidden, hovering the topbar hamburger opens a
-temporary peek drawer; clicking the drawer pins the rail. A 12px left-edge
+temporary peek drawer; clicking the drawer pins the rail. The pane carries
+a corner toggle at the TopBar hamburger's exact position in every open mode
+(peek: hamburger pins the rail; fullscreen and rail: an ✕ that dismisses or
+hides), so the same screen corner toggles the sidebar throughout. A 12px left-edge
 drag zone can reveal and size the rail. Any pick that navigates — opening a
 Session or a Project home — dismisses a peek or mobile overlay.
 
