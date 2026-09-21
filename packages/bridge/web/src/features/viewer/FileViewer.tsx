@@ -16,6 +16,7 @@ import type { ReadFileReply } from "../../../../src/core/index.ts";
 import { getGlobalClient } from "../../infra/net/client.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CodeSnippet } from "../../render/CodeSnippet.tsx";
+import { MarkdownIcon, WrapIcon } from "../../render/icons.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { extToLang } from "../conversation/tools/args.ts";
 import styles from "./Viewer.module.css";
@@ -125,9 +126,10 @@ export function FileViewer() {
 							data-on={cardMarkdown || undefined}
 							aria-pressed={cardMarkdown}
 							aria-label="Toggle markdown preview"
+							title="Toggle markdown preview"
 							onClick={toggleCardMarkdown}
 						>
-							preview
+							<MarkdownIcon size={13} />
 						</button>
 					) : (
 						<button
@@ -136,9 +138,10 @@ export function FileViewer() {
 							data-on={cardWrap || undefined}
 							aria-pressed={cardWrap}
 							aria-label="Toggle line wrap"
+							title="Toggle line wrap"
 							onClick={toggleCardWrap}
 						>
-							wrap
+							<WrapIcon size={13} />
 						</button>
 					)}
 					<button type="button" className={styles.viewerClose} onClick={closeFileViewer} aria-label="Close">
