@@ -7,7 +7,7 @@
 
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
-import { CheckIcon, CopyIcon } from "../../../render/icons.tsx";
+import { CheckIcon, CopyIcon, EyeIcon } from "../../../render/icons.tsx";
 import styles from "../actions.module.css";
 import { copyToClipboard } from "../clipboard.ts";
 
@@ -124,6 +124,8 @@ export const CardControls = memo(function CardControls({
 	showMarkdown,
 	markdown,
 	capped,
+	viewPath,
+	onOpenView,
 	onToggleWrap,
 	onToggleMarkdown,
 	onToggleCap,
@@ -134,6 +136,11 @@ export const CardControls = memo(function CardControls({
 	showMarkdown: boolean;
 	markdown: boolean;
 	capped: "none" | "capped" | "uncapped";
+	/** File path referenced by the call (string `path` arg) — shows the
+	 * open-in-viewer eye when set. The viewer re-reads from disk, so it shows
+	 * the file as it exists now, not what the call produced. */
+	viewPath?: string | null;
+	onOpenView?: () => void;
 	onToggleWrap: () => void;
 	onToggleMarkdown: () => void;
 	onToggleCap: () => void;
@@ -149,9 +156,20 @@ export const CardControls = memo(function CardControls({
 		}
 	}, [copyText]);
 
-	if (copyText === null && !showWrap && !showMarkdown && capped === "none") return null;
+	if (copyText === null && !showWrap && !showMarkdown && capped === "none" && !viewPath) return null;
 	return (
 		<div className={styles.cardControls}>
+			{viewPath != null && (
+				<button
+					type="button"
+					className={styles.cardCtrlBtn}
+					onClick={() => onOpenView?.()}
+					aria-label="Open in viewer"
+					title={`Open in viewer: ${viewPath}`}
+				>
+					<EyeIcon size={13} />
+				</button>
+			)}
 			{copyText !== null && (
 				<button type="button" className={styles.cardCtrlBtn} onClick={handleCopy} aria-label="Copy content">
 					{copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
