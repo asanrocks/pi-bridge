@@ -321,6 +321,35 @@ export const Sidebar = memo(function Sidebar({
 				    overlay, so the folder tree renders once. */}
 				{mode === "rail" && dragPreview === null && (
 					<div className={styles.sidebar} style={{ width: resize.width }}>
+						{/* Corner toggle: the same (12, 6) box as the TopBar hamburger
+						    and the peek drawer's pin button. The rail previously had
+						    nothing there — pinning from the peek drawer removed the
+						    only click target, breaking the same-corner-toggles
+						    invariant. ✕ matches the fullscreen overlay: an open
+						    sidebar closes; only the transient peek shows the
+						    hamburger. */}
+						<div className={styles.overlayHeader}>
+							<button
+								type="button"
+								className={styles.sidebarAddBtn}
+								onClick={() => setMode("hidden")}
+								aria-label="Hide sidebar"
+								title="Hide sidebar"
+							>
+								<svg
+									viewBox="0 0 20 20"
+									width="18"
+									height="18"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="1.5"
+									strokeLinecap="round"
+									aria-hidden="true"
+								>
+									<path d="M5 5l10 10M15 5L5 15" />
+								</svg>
+							</button>
+						</div>
 						{sidebarContent}
 					</div>
 				)}
