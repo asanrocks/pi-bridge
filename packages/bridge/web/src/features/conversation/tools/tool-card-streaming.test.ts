@@ -319,14 +319,14 @@ describe("card controls", () => {
 	});
 
 	test("markdown toggle only for .md-capable cards", () => {
-		expect(renderControls({ showMarkdown: true })).toContain(">md<");
-		expect(renderControls({ showMarkdown: false })).not.toContain(">md<");
+		expect(renderControls({ showMarkdown: true })).toContain('aria-label="Toggle markdown rendering"');
+		expect(renderControls({ showMarkdown: false })).not.toContain('aria-label="Toggle markdown rendering"');
 	});
 
 	test("cap toggle renders show-all when capped, collapse when uncapped", () => {
-		expect(renderControls({ capped: "capped" })).toContain("Show all");
-		expect(renderControls({ capped: "uncapped" })).toContain("Collapse");
-		expect(renderControls({ capped: "none" })).not.toContain("Show all");
+		expect(renderControls({ capped: "capped" })).toContain('aria-label="Show all"');
+		expect(renderControls({ capped: "uncapped" })).toContain('aria-label="Collapse to cap"');
+		expect(renderControls({ capped: "none" })).not.toContain('aria-label="Show all"');
 	});
 });
 
