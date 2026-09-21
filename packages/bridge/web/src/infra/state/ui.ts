@@ -176,11 +176,12 @@ export interface UiSlice {
 	setScrollToEntryId: (id: string | null) => void;
 
 	// File viewer (markdown file links → in-app read of the freshest file)
-	/** Raw link href of the file being viewed, or null when closed. The
-	 * FileViewer resolves it via the readFile verb on every open — content is
-	 * never cached, so re-opening always reads from disk. */
-	fileViewerPath: string | null;
-	openFileViewer: (path: string) => void;
+	/** The file being viewed, or null when closed. `line` is a `path:98` /
+	 * `#L98` scroll anchor from the link, applied by the viewer after load.
+	 * The FileViewer resolves the path via the readFile verb on every open —
+	 * content is never cached, so re-opening always reads from disk. */
+	fileViewer: { path: string; line?: number } | null;
+	openFileViewer: (path: string, line?: number) => void;
 	closeFileViewer: () => void;
 
 	// Notifications
@@ -235,7 +236,7 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 
 	renderLeafId: null,
 
-	fileViewerPath: null,
+	fileViewer: null,
 
 	notifications: [],
 
@@ -265,8 +266,8 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 			return target === undefined ? s : { renderLeafId: target };
 		}),
 
-	openFileViewer: (path) => set({ fileViewerPath: path }),
-	closeFileViewer: () => set({ fileViewerPath: null }),
+	openFileViewer: (path, line) => set({ fileViewer: line === undefined ? { path } : { path, line } }),
+	closeFileViewer: () => set({ fileViewer: null }),
 
 	setFocusedTurnId: (focusedTurnId) => set({ focusedTurnId }),
 
