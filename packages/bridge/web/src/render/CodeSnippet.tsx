@@ -17,9 +17,20 @@ interface CodeSnippetProps {
 	className?: string;
 	/** Wrap long lines instead of horizontal scroll. Default: scroll. */
 	wrap?: boolean;
+	/** Render a line-number gutter. */
+	lineNumbers?: boolean;
+	/** 1-based line to mark active (viewer scroll anchor, e.g. `path:98`). */
+	highlightLine?: number;
 }
 
-export const CodeSnippet = memo(function CodeSnippet({ code, language, className, wrap }: CodeSnippetProps) {
+export const CodeSnippet = memo(function CodeSnippet({
+	code,
+	language,
+	className,
+	wrap,
+	lineNumbers,
+	highlightLine,
+}: CodeSnippetProps) {
 	const [result, setResult] = useState<HighlightResult | null>(null);
 	const lang = language || "";
 	const whiteSpace = wrap ? "pre-wrap" : "pre";
@@ -63,10 +74,38 @@ export const CodeSnippet = memo(function CodeSnippet({ code, language, className
 		>
 			<code>
 				{result.lines.map((line, lineIdx) => (
-					// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
-					<span key={lineIdx} className="line" style={{ display: "block" }}>
-						{line.tokens.length === 0 ? (
-							<wbr />
+					<span
+						// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
+						key={lineIdx}
+						className="line"
+						style={{ display: "block" }}
+						data-line={lineNumbers ? lineIdx + 1 : undefined}
+						data-gutter={lineNumbers ? "true" : undefined}
+						data-active={lineNumbers && highlightLine === lineIdx + 1 ? "true" : undefined}
+					>
+						{lineNumbers && (
+							<span aria-hidden="true" className="lineNo">
+								{lineIdx + 1}
+							</span>
+						)}
+						{lineNumbers ? (
+							<span className="lineText">
+								{line.tokens.length === 0 ? (
+									<wbr />
+								) : (
+									line.tokens.map((token, tokIdx) => {
+										const style: Record<string, string> = {};
+										if (token.color) style["--code-c"] = token.color;
+										if (token.darkColor) style["--shiki-dark"] = token.darkColor;
+										return (
+											// biome-ignore lint/suspicious/noArrayIndexKey: static token list
+											<span key={tokIdx} style={style}>
+												{token.content}
+											</span>
+										);
+									})
+								)}
+							</span>
 						) : (
 							line.tokens.map((token, tokIdx) => {
 								const style: Record<string, string> = {};
