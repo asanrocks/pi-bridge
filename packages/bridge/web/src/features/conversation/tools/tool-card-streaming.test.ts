@@ -15,7 +15,7 @@
 // which is exactly the streaming display path under test.
 //
 // Lives under web/ (not test/suite/) because it imports .tsx components;
-// root tsgo has no --jsx, so it is type-checked by check:bridge-web instead.
+// root tsc has no --jsx, so it is type-checked by check:bridge-web instead.
 
 import type { ComponentType } from "react";
 import { createElement } from "react";
@@ -319,14 +319,14 @@ describe("card controls", () => {
 	});
 
 	test("markdown toggle only for .md-capable cards", () => {
-		expect(renderControls({ showMarkdown: true })).toContain(">md<");
-		expect(renderControls({ showMarkdown: false })).not.toContain(">md<");
+		expect(renderControls({ showMarkdown: true })).toContain('aria-label="Toggle markdown rendering"');
+		expect(renderControls({ showMarkdown: false })).not.toContain('aria-label="Toggle markdown rendering"');
 	});
 
 	test("cap toggle renders show-all when capped, collapse when uncapped", () => {
-		expect(renderControls({ capped: "capped" })).toContain("Show all");
-		expect(renderControls({ capped: "uncapped" })).toContain("Collapse");
-		expect(renderControls({ capped: "none" })).not.toContain("Show all");
+		expect(renderControls({ capped: "capped" })).toContain('aria-label="Show all"');
+		expect(renderControls({ capped: "uncapped" })).toContain('aria-label="Collapse to cap"');
+		expect(renderControls({ capped: "none" })).not.toContain('aria-label="Show all"');
 	});
 });
 
