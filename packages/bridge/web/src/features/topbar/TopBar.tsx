@@ -3,8 +3,10 @@
 // right HistoryPane), so it shares the viewport width with both side panes
 // instead of overlaying them. Left edge: hamburger (toggles left Sidebar;
 // mobile or desktop-with-sidebar-hidden — hover peeks the drawer there).
-// Right edge: history toggle (toggles right HistoryPane) — symmetric with the
-// hamburger so each side pane has its toggle on its own side. Between them:
+// Right edge: history clock (toggles right HistoryPane) — symmetric with the
+// hamburger so each side pane has its toggle on its own side, including the
+// hover peek and the hide-when-open rule (each pane's own surface carries
+// its close affordance). Hidden on the launcher, where there is no history. Between them:
 // inline-edit session name and the connection icon (down states only) — an
 // icon-only broken-link button on the .topBarBtn spec: motion = trying,
 // stillness = failed; click retries; text lives in tooltip/aria-label only.
@@ -21,7 +23,9 @@ export function TopBar({
 	showSidebarToggle,
 	onSidebarToggle,
 	onSidebarHover,
+	showHistoryToggle,
 	onHistory,
+	onHistoryHover,
 	onRename,
 	onRetry,
 }: {
@@ -37,7 +41,14 @@ export function TopBar({
 	 *  raw to the Sidebar, which owns the peek drawer and the grace timer
 	 *  bridging the hamburger → drawer gap. */
 	onSidebarHover?: (inside: boolean) => void;
+	/** History-clock visibility — the mirrored rule: hidden on the launcher
+	 *  (no session, no history) and whenever the HistoryPane has an open
+	 *  surface of its own (rail/fullscreen carry their own close). */
+	showHistoryToggle: boolean;
 	onHistory: () => void;
+	/** Hover signal for the history peek drawer, symmetric with
+	 *  onSidebarHover. */
+	onHistoryHover?: (inside: boolean) => void;
 	onRename: (name: string) => Promise<void>;
 	onRetry: () => void;
 }) {
@@ -135,27 +146,31 @@ export function TopBar({
 					</svg>
 				</button>
 			)}
-			<button
-				type="button"
-				className={styles.topBarBtn}
-				onClick={onHistory}
-				aria-label="Conversation history"
-				title="Conversation history"
-			>
-				<svg
-					viewBox="0 0 24 24"
-					width="18"
-					height="18"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="2"
-					role="img"
-					aria-label="History"
+			{showHistoryToggle && (
+				<button
+					type="button"
+					className={styles.topBarBtn}
+					onClick={onHistory}
+					onMouseEnter={() => onHistoryHover?.(true)}
+					onMouseLeave={() => onHistoryHover?.(false)}
+					aria-label="Conversation history"
+					title="Conversation history"
 				>
-					<circle cx="12" cy="12" r="9" />
-					<path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
-				</svg>
-			</button>
+					<svg
+						viewBox="0 0 24 24"
+						width="18"
+						height="18"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						role="img"
+						aria-label="History"
+					>
+						<circle cx="12" cy="12" r="9" />
+						<path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+					</svg>
+				</button>
+			)}
 		</div>
 	);
 }
