@@ -151,6 +151,16 @@ export const Sidebar = memo(function Sidebar({
 
 	const reveal = useEdgeReveal({ resize, setMode, setDragPreview });
 
+	// Picking anything that navigates (a session row, a folder's new-session
+	// +) dismisses overlays: mobile fullscreen closes outright; desktop
+	// fullscreen backs off to the rail so the picked surface is visible;
+	// the peek drawer closes.
+	const dismissAfterPick = useCallback(() => {
+		if (!isWide) setMode("hidden");
+		else if (mode === "fullscreen") setMode("rail");
+		else hideNow();
+	}, [isWide, mode, setMode, hideNow]);
+
 	// Opening a session is an attach (ADR 11): the daemon resolves-or-creates
 	// the activation and rebinds this connection — no isBusy guard, the old
 	// attachment keeps streaming headless.
@@ -159,14 +169,19 @@ export const Sidebar = memo(function Sidebar({
 			// Passing the id lets the client seed a cache cursor (ADR 09) instead
 			// of falling back to a full replace on every UI session switch.
 			onOpenSession(session.projectId, session.stem, session.sessionId);
-			// Selection dismisses overlays: mobile fullscreen and the desktop
-			// peek drawer close outright; desktop fullscreen backs off to the
-			// rail so the picked conversation is visible.
-			if (!isWide) setMode("hidden");
-			else if (mode === "fullscreen") setMode("rail");
-			else hideNow();
+			dismissAfterPick();
 		},
-		[isWide, mode, onOpenSession, setMode, hideNow],
+		[onOpenSession, dismissAfterPick],
+	);
+
+	// Opening a Project home (folder +) is navigation too — same dismissal
+	// policy as a session pick.
+	const handleOpenProject = useCallback(
+		(projectId: string) => {
+			onOpenProject(projectId);
+			dismissAfterPick();
+		},
+		[onOpenProject, dismissAfterPick],
 	);
 
 	const handleCloseSession = useCallback(
@@ -195,7 +210,7 @@ export const Sidebar = memo(function Sidebar({
 			onToggleAllFolders={cycleAllFolders}
 			onToggleFolder={cycleFolder}
 			onOpenSession={handleOpenSession}
-			onOpenProject={onOpenProject}
+			onOpenProject={handleOpenProject}
 			onCloseSession={handleCloseSession}
 			onShowLauncher={handleShowLauncher}
 			onLoadFolder={onLoadFolder}
