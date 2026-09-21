@@ -7,7 +7,7 @@
 
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
-import { CheckIcon, CopyIcon, EyeIcon } from "../../../render/icons.tsx";
+import { CheckIcon, ChevronDownIcon, CopyIcon, EyeIcon, MarkdownIcon, WrapIcon } from "../../../render/icons.tsx";
 import styles from "../actions.module.css";
 import { copyToClipboard } from "../clipboard.ts";
 
@@ -171,7 +171,13 @@ export const CardControls = memo(function CardControls({
 				</button>
 			)}
 			{copyText !== null && (
-				<button type="button" className={styles.cardCtrlBtn} onClick={handleCopy} aria-label="Copy content">
+				<button
+					type="button"
+					className={styles.cardCtrlBtn}
+					onClick={handleCopy}
+					aria-label="Copy content"
+					title={copied ? "Copied" : "Copy content"}
+				>
 					{copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
 				</button>
 			)}
@@ -182,9 +188,10 @@ export const CardControls = memo(function CardControls({
 					data-on={wrap || undefined}
 					aria-pressed={wrap}
 					aria-label="Toggle line wrap"
+					title="Toggle line wrap"
 					onClick={onToggleWrap}
 				>
-					wrap
+					<WrapIcon size={13} />
 				</button>
 			)}
 			{showMarkdown && (
@@ -194,14 +201,22 @@ export const CardControls = memo(function CardControls({
 					data-on={markdown || undefined}
 					aria-pressed={markdown}
 					aria-label="Toggle markdown rendering"
+					title="Toggle markdown rendering"
 					onClick={onToggleMarkdown}
 				>
-					md
+					<MarkdownIcon size={13} />
 				</button>
 			)}
 			{capped !== "none" && (
-				<button type="button" className={styles.cardCtrlBtn} onClick={onToggleCap}>
-					{capped === "uncapped" ? "\u25B4 Collapse" : "\u25BE Show all"}
+				<button
+					type="button"
+					className={styles.cardCtrlBtn}
+					data-dir={capped === "uncapped" ? "up" : undefined}
+					aria-label={capped === "uncapped" ? "Collapse to cap" : "Show all"}
+					title={capped === "uncapped" ? "Collapse to cap" : "Show all"}
+					onClick={onToggleCap}
+				>
+					<ChevronDownIcon size={13} />
 				</button>
 			)}
 		</div>

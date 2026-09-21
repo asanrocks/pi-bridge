@@ -42,7 +42,7 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 	return (
 		<div className={turnStyles.userBashTurn}>
 			<div className={styles.action} data-kind="bash" data-muted={turn.excludeFromContext || undefined}>
-				<div className={styles.actionHead}>
+				<div className={styles.actionHead} data-wrap={wrap || undefined}>
 					<span className={turnStyles.userBashPrompt}>$</span>
 					<span className={styles.actionSummary}>{turn.command}</span>
 				</div>

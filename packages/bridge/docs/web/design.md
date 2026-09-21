@@ -340,8 +340,8 @@ dimmed backdrop closes it. Code files render a line-number gutter: each
 gutter line is a two-column grid (fixed number column, wrapping content
 column), so wrapped code never flows under the number.
 
-The viewer header carries the same display toggles as tool cards — `wrap`
-for code files, `preview` for Markdown files — driving the shared `cardWrap`
+The viewer header carries the same display toggles as tool cards — word-wrap
+icon for code files, markdown glyph for Markdown files — driving the shared `cardWrap`
 and `cardMarkdown` preferences, so one preference governs card and viewer
 rendering alike. With preview off, a Markdown file renders as highlighted
 raw Markdown in the guttered code view.
@@ -382,7 +382,9 @@ keyboard focus and scroll anchors remain stable.
   Markdown summary. Model changes render as one divider line naming the new
   model and thinking level.
 - **User-bash turns** are standalone bash-tinted action rows. The command is
-  shown beside `$`; output uses the shared status and result controls and
+  shown beside `$`; the shared wrap toggle governs it like the output (wrap
+  on: full multi-line command; off: one-line ellipsis). Output uses the
+  shared status and result controls and
   exposes exit, cancelled, truncated, and context-exclusion metadata.
 - **Git-change turns** are standalone cards for repository observations that
   occur outside an open assistant action group. The effective branch and short
@@ -408,7 +410,8 @@ The trailing group auto-expands while streaming so new actions are visible,
 but its action details remain collapsed. A manual group or action toggle adds
 that element to the frozen set, so later streaming renders do not override
 user intent. Each action has its own triangle. Long details use a separate
-`Show all` control; the normal details region is capped at 300px and signals
+expand control (chevron icon, with a "Show all" tooltip); the normal details
+region is capped at 300px and signals
 clipping with a fade. Touch inputs keep hover controls visible.
 
 Action rows use four semantic hues: edit and write share the mutate hue,
@@ -423,9 +426,9 @@ truncation notices, and a content region on the page surface. Read shows
 highlighted file content; write shows written content; edit shows a unified
 diff; bash and PowerShell show command output with tail/full controls; grep,
 find, and ls show argument and result rows; unknown tools use the fallback
-argument and output renderer. Copy, line wrapping, Markdown rendering for
-Markdown files, `Show all`, and the open-in-viewer eye (when the call's
-arguments carry a `path`) are card-local controls. Tool arguments and
+argument and output renderer. Copy, line-wrap, Markdown-render, expand, and
+open-in-viewer eye (when the call's arguments carry a `path`) are card-local
+icon controls with tooltips. Tool arguments and
 results can arrive while a call is streaming, so a card renders available
 content without waiting for a path or command annotation.
 

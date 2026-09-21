@@ -25,7 +25,8 @@
    Collapse affordances, two controls at the press point (action header):
      - group header: triangle at the start, then dots, then summary
      - action header:  triangle at the start (collapses the whole details); the
-                     cap toggle ("show all") and the copy/wrap/md controls
+                     cap toggle (chevron "show all") and the copy/wrap/md/
+                     view icon controls
                      live in the hover top bar of the expanded card
    ========================================================================== */
 
@@ -187,6 +188,15 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	color: var(--color-foreground);
+}
+
+/* User-bash command wrap (data-wrap from the shared wrap toggle): the
+   command IS the card's only display of the call — no separate header
+   line — so the wrap toggle governs it like the output below. Off keeps
+   the one-line ellipsis row. */
+.actionHead[data-wrap] .actionSummary {
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 
 /* Command-word chip in the beautified shell summary (beautifyShellCommand
@@ -624,6 +634,16 @@
    without hover (both tiers stay muted — controls stay subordinate). */
 .cardCtrlBtn[data-on] {
 	color: var(--color-secondary);
+}
+
+/* Icon-only controls: block-level svg kills the inline baseline gap; the
+   cap toggle flips the chevron for the collapse direction. */
+.cardCtrlBtn svg {
+	display: block;
+}
+
+.cardCtrlBtn[data-dir="up"] svg {
+	transform: rotate(180deg);
 }
 
 /* Header line — the full-form identifier (full cwd-relative path with
