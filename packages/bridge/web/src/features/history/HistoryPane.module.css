@@ -1,68 +1,18 @@
-/* HistoryPane — git-log-style branch graph as a docked right pane (desktop)
-   / right drawer (mobile). Replaces the former centered modal. */
+/* HistoryPane — the graph's own styles. Container surfaces (rail /
+   fullscreen overlay / peek drawer / edge-reveal strip) live in
+   render/PaneShell.module.css; the header stays here (the pane's own
+   chrome). */
 
-/* Desktop docked pane ───────────────────────────────────────────────────
-   Fixed right rail, full height, inline chrome. Width is set inline from
-   the resize controller and matches the --history-w value the same
-   controller publishes, so the TopBar and .body gutter clear it exactly.
-   Mobile renders .drawer + .backdrop instead.
-   Shares the Sidebar's chrome vocabulary: --color-sidebar surface, mirrored
-   border, padding-top, and a quiet section-header top edge (see .header). */
-.pane {
-	position: fixed;
-	top: 0;
-	right: 0;
-	bottom: 0;
-	z-index: var(--z-pane);
-	background: var(--color-sidebar);
-	border-left: 1px solid var(--color-border);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	padding-top: 6px;
-}
-
-/* ── Mobile drawer ────────────────────────────────────────────────────────
-   Slide-over from the right + dismiss backdrop. Off-canvas, so it
-   contributes 0 to --history-w (the gutter stays 0 on mobile). */
-.backdrop {
-	position: fixed;
-	inset: 0;
-	z-index: var(--z-drawer);
-	background: var(--color-overlay);
-	border: none;
-	cursor: pointer;
-	padding: 0;
-	margin: 0;
-}
-
-.drawer {
-	position: fixed;
-	top: 0;
-	right: 0;
-	bottom: 0;
-	width: min(100%, 56rem);
-	z-index: calc(var(--z-drawer) + 1);
-	background: var(--color-sidebar);
-	border-left: 1px solid var(--color-border);
-	display: flex;
-	flex-direction: column;
-	overflow: hidden;
-	box-shadow: var(--shadow-edge-right);
-	/* Notch / home-indicator safe areas. Right-attached, so only
-	   top/bottom/right insets matter (left matters once the 56rem cap
-	   kicks in on landscape tablets). */
-	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-}
-
-/* Header — matches the Sidebar's .sidebarSectionHeader: a quiet uppercase
-   label with an action button (× here, + on the Sidebar) in the right slot.
-   No chrome bar / border-bottom, so the two panes share a top-edge treatment. */
+/* ── Header ──────────────────────────────────────────────────────────────
+   Matches the Sidebar's .sidebarSectionHeader: a quiet uppercase label with
+   an action button in the right slot. No chrome bar / border-bottom, so the
+   two panes share a top-edge treatment. 12px from the viewport top — the
+   gap the former .pane padding-top + header margin added up to. */
 .header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin-top: 6px;
+	margin-top: 12px;
 	padding: 4px 10px 4px 13px;
 	flex-shrink: 0;
 }

@@ -168,11 +168,10 @@ export interface UiSlice {
 	renderLeafId: string | null;
 	setRenderLeaf: (id: string | null) => void;
 
-	// History pane (docked right on desktop, drawer on mobile)
-	historyOpen: boolean;
-	setHistoryOpen: (open: boolean) => void;
 	/** Entry id to scroll the conversation to after navigation (set by history
-	 * pane selection; cleared once the scroll lands). */
+	 * pane selection; cleared once the scroll lands). The history pane's
+	 *  open/mode state is NOT here — it lives with useHistoryPaneShell
+	 *  (usePaneMode), like the sidebar's. */
 	scrollToEntryId: string | null;
 	setScrollToEntryId: (id: string | null) => void;
 
@@ -232,7 +231,6 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 	loadingPaths: new Set(),
 	pullTick: 0,
 
-	historyOpen: false,
 	scrollToEntryId: null,
 
 	renderLeafId: null,
@@ -257,7 +255,6 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 			notifications: s.notifications.filter((t) => t.id !== id),
 		})),
 
-	setHistoryOpen: (historyOpen) => set({ historyOpen }),
 	setScrollToEntryId: (scrollToEntryId) => set({ scrollToEntryId }),
 
 	setRenderLeaf: (id) =>
