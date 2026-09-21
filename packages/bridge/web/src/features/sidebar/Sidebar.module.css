@@ -5,7 +5,9 @@
    clears it exactly. Spans the full viewport height (top:0) so it shares
    width with — rather than sits below — the TopBar, which now binds its
    left edge to --sidebar-w. Mobile renders .sidebarFullscreen instead
-   (already position: fixed, inset: 0). */
+   (already position: fixed, inset: 0). No padding-top of its own: the
+   corner toggle row (.overlayHeader) opens the pane and supplies the
+   6px, so the toggle lands exactly at the shared (12, 6) hamburger box. */
 .sidebar {
 	position: fixed;
 	top: 0;
@@ -17,9 +19,6 @@
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-	/* The first section header used to sit below the TopBar; now that the
-	   pane owns the top edge, give it breathing room. */
-	padding-top: 6px;
 }
 
 /* Fullscreen mode: pure overlay above the whole shell (TopBar included —
