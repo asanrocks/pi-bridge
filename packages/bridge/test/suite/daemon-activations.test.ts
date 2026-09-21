@@ -428,6 +428,45 @@ describe("daemon: projects", () => {
 		ws.close();
 	});
 
+	it("listFiles tilde prefixes with a trailing slash list the directory itself", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(join(a, "sub"), { recursive: true });
+		writeFileSync(join(a, "sub", "alpha.ts"), "// a");
+
+		// The tilde branch resolves against HOME at call time; point it at the
+		// project root so ~ maps to a known directory. Regression: `~/sub/`
+		// used to hit dirname("<home>/sub/") and list `~` filtered by "sub",
+		// so accepting a directory completion duplicated its own name.
+		const realHome = process.env.HOME;
+		process.env.HOME = a;
+		try {
+			const { port } = await startDaemon({ agentDir, allow: [a] });
+			const ws = await openClient(port);
+			const frames = collectFrames(ws);
+			const projectId = basename(a).toLowerCase();
+
+			const ask = async (prefix: string) => {
+				const id = send(ws, { verb: "listFiles", projectId, prefix });
+				const reply = (await waitForReply(frames, id)) as unknown as {
+					ok: boolean;
+					entries: Array<{ path: string; isDirectory: boolean }>;
+				};
+				return reply.entries.map((e) => e.path);
+			};
+
+			// Accepted directory completion: refetch of `~/sub/` lists inside it.
+			expect(await ask("~/sub/")).toEqual(["~/sub/alpha.ts"]);
+			// Partial filter still completes the directory entry itself.
+			expect(await ask("~/su")).toEqual(["~/sub"]);
+			// Bare `~` completes entries under home with the `~/` prefix intact.
+			expect(await ask("~")).toEqual(["~/sub"]);
+
+			ws.close();
+		} finally {
+			process.env.HOME = realHome;
+		}
+	});
+
 	it("getDaemonInfo reports each project's resolved default model", async () => {
 		const { agentDir, root, a } = makeProjectRoots();
 		// Project settings pin a default model and thinking level for project a.
