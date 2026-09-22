@@ -6,8 +6,10 @@
 // link renderer treats every href as an external URL (link-safety modal →
 // window.open), so a `./README.md` link would navigate to a 404 on the
 // daemon origin. Classification decides the click target: URLs keep the
-// external-link flow; paths go to the in-app file viewer via the readFile
-// verb (resolved against the attached instance's cwd, server-side).
+// external-link flow; paths go to the in-app browser via the readFile verb.
+// The path is absolute-ized against the current Project cwd client-side (the
+// browser's queries are absolutely addressed, ADR 14); a `~`-rooted path is
+// left as written for the host, which owns HOME.
 // ============================================================================
 
 /** A classified link href. `file` paths are raw (unresolved) — the daemon

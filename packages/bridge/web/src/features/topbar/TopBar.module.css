@@ -70,6 +70,28 @@
 	border-color: var(--color-secondary);
 }
 
+/* Dirty-now badge — the count of files differing from HEAD. A quiet chip on
+   the topBarBtn surface, hidden while the tree is clean, so it reads as an
+   ambient state light rather than permanent chrome. */
+.changesBadge {
+	background: none;
+	border: 1px solid var(--color-border);
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	padding: 4px 8px;
+	border-radius: var(--radius-sm);
+	display: inline-flex;
+	align-items: center;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.changesBadge:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
 /* Connection icon — shown only on down states. Icon-only broken-link button
    on the .topBarBtn spec (no chip surface); the Launcher renders the full
    text panel when unattached. Motion grammar (see connectionStatus.ts):

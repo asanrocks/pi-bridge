@@ -1,6 +1,6 @@
 // ============================================================================
 // App — root shell: TopBar, Sidebar, ConversationArea/ComposeDock (or the
-// Launcher), HistoryPane, FileViewer. The shell owns only chrome composition;
+// Launcher), HistoryPane, FileBrowser. The shell owns only chrome composition;
 // per-area wiring lives with its area:
 //   - useSidebarShell (sidebar)  — Sidebar props + the chrome handles
 //                                  (mode, hamburger toggle, Alt+N)
@@ -27,7 +27,7 @@ import { useHistoryPaneShell } from "../features/history/useHistoryPaneShell.tsx
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { useSidebarShell } from "../features/sidebar/useSidebarShell.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
-import { FileViewer } from "../features/viewer/FileViewer.tsx";
+import { FileBrowser } from "../features/viewer/FileBrowser.tsx";
 import { useConnection } from "../infra/net/useConnection.ts";
 import { useBranchSelect, useRpc } from "../infra/net/useRpc.ts";
 import { useDraftGuard } from "../infra/persist/draftPersistence.ts";
@@ -148,7 +148,7 @@ function AppInner() {
 			    useHistoryPaneShell, so it survives the pane's unmount when no
 			    session is open) */}
 			{hasOpenSession && history.pane}
-			<FileViewer />
+			<FileBrowser />
 		</div>
 	);
 }

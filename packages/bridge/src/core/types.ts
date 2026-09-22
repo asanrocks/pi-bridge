@@ -443,11 +443,30 @@ export interface ListFilesRequest {
 	projectId: string;
 }
 
-/** Read a file fresh from disk for the web viewer (not session state).
- * Relative paths resolve against the attached session's Project cwd. */
+/** Content-addressing for one repository snapshot: a pinned 40/64-hex object
+ * id, "head" (resolved at query time), "index" (the staged tree), or
+ * "worktree" (the live working tree). This is the one addressing vocabulary
+ * for file content — the file viewer, the review diff's per-file payloads,
+ * and the diff view's whole-file toggle all name a path plus a state. */
+export type SnapshotState = string;
+
+/** Read one path's content at one repository state. Attachment-free (ADR 14):
+ * the path is absolute — or `~`-rooted, which the host expands — so nothing
+ * about a Session is needed to resolve it. An omitted state reads the live
+ * filesystem; see SnapshotState for the other values. */
 export interface ReadFileRequest {
 	verb: "readFile";
 	path: string;
+	state?: SnapshotState;
+}
+
+/** List one directory's immediate children at one repository state.
+ * Attachment-free and absolutely addressed, like readFile. Listing is lazy:
+ * one directory per expansion, never a recursive scan. */
+export interface ListDirectoryRequest {
+	verb: "listDirectory";
+	path: string;
+	state?: SnapshotState;
 }
 
 export interface ConsoleRequest {
@@ -464,6 +483,104 @@ export interface GitShowRequest {
 	verb: "gitShow";
 	/** Full object id of the recorded commit (validated before spawn). */
 	commit: string;
+}
+
+/** Resolve the comparison base for reviewing one commit (ADR 14): the first
+ * parent's object id, or the repository's empty-tree oid when the commit is a
+ * root commit. Attachment-free, like the browser's read queries; the result
+ * is a diff state the client can pass back, never a picker value. */
+export interface GitBaseRequest {
+	verb: "gitBase";
+	/** Absolute directory whose repository owns the commit. */
+	directory: string;
+	/** Full object id of the commit to review (validated before spawn). */
+	commit: string;
+}
+
+// ── Review surface: repository diff queries over the stamp timeline ─────
+
+/** One endpoint of a review diff query. Either a pinned 40/64-hex object id
+ * (a recorded stamp commit), "head" (the repository's current HEAD commit,
+ * resolved at query time — recorded oids are pinned labels and can drift
+ * after external commits), "index" (the staged tree), or "worktree" (the live
+ * working tree, valid only as the `new` end). */
+export type GitDiffState = string;
+
+/** Change kind from git's raw status letter. `unknown` is the fallback for a
+ * status git reports but the protocol does not name. Untracked files are
+ * `added` and also carry `untracked`. */
+export type GitDiffFileStatus =
+	| "added"
+	| "modified"
+	| "deleted"
+	| "renamed"
+	| "copied"
+	| "typechange"
+	| "unmerged"
+	| "unknown";
+
+export interface GitDiffFileStat {
+	/** Destination path (for renames: the new name). */
+	path: string;
+	/** Rename/copy source path when git detected one. */
+	oldPath?: string;
+	/** The change kind for this path (ADR 14). The file list itself comes from
+	 * numstat; the status is a best-effort companion from the raw directive. */
+	status: GitDiffFileStatus;
+	additions: number;
+	deletions: number;
+	/** True for binary files (git reports `-` counts). */
+	binary: boolean;
+	/** True for an untracked (new, unstaged) file, which git's own diff
+	 * excludes and the host lists separately. The client fetches its content
+	 * through the payload verb like any other path (the old side is absent). */
+	untracked?: boolean;
+}
+
+// ── Repository browser: directory listing over one state (ADR 14) ────────
+
+/** One entry of a directory listing. `path` is absolute, so it can be fed
+ * back to the browser's read and list queries unchanged. */
+export interface DirectoryEntry {
+	name: string;
+	path: string;
+	isDirectory: boolean;
+}
+
+/** One directory's immediate children at one repository state. `absent` is a
+ * value, not an error: the directory does not exist at that state (a deleted
+ * directory, a path outside a repository, or a path not in the named tree).
+ * `omitted` counts entries the host's cap left out. */
+export interface DirectoryListing {
+	path: string;
+	state: SnapshotState;
+	entries: DirectoryEntry[];
+	omitted: number;
+	absent: boolean;
+}
+
+/** Diff two review states under an absolute directory (ADR 14). This is the
+ * *directive* query: it returns the file list, statuses, and line counts, and
+ * never patch text. Content comes from `readFile` per file, so the renderer
+ * diffs whole snapshots rather than parsing git's patch format. Paths are
+ * relative to `directory`, which also scopes the result to that subtree. */
+export interface GitDiffRequest {
+	verb: "gitDiff";
+	directory: string;
+	old: GitDiffState;
+	new: GitDiffState;
+}
+
+export interface GitDiffReply {
+	id: string;
+	ok: true;
+	files: GitDiffFileStat[];
+	/** Changed files left out by the host's list cap. Present only when some
+	 * were left out, so the review can report a partial list honestly. */
+	filesOmitted?: number;
+	/** Untracked files discovered beyond the host's inclusion cap. Present
+	 * only when some were left out, so the summary can stay honest. */
+	untrackedOmitted?: number;
 }
 
 // ── Project / session address shapes (ADR 11) ────────────────────────
@@ -566,7 +683,10 @@ export type RpcRequestBody =
 	| PullRequest
 	| ListFilesRequest
 	| ReadFileRequest
+	| ListDirectoryRequest
 	| GitShowRequest
+	| GitBaseRequest
+	| GitDiffRequest
 	| ConsoleRequest
 	| DetachRequest
 	| CloseSessionRequest
@@ -675,17 +795,32 @@ export interface ListFilesReply {
 	entries: Array<{ path: string; isDirectory: boolean }>;
 }
 
-export interface ReadFileReply {
-	id: string;
-	ok: true;
-	/** Absolute resolved path (cwd-relative links resolve server-side). */
-	path: string;
-	content: string;
-	/** True when the file exceeded the byte cap and content is a prefix. */
-	truncated: boolean;
-	/** Full file size in bytes. */
-	bytes: number;
-}
+/** One path's content at a snapshot. `absent` is a value, not an error: a
+ * deleted file, a path that is not in a commit's tree, or an unmerged index
+ * entry. `binary` is detected host-side from a NUL byte, so the client never
+ * renders mojibake. `path` is the resolved absolute path for a worktree read
+ * and the repo-relative path for a commit or index read. */
+export type SnapshotFile =
+	| {
+			kind: "file";
+			state: SnapshotState;
+			path: string;
+			content: string;
+			/** True when the file exceeded the byte cap and content is a prefix.
+			 * A truncated snapshot is not diffable. */
+			truncated: boolean;
+			/** Full file size in bytes. */
+			bytes: number;
+	  }
+	| { kind: "absent"; state: SnapshotState; path: string }
+	| { kind: "binary"; state: SnapshotState; path: string; bytes: number };
+
+/** The RPC reply is the payload plus the envelope. The host-side DaemonVerbs
+ * seam returns the bare `SnapshotFile`. */
+export type ReadFileReply = { id: string; ok: true } & SnapshotFile;
+
+/** The index listing reply: the envelope plus the listing. */
+export type ListDirectoryReply = { id: string; ok: true } & DirectoryListing;
 
 export interface GitShowReply {
 	id: string;
@@ -694,6 +829,14 @@ export interface GitShowReply {
 	output: string;
 	/** True when the output exceeded the byte cap and is a prefix. */
 	truncated: boolean;
+}
+
+export interface GitBaseReply {
+	id: string;
+	ok: true;
+	/** The commit to diff against: the commit's first parent, or the
+	 * repository's empty-tree oid for a root commit. */
+	baseline: string;
 }
 
 export interface VerbReply {

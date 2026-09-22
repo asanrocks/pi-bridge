@@ -3,10 +3,15 @@ import type {
 	ArchiveSessionRequest,
 	ClientMessage,
 	CloseSessionRequest,
+	DirectoryListing,
 	GetDaemonInfoReply,
+	GitBaseRequest,
+	GitDiffFileStat,
+	GitDiffRequest,
 	GitShowRequest,
 	ImageContent,
 	JsonValue,
+	ListDirectoryRequest,
 	ListFilesRequest,
 	ListSessionsRequest,
 	ModelRef,
@@ -25,6 +30,7 @@ import type {
 	SessionRef,
 	SetModelRequest,
 	SetThinkingLevelRequest,
+	SnapshotFile,
 } from "../core/index.ts";
 import {
 	CompactCodec,
@@ -101,12 +107,30 @@ export interface DaemonVerbs {
 	 * not require an attachment (the Project home completes pre-send). Throws
 	 * on an unknown Project. */
 	listFiles: (prefix: string, projectId: string) => Array<{ path: string; isDirectory: boolean }>;
-	/** Read a file for the web viewer. Throws on missing/unreadable paths
-	 * (converted to an ok:false reply). Relative paths resolve against cwd. */
-	readFile: (path: string, cwd?: string) => { path: string; content: string; truncated: boolean; bytes: number };
+	/** Read one absolute path at one repository state (ADR 14). A missing path
+	 * is an `absent` value, not a throw; an invalid state/path or a spawn
+	 * failure throws (converted to an ok:false reply). An omitted state reads
+	 * the live filesystem. Attachment-free. */
+	readFile: (path: string, state?: string) => Promise<SnapshotFile>;
+	/** List one absolute directory's immediate children at one repository state
+	 * (ADR 14). A missing directory is an `absent` value, not a throw.
+	 * Attachment-free. */
+	listDirectory: (path: string, state?: string) => Promise<DirectoryListing>;
 	/** Show a commit (`git show --stat`) for an ADR 10 change card. Throws on
 	 * invalid commits and spawn failures (converted to an ok:false reply). */
 	gitShow: (commit: string, cwd?: string) => Promise<{ output: string; truncated: boolean }>;
+	/** Resolve the comparison base for reviewing one commit (ADR 14): its first
+	 * parent, or the repository's empty-tree oid for a root commit.
+	 * Attachment-free, like the browser's read queries. */
+	gitBase: (directory: string, commit: string) => Promise<{ baseline: string }>;
+	/** The browser's diff *directive* (file list, statuses, counts) between two
+	 * repository states under an absolute directory (see GitDiffRequest).
+	 * Throws like gitShow. Attachment-free. */
+	gitDiff: (
+		directory: string,
+		oldState: string,
+		newState: string,
+	) => Promise<{ files: GitDiffFileStat[]; filesOmitted?: number; untrackedOmitted: number }>;
 }
 
 // ============================================================================
@@ -383,11 +407,24 @@ export class Connection {
 				case "readFile": {
 					const m = msg as unknown as ReadFileRequest;
 					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
-					// Requires an attachment: relative links resolve against the
-					// attached session's Project cwd.
-					if (!this._attachedManager) throw new Error("no session attached");
-					const result = this.daemonVerbs.readFile(m.path, this._attachedManager.cwd);
+					if (m.state !== undefined && (typeof m.state !== "string" || m.state === "")) {
+						throw new Error("Invalid `state`");
+					}
+					// Attachment-free (ADR 14): the path is absolute, so no Session is
+					// needed to resolve it. An omitted state reads the live filesystem.
+					const result = await this.daemonVerbs.readFile(m.path, m.state);
 					this.send({ id, ok: true, ...result });
+					break;
+				}
+				case "listDirectory": {
+					const m = msg as unknown as ListDirectoryRequest;
+					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
+					if (m.state !== undefined && (typeof m.state !== "string" || m.state === "")) {
+						throw new Error("Invalid `state`");
+					}
+					// Attachment-free, like readFile.
+					const listing = await this.daemonVerbs.listDirectory(m.path, m.state);
+					this.send({ id, ok: true, ...listing });
 					break;
 				}
 				case "gitShow": {
@@ -397,6 +434,24 @@ export class Connection {
 					// attached session's repository, so its cwd is the query base.
 					if (!this._attachedManager) throw new Error("no session attached");
 					const result = await this.daemonVerbs.gitShow(m.commit, this._attachedManager.cwd);
+					this.send({ id, ok: true, ...result });
+					break;
+				}
+				case "gitBase": {
+					const m = msg as unknown as GitBaseRequest;
+					if (typeof m.directory !== "string" || m.directory === "") throw new Error("Missing `directory`");
+					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
+					// Attachment-free: the absolute directory owns the commit.
+					const result = await this.daemonVerbs.gitBase(m.directory, m.commit);
+					this.send({ id, ok: true, ...result });
+					break;
+				}
+				case "gitDiff": {
+					const m = msg as unknown as GitDiffRequest;
+					if (typeof m.directory !== "string" || m.directory === "") throw new Error("Missing `directory`");
+					if (typeof m.old !== "string" || typeof m.new !== "string") throw new Error("Missing diff states");
+					// Attachment-free (ADR 14): the absolute directory scopes the diff.
+					const result = await this.daemonVerbs.gitDiff(m.directory, m.old, m.new);
 					this.send({ id, ok: true, ...result });
 					break;
 				}

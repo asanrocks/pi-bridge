@@ -144,11 +144,13 @@ image-count and image-size limits.
 Navigation verbs are `openSession`, `newSession`, `detach`, `closeSession`,
 and `archiveSession`. They route to the Daemon because they change attachment
 or Activation state. Query verbs are `listSessions`, `listActiveSessions`,
-`getDaemonInfo`, `listFiles`, `readFile`, and `gitShow`. `listFiles` is
-Project-addressed and needs no attachment. `readFile` and `gitShow` require an
-attachment because their relative path or repository is the attached
-Session's Project cwd. `pull` is Connection-local. `console` is accepted only
-when the daemon is in dev mode and is a no-op acknowledgement.
+`getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,
+`gitBase`, and `gitDiff`. `listFiles` is Project-addressed; `readFile`,
+`listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),
+so their base travels in the request and they need no attachment. `gitShow`
+alone remains attachment-bound: it reads the attached Session's Project cwd.
+`pull` is Connection-local. `console` is accepted only when the daemon is in
+dev mode and is a no-op acknowledgement.
 
 RPC replies carry the request id and success or error fields. Document changes
 never ride in replies: they arrive through initial-sync or live push frames.
@@ -306,16 +308,91 @@ directories, sorts directories first, and omits hidden entries unless the
 prefix begins with `.`. This Project-addressed form is what the Project-home
 composer uses before a Session exists.
 
-`readFile` is attachment-bound and reads the requested file fresh against the
-attached Manager's cwd. It accepts absolute paths and relative paths (with
-`~` expansion), requires a regular file, caps returned content at 256 KiB, and
-reports the absolute path, original byte count, and truncation flag.
+`readFile` and `listDirectory` are the browser's content and structure
+queries (ADR 14). Both are attachment-free and absolutely addressed: the
+request carries the path, so no Session is needed to resolve a base, and a
+Connection that never opened one can still browse. `~`-rooted paths are the
+one non-absolute form accepted, expanded host-side because the client has no
+HOME; everything else must be absolute. For a snapshot state the host finds
+the repository containing the path (from the nearest existing directory
+ancestor, so a deleted path still resolves) and translates the path to a
+repository-relative one — `<rev>:<rel>` or `:<rel>` for the index — running
+git from the repository root. A path outside a repository has no snapshot
+view and is `absent`.
+
+`readFile` returns one path's content at one state. `"worktree"` reads the
+filesystem fresh; a pinned oid or `"head"` reads the commit's tree, and
+`"index"` reads the staged blob. All states cap content at 256 KiB and report
+the path, original byte count, and truncation flag. A missing path is a value,
+not an error: the reply is `absent` for a deleted file, a path not in a
+commit's tree, a directory (`cat-file blob` rejects a tree), or an unmerged
+index entry. Binary content (a NUL byte in the first 8 KB) is reported as
+`binary` rather than decoded. A state that does not resolve is an error, not
+an absent path: a failed blob read is only called `absent` after the state
+itself is verified (`rev-parse <rev>^{tree}` for a commit, `ls-files` for the
+index), so an unreachable recorded commit or an unreadable index stays a
+failure.
+
+`listDirectory` returns one directory's immediate children. Live listings read
+the filesystem; `"head"`/commit listings use non-recursive `git ls-tree`, and
+`"index"` listings derive immediate children from the flat staged path list
+(the index holds no tree objects). `.git` is never listed — machine state, not
+project content — and entries are capped at `MAX_DIRECTORY_ENTRIES` with the
+remainder reported as `omitted`. A missing directory, or a snapshot state for
+a path outside a repository, is `absent`. A listing that cannot be read at all
+— an unreadable state, a spawn failure, an index listing over its byte cap —
+is an RPC error, never an empty directory, so the client can say the directory
+is unreadable and retry it on the next expansion. Listing is lazy: one
+directory per expansion, never a recursive scan.
 
 `gitShow` is attachment-bound and runs `git show --stat --no-color` in the
 attached Manager's cwd. The commit must be a 40- or 64-character lowercase
 hex object id. The command has a five-second timeout and a 128 KiB output cap;
 invalid, unreachable, failed, or timed-out requests return an RPC error. This
 is an explicit viewer query, not part of automatic Document synchronization.
+
+`gitBase` resolves the comparison base for reviewing one commit: the first
+parent's oid, or the repository's empty-tree oid when the commit is a root
+commit, so a commit card can open the browser on `commit` vs `base` without
+the client knowing git's parent syntax or a hash-algorithm constant. It is
+attachment-free and scoped by an absolute directory, like `gitDiff`. An
+unreachable commit is an RPC error; the empty-tree oid is an internal diff
+base, never offered as a picker value.
+
+`gitDiff` is the browser's *directive* query: it returns the file list,
+statuses, and line counts between two states — a pinned object id, `"head"`
+(the repository's current HEAD, resolved at query time), `"index"`, or
+`"worktree"` (valid only as the new state) — and never patch text. It is
+attachment-free and scoped by an absolute directory. Two directives are run
+per query: `git diff --numstat -z` is the authority for which files are
+listed, and `git diff --raw -z` supplies the status letters (added, modified,
+deleted, renamed, copied, typechange, unmerged). Both use fixed flags
+(`--no-color --no-ext-diff --no-textconv -M --relative --literal-pathspecs`)
+so repo config cannot alter the output. `--relative` (explicit, so it
+overrides `diff.relative` config) makes every path relative to the requested
+directory and scopes the directive to that subtree. The three trees make the
+state pair a matrix rather than a symmetric pair: `--cached` compares against
+the index, and an index-valued base is the reverse (`-R`) of the canonical
+commit → index diff. A worktree-side diff also lists untracked, non-ignored
+files, which git's own diff never reports: they are enumerated with
+`ls-files --others --exclude-standard` (directory-relative, so the same base),
+capped at `MAX_UNTRACKED_FILES` with the remainder reported as
+`untrackedOmitted`, and carry no line counts. The changed-file list itself is
+capped at `MAX_DIFF_FILES` with the remainder reported as `filesOmitted`.
+Each directive stream is byte-capped as a memory guard (16 MiB — hundreds of
+thousands of `numstat` records, far above a realistic diff). A byte-truncated
+`numstat` cannot supply an exact `filesOmitted`, so it is refused as an RPC
+error rather than presented as a partial list; a truncated `raw` stream is not
+fatal, and the status letters past the cut fall back to `unknown`. State values
+are validated before any spawn: only the exact sentinels and lowercase hex
+oids are accepted, and `"worktree"` is invalid as the old state.
+
+The content half of the browser is `readFile` (above): each file section
+fetches both ends of the pair and diffs them in the client. There is no patch
+parser and no patch byte cap; a truncated snapshot is refused for diffing
+rather than rendered as a phantom tail. Like `gitShow`, failures and timeouts
+are RPC errors; the browser is read-only — no verb here mutates the repository
+or the index.
 
 ## Pushes and HTTP Serving
 

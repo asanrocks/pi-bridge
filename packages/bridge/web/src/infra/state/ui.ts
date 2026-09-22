@@ -1,14 +1,22 @@
 // ============================================================================
 // UI slice — ephemeral view state: conversation expand/collapse sets and their
 // freeze/migrate machinery, keyboard focus, pull orchestration tickers,
-// chrome (history pane, file viewer), and toast notifications. Nothing here
+// chrome (history pane, repository browser), and toast notifications. Nothing here
 // is protocol state; all of it is session-scoped or app-chrome.
 // Browser-safe: no node:* imports, no DOM.
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
-import type { Entry } from "../../../../src/core/types.ts";
+import type { Entry, SnapshotState } from "../../../../src/core/types.ts";
+import type { DiffWindow } from "../../../../src/viewmodel/index.ts";
+import { isHomePath, isUnder, parentDirectory, resolveAgainst } from "../lib/paths.ts";
 import type { ClientStore } from "./store.ts";
+
+/** The current Project's cwd — the browser's default root and the base for
+ * relative entry-point paths. Null before the Projects list arrives. */
+export function projectCwdOf(s: ClientStore): string | null {
+	return s.projects.find((p) => p.id === s.currentProjectId)?.cwd ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Toast notification
@@ -122,6 +130,37 @@ export function resolveRenderLeafTarget(
 }
 
 // ---------------------------------------------------------------------------
+// Repository browser target (ADR 14)
+// ---------------------------------------------------------------------------
+
+/** One browser open target. `state` answers which content is read; the
+ * optional `baseline` makes a diff — and change markers in the tree —
+ * available. `presentation` is an explicit view choice, not a property
+ * inferred from the entry point. */
+export interface BrowserTarget {
+	/** Absolute directory the tree is rooted at. */
+	root: string;
+	state: SnapshotState;
+	baseline?: SnapshotState;
+	/** Absolute selected file path. */
+	path?: string;
+	/** Scroll anchor (`path:98` / `#L98`), applied after load. */
+	line?: number;
+	/** `all` lists the directory tree lazily; `changed` comes from the diff. */
+	tree: "all" | "changed";
+	presentation: "file" | "review";
+	/** Origin label for a recorded transition (a turn's first line, or a
+	 * commit subject), used as the semantic header title. Ignored once the
+	 * pair is re-pointed through `Compare…` — the label describes the window
+	 * the browser was opened on, not an arbitrary comparison. */
+	label?: string;
+	/** How the pair was chosen; names the header surface. `commit` is a commit
+	 * reviewed against its base; `transition` is a git-stamp window. Cleared
+	 * when `Compare…` re-points the pair, which is neither. */
+	origin?: "commit" | "transition";
+}
+
+// ---------------------------------------------------------------------------
 // Slice shape
 // ---------------------------------------------------------------------------
 
@@ -175,14 +214,29 @@ export interface UiSlice {
 	scrollToEntryId: string | null;
 	setScrollToEntryId: (id: string | null) => void;
 
-	// File viewer (markdown file links → in-app read of the freshest file)
-	/** The file being viewed, or null when closed. `line` is a `path:98` /
-	 * `#L98` scroll anchor from the link, applied by the viewer after load.
-	 * The FileViewer resolves the path via the readFile verb on every open —
-	 * content is never cached, so re-opening always reads from disk. */
-	fileViewer: { path: string; line?: number } | null;
-	openFileViewer: (path: string, line?: number) => void;
-	closeFileViewer: () => void;
+	// Repository browser (ADR 14)
+	/** The open browser target, or null when closed. One target for every
+	 * entry point: a file link or tool card opens `presentation: "file"`, a
+	 * git-stamp window or commit card opens `presentation: "review"`. The
+	 * browser refetches on every open and on every state/selection change — a
+	 * target is a selector, not a snapshot. */
+	browser: BrowserTarget | null;
+	openBrowser: (target: BrowserTarget) => void;
+	closeBrowser: () => void;
+	/** Adopt the host-resolved absolute path of a `~`-rooted target. Only the
+	 * host can expand `~` (it owns HOME), so the first read reply is the one
+	 * place the resolved form appears; without this the target keeps a `~` path
+	 * while the tree's nodes carry host-resolved absolutes, and the selected
+	 * node never matches. Guarded on the requested path, so a reply that
+	 * arrives after the user moved on is ignored. */
+	adoptBrowserPath: (requested: string, resolved: string) => void;
+	/** Open one file (link / tool card): absolute-ized against the current
+	 * Project cwd, tree scope `all`, `state` defaulting to the worktree. */
+	openFileViewer: (path: string, line?: number, state?: SnapshotState) => void;
+	/** Open a git-stamp window for review: the window's old state as the
+	 * baseline, its new state as the read state, tree scope `changed`. `label`
+	 * names the origin (turn text or commit subject) for the header. */
+	openDiffView: (win: DiffWindow, label?: string) => void;
 
 	// Notifications
 	notifications: Toast[];
@@ -220,7 +274,7 @@ export interface UiSlice {
 // Slice factory
 // ---------------------------------------------------------------------------
 
-export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) => ({
+export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, get) => ({
 	focusedTurnId: null,
 	expandedActionGroups: new Set(),
 	expandedActions: new Set(),
@@ -236,7 +290,7 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 
 	renderLeafId: null,
 
-	fileViewer: null,
+	browser: null,
 
 	notifications: [],
 
@@ -266,8 +320,48 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set) =
 			return target === undefined ? s : { renderLeafId: target };
 		}),
 
-	openFileViewer: (path, line) => set({ fileViewer: line === undefined ? { path } : { path, line } }),
-	closeFileViewer: () => set({ fileViewer: null }),
+	openBrowser: (browser) => set({ browser }),
+	closeBrowser: () => set({ browser: null }),
+
+	adoptBrowserPath: (requested, resolved) =>
+		set((s) =>
+			s.browser !== null && s.browser.path === requested && requested !== resolved
+				? { browser: { ...s.browser, path: resolved } }
+				: s,
+		),
+
+	openFileViewer: (path, line, state) => {
+		const cwd = projectCwdOf(get());
+		// `~` stays as written — the host owns HOME and expands it. Everything
+		// else is made absolute here so the host never resolves a relative path.
+		const absolute = cwd === null || isHomePath(path) ? path : resolveAgainst(cwd, path);
+		// A file inside the Project browses from the Project cwd; one outside it
+		// (or on the `~` path) falls back to its own directory.
+		const root = cwd !== null && isUnder(cwd, absolute) ? cwd : parentDirectory(absolute);
+		set({
+			browser: {
+				root,
+				state: state ?? "worktree",
+				path: absolute,
+				...(line === undefined ? {} : { line }),
+				tree: "all",
+				presentation: "file",
+			},
+		});
+	},
+
+	openDiffView: (win, label) =>
+		set({
+			browser: {
+				root: projectCwdOf(get()) ?? "",
+				state: win.new,
+				baseline: win.old,
+				tree: "changed",
+				presentation: "review",
+				origin: "transition",
+				...(label === undefined ? {} : { label }),
+			},
+		}),
 
 	setFocusedTurnId: (focusedTurnId) => set({ focusedTurnId }),
 

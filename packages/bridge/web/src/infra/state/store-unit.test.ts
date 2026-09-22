@@ -280,3 +280,96 @@ describe("sidebar folder pages", () => {
 		expect(store.getState().sessionPages.proj?.kind).toBe("ready");
 	});
 });
+
+describe("setCurrentSession", () => {
+	// The browser holds content read from the session being left, so an address
+	// change closes it; a same-address re-assert (the initial-sync push after an
+	// optimistic open, a reconnect replace) leaves it alone.
+	function withOpenBrowser(store: ReturnType<typeof createClientStore>) {
+		store.getState().setProjects([{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]);
+		store.getState().setCurrentSession("proj", "2024-01-01_x");
+		store.getState().openFileViewer("src/a.ts");
+	}
+
+	it("closes the browser when the address changes", () => {
+		const store = createClientStore();
+		withOpenBrowser(store);
+
+		store.getState().setCurrentSession("proj", "2024-01-02_y");
+
+		expect(store.getState().browser).toBeNull();
+		expect(store.getState().currentStem).toBe("2024-01-02_y");
+	});
+
+	it("closes it when the stem is dropped for the Project home", () => {
+		const store = createClientStore();
+		withOpenBrowser(store);
+
+		store.getState().setCurrentSession("proj", null);
+
+		expect(store.getState().browser).toBeNull();
+	});
+
+	it("keeps it open when the same address is re-asserted", () => {
+		const store = createClientStore();
+		withOpenBrowser(store);
+
+		store.getState().setCurrentSession("proj", "2024-01-01_x");
+
+		// A relative entry-point path is absolute-ized against the Project cwd
+		// (ADR 14), and the tree is rooted at that cwd.
+		expect(store.getState().browser).toEqual({
+			root: "/repo",
+			state: "worktree",
+			path: "/repo/src/a.ts",
+			tree: "all",
+			presentation: "file",
+		});
+	});
+
+	it("opens a review target from a git-stamp window", () => {
+		const store = createClientStore();
+		withOpenBrowser(store);
+
+		store.getState().openDiffView({ old: "head", new: "worktree" }, "Implement parser");
+
+		expect(store.getState().browser).toEqual({
+			root: "/repo",
+			state: "worktree",
+			baseline: "head",
+			tree: "changed",
+			presentation: "review",
+			origin: "transition",
+			label: "Implement parser",
+		});
+	});
+});
+
+describe("adoptBrowserPath", () => {
+	function withHomeTarget(store: ReturnType<typeof createClientStore>) {
+		store.getState().setProjects([{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]);
+		store.getState().setCurrentSession("proj", "2024-01-01_x");
+		store.getState().openFileViewer("~/notes/todo.md");
+	}
+
+	it("rewrites a `~`-rooted target with the absolute path the host resolved", () => {
+		const store = createClientStore();
+		withHomeTarget(store);
+		// The client cannot expand `~` (the host owns HOME), so the target keeps
+		// the `~` form and the root stays the requested directory.
+		expect(store.getState().browser).toMatchObject({ path: "~/notes/todo.md", root: "~/notes" });
+
+		store.getState().adoptBrowserPath("~/notes/todo.md", "/home/u/notes/todo.md");
+
+		expect(store.getState().browser).toMatchObject({ path: "/home/u/notes/todo.md", root: "~/notes" });
+	});
+
+	it("ignores a resolution for a path the target no longer holds", () => {
+		const store = createClientStore();
+		withHomeTarget(store);
+
+		store.getState().adoptBrowserPath("~/other.md", "/home/u/other.md");
+
+		expect(store.getState().browser).toMatchObject({ path: "~/notes/todo.md" });
+	});
+});
