@@ -116,6 +116,10 @@ export const HomeCompose = memo(function HomeCompose({
 	const effectiveLevel = choice?.thinkingLevel ?? defaultThinkingLevel ?? "";
 
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
+	// ADR 14 entry point: the Project home browses the worktree from the
+	// Project cwd, with no file selected and no baseline.
+	const projectCwd = useStore((s) => s.projects.find((p) => p.id === s.currentProjectId)?.cwd ?? null);
+	const openBrowser = useStore((s) => s.openBrowser);
 
 	const handleSetModel = useCallback(
 		(provider: string, modelId: string) => {
@@ -218,7 +222,28 @@ export const HomeCompose = memo(function HomeCompose({
 				onSetThinkingLevel={handleSetThinkingLevel}
 				onCycleModel={handleCycleModel}
 			/>
-			<div className={styles.hint}>Enter starts a new session · Shift+Enter for a new line</div>
+			<div className={styles.hint}>
+				Enter starts a new session · Shift+Enter for a new line
+				{projectCwd !== null && (
+					<>
+						{" · "}
+						<button
+							type="button"
+							className={styles.browse}
+							onClick={() =>
+								openBrowser({
+									root: projectCwd,
+									state: "worktree",
+									tree: "all",
+									presentation: "file",
+								})
+							}
+						>
+							Browse files
+						</button>
+					</>
+				)}
+			</div>
 		</div>
 	);
 });

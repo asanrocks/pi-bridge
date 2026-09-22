@@ -113,11 +113,45 @@
 	margin: 0 2px;
 }
 
+/* The clickable promotion of the chip (turn has a review window): a reset
+   button that renders identically to the static chip, plus a hover accent
+   so the affordance is discoverable without shouting. */
+.gitStampBtn {
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	font: inherit;
+}
+
+.gitStampBtn:hover {
+	color: var(--color-foreground);
+}
+
 /* ADR 10 v2 — standalone (boundary) git change card wrapper: the tinted row
    between turns (the tinted row anatomy itself is the shared action hue,
    in actions.module.css with the git hue). */
 .gitChangeTurn {
 	margin: 4px 0;
+}
+
+/* Review-surface trigger on a git change card: a quiet lowercase mono
+   action docked beside the meta, in the card's own text scale. */
+.gitDiffAction {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	padding: 1px 6px;
+	flex-shrink: 0;
+}
+
+.gitDiffAction:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
 }
 
 /* Branch + short hash docked right in the collapsed row (the read tool's

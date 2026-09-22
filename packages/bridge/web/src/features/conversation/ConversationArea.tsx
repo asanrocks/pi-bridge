@@ -75,6 +75,13 @@ export const ConversationArea = memo(function ConversationArea({
 	}
 
 	const lastTurn = vm.turns[vm.turns.length - 1];
+	// The live tail is the last user turn on the live path — the only turn whose
+	// send state can be honestly compared against the current worktree.
+	let lastUserTurnId: string | null = null;
+	for (const t of vm.turns) {
+		if (t.kind === "user") lastUserTurnId = t.entryId;
+	}
+	const isLive = vm.forkPointId === null;
 
 	return (
 		<div className={styles.scrollContainer} ref={scrollContainerRef}>
@@ -88,6 +95,7 @@ export const ConversationArea = memo(function ConversationArea({
 								entriesRef={entriesRef}
 								onNavigate={onSelectBranch}
 								onEdit={onEdit}
+								isLiveTail={isLive && turn.entryId === lastUserTurnId}
 							/>
 						);
 					case "assistant":
