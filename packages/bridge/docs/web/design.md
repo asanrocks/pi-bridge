@@ -426,7 +426,8 @@ Expanded tool cards have a status line, full path or command header, error or
 truncation notices, and a content region on the page surface. Read shows
 highlighted file content; write shows written content; edit shows a unified
 diff; apply_patch (the Codex-style patch tool) renders one diff section per
-file — `Add`/`Update`/`Delete` labels above each section, `@@` seek markers as
+file — `Add`/`Update`/`Delete` labels above each section (clickable: each
+opens its file in the viewer, a moved update its target), `@@` seek markers as
 muted locator rows, move targets folded into the Update title, delete sections
 carrying the label only (the old content is not in the envelope), and the
 tool's result text under the diff (apply_patch failures cross the wire as
@@ -434,7 +435,9 @@ normal content, so the body owns their visibility); bash and PowerShell show
 command output with tail/full controls; grep,
 find, and ls show argument and result rows; unknown tools use the fallback
 argument and output renderer. Copy, line-wrap, Markdown-render, expand, and
-open-in-viewer eye (when the call's arguments carry a `path`) are card-local
+open-in-viewer eye (when the call's arguments carry a `path`, or an
+apply_patch envelope touching a single file — multi-file patches get
+per-section clickable labels instead) are card-local
 icon controls with tooltips; apply_patch copies the raw patch envelope. Tool
 arguments and
 results can arrive while a call is streaming, so a card renders available
