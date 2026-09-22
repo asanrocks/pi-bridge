@@ -14,13 +14,13 @@
 // ============================================================================
 
 import { memo, useMemo } from "react";
+import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
-import { sortByLastActivity } from "./sortByLastActivity.ts";
 
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
 	const connection = useStore((s) => s.connection);
@@ -34,6 +34,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const scopedModels = useStore((s) => s.scopedModels);
 	const rpc = useRpc();
 	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
+	/** ADR 13: the launcher's discovery entry for the `@latest` alias — the
+	 * most recently active live session. */
+	const latest = active[0] ?? null;
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	// Wording and visible state come from the shared connectionStatus mapping
@@ -84,6 +87,25 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	// ── Global launcher: Projects + active sessions ────────────────────────
 	return (
 		<div className={styles.launcher}>
+			{latest && (
+				<div className={styles.rows}>
+					<div className={styles.row}>
+						<button
+							type="button"
+							className={styles.rowMain}
+							onClick={() => void rpc.openLatest()}
+							title="Opens the most recently active session in any project (/@latest)"
+						>
+							<div className={styles.rowLine1}>
+								<span className={styles.rowName}>Latest session</span>
+								<span className={styles.rowCwd}>
+									<bdi>{latest.projectId}</bdi>
+								</span>
+							</div>
+						</button>
+					</div>
+				</div>
+			)}
 			<div className={styles.header}>
 				<span className={styles.headerTitle}>Projects</span>
 			</div>
