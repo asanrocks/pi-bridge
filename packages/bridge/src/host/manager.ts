@@ -57,6 +57,20 @@ function getContextUsageOption(session: AgentSession | undefined): ContextUsage 
 	return toBridgeContextUsage(session?.getContextUsage());
 }
 
+/** True when the parent chain of `parentId` hits an id the Document does not
+ * hold — the entry is parented into a suffix only the session file knows.
+ * The walk stops at the first known ancestor, so it only ever walks the
+ * current turn's in-flight suffix, not the whole history. */
+function hasUnknownAncestor(doc: Document, parentId: string | null | undefined): boolean {
+	let cursor = parentId ?? null;
+	while (cursor !== null) {
+		const entry = doc.entries[cursor];
+		if (!entry) return true;
+		cursor = entry.parentId;
+	}
+	return false;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -199,10 +213,23 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const processEvent = (event: AgentSessionEvent) => {
 		const patches: Patch[] = [];
 
-		const patch = applyEvent(document, event);
-		if (patch) {
-			document = applyPatch(document, patch.ops);
-			patches.push(patch);
+		// An appended entry can reference ids only the session file knows (the
+		// streaming assistant is a `pending:` provisional until the seal; the
+		// git-stamp extension parents on the real persisted id). Applying it
+		// would move the leaf onto an unresolvable chain — the path walk breaks,
+		// the ViewModel collapses, and the seal restore remounts every turn.
+		// Such entries defer to the seal instead: reconcile discovers them from
+		// the file (the same path that picks up silently-appended entries), under
+		// its normal pairing conditions. Known-parent appends (prompt stamps,
+		// bash entries and their user_bash_end stamps) still apply live.
+		const orphaned = event.type === "entry_appended" && hasUnknownAncestor(document, event.entry.parentId);
+
+		if (!orphaned) {
+			const patch = applyEvent(document, event);
+			if (patch) {
+				document = applyPatch(document, patch.ops);
+				patches.push(patch);
+			}
 		}
 
 		if (event.type === "turn_end" || event.type === "agent_settled") {

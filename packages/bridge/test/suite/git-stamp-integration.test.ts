@@ -9,6 +9,8 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Entry } from "../../src/core/index.ts";
 import { GIT_STAMP_CUSTOM_TYPE, parseGitStampEntry } from "../../src/core/index.ts";
+import type { TurnVM } from "../../src/viewmodel/index.ts";
+import { computeViewModel } from "../../src/viewmodel/index.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -343,5 +345,80 @@ describe("git identity stamps (integration)", () => {
 		const s = stamps(h);
 		expect(s).toHaveLength(2);
 		expect(s[1]).toMatchObject({ anchor: "prompt", commit: head, branch: null });
+	});
+
+	// Regression (profiled live failure, 2026-09-22): a mid-turn tool_end
+	// stamp is appended with parentId = the REAL assistant entry id from the
+	// session file, which the live document does not know yet (it holds that
+	// message as the `pending:message` provisional; real ids fold in only at
+	// the turn-end reconcile). entry_appended moved status.leafId onto the
+	// stamp, the leaf-path walk stopped at the unknown parent, and the
+	// ViewModel collapsed to the lone git card — the client unmounted the
+	// whole conversation (blank page), then the turn-end reconcile restored
+	// it with zero identity reuse: every turn remounted and every Markdown
+	// block re-parsed (a 500ms main-thread task in the wild).
+	it("a mid-turn tool_end stamp never collapses the turn list or breaks turn identity", async () => {
+		const h = await createBridgeHarness({
+			fixturePath: FIXTURE_URL.pathname,
+			responses: [
+				fauxAssistantMessage(fauxToolCall("git-commit", {}), { stopReason: "toolUse" }),
+				fauxAssistantMessage("Committed as 55cfb24ef — 1 file, 2 insertions."),
+			],
+			customTools: [commitTool],
+			gitStamps: true,
+			initGitRepo: true,
+		});
+		harnesses.push(h);
+		toolGit = h.git;
+
+		const keyOf = (t: TurnVM) => (t.kind === "assistant" ? t.turnKey : t.entryId);
+		// Identity reuse is not expected for: (a) turns keyed by a provisional
+		// entry (pending: → real id is an add/remove pair, not a break), (b)
+		// user-bash turns, which do not participate in prevTurns reuse at all
+		// (a separate gap), and (c) the turn that is actively growing — it holds
+		// a provisional block or is the trailing turn while the session
+		// streams, so its identity legitimately changes on every flush.
+		const isGrowing = (t: TurnVM, vm: ReturnType<typeof computeViewModel>) =>
+			(t.kind === "assistant" && t.blocks.some((b) => b.entryId.startsWith("pending:"))) ||
+			(t === vm.turns[vm.turns.length - 1] && h.manager.document.status.isStreaming);
+
+		// Checked after every emitted patch, against the previous projection.
+		const failures: string[] = [];
+		let prev = computeViewModel({ document: h.manager.document, models: [] });
+		const baseline = prev.turns.length; // the fixture-resumed history
+		expect(baseline).toBeGreaterThan(10);
+
+		h.manager.onPatch(() => {
+			const vm = computeViewModel({ document: h.manager.document, models: [] }, prev);
+			if (vm.turns.length < baseline) {
+				failures.push(`turn list collapsed mid-turn: ${baseline} -> ${vm.turns.length}`);
+			}
+			// One patch appends at most one entry (plus turn-end reconcile
+			// pairing the user and assistant provisionals); a mass re-add is
+			// the blank-page remount signature.
+			const added = vm.turns.filter((t) => !prev.turns.some((p) => keyOf(p) === keyOf(t))).length;
+			if (added > 3) failures.push(`patch materialized ${added} turns (identity reuse lost)`);
+			for (const t of vm.turns) {
+				const key = keyOf(t);
+				if (key.includes("pending:") || t.kind === "userBash" || isGrowing(t, vm)) continue;
+				const p = prev.turns.find((x) => keyOf(x) === key);
+				if (p !== undefined && p !== t) failures.push(`turn identity broken: ${key}`);
+			}
+			prev = vm;
+		});
+
+		await h.manager.prompt("commit for me");
+		expect(failures).toEqual([]);
+
+		// The stamp must fold inline into the open assistant turn (its
+		// tool_end anchor, pending non-empty), never surface as a standalone
+		// GitChangeTurn.
+		const final = computeViewModel({ document: h.manager.document, models: [] });
+		expect(final.turns.some((t) => t.kind === "gitChange")).toBe(false);
+		const last = final.turns[final.turns.length - 1]!;
+		expect(last.kind).toBe("assistant");
+		if (last.kind === "assistant") {
+			expect(last.gitChanges?.[0]?.identity.commit).toBe(await h.git("rev-parse", "HEAD"));
+		}
 	});
 });
