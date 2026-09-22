@@ -187,7 +187,11 @@ ADR 10 git stamps are projected as a carried state and as ordered changes:
 text remains a separate segment. `actionPulls` declares thinking and tool-call
 fields needed by visible actions, and `resultPullPaths` declares the lazy tool
 result fields needed by an expanded action. These functions are the sole
-ViewModel-to-pull mapping.
+ViewModel-to-pull mapping. Display helpers that need no Document access live
+beside the projection: the apply-patch module parses Codex-style
+`apply_patch` envelopes (streaming-tolerant, no disk access) into per-file
+sections for the web card, and feeds the action summary/header (`patch: <file>
++N`), the `edit` kind (mutate hue), and the group summary's file list.
 
 ## Network Layer
 

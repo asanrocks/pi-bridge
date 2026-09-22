@@ -43,7 +43,7 @@ const SHELL_TOOLS = new Set(["bash", "powershell"]);
 const WRAP_TOOLS = new Set(["read", "write", "bash", "powershell", "grep", "find", "ls"]);
 
 /** Registry-known tool names (anything else renders via the fallback body). */
-const KNOWN_TOOLS = new Set(["read", "write", "edit", "bash", "powershell", "grep", "find", "ls"]);
+const KNOWN_TOOLS = new Set(["read", "write", "edit", "apply_patch", "bash", "powershell", "grep", "find", "ls"]);
 
 const ToolActionView = memo(function ToolActionView({
 	action,
@@ -113,6 +113,9 @@ const ToolActionView = memo(function ToolActionView({
 				const edits = normalizeEditArgs(recArgs);
 				return edits ? edits.map((e) => e.newText).join("\n") : null;
 			}
+			case "apply_patch":
+				// The envelope is the call's artifact — copy it verbatim.
+				return typeof recArgs?.input === "string" ? (recArgs.input as string) : null;
 			case "read":
 				if (action.result?.isError) return null;
 				return resultText !== null ? parseReadNotice(resultText).content || null : null;
