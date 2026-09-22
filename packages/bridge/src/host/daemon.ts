@@ -32,8 +32,10 @@ import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
 import { createManager, type Manager } from "./manager.ts";
 import {
+	archiveStemFile,
 	buildProjects,
 	containedSessionFile,
+	isArchivedStem,
 	isContained,
 	normalizeStem,
 	type ProjectConfig,
@@ -302,13 +304,17 @@ export class Daemon {
 			}
 			for (const rel of rels) {
 				if (!rel.endsWith(".jsonl")) continue;
+				const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
+				// Archived sessions are outside discovery, so they must not
+				// participate in the uniqueness invariant either: a manual copy into
+				// `.archive/` would otherwise fail daemon startup.
+				if (isArchivedStem(stem)) continue;
 				// A symlinked `.jsonl` that escapes the namespace must not leak a
 				// foreign session id into the conflict registry.
 				const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
 				if (real === null) continue;
 				const sessionId = readSessionHeaderId(real);
 				if (sessionId === null) continue;
-				const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
 				const address = `${project.id}/${stem}`;
 				const owner = owners.get(sessionId);
 				if (owner !== undefined && owner !== address) {
@@ -332,6 +338,10 @@ export class Daemon {
 		}
 		for (const rel of rels) {
 			if (!rel.endsWith(".jsonl")) continue;
+			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
+			// The archive prefix is a storage namespace, not discovery: an
+			// archived session is not listed and has no address.
+			if (isArchivedStem(stem)) continue;
 			// Containment first: statSync follows symlinks, so a symlinked file
 			// pointing outside the namespace would otherwise expose foreign
 			// metadata (name, first message) in listSessions (ADR 11 boundary).
@@ -343,7 +353,6 @@ export class Daemon {
 			} catch {
 				continue;
 			}
-			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
 			byStem.set(stem, { stem, abs: real, sortTimeMs: st.mtimeMs });
 		}
 
@@ -773,6 +782,30 @@ export class Daemon {
 				await this.collectActivation(activation);
 				// Refresh the Project's first page everywhere: the kill's flush
 				// (and an unflushed session's disappearance) reorders history.
+				this.broadcastSessionsChanged(projectId);
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
+		},
+
+		archiveSession: async (projectId, stem) => {
+			try {
+				const project = this.projects.get(projectId);
+				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
+				// Rejects the archive prefix itself, so an archived stem can never be
+				// re-addressed (see ARCHIVE_DIR).
+				const normalized = normalizeStem(stem);
+				// Close first, unconditionally: disposal finalizes an in-flight turn,
+				// which can create or advance the file, so the move must follow it.
+				// A dormant session has no activation — the close is then a no-op and
+				// only the move remains.
+				const activationId = this.activationByAddress.get(addressKey(projectId, normalized));
+				const activation = activationId !== undefined ? this.activations.get(activationId) : undefined;
+				if (activation) await this.collectActivation(activation);
+				archiveStemFile(project.sessionDir, normalized);
+				// The row leaves the history pages. A live session's row already left
+				// the active snapshot via collectActivation's broadcast.
 				this.broadcastSessionsChanged(projectId);
 				return { ok: true };
 			} catch (err) {

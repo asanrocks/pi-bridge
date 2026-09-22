@@ -84,6 +84,7 @@ export const Sidebar = memo(function Sidebar({
 	onOpenSession,
 	onOpenProject,
 	onCloseSession,
+	onArchiveSession,
 	onShowLauncher,
 	onLoadFolder,
 	onLoadMoreFolder,
@@ -108,6 +109,9 @@ export const Sidebar = memo(function Sidebar({
 	onOpenProject: (projectId: string) => void;
 	/** Terminate a session's live instance (row menu Close, no confirmation). */
 	onCloseSession: (projectId: string, stem: string) => void;
+	/** Close then archive a session (row menu Archive, no confirmation) —
+	 *  available on dormant rows too, where only the move happens. */
+	onArchiveSession: (projectId: string, stem: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
 	onShowLauncher: () => void;
 	onLoadFolder: (projectId: string) => void;
@@ -133,6 +137,13 @@ export const Sidebar = memo(function Sidebar({
 			onCloseSession(session.projectId, session.stem);
 		},
 		[onCloseSession],
+	);
+
+	const handleArchiveSession = useCallback(
+		(session: SessionInfo) => {
+			onArchiveSession(session.projectId, session.stem);
+		},
+		[onArchiveSession],
 	);
 
 	// All-projects leaves the current Project: detach, and the fullscreen
@@ -180,6 +191,7 @@ export const Sidebar = memo(function Sidebar({
 						api.dismissAfterPick();
 					}}
 					onCloseSession={handleCloseSession}
+					onArchiveSession={handleArchiveSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={onLoadFolder}
 					onLoadMoreFolder={onLoadMoreFolder}
