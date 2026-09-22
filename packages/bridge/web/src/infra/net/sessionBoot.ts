@@ -37,14 +37,21 @@ function fallbackToProjectPage(projectId: string): void {
  *
  * `isSuperseded` is the stale-connection guard: every awaited step re-checks
  * it, because a newer connection may have taken over mid-open.
+ *
+ * `viaAlias` (ADR 13): the address was reached through `/@<alias>`, so the
+ * alias flag is already set and the pipeline suppresses route writes; a
+ * failed open still lands on the resolved Project's home (an explicit URL,
+ * leaving the alias form).
  */
 export async function openSessionAddress(
 	client: BridgeClient,
 	projectId: string,
 	stem: string,
 	isSuperseded: () => boolean,
+	options: { viaAlias?: boolean } = {},
 ): Promise<void> {
 	const store = getStore();
+	if (options.viaAlias) store.getState().setAddressViaAlias(true);
 	store.getState().setCurrentSession(projectId, stem);
 	const sessionId = lookupSessionId(projectId, stem);
 	if (!sessionId) {
