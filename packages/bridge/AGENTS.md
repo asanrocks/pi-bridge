@@ -74,6 +74,8 @@ Test files: see `test/suite/`. Categories:
 
 Full fixture/harness detail in `test/suite/harness.ts`.
 
+**Scope of verification:** bridge changes are verified by this package's own suite — `npm test` from `packages/bridge/` (runs `test/suite/` plus the web tests under `web/src/`). The parent-repo suite (`./test.sh` from the repo root) is not part of the normal loop; run it only when the bridge suite is insufficient — e.g. a change that could affect other packages (shared `packages/ai` types, repo-root scripts) or a failure mode that can only reproduce outside this package.
+
 ## Entry-point map
 
 ### `src/core/` — pure, browser-safe
