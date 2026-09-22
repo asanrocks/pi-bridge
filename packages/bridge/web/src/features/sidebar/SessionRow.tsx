@@ -1,6 +1,7 @@
 // ============================================================================
 // SessionRow — one sidebar leaf: liveness dot + label + relative time, plus
-// the row menu (Close) on live rows.
+// the row menu. Close appears on live rows, Archive on any durable row (a
+// dormant row's close is a no-op, so only the move remains).
 // ============================================================================
 
 import { memo, useState } from "react";
@@ -14,6 +15,7 @@ export const SessionRow = memo(function SessionRow({
 	selected,
 	onOpen,
 	onClose,
+	onArchive,
 }: {
 	session: SessionInfo;
 	/** Green = active, orange + pulse = streaming, muted = dormant history. */
@@ -24,9 +26,13 @@ export const SessionRow = memo(function SessionRow({
 	selected?: boolean;
 	onOpen: (session: SessionInfo) => void;
 	/** Present only on rows with a live instance (the pinned active section):
-	 * opens the row menu whose Close item terminates it. No confirmation —
+	 * adds Close to the row menu, which terminates it. No confirmation —
 	 * the kill is the point. */
 	onClose?: (session: SessionInfo) => void;
+	/** Present on any row with a durable file (pinned and history): adds
+	 * Archive, which closes the session then moves its file out of
+	 * discovery. Also unconfirmed — the file survives. */
+	onArchive?: (session: SessionInfo) => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
 	const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
@@ -51,7 +57,7 @@ export const SessionRow = memo(function SessionRow({
 					<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
 				</span>
 			</button>
-			{onClose && (
+			{(onClose || onArchive) && (
 				<button
 					type="button"
 					className={styles.sidebarMenuBtn}
@@ -94,16 +100,30 @@ export const SessionRow = memo(function SessionRow({
 							width: 130,
 						}}
 					>
-						<button
-							type="button"
-							className={styles.sidebarMenuClose}
-							onClick={() => {
-								setMenuAnchor(null);
-								onClose?.(session);
-							}}
-						>
-							Close
-						</button>
+						{onClose && (
+							<button
+								type="button"
+								className={[styles.sidebarMenuItem, styles.sidebarMenuClose].join(" ")}
+								onClick={() => {
+									setMenuAnchor(null);
+									onClose(session);
+								}}
+							>
+								Close
+							</button>
+						)}
+						{onArchive && (
+							<button
+								type="button"
+								className={[styles.sidebarMenuItem, styles.sidebarMenuArchive].join(" ")}
+								onClick={() => {
+									setMenuAnchor(null);
+									onArchive(session);
+								}}
+							>
+								Archive
+							</button>
+						)}
 					</div>
 				</>
 			)}
