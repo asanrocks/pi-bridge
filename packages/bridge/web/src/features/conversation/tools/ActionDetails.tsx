@@ -10,6 +10,7 @@ import { actionPulls, type ToolActionVM } from "../../../../../src/viewmodel/ind
 import { enqueuePulls } from "../../../infra/net/pullQueue.ts";
 import { useStore } from "../../../infra/state/store.tsx";
 import styles from "../actions.module.css";
+import { ApplyPatchCardBody } from "./ApplyPatchCardBody.tsx";
 import type { ActionDetailsProps, ToolArgs } from "./args.ts";
 import { BashCardBody } from "./BashCardBody.tsx";
 import { EditCardBody } from "./EditCardBody.tsx";
@@ -27,6 +28,7 @@ import { WriteCardBody } from "./WriteCardBody.tsx";
  */
 const TOOL_DETAILS: Record<string, ComponentType<ActionDetailsProps>> = {
 	edit: EditCardBody,
+	apply_patch: ApplyPatchCardBody,
 	read: ReadCardBody,
 	write: WriteCardBody,
 	bash: BashCardBody,

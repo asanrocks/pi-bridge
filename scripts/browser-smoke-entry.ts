@@ -2,6 +2,7 @@ import { Client } from "@earendil-works/pi-client";
 import {
 	applyEvent,
 	applyPatch,
+	applyPatchInput,
 	beautifyShellCommand,
 	scanShellPieces,
 	BridgeClient,
@@ -50,6 +51,8 @@ import {
 	computeActiveUserPath,
 	collapseDrafts,
 	computeLaneLayout,
+	extractApplyPatchPaths,
+	parseApplyPatch,
 } from "@earendil-works/pi-bridge";
 import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import { complete, getModel, getProviders, streamSimple } from "@earendil-works/pi-ai/compat";
@@ -137,6 +140,9 @@ console.log(
 	typeof planPull,
 	typeof resolveFieldPath,
 	typeof setAtPath,
+	typeof applyPatchInput,
+	typeof extractApplyPatchPaths,
+	typeof parseApplyPatch,
 	typeof computeViewModel,
 	typeof findNextModel,
 	typeof GIT_STAMP_CUSTOM_TYPE,

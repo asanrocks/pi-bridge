@@ -70,7 +70,7 @@ export function formatGroupSummary(items: ActionSummaryItem[], gitChanges: GitSu
 
 	for (const item of items) {
 		const name = item.toolName;
-		if (name === "edit" || name === "write") {
+		if (name === "edit" || name === "write" || name === "apply_patch") {
 			const key = item.basename ?? "?";
 			editMap.set(key, (editMap.get(key) ?? 0) + 1);
 		} else if (name === "read") {
