@@ -32,6 +32,7 @@ import type {
 	ToolResultEntry,
 	Usage,
 } from "../core/types.ts";
+import { applyPatchInput, extractApplyPatchPaths } from "./apply-patch.ts";
 
 // ---------------------------------------------------------------------------
 // ViewModel types (ADR 07 §ViewModel types)
@@ -1351,6 +1352,13 @@ export function makeActionSummary(name: string, args: JsonValue | null, cwd?: st
 			const cmd = recArgs ? (recArgs.command as string) : null;
 			return cmd ? `${name}: ${cmd}` : name;
 		}
+		case "apply_patch": {
+			const input = applyPatchInput(args);
+			const paths = input !== null ? extractApplyPatchPaths(input) : [];
+			if (paths.length === 0) return name;
+			const first = paths[0].split("/").pop() || paths[0];
+			return paths.length === 1 ? `patch: ${first}` : `patch: ${first} +${paths.length - 1}`;
+		}
 		case "glob": {
 			const pattern = recArgs ? (recArgs.pattern as string) : null;
 			return pattern ? `glob: ${pattern}` : "glob";
@@ -1767,6 +1775,13 @@ export function makeActionHeader(name: string, args: JsonValue | null, cwd?: str
 			const cmd = recArgs ? (recArgs.command as string) : null;
 			return cmd ? cmd : null;
 		}
+		case "apply_patch": {
+			const input = applyPatchInput(args);
+			if (input === null) return null;
+			const paths = extractApplyPatchPaths(input);
+			if (paths.length === 0) return null;
+			return paths.map((p) => displayPath(p, cwd ?? null)).join(", ");
+		}
 		case "grep": {
 			const pattern = recArgs ? ((recArgs.pattern as string) ?? (recArgs.query as string)) : null;
 			if (pattern === null || pattern === undefined) return null;
@@ -2121,6 +2136,11 @@ export function assignGroupGitChanges(segments: TurnSegment[], stamps: InlineGit
 // ---------------------------------------------------------------------------
 export type { ModelCostRow, SessionAccounting } from "./accounting.ts";
 export { sessionAccounting } from "./accounting.ts";
+// ---------------------------------------------------------------------------
+// apply-patch re-exports (see apply-patch.ts).
+// ---------------------------------------------------------------------------
+export type { ApplyPatchChunk, ApplyPatchParse, ApplyPatchSection } from "./apply-patch.ts";
+export { applyPatchInput, extractApplyPatchPaths, parseApplyPatch } from "./apply-patch.ts";
 
 // ---------------------------------------------------------------------------
 // Tree viewmodel re-exports (Pass 1 + Pass 2 — see tree.ts).
@@ -2202,6 +2222,7 @@ export function kindForTool(name: string): ActionKind {
 		case "write":
 			return "write";
 		case "edit":
+		case "apply_patch":
 			return "edit";
 		case "read":
 		case "grep":

@@ -406,6 +406,29 @@
 	user-select: none;
 }
 
+/* Per-file section label above a titled diff section (apply_patch cards):
+   muted mono, same treatment family as the hunk separator but left-docked —
+   it replaces the `---` divider between titled sections. */
+.editDiffSectionTitle {
+	color: var(--color-muted-foreground);
+	padding: 4px 4px 1px 4px;
+	font-size: var(--fs-xs);
+	user-select: none;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+/* Seek-marker note rows (apply_patch `@@ …` context lines) — file lines the
+   applier matched to locate a chunk, displayed as muted locators. */
+.editDiffNote {
+	color: var(--color-muted-foreground);
+	padding: 0 4px;
+	font-size: var(--fs-xs);
+	user-select: none;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
 /* Tinted row preview — the collapsed tinted row's result tail (bash) or error line.
    Muted mono, one line per row with ellipsis clipping (the preview
    recedes; the expanded card is the readable surface). The hint row counts

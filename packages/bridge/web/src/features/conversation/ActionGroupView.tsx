@@ -19,6 +19,8 @@ import {
 	type ActionKind,
 	type ActionVM,
 	actionPulls,
+	applyPatchInput,
+	extractApplyPatchPaths,
 	type InlineGitStamp,
 	kindForTool,
 	kindHue,
@@ -111,9 +113,17 @@ export const ActionGroupView = memo(function ActionGroupView({
 					const recArgs =
 						liveArgs !== null && typeof liveArgs === "object" ? (liveArgs as Record<string, unknown>) : null;
 					const rawPath = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string) ?? null) : null;
+					// apply_patch has no `path` arg — its named file is the first
+					// path in the envelope (the group lists it with the edit family).
+					let basename = rawPath ? rawPath.split("/").pop() || rawPath : null;
+					if (basename === null && (h as ToolActionVM).toolName === "apply_patch") {
+						const input = applyPatchInput(liveArgs);
+						const first = input !== null ? extractApplyPatchPaths(input)[0] : undefined;
+						basename = first !== undefined ? first.split("/").pop() || first : null;
+					}
 					return {
 						toolName: (h as ToolActionVM).toolName,
-						basename: rawPath ? rawPath.split("/").pop() || rawPath : null,
+						basename,
 					};
 				});
 				return formatGroupSummary(
