@@ -337,13 +337,18 @@ accent so both are legible where they share ancestors.
 ### File viewer
 
 File-path Markdown links open the in-app `FileViewer` instead of navigating to
-the daemon origin. Each open performs a fresh read from the attached
-Project's working directory. The viewer shows the resolved absolute path,
+the daemon origin. The viewer opens fullscreen, covering the entire viewport.
+Each open performs a fresh read from the attached
+Project's working directory. The viewer shows the resolved absolute path —
+a single line truncated from the left (the `direction: rtl` trick with LRM
+sentinels), so the filename end stays visible —
 loads Markdown as rendered prose and other files as syntax-highlighted code,
-and reports the server's 256 KB truncation. Escape, the close button, or the
-dimmed backdrop closes it. Code files render a line-number gutter: each
-gutter line is a two-column grid (fixed number column, wrapping content
-column), so wrapped code never flows under the number.
+and reports the server's 256 KB truncation. Escape or the close button closes
+it (the fullscreen panel leaves no clickable backdrop). Code files render a
+line-number gutter built the streamdown way — a CSS `counter(line)` on a
+`::before` pseudo-number with a hanging indent (`padding-left` + negative
+`text-indent`), so the number is not selectable text and wrapped code never
+flows under the number.
 
 The viewer header carries the same display toggles as tool cards — word-wrap
 icon for code files, markdown glyph for Markdown files — driving the shared `cardWrap`
@@ -362,8 +367,9 @@ the click reads the file as it exists at click time — not what the call
 produced (the card shows what the tool did; the viewer shows the file now).
 
 External URLs open a confirmation dialog before a new tab is opened. An
-incomplete link whose target is still streaming is styled but inert. Both the
-viewer and confirmation dialog use blocking overlays and portal surfaces.
+incomplete link whose target is still streaming is styled but inert. The
+confirmation dialog uses a blocking overlay and portal surface; the viewer
+is the fullscreen variant of the same portal role.
 
 ## Conversation Rendering
 
