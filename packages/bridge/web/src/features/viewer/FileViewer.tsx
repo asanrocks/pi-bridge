@@ -118,7 +118,9 @@ export function FileViewer() {
 			/>
 			<div role="dialog" className={styles.viewerPanel}>
 				<div className={styles.viewerHeader}>
-					<span className={styles.viewerPath}>{headerPath}</span>
+					{/* LRM sentinels keep the path's leading/trailing punctuation on the
+			     correct end of the left-truncating RTL header (see Viewer.module.css). */}
+					<span className={styles.viewerPath}>{`\u200E${headerPath}\u200E`}</span>
 					{isMarkdown ? (
 						<button
 							type="button"
