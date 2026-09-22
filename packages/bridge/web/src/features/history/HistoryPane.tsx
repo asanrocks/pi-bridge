@@ -98,6 +98,10 @@ export const HistoryPane = memo(function HistoryPane({
 	 *  drawer (PaneShell owns it). */
 	historyHover: boolean;
 }) {
+	// The pane is the conversation branch graph. The repository-evolution
+	// timeline is now the transcript itself: each user turn's git chip menu
+	// lists the commits observed during that turn, and the TopBar's dirty-now
+	// badge owns the live worktree comparison.
 	return (
 		<PaneShell
 			side="right"

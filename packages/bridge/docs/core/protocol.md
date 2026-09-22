@@ -70,14 +70,21 @@ state channel.
 | `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
 | `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, scopedModels, thinkingLevels, devMode }`; no attachment and no Document push. |
 | `listFiles` | Project plus `prefix` | `{ ok: true, entries: { path, isDirectory }[] }`; paths resolve against the named Project cwd, so it works without an attachment. |
-| `readFile` | Attached Session | `{ ok: true, path, content, truncated, bytes }`; relative paths resolve against the attached Project cwd and are read fresh from disk. |
+| `readFile` | Absolute path (ADR 14) | Content of one path at one snapshot state. `state` is a pinned 40/64-hex oid, `"head"`, `"index"` (the staged tree), or `"worktree"`; omitted means `"worktree"`. The reply is discriminated by `kind`: `"file"` (`{ state, path, content, truncated, bytes }`), `"absent"` (`{ state, path }` — a deleted file, a path not in a commit's tree, a directory, an unmerged index entry, or a path outside a repository for a snapshot state), or `"binary"` (`{ state, path, bytes }`, detected from a NUL byte). The path is absolute (`~`-rooted is the one other accepted form, expanded host-side because the client has no HOME); the host finds the containing repository and translates the path to a repository-relative one for `git cat-file blob <rev>:<path>` / `:<path>`. No attachment. |
+| `listDirectory` | Absolute path (ADR 14) | One directory's immediate children at one snapshot state: `{ ok: true, path, state, entries: { name, path, isDirectory }[], omitted, absent }`. A missing directory — or a snapshot state for a path outside a repository — is `absent`, not an error. Listing is lazy (one directory per call, never a recursive scan); `.git` is never listed; `omitted` reports entries the host cap left out. No attachment. |
 | `gitShow` | Attached Session | `{ ok: true, output, truncated }`; the validated commit is read from the attached Project cwd. |
+| `gitBase` | Absolute directory (ADR 14) | The comparison base for reviewing one commit: `{ ok: true, baseline }`, its first parent's oid or — for a root commit — the repository's empty-tree oid (resolved with `git hash-object -t tree --stdin`, never a hardcoded constant). The result is a diff state for `gitDiff`, not a picker value. No attachment. |
+| `gitDiff` | Absolute directory (ADR 14) | The diff *directive* between two states (a pinned 40/64-hex oid, `"head"`, `"index"`, or `"worktree"` — `"worktree"` only as `new`) under an absolute directory: `{ ok: true, files, filesOmitted?, untrackedOmitted? }`. `files` carries path, rename source, `status` (from git's raw directive), ±counts, binary, and `untracked`; paths are relative to `directory`, which also scopes the result to that subtree. A worktree-side diff also lists untracked, non-ignored files (without counts, since git's own diff omits them); `filesOmitted` and `untrackedOmitted` report what the host caps left out. No patch text crosses the wire: the renderer fetches each file's content with `readFile` and diffs it client-side. No attachment. |
 | `console` | Daemon dev mode | `{ ok: true }`; forwards browser console data only when development mode is enabled. It does not change the Document. |
 
 The attachment-bound verbs reject with `ok: false` when no Session is attached.
-Project-addressed verbs validate their `projectId` and, where applicable,
-normalize and resolve the `stem` within that Project's session namespace.
-`getDaemonInfo`, `listActiveSessions`, and `console` are not Session reads.
+`readFile`, `listDirectory`, `gitBase`, and `gitDiff` are not among them: they carry
+absolute paths (ADR 14), so they need no Session to resolve a base, and a
+Connection that never opened one can still browse the filesystem and the
+repository. Project-addressed verbs validate their `projectId` and, where
+applicable, normalize and resolve the `stem` within that Project's session
+namespace. `getDaemonInfo`, `listActiveSessions`, `listFiles`, and `console`
+are not Session reads.
 
 ## Patch operations
 

@@ -9,6 +9,9 @@
 
 import { memo } from "react";
 import type { GitIdentity, GitStampAnchor } from "../../../../src/core/index.ts";
+import { gitBaseRpc } from "../../infra/net/useRpc.ts";
+import { useStore } from "../../infra/state/store.tsx";
+import { projectCwdOf } from "../../infra/state/ui.ts";
 import styles from "./actions.module.css";
 import turnStyles from "./turns.module.css";
 import type { GitShowState } from "./useGitShow.ts";
@@ -44,9 +47,24 @@ export function formatGitMeta(identity: GitIdentity): string {
  * commit (expansion fetches `git show --stat`), a static head otherwise
  * (unborn/unknown identities carry nothing to fetch). */
 export const GitChangeRow = memo(function GitChangeRow({ change }: { change: GitChangeFields }) {
+	const openBrowser = useStore((s) => s.openBrowser);
+	// The commit review is scoped to the Project's repository; without a cwd
+	// there is no absolute directory to resolve the commit against.
+	const cwd = useStore(projectCwdOf);
 	const { commit, branch } = change.identity;
 	const expandable = commit !== null;
 	const { expanded, toggle, state } = useGitShow(expandable ? commit : null);
+	// Review this commit against its first parent (ADR 14, the ADR 10 commit
+	// card's entry point). The base is resolved host-side — a root commit
+	// resolves to the repository's empty tree — and the result opens the
+	// browser with the commit as the content state.
+	const reviewCommit = () => {
+		if (commit === null || cwd === null) return;
+		void gitBaseRpc(cwd, commit).then((baseline) => {
+			if (baseline === null) return;
+			openBrowser({ root: cwd, state: commit, baseline, tree: "changed", presentation: "review", origin: "commit" });
+		});
+	};
 	// Collapsed primary text: the subject; fall back for subject-less stamps
 	// (v1) to the branch, or "git state" for a bare initial recording.
 	const summary = change.commitSubject ?? branch ?? "git state";
@@ -86,6 +104,22 @@ export const GitChangeRow = memo(function GitChangeRow({ change }: { change: Git
 						<span className={styles.actionSummary}>{summary}</span>
 						{metaSpan}
 					</span>
+				)}
+				{/* Sibling of the expand button, not a child: a nested button is
+				    invalid markup and one click would both open a view and toggle the
+				    card. The card's one meaning is the commit itself (vs its first
+				    parent); the turn's transition windows live on the turn chip's
+				    menu, so there is no second `diff` affordance here. */}
+				{commit !== null && cwd !== null && (
+					<button
+						type="button"
+						className={turnStyles.gitDiffAction}
+						onClick={reviewCommit}
+						aria-label="Review this commit"
+						title="Review this commit against its first parent"
+					>
+						review
+					</button>
 				)}
 			</div>
 			{expanded && (

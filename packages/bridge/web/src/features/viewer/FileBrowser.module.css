@@ -1,0 +1,653 @@
+/* FileBrowser — the repository browser's fullscreen portal (ADR 14). Shell
+   classes come from Viewer.module.css (same portal role, one spec); diff-line
+   styles come from the conversation's actions.module.css (the one unified-diff
+   line spec). This module owns the browser's own chrome: the state-pair
+   header, the file tree, the file bar, and the review section list. */
+
+.browserBody {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	/* The narrow-viewport tree is an absolute drawer positioned against this. */
+	position: relative;
+}
+
+.treePane {
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 260px;
+	min-width: 0;
+	overflow: auto;
+	border-right: 1px solid var(--color-border);
+}
+
+.treeHead {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 10px;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-sm);
+	position: sticky;
+	top: 0;
+	background: var(--color-portal-bg);
+	z-index: 1;
+}
+
+/* The tree scope is named by its own label: clicking it switches between the
+   full tree and the changed-files tree, so no header button is spent on it. */
+.treeScope {
+	background: none;
+	border: none;
+	padding: 0;
+	color: var(--color-muted-foreground);
+	font: inherit;
+	cursor: pointer;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.treeScope:hover,
+.treeScope[data-on] {
+	color: var(--color-foreground);
+}
+
+.tree {
+	display: flex;
+	flex-direction: column;
+	padding: 2px 0 12px;
+}
+
+.treeRow {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: none;
+	border: 0;
+	color: var(--color-foreground);
+	font-size: var(--fs-md);
+	line-height: 1.5;
+	text-align: left;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.treeRow:hover {
+	background: var(--color-muted);
+}
+
+.treeRow[data-active] {
+	background: var(--color-accent-soft);
+}
+
+.treeRow[data-on-path] {
+	color: var(--color-foreground);
+}
+
+.treeMark {
+	width: 10px;
+	flex: 0 0 10px;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-sm);
+}
+
+.treeName {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.treeOldName {
+	color: var(--color-muted-foreground);
+	text-decoration: line-through;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.treeStatus {
+	margin-left: auto;
+	padding-right: 8px;
+	color: var(--color-muted-foreground);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+}
+
+.treeRow[data-status="added"] .treeStatus {
+	color: var(--color-success);
+}
+
+.treeRow[data-status="deleted"] .treeStatus {
+	color: var(--color-error);
+}
+
+/* A directory whose listing failed (the node is not empty, it is unreadable). */
+.treeRow[data-error] .treeStatus {
+	color: var(--color-error);
+}
+
+.contentPane {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-width: 0;
+	overflow: auto;
+}
+
+/* Review-only controls live with the content they act on (diff expansion and
+   context), not in the header. Shown only when a baseline makes a diff. */
+.reviewBar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--color-border);
+}
+
+.fileBar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--color-border);
+	position: sticky;
+	top: 0;
+	background: var(--color-portal-bg);
+	z-index: 1;
+}
+
+.fileBarPath {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@media (max-width: 767.98px) {
+	/* The tree becomes an overlay drawer instead of a column, at the same 768px
+	   boundary the Sidebar and History panes use: on a phone-width viewport an
+	   inline pane would squeeze the content. It floats above the content pane,
+	   opened from the header's Files control (treeOpen defaults false here), and
+	   a scrim makes the tap outside dismiss it rather than hit the content
+	   underneath. Choosing a file dismisses it too. */
+	.treePane {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 2;
+		width: min(280px, 80%);
+		background: var(--color-portal-bg);
+		box-shadow: var(--shadow-edge-left);
+	}
+
+	.treeScrim {
+		position: absolute;
+		inset: 0;
+		z-index: 1;
+		background: var(--color-overlay);
+		border: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	/* The header's controls are wide and non-shrinkable (the state chips, the
+	   review toggles, the `as of` time). Wrapping keeps the trailing ones
+	   reachable instead of clipping them at the panel edge. The base `gap`
+	   already spaces both rows, so nothing is redeclared here. */
+	.headerActions {
+		flex-wrap: wrap;
+	}
+}
+
+/* ── Header: semantic heading + actions ───────────────────────────────── */
+
+.headerMain {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	flex: 1;
+}
+
+.headingText {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+
+.headingTitle {
+	color: var(--color-foreground);
+	font-size: var(--fs-sm);
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.headingDetail {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.headerActions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+/* ── Compare menu ─────────────────────────────────────────────────────── */
+
+.compareMenu {
+	z-index: 2;
+	width: min(316px, calc(100vw - 16px));
+	padding: 4px;
+	background: var(--color-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-2);
+}
+
+.compareLabel {
+	padding: 6px 8px 2px;
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-caps);
+}
+
+.comparePreset {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 8px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	text-align: left;
+	cursor: pointer;
+	color: var(--color-foreground);
+}
+
+.comparePreset:hover {
+	background: var(--color-muted);
+}
+
+.comparePresetName {
+	flex-shrink: 0;
+	font-size: var(--fs-sm);
+}
+
+.comparePresetNote {
+	flex: 1;
+	min-width: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: right;
+}
+
+.compareRow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 8px 6px;
+}
+
+/* Two chips and an arrow share the menu width; let each chip shrink. */
+.compareRow .stateChip {
+	flex: 1;
+	min-width: 0;
+	max-width: none;
+}
+
+.compareArrow {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	flex-shrink: 0;
+}
+
+.compareApply {
+	display: block;
+	width: calc(100% - 16px);
+	margin: 2px 8px 6px;
+	padding: 5px 8px;
+	background: var(--color-accent);
+	border: 1px solid var(--color-accent);
+	border-radius: var(--radius-sm);
+	color: var(--color-on-accent);
+	font-size: var(--fs-sm);
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.compareApply:hover:not(:disabled) {
+	background: var(--color-accent-hover);
+	border-color: var(--color-accent-hover);
+}
+
+.compareApply:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.stateChip {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-foreground);
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	padding: 2px 8px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 14em;
+}
+
+.stateChipWorktree {
+	color: var(--color-muted-foreground);
+	font-family: inherit;
+}
+
+/* Chip as a selector: a button, so it needs the button reset and a caret. */
+.stateChipBtn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+}
+
+.stateChipBtn:hover {
+	border-color: var(--color-accent);
+	color: var(--color-foreground);
+}
+
+.stateChipLabel {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The commit under review is the header's headline; the base is metadata. */
+.commitChip {
+	color: var(--color-foreground);
+}
+
+/* Endpoint list: the model-picker portal pattern (viewport overlay + fixed
+   panel), scaled down. z-index is local — the menu lives inside the viewer
+   panel's stacking context. */
+.pickerOverlay {
+	position: fixed;
+	inset: 0;
+	z-index: 1;
+	background: none;
+	border: none;
+	padding: 0;
+	margin: 0;
+}
+
+.pickerMenu {
+	z-index: 2;
+	min-width: 240px;
+	max-width: min(340px, calc(100vw - 16px));
+	max-height: 320px;
+	overflow-y: auto;
+	padding: 4px;
+	background: var(--color-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-2);
+}
+
+.pickerOption {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 4px 8px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	text-align: left;
+	cursor: pointer;
+	color: var(--color-foreground);
+}
+
+.pickerOption:hover,
+.pickerOption[data-active] {
+	background: var(--color-muted);
+}
+
+.pickerOptionLabel {
+	flex-shrink: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+}
+
+.pickerOptionSubject {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.refreshBtn[data-on] {
+	color: var(--color-foreground);
+	border-color: var(--color-foreground);
+}
+
+.refreshBtn {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	font-size: var(--fs-xs);
+	padding: 2px 8px;
+	flex-shrink: 0;
+}
+
+.refreshBtn:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
+/* ── File sections ─────────────────────────────────────────────────────── */
+
+.sections {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.section {
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	overflow: hidden;
+	background: var(--color-card);
+}
+
+/* Section head row — a div holding the collapse button and the whole-file
+   toggle, so the two controls are siblings (a button inside a button is
+   invalid markup and would toggle twice on one click). */
+.sectionHead {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 10px;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+}
+
+.sectionHead:hover {
+	background: var(--color-surface-raised);
+}
+
+.sectionToggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+	padding: 0;
+	background: none;
+	border: none;
+	cursor: pointer;
+	text-align: left;
+	font: inherit;
+	font-size: var(--fs-sm);
+	color: var(--color-foreground);
+}
+
+/* Whole-file toggle — the section's own quiet control, matching the
+   state-pair Refresh chrome. */
+.sectionFileBtn {
+	background: none;
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	padding: 1px 6px;
+	flex-shrink: 0;
+}
+
+.sectionFileBtn:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
+.sectionFileBtn[data-on] {
+	color: var(--color-foreground);
+	border-color: var(--color-accent);
+}
+
+.sectionTri {
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+}
+
+.sectionPath {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-sm);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+	min-width: 0;
+}
+
+.sectionOldPath {
+	color: var(--color-muted-foreground);
+	text-decoration: line-through;
+	margin-right: 4px;
+}
+
+.sectionCounts {
+	flex-shrink: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-xs);
+	display: flex;
+	gap: 6px;
+}
+
+.countAdd {
+	color: var(--color-success);
+}
+
+.countDel {
+	color: var(--color-error);
+}
+
+.sectionBody {
+	border-top: 1px solid var(--color-border);
+	padding: 6px 0;
+	overflow-x: auto;
+}
+
+/* Whole-file view: the shared FileContent spec; the section owns only its
+   border and inset, so the code sits on the page tone, not the card tint. */
+.fileBody {
+	border-top: 1px solid var(--color-border);
+	padding: 8px 10px;
+}
+
+.fileNote {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	margin-bottom: 6px;
+}
+
+.diffLines {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: var(--fs-md);
+	line-height: 1.5;
+}
+
+.note {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-sm);
+	padding: 4px 10px;
+}
+
+/* ── Summary (collapsed state is just the closed section) ──────────────── */
+
+.emptyState {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-md);
+	padding: 24px 12px;
+	text-align: center;
+}
+
+/* The coarse-pointer convention the conversation surfaces follow
+   (actions/conversation/turns modules): rows and chrome grow so they are
+   actually tappable. The browser adds itself to that instead of leaving its
+   20px rows and 2px-padded chrome as the smallest targets in the app. Kept at
+   the end of the file: these override the base rules above and share their
+   specificity, so source order is what decides. */
+@media (pointer: coarse) {
+	.treeRow {
+		padding-top: 12px;
+		padding-bottom: 12px;
+	}
+
+	.treeHead {
+		min-height: 40px;
+	}
+
+	.refreshBtn {
+		min-height: 32px;
+		padding: 2px 12px;
+	}
+
+	.sectionToggle {
+		padding: 6px 0;
+	}
+
+	.sectionFileBtn {
+		min-height: 32px;
+		padding: 1px 10px;
+	}
+}

@@ -1,0 +1,94 @@
+/* FileContent — the shared file-reading body. It owns the code surface, the
+   code size, the line-number gutter, and the toggle row, so the browser's file
+   the review surface's whole-file section are one spec. The surface is the
+   page tone (--color-background), matching the viewer's portal panel: a host
+   that nests this body inside a card (the diff section) must not tint it. */
+
+.fileContent {
+	background: var(--color-background);
+}
+
+.controls {
+	display: flex;
+	justify-content: flex-end;
+	gap: 4px;
+	margin-bottom: 4px;
+}
+
+.control {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: var(--color-muted-foreground);
+	padding: 0;
+	cursor: pointer;
+}
+
+.control svg {
+	display: block;
+}
+
+.control:hover {
+	background: var(--color-muted);
+	color: var(--color-foreground);
+}
+
+/* Toggle state: on reads brighter than off (same treatment as cardCtrlBtn). */
+.control[data-on] {
+	color: var(--color-secondary);
+}
+
+.truncated {
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	padding: 3px 8px;
+	margin-bottom: 8px;
+}
+
+/* Block code keeps the card-code size; a file reader is a 12px-adjacent
+   surface like the tool cards, not the 16px document. */
+.fileContent pre code {
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	counter-reset: line;
+}
+
+/* Line-number gutter (CodeSnippet lineNumbers) — the streamdown technique:
+   a CSS counter + ::before pseudo-number with a hanging indent. padding-left
+   reserves the gutter column; text-indent pulls the first visual line —
+   including the pseudo number — back to the left edge, so wrapped code never
+   flows under the number. No DOM spans: the number is not selectable text and
+   the .line itself stays the scroll/anchor target (data-line). `.line` is
+   CodeSnippet's global string class, not a module class — it must stay
+   :global here or the module pipeline hashes it into a selector that never
+   matches. */
+.fileContent pre code :global(.line[data-gutter="true"]) {
+	padding-left: 5.5ch;
+	text-indent: -5.5ch;
+}
+
+.fileContent pre code :global(.line[data-gutter="true"])::before {
+	content: counter(line);
+	counter-increment: line;
+	display: inline-block;
+	width: 4ch;
+	margin-right: 1.5ch;
+	text-align: right;
+	color: var(--color-muted-foreground);
+	user-select: none;
+	font-variant-numeric: tabular-nums;
+	/* text-indent inherits -5.5ch from .line; the number must not shift. */
+	text-indent: 0;
+}
+
+.fileContent pre code :global(.line[data-active="true"]) {
+	background: var(--color-muted);
+}
