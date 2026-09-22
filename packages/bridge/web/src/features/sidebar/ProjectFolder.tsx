@@ -25,6 +25,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 	onOpenProject,
 	onOpen,
 	onClose,
+	onArchive,
 	onLoad,
 	onLoadMore,
 }: {
@@ -45,6 +46,10 @@ export const ProjectFolder = memo(function ProjectFolder({
 	/** Terminate a live instance (row menu Close). Passed only to the pinned
 	 * active rows — dormant history has no instance to kill. */
 	onClose: (session: SessionInfo) => void;
+	/** Close then archive a session (row menu Archive). Passed to active and
+	 * dormant rows alike: a dormant row's close is a no-op, so archiving is
+	 * how history is thinned without opening each session. */
+	onArchive: (session: SessionInfo) => void;
 	onLoad: (projectId: string) => void;
 	onLoadMore: (projectId: string) => void;
 }) {
@@ -139,6 +144,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 								selected={isSelected(s)}
 								onOpen={onOpen}
 								onClose={onClose}
+								onArchive={onArchive}
 							/>
 						))}
 					</div>
@@ -168,6 +174,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 												dot="idle"
 												selected={isSelected(s)}
 												onOpen={onOpen}
+												onArchive={onArchive}
 											/>
 										))}
 									</div>

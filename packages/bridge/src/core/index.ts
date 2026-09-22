@@ -42,6 +42,7 @@ export type {
 	ActiveSessionsChangedMessage,
 	AddOp,
 	AppendOp,
+	ArchiveSessionRequest,
 	BranchSummaryEntry,
 	ClientMessage,
 	CloseSessionRequest,
