@@ -78,34 +78,13 @@ export const CodeSnippet = memo(function CodeSnippet({
 						// biome-ignore lint/suspicious/noArrayIndexKey: static token list, no stable key
 						key={lineIdx}
 						className="line"
-						style={{ display: "block" }}
 						data-line={lineNumbers ? lineIdx + 1 : undefined}
 						data-gutter={lineNumbers ? "true" : undefined}
 						data-active={lineNumbers && highlightLine === lineIdx + 1 ? "true" : undefined}
 					>
-						{lineNumbers && (
-							<span aria-hidden="true" className="lineNo">
-								{lineIdx + 1}
-							</span>
-						)}
-						{lineNumbers ? (
-							<span className="lineText">
-								{line.tokens.length === 0 ? (
-									<wbr />
-								) : (
-									line.tokens.map((token, tokIdx) => {
-										const style: Record<string, string> = {};
-										if (token.color) style["--code-c"] = token.color;
-										if (token.darkColor) style["--shiki-dark"] = token.darkColor;
-										return (
-											// biome-ignore lint/suspicious/noArrayIndexKey: static token list
-											<span key={tokIdx} style={style}>
-												{token.content}
-											</span>
-										);
-									})
-								)}
-							</span>
+						{/* Gutter numbers are CSS counters (Viewer.module.css), not DOM. */}
+						{line.tokens.length === 0 ? (
+							<wbr />
 						) : (
 							line.tokens.map((token, tokIdx) => {
 								const style: Record<string, string> = {};
