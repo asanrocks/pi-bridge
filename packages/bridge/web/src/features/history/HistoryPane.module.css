@@ -17,6 +17,7 @@
 	flex-shrink: 0;
 }
 
+/* Quiet uppercase label in the header slot the tab strip used to own. */
 .title {
 	font-size: var(--fs-xs);
 	font-weight: 600;
