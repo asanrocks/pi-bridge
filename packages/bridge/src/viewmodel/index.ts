@@ -66,6 +66,33 @@ export interface ViewModel {
 
 export type TurnVM = UserTurn | AssistantTurn | SystemTurn | UserBashTurn | GitChangeTurn;
 
+/** Review diff window (git-stamp timeline). `old` is the pinned commit in
+ * effect at the window's start; `new` is the next distinct commit observed
+ * later on the path, or the literal "worktree" while the live path ends
+ * without a later transition. */
+export interface DiffWindow {
+	old: string;
+	new: string | "worktree";
+}
+
+/** One observed git identity transition on the active path (ADR 10): the
+ * commit in effect before an observation and the commit the stamp recorded.
+ * Same-commit (branch-only) transitions are not represented — they carry no
+ * content change. A turn's transitions are the non-prompt stamps observed
+ * while the turn was open; prompt stamps are the next turn's baseline. */
+export interface GitTransition {
+	/** The stamp entry id that observed this transition (stable key). */
+	entryId: string;
+	/** The commit in effect before this observation. */
+	old: string;
+	/** The commit observed. */
+	new: string;
+	/** HEAD subject at observation; null for v1 stamps and failed lookups. */
+	subject: string | null;
+	timestamp: string;
+	anchor: GitStampAnchor;
+}
+
 /** ADR 10 v2: a boundary git identity stamp rendered as an ordered
  * transcript item (prompt / user_bash_end anchors, or a turn-anchor stamp
  * with no open turn). Mid-turn stamps (tool_end / turn_end inside a turn) do
@@ -116,6 +143,10 @@ export interface UserTurn {
 	/** Subject of that effective identity's commit (v2 stamps only); shown as
 	 * the identity chip's tooltip. Null/undefined when unknown. */
 	gitCommitSubject?: string | null;
+	/** ADR 10 transitions observed while this turn was open (non-prompt
+	 * anchors, in path order). Empty when the turn committed nothing. The
+	 * chip's review menu lists these; the union window is first.old → last.new. */
+	gitTransitions: GitTransition[];
 }
 
 export interface UserBashTurn {
@@ -298,6 +329,63 @@ export interface ViewModelInput {
 // ---------------------------------------------------------------------------
 
 /**
+ * Per-turn git transitions (ADR 10 timeline), computed in one pass over the
+ * path before the fold. A transition is a stamp whose observed commit differs
+ * from the previously observed commit, attributed to the user turn open at its
+ * path position. A prompt stamp is persisted before the message it labels, so
+ * it is attributed to the turn it closes — the turn whose work produced the
+ * commit — while its identity is carried forward as the next turn's baseline.
+ * A transition with an unborn (null) end is omitted — no honest pair, no
+ * content change to review.
+ */
+function computeTurnTransitions(path: Entry[]): Map<string, GitTransition[]> {
+	const byTurn = new Map<string, GitTransition[]>();
+	let currentUserId: string | null = null;
+	let prevCommit: string | null = null;
+	for (const e of path) {
+		if (e.kind === "message" && e.role === "user") {
+			currentUserId = e.id;
+			continue;
+		}
+		if (e.kind !== "custom" || e.customType !== GIT_STAMP_CUSTOM_TYPE) continue;
+		const stamp = parseGitStampEntry(e);
+		if (!stamp) continue;
+		if (currentUserId !== null && prevCommit !== null && stamp.commit !== null && stamp.commit !== prevCommit) {
+			const transition: GitTransition = {
+				entryId: e.id,
+				old: prevCommit,
+				new: stamp.commit,
+				subject: stamp.v === 2 ? stamp.commitSubject : null,
+				timestamp: e.timestamp,
+				anchor: stamp.anchor,
+			};
+			const list = byTurn.get(currentUserId);
+			if (list) list.push(transition);
+			else byTurn.set(currentUserId, [transition]);
+		}
+		prevCommit = stamp.commit;
+	}
+	return byTurn;
+}
+
+/** Element-wise equality for per-turn transition array reuse. */
+function sameGitTransitions(a: GitTransition[] | undefined, b: GitTransition[] | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every((t, i) => {
+		const o = b[i]!;
+		return (
+			t.entryId === o.entryId &&
+			t.old === o.old &&
+			t.new === o.new &&
+			t.subject === o.subject &&
+			t.timestamp === o.timestamp &&
+			t.anchor === o.anchor
+		);
+	});
+}
+
+/**
  * Project a Document into a display-ready ViewModel.
  *
  * 1. Leaf-path projection — walk from status.leafId up via parentId, reverse.
@@ -323,6 +411,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	const viewLeaf = resolveViewLeaf(doc, input.viewLeafId);
 	const path = projectLeafPath(doc, viewLeaf);
 	const toolResultMap = buildToolResultMap(doc.entries);
+	const turnTransitions = computeTurnTransitions(path);
 
 	const prevTurns = new Map<string, TurnVM>();
 	const prevBlocks = new Map<string, AssistantBlockVM>();
@@ -480,6 +569,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						asstSeals,
 						carriedGit?.identity,
 						carriedGit?.subject,
+						turnTransitions.get(entry.id) ?? [],
 					);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
@@ -762,6 +852,7 @@ function buildUserTurn(
 	asstSeals: string[],
 	gitIdentity?: GitIdentity,
 	gitCommitSubject?: string | null,
+	gitTransitions: GitTransition[] = [],
 ): UserTurn {
 	const text = entry.content
 		.filter((c) => c.type === "text")
@@ -797,6 +888,7 @@ function buildUserTurn(
 		thoughtForMs,
 		gitIdentity,
 		gitCommitSubject,
+		gitTransitions,
 	};
 
 	const prev = prevTurns.get(`user:${entry.id}`);
@@ -815,6 +907,7 @@ function buildUserTurn(
 		prev.thoughtForMs === turn.thoughtForMs &&
 		sameStringArray(prev.siblings, turn.siblings) &&
 		prev.gitCommitSubject === turn.gitCommitSubject &&
+		sameGitTransitions(prev.gitTransitions, turn.gitTransitions) &&
 		((prev.gitIdentity === undefined && gitIdentity === undefined) ||
 			(prev.gitIdentity !== undefined &&
 				gitIdentity !== undefined &&

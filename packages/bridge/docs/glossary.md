@@ -193,6 +193,19 @@ and [web design](web/design.md).
 12. A **draft** *(bound)* is the composer's unsent text. Drafts are client
     state, not daemon objects.
 
+13. A **browser** *(bound)* is the fullscreen surface that pairs a file tree
+    with file content: the tree addresses structure, the content pane shows
+    one file or a stacked review of the files that differ. Every entry point
+    (a link, a tool card, a git-stamp window, the Project home) opens it with a
+    different target; the browser is chrome, not a route.
+14. A **snapshot state** *(bound)* is the repository state a browser read or
+    listing addresses: a pinned commit oid, `head`, `index` (the staged tree),
+    or `worktree`. `worktree` is a sampling point, not a fixed snapshot.
+15. A **baseline** *(bound)* is an optional second snapshot state a browser
+    compares its content state against. With a baseline the tree can mark
+    changed paths and the content pane can diff; without one, the browser
+    reads a single state. The baseline end cannot be `worktree`.
+
 ## The seams
 
 Two components legitimately span domains; they are sanctioned exceptions,

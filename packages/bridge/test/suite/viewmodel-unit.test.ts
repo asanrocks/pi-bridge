@@ -2485,3 +2485,164 @@ describe("computeViewModel view-leaf override", () => {
 		expect(vmOver(doc, "a2b").pathKey).not.toBe(vmOver(doc).pathKey);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Review diff windows (git-stamp timeline)
+// ---------------------------------------------------------------------------
+
+describe("review diff windows", () => {
+	const SHA_A = "1111111111111111111111111111111111111111";
+	const SHA_B = "2222222222222222222222222222222222222222";
+
+	function stampEntry(id: string, parentId: string | null, data: unknown): Record<string, unknown> {
+		return makeEntry(id, parentId, "2024-01-01T00:00:00Z", "custom", {
+			customType: "pi-bridge.git-stamp",
+			data,
+		});
+	}
+
+	function userEntry(id: string, parentId: string | null, ts: string): Record<string, unknown> {
+		return makeEntry(id, parentId, ts, "message", { role: "user", content: [{ type: "text", text: id }] });
+	}
+
+	function userTurnAt(vm: ReturnType<typeof computeViewModel>, i: number) {
+		const users = vm.turns.filter((t) => t.kind === "user");
+		const t = users[i];
+		if (t?.kind !== "user") throw new Error(`user turn ${i} not found`);
+		return t;
+	}
+
+	it("collects the transitions observed during each user turn", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: SHA_A, branch: "main", commitSubject: "a" }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			stampEntry("s2", "u1", { v: 2, anchor: "turn_end", commit: SHA_B, branch: "main", commitSubject: "b" }),
+		);
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(userTurnAt(vm, 0).gitTransitions).toEqual([
+			{ entryId: "s2", old: SHA_A, new: SHA_B, subject: "b", timestamp: "2024-01-01T00:00:00Z", anchor: "turn_end" },
+		]);
+		expect(userTurnAt(vm, 1).gitTransitions).toEqual([]);
+	});
+
+	it("omits transitions with an unborn baseline and on paths with no stamps", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: null, branch: "main", commitSubject: null }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(
+			doc,
+			stampEntry("s2", "u1", { v: 2, anchor: "turn_end", commit: SHA_A, branch: "main", commitSubject: null }),
+		);
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		// Unborn baseline: the first non-prompt stamp has no previous commit.
+		expect(userTurnAt(vm, 0).gitTransitions).toEqual([]);
+		expect(userTurnAt(vm, 1).gitTransitions).toEqual([]);
+
+		// No stamps at all.
+		const bare = emptyDoc();
+		appendEntry(bare, userEntry("u1", null, "2024-01-01T00:00:01Z"));
+		expect(userTurnAt(computeViewModel({ document: bare, models: [] }), 0).gitTransitions).toEqual([]);
+	});
+
+	it("skips same-commit stamps and attributes a prompt-observed commit to the turn it closes", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: SHA_A, branch: "main", commitSubject: "a" }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		// Same-commit (branch-only) observation: not a transition.
+		appendEntry(
+			doc,
+			stampEntry("s2", "u1", { v: 2, anchor: "tool_end", commit: SHA_A, branch: "dev", commitSubject: "a" }),
+		);
+		// A prompt stamp is persisted before the message it labels, so its
+		// commit is attributed to the turn it closes (u1).
+		appendEntry(
+			doc,
+			stampEntry("s3", "s2", { v: 2, anchor: "prompt", commit: SHA_B, branch: "dev", commitSubject: "b" }),
+		);
+		appendEntry(doc, userEntry("u2", "s3", "2024-01-01T00:00:02Z"));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(userTurnAt(vm, 0).gitTransitions).toEqual([
+			{ entryId: "s3", old: SHA_A, new: SHA_B, subject: "b", timestamp: "2024-01-01T00:00:00Z", anchor: "prompt" },
+		]);
+		expect(userTurnAt(vm, 1).gitTransitions).toEqual([]);
+	});
+
+	it("attributes inline tool_end/turn_end stamps to the turn they were observed in", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: SHA_A, branch: "main", commitSubject: "a" }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		appendEntry(doc, userEntry("u2", "u1", "2024-01-01T00:00:02Z"));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u2", "2024-01-01T00:00:03Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "working" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			stampEntry("s2", "a1", { v: 2, anchor: "tool_end", commit: SHA_B, branch: "main", commitSubject: "b" }),
+		);
+		appendEntry(
+			doc,
+			stampEntry("s3", "s2", { v: 2, anchor: "turn_end", commit: SHA_B, branch: "main", commitSubject: "b" }),
+		);
+		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:04Z"));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const assistant = vm.turns.find((t) => t.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		// Both stamps fold inline (the turn was still open); the card carries the
+		// identity, the turn's transition list carries the content change.
+		expect(assistant.gitChanges).toHaveLength(2);
+		expect(assistant.gitChanges![0]!.identity.commit).toBe(SHA_B);
+		expect(assistant.gitChanges![1]!.identity.commit).toBe(SHA_B);
+		// The same-commit turn_end stamp is not a second transition.
+		expect(userTurnAt(vm, 1).gitTransitions).toEqual([
+			{ entryId: "s2", old: SHA_A, new: SHA_B, subject: "b", timestamp: "2024-01-01T00:00:00Z", anchor: "tool_end" },
+		]);
+		expect(userTurnAt(vm, 2).gitTransitions).toEqual([]);
+	});
+
+	it("keeps transition identity stable across recomputes and refreshes on change", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			stampEntry("s1", null, { v: 2, anchor: "prompt", commit: SHA_A, branch: "main", commitSubject: "a" }),
+		);
+		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
+		const first = computeViewModel({ document: doc, models: [] });
+		const second = computeViewModel({ document: doc, models: [] }, first);
+		expect(userTurnAt(second, 0)).toBe(userTurnAt(first, 0));
+
+		// A new stamp adds a transition: fresh turn object.
+		appendEntry(
+			doc,
+			stampEntry("s2", "u1", { v: 2, anchor: "turn_end", commit: SHA_B, branch: "main", commitSubject: "b" }),
+		);
+		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
+		const third = computeViewModel({ document: doc, models: [] }, second);
+		expect(userTurnAt(third, 0)).not.toBe(userTurnAt(second, 0));
+		expect(userTurnAt(third, 0).gitTransitions).toHaveLength(1);
+		expect(userTurnAt(third, 0).gitTransitions[0]!.new).toBe(SHA_B);
+	});
+});

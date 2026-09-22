@@ -2,7 +2,7 @@
 // MarkdownLink — Streamdown `a` override for the app.
 //
 // File-path hrefs (LLM markdown links like `./README.md`, `/abs/path.md`,
-// `file:///…`) open the in-app FileViewer via the readFile verb instead of
+// `file:///…`) open the in-app FileBrowser via the readFile verb instead of
 // navigating to a 404 on the daemon origin. URL hrefs keep the external-link
 // confirm step (links come from model output — a click-through guard against
 // prompt-injected navigation), restyled to the app's portal tokens instead

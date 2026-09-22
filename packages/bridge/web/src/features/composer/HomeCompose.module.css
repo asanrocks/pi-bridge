@@ -19,6 +19,21 @@
 	user-select: none;
 }
 
+/* The Project home's file-browser entry point (ADR 14): an inline text link in
+   the hint row, not a second button competing with Send. */
+.browse {
+	background: none;
+	border: 0;
+	padding: 0;
+	font: inherit;
+	color: var(--color-accent);
+	cursor: pointer;
+}
+
+.browse:hover {
+	text-decoration: underline;
+}
+
 @media (max-width: 48rem) {
 	.hint {
 		/* Match the card shell's mobile gutter (ComposeCard.module.css). */

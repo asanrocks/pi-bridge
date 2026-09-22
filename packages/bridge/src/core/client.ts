@@ -9,6 +9,7 @@
 import { applyPatch, CompactCodec, getAtPath, setAtPath } from "./document.ts";
 import type {
 	Document,
+	GitDiffState,
 	ImageContent,
 	JsonValue,
 	ModelRef,
@@ -18,6 +19,7 @@ import type {
 	RpcRequestBody,
 	ServerPushMessage,
 	SessionListCursor,
+	SnapshotState,
 } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -254,12 +256,35 @@ export class BridgeClient {
 		return this.call({ verb: "listFiles", projectId, prefix });
 	}
 
-	readFile(path: string): Promise<RpcReply> {
-		return this.call({ verb: "readFile", path });
+	/** Read one absolute path's content at a repository state (see
+	 * ReadFileRequest): omitted or "worktree" from the filesystem, a pinned
+	 * object id / "head" / "index" from git. */
+	readFile(path: string, state?: SnapshotState): Promise<RpcReply> {
+		return this.call(state === undefined ? { verb: "readFile", path } : { verb: "readFile", path, state });
+	}
+
+	/** List one absolute directory's immediate children at a repository state
+	 * (see ListDirectoryRequest). Lazy: one directory per call. */
+	listDirectory(path: string, state?: SnapshotState): Promise<RpcReply> {
+		return this.call(state === undefined ? { verb: "listDirectory", path } : { verb: "listDirectory", path, state });
 	}
 
 	gitShow(commit: string): Promise<RpcReply> {
 		return this.call({ verb: "gitShow", commit });
+	}
+
+	/** The comparison base for reviewing one commit (see GitBaseRequest): the
+	 * commit's first parent, or the repository's empty-tree oid for a root
+	 * commit. Attachment-free, like the browser's read queries. */
+	gitBase(directory: string, commit: string): Promise<RpcReply> {
+		return this.call({ verb: "gitBase", directory, commit });
+	}
+
+	/** The browser's diff *directive* — the file list, statuses, and line counts
+	 * between two repository states under an absolute directory (see
+	 * GitDiffRequest). Content is fetched per file with `readFile`. */
+	gitDiff(directory: string, oldState: GitDiffState, newState: GitDiffState): Promise<RpcReply> {
+		return this.call({ verb: "gitDiff", directory, old: oldState, new: newState });
 	}
 
 	console(level: "log" | "warn" | "error", args: JsonValue[]): Promise<RpcReply> {

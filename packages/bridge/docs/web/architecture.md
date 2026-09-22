@@ -36,10 +36,14 @@ The web source is divided by responsibility:
 - `features/<area>/` owns an area and its wiring: launcher, topbar, sidebar,
   conversation, composer, history, and viewer. Components and area hooks stay
   together, so RPC and store composition belongs with the area that uses it.
+  `features/viewer/` owns the repository browser (ADR 14): `FileBrowser` is the
+  container (target state, tree loading, content panes), `FileTree` is
+  presentational over normalized nodes, and `browserTree.ts` builds those nodes
+  from either a lazy directory listing or the diff directive's changed paths.
 
 `App` is chrome composition only. It installs the connection and draft guard,
 creates the ViewModel, composes the TopBar, Sidebar, conversation or Launcher,
-history pane, file viewer, and toast surface, and supplies the callbacks that
+history pane, repository browser, and toast surface, and supplies the callbacks that
 are genuinely shared by the keyboard ring and a feature. `useSidebarShell`
 and `useHistoryPaneShell` keep their pane's composition and chrome handles
 (mode ownership, TopBar toggle, hover signal) in its own area.
@@ -87,9 +91,21 @@ The protocol slice contains:
 
 `clearCurrentSession` is the one teardown operation for leaving a Session. It
 clears the Document, `activeSessionId`, address, session-scoped expansion and
-freeze state, pull state, draft state, and the rendered-leaf override. It can
+freeze state, pull state, draft state, the rendered-leaf override, and both
+fullscreen browser. It can
 retain a Project id to land on that Project's home. Detach, a Project switch,
 and a failed open use this boundary rather than partially clearing fields.
+
+A session-to-session switch does not go through it (the address is committed
+optimistically), so `setCurrentSession` also closes the browser when the
+address actually changes — it held a path or a commit pair read from the
+session being left. A same-address re-assert (the initial-sync push after an
+optimistic open, a reconnect replace) keeps it open. The browser drops any
+reply whose fetch started under a different address, so a slow RPC cannot land
+under the new session's header. The TopBar changes badge carries the same
+guard in its own state: a sample read for a different stem is hidden until the
+new session's fetch lands, so a switch cannot show the previous worktree's
+dirt.
 
 The composer slice contains `draft`, a discriminated union:
 
@@ -108,13 +124,13 @@ streaming and pending-steer state, which is the deliberate cross-slice seam.
 
 The UI slice contains ephemeral view state: `focusedTurnId`, action and detail
 expansion sets, `cardWrap` and `cardMarkdown`, frozen action-group and action
-sets, `loadingPaths`, `pullTick`, the rendered-leaf override, history and
-file-viewer state, and toast notifications. Expansion keys use the first
-action's entry and block index; action keys use the entry and block index.
-Manual toggles add keys to the corresponding frozen set, preventing streaming
-auto-expansion from overriding user intent. A provisional-to-durable `move`
-rewrites expansion, frozen, uncapped-detail, loading-path, and focused-turn
-keys through `migrateExpandKeys` and `migrateFocusedTurnId`.
+sets, `loadingPaths`, `pullTick`, the rendered-leaf override, history, the
+browser target, and toast notifications. Expansion keys use
+the first action's entry and block index; action keys use the entry and block
+index. Manual toggles add keys to the corresponding frozen set, preventing
+streaming auto-expansion from overriding user intent. A provisional-to-durable
+`move` rewrites expansion, frozen, uncapped-detail, loading-path, and
+focused-turn keys through `migrateExpandKeys` and `migrateFocusedTurnId`.
 
 `renderLeafId` is the rendered-leaf override behind read-only branch peeking.
 `null` follows the live leaf; a non-null value pins the projection to a
@@ -182,6 +198,16 @@ ADR 10 git stamps are projected as a carried state and as ordered changes:
   `InlineGitStamp` values positioned after the preceding action. Renderer-side
   `segmentBlocks` and `assignGroupGitChanges` place those values with the
   action group they follow.
+
+The same stamp events supply the review surface's `DiffWindow`s, computed in
+one pass over the path before the fold. Stamp events give every path position
+a "commit in effect"; a user turn's window is its carried commit → the next
+distinct commit observed later on the path (a branch-only same-commit stamp
+does not end a window), and a stamp's window is the previous stamp commit →
+its own commit. The live path's open-ended tail resolves to `"worktree"`; a
+peeked path's open-ended tail resolves to nothing (the worktree is not the
+peeked state), and a window is omitted whenever either end is unborn — no
+honest pair, no diff offer.
 
 `segmentBlocks` groups consecutive thinking and tool blocks for rendering;
 text remains a separate segment. `actionPulls` declares thinking and tool-call
@@ -271,8 +297,18 @@ address operations (`openSession`, `openProject`, `newSession`, `detach`, and
 centralizes failure toasts. `useBranchSelect` is the branch-target selection
 matrix over `navigate`: a real branch switch when idle and following the live
 leaf, a read-only rendering-leaf re-target while busy or already peeking.
-`listFilesRpc` and `gitShowRpc` are small store-free helper paths for the
-composer and git-change viewer.
+`listFilesRpc`, `gitShowRpc`, `gitBaseRpc`, `gitDiffRpc`, `readFileRpc`, and
+`listDirectoryRpc` are small store-free helper paths for the composer, the
+git-change viewer, and the browser. The browser splits the two roles:
+`gitDiffRpc` fetches the *directive* (file list, statuses, counts) and
+`readFileRpc` fetches the *payload* (one path at one state) for the file pane
+and for each expanded review section, which is diffed client-side by the
+shared `DiffSections` renderer. `listDirectoryRpc` lazily lists one directory
+per tree expansion. `gitBaseRpc` resolves a commit card's review base (its
+first parent, or the empty tree for a root commit) so the browser opens a
+commit against the right baseline. All four are attachment-free and absolutely
+addressed; `openFileViewer` resolves a relative entry-point path against the
+current Project cwd (via `infra/lib/paths.ts`) before opening the browser.
 
 A session switch can have old-session patches in flight until the target's
 initial sync arrives. `prepareSwitch` seeds a candidate mirror when it has a

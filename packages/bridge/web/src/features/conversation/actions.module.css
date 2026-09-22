@@ -398,6 +398,43 @@
 	border-radius: var(--radius-xs);
 }
 
+/* Whole-file review (FileBrowser): a dual old/new gutter, collapsed unchanged
+   runs, and an opt-out of wrapping. Gutter columns are fixed so numbers never
+   shift the text; the text column is the only one that wraps. Card bodies
+   leave all three off and keep the single-column layout. */
+.editDiffNumbered .editDiffLine {
+	display: grid;
+	grid-template-columns: 3.2em 3.2em minmax(0, 1fr);
+}
+
+.editDiffGutter {
+	color: var(--color-muted-foreground);
+	text-align: right;
+	padding-right: 6px;
+	user-select: none;
+	font-variant-numeric: tabular-nums;
+	opacity: 0.7;
+}
+
+.editDiffText {
+	min-width: 0;
+}
+
+.editDiffGap {
+	color: var(--color-muted-foreground);
+	background: var(--color-surface-raised);
+	user-select: none;
+}
+
+.editDiffNoWrap {
+	overflow-x: auto;
+}
+
+.editDiffNoWrap .editDiffLine {
+	white-space: pre;
+	word-break: normal;
+}
+
 .editDiffHunkSep {
 	color: var(--color-muted-foreground);
 	text-align: center;
