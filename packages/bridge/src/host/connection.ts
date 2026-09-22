@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import type {
+	ArchiveSessionRequest,
 	ClientMessage,
 	CloseSessionRequest,
 	GetDaemonInfoReply,
@@ -91,6 +92,9 @@ export interface DaemonVerbs {
 	 * GC: disposes the activation now, ignoring idle policy, streaming state,
 	 * and attached Connections. */
 	closeSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
+	/** Close a session, then move its file into the reserved archive prefix.
+	 * The close is unconditional; the move requires a durable file. */
+	archiveSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
 	/** Broadcast a Project's refreshed first page (rename, settle). */
 	sessionsChanged: (projectId: string) => void;
 	/** Path completion (ADR 12): resolved against `projectId`'s cwd, so it does
@@ -326,6 +330,15 @@ export class Connection {
 					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
 					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
 					const result = await this.daemonVerbs.closeSession(m.projectId, m.stem);
+					if (result.ok) this.sendReply(id, true);
+					else this.sendReply(id, false, result.error);
+					break;
+				}
+				case "archiveSession": {
+					const m = msg as unknown as ArchiveSessionRequest;
+					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
+					const result = await this.daemonVerbs.archiveSession(m.projectId, m.stem);
 					if (result.ok) this.sendReply(id, true);
 					else this.sendReply(id, false, result.error);
 					break;

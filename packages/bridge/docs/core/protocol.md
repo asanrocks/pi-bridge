@@ -65,6 +65,7 @@ state channel.
 | `newSession` | Project; first prompt text is required | `{ ok: true, session: SessionRef }`. Model/thinking choices are applied and the first prompt is admitted before attach; initial sync carries the in-flight turn. Refused admission leaves no empty live Session. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
 | `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. |
+| `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Fails when no durable file exists to move. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
 | `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
 | `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, scopedModels, thinkingLevels, devMode }`; no attachment and no Document push. |

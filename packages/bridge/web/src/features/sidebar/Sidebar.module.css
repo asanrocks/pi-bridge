@@ -251,13 +251,13 @@
 	color: var(--color-foreground);
 }
 
-/* Destructive row-menu item: red — Close terminates the live instance. */
-.sidebarMenuClose {
+/* Row-menu item: one geometry spec for both items — pigment is the only
+difference between them. */
+.sidebarMenuItem {
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
 	background: none;
-	color: var(--color-error);
 	border: none;
 	border-radius: var(--radius-sm);
 	cursor: pointer;
@@ -265,9 +265,23 @@
 	user-select: none;
 }
 
-.sidebarMenuClose:hover {
+.sidebarMenuItem:hover {
 	background: var(--color-muted);
+}
+
+/* Destructive item: red — Close terminates the live instance. */
+.sidebarMenuClose {
+	color: var(--color-error);
+}
+
+.sidebarMenuClose:hover {
 	color: var(--color-error-hover);
+}
+
+/* Archive closes the session then moves its file out of discovery; the file
+   survives, so the item keeps the neutral pigment. */
+.sidebarMenuArchive {
+	color: var(--color-foreground);
 }
 
 /* Group label: a quiet sentence-case sub-label under its section,

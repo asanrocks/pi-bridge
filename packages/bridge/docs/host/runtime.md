@@ -141,9 +141,9 @@ The Connection demultiplexes RPC frames by verb. Attached Session verbs are:
 Manager. The host validates prompt image envelopes and enforces the shared
 image-count and image-size limits.
 
-Navigation verbs are `openSession`, `newSession`, `detach`, and
-`closeSession`. They route to the Daemon because they change attachment or
-Activation state. Query verbs are `listSessions`, `listActiveSessions`,
+Navigation verbs are `openSession`, `newSession`, `detach`, `closeSession`,
+and `archiveSession`. They route to the Daemon because they change attachment
+or Activation state. Query verbs are `listSessions`, `listActiveSessions`,
 `getDaemonInfo`, `listFiles`, `readFile`, and `gitShow`. `listFiles` is
 Project-addressed and needs no attachment. `readFile` and `gitShow` require an
 attachment because their relative path or repository is the attached
@@ -209,6 +209,19 @@ by this operation, and a client must reconnect or navigate to obtain a fresh
 attachment. No `session_closed` frame is part of the implemented
 `ServerPushMessage` set.
 
+`archiveSession(projectId, stem)` closes a Session, then moves its file under
+the reserved `.archive` prefix of the Project's session directory. The close
+is unconditional and uses the same collect/dispose path as `closeSession`
+when an Activation exists; a dormant Session has none, so only the move
+happens. The move follows disposal because disposal finalizes an in-flight
+turn, which can create or advance the file. An archived Session is neither
+discovered nor addressable: the scanner and the startup `sessionId` conflict
+scan skip the prefix, and `normalizeStem` rejects it. The verb refreshes the
+Project's first page; when it had an Activation, the active-session snapshot
+broadcast from collection covers that side. A missing durable file (a fresh
+Session whose first turn never flushed) is an error reply — the close still
+happened, but nothing was archived.
+
 The timer model and its reservation invariant govern this runtime.
 
 ## Session Operations
@@ -235,6 +248,18 @@ It resolves or creates the address, waits through any collecting Activation,
 and attaches the Connection to the resulting Manager. It is not a
 transactional switch: the Connection releases its existing attachment before
 the new attach is completed. A failed open returns an error from the Daemon.
+
+### `archiveSession`
+
+`archiveSession` takes a Project id and a normalized stem. It looks up the
+address's Activation and collects it when one exists — a close, not a GC, so
+streaming state and attached Connections do not defer it. It then moves
+`<sessionDir>/<stem>.jsonl` to `<sessionDir>/.archive/<stem>.jsonl`, creating
+the archive directory tree. Both the source and the destination directory are
+containment-checked, so a symlinked `.archive` cannot redirect the move
+outside the Project namespace. The move refuses to overwrite an existing
+archived file. The Session file survives; it merely leaves discovery, and
+moving it back is a manual filesystem operation.
 
 ### `detach`
 

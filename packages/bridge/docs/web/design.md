@@ -174,9 +174,12 @@ Folder children:
   `Load more` requests the next page. A dormant row has a muted status dot
   and no close action.
 
-The active rows and history rows open Sessions. A live row menu exposes
-`Close` without confirmation. The grid action beside the `Projects` header
-returns to the global launcher. Empty, loading, failed-with-retry, and
+The active rows and history rows open Sessions. A row menu exposes `Close`
+without confirmation on live rows and `Archive` on any durable row — archive
+closes the session then moves its file out of discovery, and a dormant row's
+close is a no-op, so it is how history is thinned without opening each
+session. The grid action beside the `Projects` header returns to the global
+launcher. Empty, loading, failed-with-retry, and
 no-session states occupy the same quiet message position in the folder.
 
 On desktop the Sidebar has three modes: hidden, a docked resizable rail, and

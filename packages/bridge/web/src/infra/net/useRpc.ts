@@ -212,6 +212,24 @@ export function useRpc() {
 		[openProject],
 	);
 
+	/** Close a session, then move its file under the archive prefix
+	 * (archiveSession verb). The close is unconditional and unconfirmed; the
+	 * row leaves the active snapshot and the history page, and the file is no
+	 * longer discovered. When the archived address is the one on screen, land
+	 * on the Project home like closeSession does — the server-side binding is
+	 * severed either way. */
+	const archiveSession = useCallback(
+		async (projectId: string, stem: string) => {
+			const reply = await rpc(() => getGlobalClient()?.archiveSession(projectId, stem), "archive session failed");
+			if (!reply?.ok) return;
+			const store = getStore();
+			if (store.getState().currentProjectId === projectId && store.getState().currentStem === stem) {
+				await openProject(projectId);
+			}
+		},
+		[openProject],
+	);
+
 	/** Refresh the global active/streaming snapshot without side effects. */
 	const refreshActiveSessions = useCallback(async () => {
 		const reply = await getGlobalClient()?.listActiveSessions();
@@ -281,6 +299,7 @@ export function useRpc() {
 			newSession,
 			detach,
 			closeSession,
+			archiveSession,
 			refreshActiveSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,
@@ -299,6 +318,7 @@ export function useRpc() {
 			newSession,
 			detach,
 			closeSession,
+			archiveSession,
 			refreshActiveSessions,
 			loadFolderSessions,
 			loadMoreFolderSessions,

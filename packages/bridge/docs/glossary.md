@@ -94,6 +94,12 @@ What exists, how it is named, how long it lives. Owned by
    newer Session. The alias set is closed: new aliases are new claims in
    this document first.
 
+8. A Session is **archived** *(bound)* when its file has been moved under the
+   reserved `.archive` prefix of its Project's session directory. An archived
+   Session is not discovered and its stem is not addressable, so restoring it
+   takes a manual filesystem move. Archiving closes the Session first:
+   disposal finalizes an in-flight turn, so the move follows it.
+
 ADR 12 proposes further lifetime vocabulary (admitted prompt, reservation,
 in-flight window). It is ADR-local until that ADR is accepted; this document
 does not claim it.
