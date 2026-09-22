@@ -6,16 +6,24 @@
 
 import { useCallback, useMemo } from "react";
 import type {
+	DirectoryListing,
+	GitBaseReply,
+	GitDiffReply,
+	GitDiffState,
 	GitShowReply,
 	ImageContent,
 	ListActiveSessionsReply,
+	ListDirectoryReply,
 	ListFilesReply,
 	ListSessionsReply,
 	ModelRef,
 	PrefixCursor,
+	ReadFileReply,
 	RpcReply,
 	SessionInfo,
 	SessionRef,
+	SnapshotFile,
+	SnapshotState,
 } from "../../../../src/core/index.ts";
 import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
 import { sortByLastActivity } from "../lib/sortByLastActivity.ts";
@@ -381,6 +389,77 @@ export async function gitShowRpc(commit: string): Promise<{ output: string; trun
 		if (!reply.ok) return null;
 		const r = reply as unknown as GitShowReply;
 		return { output: r.output, truncated: r.truncated };
+	} catch {
+		return null;
+	}
+}
+
+/** Resolve the comparison base for reviewing one commit (see GitBaseRequest):
+ * its first parent, or the repository's empty-tree oid for a root commit.
+ * Returns null on any failure — the same graceful contract as gitShowRpc; an
+ * unreachable commit is expected after a rebase and has nothing to show. */
+export async function gitBaseRpc(directory: string, commit: string): Promise<string | null> {
+	const client = getGlobalClient();
+	if (!client) return null;
+	try {
+		const reply = await client.gitBase(directory, commit);
+		if (!reply.ok) return null;
+		const r = reply as unknown as GitBaseReply;
+		return r.baseline === "" ? null : r.baseline;
+	} catch {
+		return null;
+	}
+}
+
+/** The browser's diff *directive* — the file list, statuses, and line counts
+ * between two repository states under an absolute directory (see
+ * GitDiffRequest). Content is fetched per file with `readFileRpc`. Returns
+ * null on any failure — same graceful-failure contract as gitShowRpc. */
+export async function gitDiffRpc(
+	directory: string,
+	oldState: GitDiffState,
+	newState: GitDiffState,
+): Promise<GitDiffReply | null> {
+	const client = getGlobalClient();
+	if (!client) return null;
+	try {
+		const reply = await client.gitDiff(directory, oldState, newState);
+		if (!reply.ok) return null;
+		return reply as unknown as GitDiffReply;
+	} catch {
+		return null;
+	}
+}
+
+/** Read one absolute path at one repository state (see ReadFileRequest).
+ * Serves the browser's file pane and its review sections alike — an omitted
+ * or `"worktree"` state is the live file, a pinned oid / `"head"` is a
+ * commit's blob, `"index"` is the staged blob. Returns null on transport
+ * failure; `absent` and `binary` come back as values, not failures. */
+export async function readFileRpc(path: string, state?: SnapshotState): Promise<SnapshotFile | null> {
+	const client = getGlobalClient();
+	if (!client) return null;
+	try {
+		const reply = await client.readFile(path, state);
+		if (!reply.ok) return null;
+		const { id: _id, ok: _ok, ...file } = reply as unknown as ReadFileReply;
+		return file as SnapshotFile;
+	} catch {
+		return null;
+	}
+}
+
+/** List one absolute directory's immediate children at one repository state
+ * (see ListDirectoryRequest). Returns null on transport failure; a missing
+ * directory comes back as an `absent` listing, not a failure. */
+export async function listDirectoryRpc(path: string, state?: SnapshotState): Promise<DirectoryListing | null> {
+	const client = getGlobalClient();
+	if (!client) return null;
+	try {
+		const reply = await client.listDirectory(path, state);
+		if (!reply.ok) return null;
+		const { id: _id, ok: _ok, ...listing } = reply as unknown as ListDirectoryReply;
+		return listing as DirectoryListing;
 	} catch {
 		return null;
 	}

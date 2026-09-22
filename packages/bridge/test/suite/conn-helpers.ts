@@ -109,7 +109,16 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	readFile: () => {
 		throw new Error("readFile not wired in mock");
 	},
+	listDirectory: () => {
+		throw new Error("listDirectory not wired in mock");
+	},
 	gitShow: () => {
 		throw new Error("gitShow not wired in mock");
+	},
+	gitBase: () => {
+		throw new Error("gitBase not wired in mock");
+	},
+	gitDiff: () => {
+		throw new Error("gitDiff not wired in mock");
 	},
 };

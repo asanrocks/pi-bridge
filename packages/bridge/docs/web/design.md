@@ -313,13 +313,17 @@ and a full-screen overlay with safe-area insets. Rail visibility is
 persisted, and any row pick dismisses a peek or backs a fullscreen overlay
 off to the rail so the picked conversation surface is visible.
 
-The pane renders a git-log-style graph of user-message branches. SVG vertical
-lineage and cubic fork curves sit beneath fixed-height DOM rows containing a
-dot, time, and message preview. The active path uses the accent treatment;
-the current deepest user message is filled. A `+N` badge groups consecutive
-off-path aborted re-edit drafts; opening it reveals the individual drafts.
-The pane scrolls to the active row when opened but does not keep repositioning
-the reader on every new leaf.
+The header is a quiet uppercase `History` label. The pane renders the
+conversation's branch graph; the repository's evolution lives in the
+transcript's git affordances and the TopBar badge (see Git affordances).
+
+The graph renders a git-log-style graph of user-message branches. SVG
+vertical lineage and cubic fork curves sit beneath fixed-height DOM rows
+containing a dot, time, and message preview. The active path uses the accent
+treatment; the current deepest user message is filled. A `+N` badge groups
+consecutive off-path aborted re-edit drafts; opening it reveals the
+individual drafts. The pane scrolls to the active row when opened but does
+not keep repositioning the reader on every new leaf.
 
 Selection is state-dependent, and every row is clickable in every state:
 
@@ -337,41 +341,149 @@ Selection is state-dependent, and every row is clickable in every state:
 The rendered path gets a neutral row highlight alongside the live path's
 accent so both are legible where they share ancestors.
 
-### File viewer
+### Git affordances
 
-File-path Markdown links open the in-app `FileViewer` instead of navigating to
-the daemon origin. The viewer opens fullscreen, covering the entire viewport.
-Each open performs a fresh read from the attached
-Project's working directory. The viewer shows the resolved absolute path —
-a single line truncated from the left (the `direction: rtl` trick with LRM
-sentinels), so the filename end stays visible —
-loads Markdown as rendered prose and other files as syntax-highlighted code,
-and reports the server's 256 KB truncation. Escape or the close button closes
-it (the fullscreen panel leaves no clickable backdrop). Code files render a
-line-number gutter built the streamdown way — a CSS `counter(line)` on a
-`::before` pseudo-number with a hanging indent (`padding-left` + negative
-`text-indent`), so the number is not selectable text and wrapped code never
-flows under the number.
+Repository evolution has three discovery surfaces, one per question the user
+asks, and no separate timeline pane. Each names its endpoint pair explicitly;
+none infers a turn-scoped window git cannot know.
 
-The viewer header carries the same display toggles as tool cards — word-wrap
-icon for code files, markdown glyph for Markdown files — driving the shared `cardWrap`
-and `cardMarkdown` preferences, so one preference governs card and viewer
-rendering alike. With preview off, a Markdown file renders as highlighted
-raw Markdown in the guttered code view.
+- **The turn chip** (the git identity on a user message) is a static label
+  until the turn has something to review, then a `▾` menu. Its items are the
+  commits observed during the turn (`UserTurn.gitTransitions`): a stamp whose
+  commit differs from the previously observed one, attributed to the turn open
+  at its path position — a prompt stamp is persisted before the message it
+  labels, so it closes the previous turn while its identity becomes the next
+  turn's baseline. A turn with several commits also offers one union window
+  from the first transition's old commit to the last one's new commit. The
+  live path's last user turn additionally offers **Compare with the current
+  worktree** (its send state → `worktree`), the honest form of "what happened
+  since this prompt" — it is a sampling point, so the browser marks it `as of`
+  and refetches on settle. Earlier turns and peeked paths offer no worktree
+  item, because comparing them to the current worktree would silently span
+  other turns.
+- **The git card** (`review`) opens that one commit against its first parent,
+  resolved host-side. It is the card's only review meaning; the turn's
+  transition windows belong to the chip menu, so there is no second `diff`
+  affordance to disambiguate.
+- **The TopBar changes badge** is the one turn-agnostic surface: the count of
+  files differing from `HEAD` in the attached session's Project worktree,
+  sampled when a turn settles (never per streamed entry) and hidden while
+  clean. Its menu reviews `head → worktree`. Because dirt from several
+  trailing turns is indistinguishable now, attributing it to any one turn
+  would be a lie — which is why it lives in session chrome, not on a turn.
 
-A trailing line anchor on a file link — `path.ts:98`, `path.ts:98:12`, or the
-GitHub-style `#L98` — opens the viewer scrolled to that line with the line
-tinted; the anchor is stripped before the path resolves. Markdown files skip
-the gutter and anchors (heading fragments remain stripped). Links whose
-scheme and trailing port look like a line anchor (`http://host:8080`) stay
-URLs. The same open path serves tool cards: any card whose call arguments
-carry a string `path` gets an open-in-viewer eye in the hover controls, and
-the click reads the file as it exists at click time — not what the call
-produced (the card shows what the tool did; the viewer shows the file now).
+Every menu opens the same repository browser (see below) with the pair as its
+target. Historical uncommitted state is still not recoverable: only the live
+worktree is shown, and a turn's commits are the recorded identity transitions,
+not an archived worktree.
+
+### Repository browser
+
+The browser is the one fullscreen repository surface (ADR 14): a file tree on
+the left, file content on the right, in the portal role (Escape, ✕, and
+backdrop close; read-only). Every entry point opens this same surface with a
+different target — a Markdown link or a tool card opens one file with the full
+tree, a turn chip menu or a git card's `review` control opens a changed-files
+review, the TopBar badge's menu opens the live uncommitted review, and the
+Project home browses the worktree from the Project cwd with
+nothing selected. The browser is not a Session-scoped route: it is ephemeral
+chrome, closed by an address change like the panes.
+
+The header names the task, not the endpoint pair. Four surfaces fall out of
+the target: **Files** (no baseline — one state read in the full tree, with the
+single state selector and the root path as its detail); **Working changes** (a
+worktree content state, described `since <baseline>`); **Commit changes** (a
+pinned commit against its base, led by the commit id and subject); and a
+**recorded transition** (a git-stamp window, titled by its origin — the turn's
+first line or the commit subject — with the pair as metadata). A detail line
+carries the changed-file count, the comparison, and an `as of` time whenever
+the worktree is an endpoint (the worktree is a sampling point, so the render
+is stale by construction). `Compare…` opens the endpoint selector — the three
+common comparisons (Working, Staged, Unstaged changes) and a custom From → To
+pair built from the same state list; the baseline end cannot be the working
+tree, which the host rejects. Applying a comparison rewrites the target and
+refetches, and drops the origin label, because the window is no longer the one
+the browser was opened on. A worktree endpoint also refetches when a turn
+settles, so the view tracks the agent without polling. Review-scoped diff
+controls live with the content they act on, in a bar above the sections:
+`Expand files` and `Expand all lines` (the latter replaces the diff's three
+context lines with the complete diff, from contents that are already fetched).
+The `Review` toggle switches between the stacked sections and one selected
+file, and the changed-files tree scope is the tree pane's own label, which
+toggles between the full tree and the changed tree when a baseline exists.
+
+The tree has two scopes. The full tree lists one directory per expansion
+(`listDirectory`), lazily, so a large repository costs one query per opened
+folder; `.git` never appears, and a directory the host's cap clipped says how
+many entries are missing. With a baseline, changed files are marked on their
+rows with git's status letter. The changed tree is derived from the diff
+directive's paths, never from walking the repository and filtering it
+client-side; intermediate directories are synthesized from the paths. A file
+link that points deep into the tree expands and loads its ancestors so the
+selection is visible where it lives. A directory whose listing failed is
+marked unreadable and stays collapsed — the next toggle retries it — rather
+than rendering as an empty directory. On narrow viewports (the same 768px
+boundary the Sidebar and History panes use) the tree starts collapsed behind a
+`Files` control in the header and opens as an overlay drawer over a scrim:
+tapping the scrim, the `Hide` control, or a file dismisses it, so it never
+sits as an empty column and never buries the content it covers. The header's
+own controls wrap to a second row on a narrow viewport rather than clipping at
+the panel edge, and the browser's rows and chrome grow under a coarse pointer
+like every other control in the app.
+
+The wire is split by role, exactly as the old review surface was. `gitDiff` is
+the *directive*: one call supplies the per-file list, statuses, and ± counts
+and no patch text at all. `readFile` is the *payload*: the file pane reads one
+path at the read state, and each review section fetches that file's content at
+each end of the pair and diffs the two snapshots in the client with the shared
+diff-line spec — so syntax highlighting, word-level inline diffs, the dual
+old/new gutter, and context elision are the same spec the edit and apply_patch
+cards use. There is no unified-patch parser. A fetch that fails, or a snapshot
+the host truncated (which would diff as a phantom tail), says so instead of
+rendering a wrong diff. Untracked files are listed by the directive (without
+counts) and always fetch their content on expand; when the host capped the
+untracked list or the changed-file list, the remainder is stated rather than
+hidden.
+
+A review section shows its path (the rename source struck through), binary
+note, and ± counts in the diff tint colors, and expands to the diff — or, with
+its `file` control, to the whole file at the read state through the shared file
+body. Clicking a changed file in the tree scrolls to and opens its section, so
+the tree is navigation over one stacked list rather than a filter; as the list
+scrolls, the highlighted node follows the section being read. Sections are
+collapsed by default, and `Expand files` / `Collapse files` toggles the whole
+list; an open section fetches its payload as it approaches the viewport, on the
+same measurement that moves the tree highlight, so expanding a large review
+loads diffs on approach instead of one read per changed file. A section
+left with no content change (a mode-only change) says so. An unreachable
+recorded commit, a binary file, and an identical pair render as neutral
+explanations, never errors.
+
+The file pane and the review sections render through the same two shared specs
+as the rest of the app: `render/FileContent` for whole files (one code
+surface, one gutter, one truncation notice, the shared wrap/markdown toggles)
+and the conversation's `DiffSections` for diffs. Opening a file in a review is
+therefore indistinguishable from browsing it in the tree. A Markdown file
+renders as prose, other files as highlighted code; the server's 256 KB
+truncation is reported. A trailing line anchor on a file link — `path.ts:98`,
+`path.ts:98:12`, or the GitHub-style `#L98` — opens the browser, scrolls to
+that line, and tints it; the anchor is stripped before the path resolves, and
+Markdown files skip the gutter and anchors. Links whose scheme and trailing port look like a
+line anchor (`http://host:8080`) stay URLs.
+
+Entry-point paths are absolute-ized client-side against the current Project
+cwd (ADR 14): the browser's queries carry absolute paths, and `~`-rooted
+paths are the one form left for the host, which owns HOME. A file inside the
+Project browses from the Project cwd; one outside it falls back to its own
+directory as the tree root. The same open path serves tool cards: any card
+whose call arguments carry a string `path` gets an open-in-browser eye in the
+hover controls, and the click reads the file as it exists at click time — not
+what the call produced (the card shows what the tool did; the browser shows
+the file now).
 
 External URLs open a confirmation dialog before a new tab is opened. An
 incomplete link whose target is still streaming is styled but inert. The
-confirmation dialog uses a blocking overlay and portal surface; the viewer
+confirmation dialog uses a blocking overlay and portal surface; the browser
 is the fullscreen variant of the same portal role.
 
 ## Conversation Rendering

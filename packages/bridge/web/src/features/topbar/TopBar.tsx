@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import type { ConnectionState } from "../../infra/state/store.ts";
+import { ChangesBadge } from "./ChangesBadge.tsx";
 import styles from "./TopBar.module.css";
 
 export function TopBar({
@@ -146,6 +147,7 @@ export function TopBar({
 					</svg>
 				</button>
 			)}
+			<ChangesBadge />
 			{showHistoryToggle && (
 				<button
 					type="button"

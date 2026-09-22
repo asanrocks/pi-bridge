@@ -99,7 +99,9 @@ export interface ProtocolSlice {
 	/** Set the global active/streaming snapshot. */
 	setActiveSessions: (sessions: SessionInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
-	 * global launcher; `null` stem = that Project's home. */
+	 * global launcher; `null` stem = that Project's home. Changing the address
+	 * also closes the file-viewer and diff-view portals — they showed content
+	 * from the session being left. */
 	setCurrentSession: (projectId: string | null, stem: string | null) => void;
 	/** Unbind from the current Project/session (Launcher, open failure). Pass a
 	 * `projectId` to land on that Project's home instead of the launcher. */
@@ -177,6 +179,9 @@ function clearedSessionState() {
 		composerExpanded: false,
 		focusedTurnId: null as string | null,
 		renderLeafId: null as string | null,
+		// The browser shows content from the session being left (a file path, or a
+		// commit pair in that repo); it must not survive the switch.
+		browser: null as ClientStore["browser"],
 	};
 }
 
@@ -217,7 +222,17 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	setActiveSessions: (activeSessions) => set({ activeSessions }),
 
-	setCurrentSession: (currentProjectId, currentStem) => set({ currentProjectId, currentStem }),
+	// An address change is a different session's content: both portals hold
+	// something read from the session being left (a path, or a commit pair in
+	// that repository), so they close with it. A same-address re-assert (the
+	// initial-sync push after an optimistic open, a reconnect replace) keeps
+	// them open.
+	setCurrentSession: (currentProjectId, currentStem) =>
+		set((s) =>
+			s.currentProjectId === currentProjectId && s.currentStem === currentStem
+				? s
+				: { currentProjectId, currentStem, browser: null },
+		),
 
 	clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
 
