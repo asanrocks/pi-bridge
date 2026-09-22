@@ -103,6 +103,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	newSession: async () => ({ ok: true, session: mockSessionRef }),
 	detach: () => {},
 	closeSession: async () => ({ ok: true }),
+	archiveSession: async () => ({ ok: true }),
 	sessionsChanged: () => {},
 	listFiles: () => [],
 	readFile: () => {

@@ -242,6 +242,12 @@ export class BridgeClient {
 		return this.call({ verb: "closeSession", projectId, stem });
 	}
 
+	/** Close a session and move its file under the archive prefix
+	 * (archiveSession verb). The file survives; it is no longer discovered. */
+	archiveSession(projectId: string, stem: string): Promise<RpcReply> {
+		return this.call({ verb: "archiveSession", projectId, stem });
+	}
+
 	/** Path completion (ADR 12): `prefix` is resolved against the Project's
 	 * cwd, so the Project home can complete before anything is attached. */
 	listFiles(projectId: string, prefix: string): Promise<RpcReply> {

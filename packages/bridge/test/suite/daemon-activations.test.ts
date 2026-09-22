@@ -1402,6 +1402,151 @@ describe("daemon: closeSession", () => {
 	});
 });
 
+describe("daemon: archiveSession", () => {
+	it("archives a dormant session: the file moves under the reserved prefix and leaves discovery", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "arch-1");
+		const dir = sessionDirFor(a, agentDir);
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const before = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+		};
+		expect(before.sessions.map((s) => s.stem)).toContain(stem);
+
+		// No activation: the close is a no-op and only the move happens.
+		expect((await waitForReply(frames, send(ws, { verb: "archiveSession", projectId, stem }))).ok).toBe(true);
+		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(false);
+		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+
+		// The Project push refreshes the page the row just left.
+		await waitForPush(frames, "sessions_changed");
+		const after = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+		};
+		expect(after.sessions.map((s) => s.stem)).not.toContain(stem);
+
+		// Nothing is left to archive for that address.
+		const again = (await waitForReply(
+			frames,
+			send(ws, { verb: "archiveSession", projectId, stem }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(again.ok).toBe(false);
+		expect(again.error).toContain("no file to archive");
+
+		ws.close();
+	});
+
+	it("closes a live session before moving its file, even mid-stream", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "arch-2");
+		const dir = sessionDirFor(a, agentDir);
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		const stub = [...stubs.values()][stubs.size - 1];
+		expect(stub).toBeDefined();
+		stub!.handles.setStreaming(true);
+
+		expect((await waitForReply(frames, send(ws, { verb: "archiveSession", projectId, stem }))).ok).toBe(true);
+		expect(stub!.handles.disposed()).toBe(true);
+		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "active_sessions_changed" &&
+				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+		);
+
+		ws.close();
+	});
+
+	it("closes an unflushed session and reports that there was no file to archive", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const created = (await waitForReply(
+			frames,
+			send(ws, { verb: "newSession", projectId, text: "hello" }),
+		)) as unknown as {
+			session: SessionRef;
+		};
+		const reply = (await waitForReply(
+			frames,
+			send(ws, { verb: "archiveSession", projectId, stem: created.session.stem }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("no file to archive");
+
+		// The close is unconditional: the failed move does not skip it.
+		const stub = [...stubs.values()][stubs.size - 1];
+		expect(stub!.handles.disposed()).toBe(true);
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "active_sessions_changed" &&
+				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === created.session.stem),
+		);
+
+		ws.close();
+	});
+
+	it("never discovers an archived file and excludes it from the startup id-conflict scan", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const live = writeSessionFile(a, agentDir, "arch-dup");
+		// A manual copy into the reserved prefix: same session id as the live
+		// file, so a scan that enumerated the archive would hard-fail startup.
+		const dir = sessionDirFor(a, agentDir);
+		mkdirSync(join(dir, ".archive"), { recursive: true });
+		writeSessionAt(join(dir, ".archive", "2026-01-01T00-00-00-000Z_arch-copy.jsonl"), "arch-dup", a);
+
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const page = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
+			sessions: Array<{ stem: string }>;
+		};
+		expect(page.sessions.map((s) => s.stem)).toEqual([live]);
+
+		ws.close();
+	});
+
+	it("rejects the reserved archive stem and unknown projects", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "arch-3");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const unknown = (await waitForReply(
+			frames,
+			send(ws, { verb: "archiveSession", projectId: "nope", stem }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(unknown.ok).toBe(false);
+		expect(unknown.error).toContain("Unknown project");
+
+		const reserved = (await waitForReply(
+			frames,
+			send(ws, { verb: "archiveSession", projectId, stem: `.archive/${stem}` }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(reserved.ok).toBe(false);
+		expect(reserved.error).toContain("reserved");
+
+		ws.close();
+	});
+});
+
 describe("daemon: session listing", () => {
 	it("paginates by the compound cursor and reports the unflushed active session", async () => {
 		const { agentDir, a } = makeProjectRoots();
