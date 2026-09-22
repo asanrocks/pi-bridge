@@ -9,7 +9,7 @@
 // the streaming/pre-highlight display path under test.
 //
 // Lives under web/ (not test/suite/) because it imports .tsx components;
-// root tsgo has no --jsx, so it is type-checked by check:bridge-web instead.
+// root tsc has no --jsx, so it is type-checked by check:bridge-web instead.
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -59,6 +59,20 @@ describe("ApplyPatchCardBody", () => {
 		expect(html).toContain("editDiffInlineChanged");
 		expect(html).toContain("def greet():");
 		expect(html).toContain("context");
+	});
+
+	test("section labels open the file viewer (button + tooltip)", () => {
+		const html = render({ input: ENVELOPE });
+		// Every titled section is a button whose tooltip carries the raw
+		// envelope path (cwd-relative display stays in the visible label).
+		expect(html).toContain('title="Open file: hello.txt"');
+		expect(html).toContain('title="Open file: src/app.py"');
+		expect(html).toContain('title="Open file: obsolete.txt"');
+		// Move target wins for moved updates.
+		const moved = render({
+			input: "*** Begin Patch\n*** Update File: a.ts\n*** Move to: b.ts\n-a\n+b\n*** End Patch",
+		});
+		expect(moved).toContain('title="Open file: b.ts"');
 	});
 
 	test("delete sections render the label only — no invented content", () => {
