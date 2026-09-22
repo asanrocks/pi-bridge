@@ -82,12 +82,20 @@ export interface ProtocolSlice {
 	/** Dev mode — when true, browser console.* calls are relayed to server. */
 	devMode: boolean;
 
+	/** True while the current session was reached through an alias address
+	 * (ADR 13): the URL keeps the alias form (`/@latest`), so address-bearing
+	 * initial-sync frames must not rewrite it. Cleared by boot re-evaluation,
+	 * the alias teardown, and every explicit navigation. */
+	addressViaAlias: boolean;
+
 	// Actions
 	setConnectionState: (state: ConnectionState) => void;
 	/** Set the active durable session id (from initial-sync frames). */
 	setActiveSessionId: (sessionId: string | null) => void;
 	/** Set the static Project list (from getDaemonInfo). */
 	setProjects: (projects: ProjectInfo[]) => void;
+	/** Enter/leave the alias-addressed view (ADR 13). */
+	setAddressViaAlias: (viaAlias: boolean) => void;
 	/** Set the global active/streaming snapshot. */
 	setActiveSessions: (sessions: SessionInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
@@ -158,6 +166,7 @@ function clearedSessionState() {
 		currentStem: null as string | null,
 		activeSessionId: null as string | null,
 		document: emptyDocument(),
+		addressViaAlias: false,
 		expandedActionGroups: new Set<string>(),
 		expandedActions: new Set<string>(),
 		uncappedDetails: new Set<string>(),
@@ -184,6 +193,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	sessionPages: {},
 	projects: [],
 	activeSessions: [],
+	addressViaAlias: false,
 	models: [],
 	scopedModels: [],
 	thinkingLevels: [],
@@ -202,6 +212,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 		),
 
 	setProjects: (projects) => set({ projects }),
+
+	setAddressViaAlias: (addressViaAlias) => set({ addressViaAlias }),
 
 	setActiveSessions: (activeSessions) => set({ activeSessions }),
 

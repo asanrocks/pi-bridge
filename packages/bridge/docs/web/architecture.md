@@ -336,6 +336,7 @@ leaves the draft in memory.
 
 ```text
 /                         launcher
+/@latest                  alias — resolved at boot, never redirected (ADR 13)
 /$proj                    Project home
 /$proj/$stem              Session, including nested stems
 ```
@@ -347,6 +348,17 @@ connection and every reconnect; unknown Projects fall back to `/`. The
 Project home is unattached and provides the Project-scoped first-prompt
 surface. A successful address-bearing initial sync commits the open Session
 address and its cache identity; a failed open lands on the Project home.
+
+Aliases (ADR 13) are single-segment routes beginning with `@` — a character
+outside the Project-id charset, so the namespaces cannot collide. Boot
+resolves `@latest` to the most recently active live Session from the global
+active snapshot already fetched by initialization (nothing active → the
+launcher) and opens it; while the alias view holds, the pipeline suppresses
+the route write on address-bearing initial-sync frames, so the URL keeps the
+alias form and the store holds the resolved address. Any explicit navigation
+(open, Project switch, detach, first prompt) clears the alias view and
+commits a real URL; a reload re-resolves, possibly onto a newer session. The
+alias never enters the address index or the cache key.
 
 Other `infra/lib` modules have narrow boundaries:
 

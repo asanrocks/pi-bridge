@@ -144,6 +144,8 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	const onPush = (push: ServerPushMessage) => {
 		if (disposed) return;
 		const store = getStore();
+		// ADR 13: while viewing through an alias (`/@latest`) the URL keeps the
+		// alias form — address-bearing frames commit the store address only.
 
 		// Project-scoped session-list refresh (ADR 11). The sidebar folder
 		// cache is the only consumer: refresh a page that is already cached;
@@ -175,7 +177,9 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			store.getState().setActiveSessionId(ref.sessionId);
 			store.getState().setCurrentSession(ref.projectId, ref.stem);
 			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-			writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+			if (!store.getState().addressViaAlias) {
+				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+			}
 			const doc = client.mirror.document;
 			const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
 			// The repair rewrites the whole session by design — the snapshot
@@ -205,7 +209,9 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			store.getState().setActiveSessionId(ref.sessionId);
 			store.getState().setCurrentSession(ref.projectId, ref.stem);
 			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-			writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+			if (!store.getState().addressViaAlias) {
+				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+			}
 			flush(); // barrier + delta write-through under the new session id
 			store.getState().bumpPullTick();
 			return;

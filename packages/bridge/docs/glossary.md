@@ -83,6 +83,16 @@ What exists, how it is named, how long it lives. Owned by
    rule is stable; the mechanism is not — ADR 11 implements it with idle
    timers, ADR 12 proposes event boundaries.) A Session with no Activation
    is dormant.
+7. An **alias** *(bound)* is a first URL segment beginning with `@` — a
+   character outside the Project-id charset, so the two namespaces cannot
+   collide and no id is reserved — that names a cross-Project target
+   resolved once per boot: `/@latest` resolves to the most recently active
+   live Session (the global active snapshot; with nothing active it does
+   not resolve and falls back to the launcher). The URL keeps the alias
+   form; the client state holds the resolved address until an explicit
+   navigation commits a real one. A reload re-resolves, possibly onto a
+   newer Session. The alias set is closed: new aliases are new claims in
+   this document first.
 
 ADR 12 proposes further lifetime vocabulary (admitted prompt, reservation,
 in-flight window). It is ADR-local until that ADR is accepted; this document
