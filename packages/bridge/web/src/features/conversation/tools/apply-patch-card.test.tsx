@@ -61,6 +61,20 @@ describe("ApplyPatchCardBody", () => {
 		expect(html).toContain("context");
 	});
 
+	test("section labels open the file viewer (button + tooltip)", () => {
+		const html = render({ input: ENVELOPE });
+		// Every titled section is a button whose tooltip carries the raw
+		// envelope path (cwd-relative display stays in the visible label).
+		expect(html).toContain('title="Open file: hello.txt"');
+		expect(html).toContain('title="Open file: src/app.py"');
+		expect(html).toContain('title="Open file: obsolete.txt"');
+		// Move target wins for moved updates.
+		const moved = render({
+			input: "*** Begin Patch\n*** Update File: a.ts\n*** Move to: b.ts\n-a\n+b\n*** End Patch",
+		});
+		expect(moved).toContain('title="Open file: b.ts"');
+	});
+
 	test("delete sections render the label only — no invented content", () => {
 		const html = render({ input: "*** Begin Patch\n*** Delete File: gone.ts\n*** End Patch" });
 		expect(html).toContain("Delete gone.ts");

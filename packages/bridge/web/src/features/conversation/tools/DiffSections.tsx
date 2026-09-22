@@ -25,6 +25,9 @@ import styles from "../actions.module.css";
  * the section a plain continuation hunk (separated by `---`). */
 export interface DiffSectionSpec {
 	title: string | null;
+	/** File opened in the viewer when the title is clicked (requires the
+	 * caller's `onOpenView`); null/undefined renders a non-interactive label. */
+	viewPath?: string | null;
 	/** Muted mono rows above the diff lines (seek markers, `@@ …`). */
 	notes?: string[];
 	/** Shiki language id; "" disables highlighting. */
@@ -217,7 +220,15 @@ function renderHighlightedTokens(tokens: HighlightedToken[]): ReactNode[] {
 	});
 }
 
-export const DiffSections = memo(function DiffSections({ sections }: { sections: DiffSectionSpec[] }) {
+export const DiffSections = memo(function DiffSections({
+	sections,
+	onOpenView,
+}: {
+	sections: DiffSectionSpec[];
+	/** Opens a section's `viewPath` in the file viewer (the clickable-title
+	 * affordance — presentational: the caller owns the store action). */
+	onOpenView?: (path: string) => void;
+}) {
 	// Content signature — the identity of everything the diff computation and
 	// highlight pipeline depend on, independent of the array's identity.
 	const signature = useMemo(
@@ -225,7 +236,7 @@ export const DiffSections = memo(function DiffSections({ sections }: { sections:
 			sections
 				.map(
 					(s) =>
-						`${s.title ?? ""}\u0000${(s.notes ?? []).join("\n")}\u0000${s.lang}\u0000${s.oldText}\u0001${s.newText}`,
+						`${s.title ?? ""}\u0000${s.viewPath ?? ""}\u0000${(s.notes ?? []).join("\n")}\u0000${s.lang}\u0000${s.oldText}\u0001${s.newText}`,
 				)
 				.join("\u0002"),
 		[sections],
@@ -235,6 +246,7 @@ export const DiffSections = memo(function DiffSections({ sections }: { sections:
 		() =>
 			sections.map((s) => ({
 				title: s.title,
+				viewPath: s.viewPath ?? null,
 				notes: s.notes ?? [],
 				lang: s.lang,
 				lines: tagInlineWordPairs(computeDiffLines(s.oldText, s.newText)),
@@ -271,7 +283,19 @@ export const DiffSections = memo(function DiffSections({ sections }: { sections:
 				// biome-ignore lint/suspicious/noArrayIndexKey: section order is the identity; content changes remount rows
 				<div key={si}>
 					{si > 0 && section.title === null && <div className={styles.editDiffHunkSep}>---</div>}
-					{section.title !== null && <div className={styles.editDiffSectionTitle}>{section.title}</div>}
+					{section.title !== null &&
+						(onOpenView !== undefined && section.viewPath !== null ? (
+							<button
+								type="button"
+								className={`${styles.editDiffSectionTitle} ${styles.editDiffTitleBtn}`}
+								title={`Open file: ${section.viewPath}`}
+								onClick={() => onOpenView(section.viewPath ?? "")}
+							>
+								{section.title}
+							</button>
+						) : (
+							<div className={styles.editDiffSectionTitle}>{section.title}</div>
+						))}
 					{section.notes.map((note, ni) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: note order is the identity
 						<div key={ni} className={styles.editDiffNote}>
