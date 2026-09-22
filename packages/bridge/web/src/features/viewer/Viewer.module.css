@@ -1,9 +1,9 @@
 /* ============================================================================
-   Viewer — file viewer portal + external-link confirm dialog.
-   Portal spec: --color-portal-bg/border surfaces, radius-md, fixed overlay
-   (ADR 07 styling invariants #1). The viewer dims the page (--color-overlay)
-   because it's a document surface, not a transient dropdown; the small
-   confirm dialog does too, so both read as blocking.
+   Viewer — fullscreen file viewer + external-link confirm dialog.
+   The viewer covers the whole viewport; the small confirm dialog stays a
+   centered portal (--color-portal-bg/border, radius-md, fixed overlay —
+   ADR 07 styling invariants #1). Both dim the page (--color-overlay)
+   because they are document surfaces, not transient dropdowns.
    ========================================================================== */
 
 .viewerOverlay,
@@ -33,9 +33,16 @@
 	overflow: hidden;
 }
 
+/* Fullscreen: the viewer owns the entire viewport, edge to edge. */
 .viewerPanel {
-	width: min(880px, calc(100vw - 48px));
-	max-height: min(80vh, 760px);
+	inset: 0;
+	width: auto;
+	height: 100%;
+	max-height: none;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+	transform: none;
 }
 
 .dialogPanel {
@@ -55,11 +62,19 @@
 
 .viewerPath {
 	flex: 1;
+	min-width: 0;
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: var(--fs-sm);
 	color: var(--color-secondary);
-	overflow-wrap: anywhere;
-	min-width: 0;
+	/* Left-truncation via the RTL trick: an LTR path in an RTL context pins
+	   its tail to the inline start (right) and clips from the left, where
+	   text-overflow places the ellipsis. LRM sentinels (added next to the
+	   text in FileViewer.tsx) keep leading/trailing punctuation ("/", ".")
+	   from resolving to paragraph direction and flipping to the wrong end. */
+	direction: rtl;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .viewerToggle {
@@ -113,7 +128,8 @@
 .viewerBody {
 	overflow: auto;
 	padding: 10px 12px;
-	min-height: 120px;
+	flex: 1;
+	min-height: 0;
 }
 
 .viewerMessage {
@@ -144,28 +160,42 @@
 	line-height: 1.5;
 }
 
-/* Line-number gutter (CodeSnippet lineNumbers): each gutter line is a
-   two-column grid — fixed number column, content column free to wrap —
-   so wrapped code never flows under the number. Gutter CSS is scoped to
-   the viewer; other CodeSnippet callers don't pass lineNumbers. */
-.viewerBody pre code .line[data-gutter="true"] {
-	display: grid;
-	grid-template-columns: 4ch minmax(0, 1fr);
-	column-gap: 1.5ch;
+/* Line-number gutter (CodeSnippet lineNumbers) — the streamdown technique:
+   a CSS counter + ::before pseudo-number with a hanging indent (streamdown
+   bakes the same counter into its markdown CodeBlock, but only as Tailwind
+   class strings, not reusable plumbing). padding-left reserves the gutter
+   column; text-indent pulls the first visual line — including the pseudo
+   number — back to the left edge, so wrapped code never flows under the
+   number. No DOM spans: the number is not selectable text and the .line
+   itself stays the scroll/anchor target (data-line). `.line` is CodeSnippet's
+   global string class, not a module class — it must stay :global here or the
+   module pipeline hashes it into a selector that never matches.
+   Gutter CSS is scoped
+   to the viewer; other CodeSnippet callers don't pass lineNumbers. */
+.viewerBody pre code {
+	counter-reset: line;
 }
 
-.viewerBody pre code .lineNo {
+.viewerBody pre code :global(.line[data-gutter="true"]) {
+	padding-left: 5.5ch;
+	text-indent: -5.5ch;
+}
+
+.viewerBody pre code :global(.line[data-gutter="true"])::before {
+	content: counter(line);
+	counter-increment: line;
+	display: inline-block;
+	width: 4ch;
+	margin-right: 1.5ch;
 	text-align: right;
 	color: var(--color-muted-foreground);
 	user-select: none;
 	font-variant-numeric: tabular-nums;
+	/* text-indent inherits -5.5ch from .line; the number must not shift. */
+	text-indent: 0;
 }
 
-.viewerBody pre code .lineText {
-	min-width: 0;
-}
-
-.viewerBody pre code .line[data-active="true"] {
+.viewerBody pre code :global(.line[data-active="true"]) {
 	background: var(--color-muted);
 }
 

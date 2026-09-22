@@ -474,6 +474,12 @@ input, textarea {
 .codeTokens {
 	color: var(--code-fg, inherit);
 }
+/* Block lines (CodeSnippet's highlighted output); a host may re-display a
+   line (the viewer's guttered lines override to grid) — class rules can be
+   overridden, the previous inline `display: block` could not. */
+.codeTokens .line {
+	display: block;
+}
 .codeTokens span {
 	color: var(--code-c, inherit);
 }
