@@ -33,6 +33,7 @@ export const SidebarContent = memo(function SidebarContent({
 	onOpenSession,
 	onOpenProject,
 	onCloseSession,
+	onArchiveSession,
 	onShowLauncher,
 	onLoadFolder,
 	onLoadMoreFolder,
@@ -54,6 +55,8 @@ export const SidebarContent = memo(function SidebarContent({
 	onOpenSession: (session: SessionInfo) => void;
 	onOpenProject: (projectId: string) => void;
 	onCloseSession: (session: SessionInfo) => void;
+	/** Close then archive a session (row menu Archive) — live and dormant rows. */
+	onArchiveSession: (session: SessionInfo) => void;
 	/** Detach and return to the Launcher (global project picker); overlay
 	 * dismissal is already folded in by the owner. */
 	onShowLauncher: () => void;
@@ -158,6 +161,7 @@ export const SidebarContent = memo(function SidebarContent({
 						onOpenProject={onOpenProject}
 						onOpen={onOpenSession}
 						onClose={onCloseSession}
+						onArchive={onArchiveSession}
 						onLoad={onLoadFolder}
 						onLoadMore={onLoadMoreFolder}
 					/>

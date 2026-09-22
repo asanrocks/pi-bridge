@@ -6,12 +6,21 @@
 // path of its file under the Project's session directory, minus `.jsonl`.
 // ============================================================================
 
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDefaultSessionDir } from "@earendil-works/pi-coding-agent";
 
 /** Validated project id shape (ADR 11). */
 export const PROJECT_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Reserved first path component of a Project's session namespace: an archived
+ * Session's file lives under `<sessionDir>/.archive/`. Neither pi's resume
+ * discovery (`listSessionsFromDir`) nor the daemon's scanner enumerates it,
+ * and `normalizeStem` refuses to address it, so an archive is invisible until
+ * a manual filesystem move puts the file back.
+ */
+export const ARCHIVE_DIR = ".archive";
 
 export interface ProjectConfig {
 	id: string;
@@ -93,11 +102,16 @@ export function buildProjects(entries: string[], agentDir: string, reservedIds?:
 	return projects;
 }
 
+/** True for a canonical stem under the reserved archive prefix. */
+export function isArchivedStem(stem: string): boolean {
+	return stem === ARCHIVE_DIR || stem.startsWith(`${ARCHIVE_DIR}/`);
+}
+
 /**
  * Normalize and validate a client-supplied stem. Returns the canonical form
  * (forward slashes, no empty/`.`/`..` components, no leading/trailing slash,
  * no `.jsonl` extension). Throws on anything that could escape the Project's
- * session directory.
+ * session directory, or that names the reserved archive namespace.
  */
 export function normalizeStem(stem: string): string {
 	if (stem === "") throw new Error("Empty session stem");
@@ -110,8 +124,10 @@ export function normalizeStem(stem: string): string {
 	for (const part of parts) {
 		if (part === "" || part === "." || part === "..") throw new Error("Invalid session stem");
 	}
+	const canonical = parts.join("/");
+	if (isArchivedStem(canonical)) throw new Error("Session stem is reserved for the archive");
 	if (parts[parts.length - 1].endsWith(".jsonl")) throw new Error("Session stem must not include .jsonl");
-	return parts.join("/");
+	return canonical;
 }
 
 /** `realpathSync` when the path exists, else the input unchanged. A Project's
@@ -187,6 +203,45 @@ export function resolveStemPath(sessionDir: string, stem: string): string {
 		return join(parentReal, basename(candidate));
 	}
 	return candidate;
+}
+
+/**
+ * Archive a durable Session file: move `<sessionDir>/<stem>.jsonl` to the
+ * reserved `<sessionDir>/.archive/` prefix, preserving the stem's relative
+ * structure. Returns the destination path.
+ *
+ * The caller must close the Session first (`Daemon.archiveSession`):
+ * disposal finalizes the in-flight turn, which can create or advance the
+ * file, so moving before disposal could leave a file at the old address.
+ *
+ * Both endpoints are containment-checked — the source through
+ * `containedSessionFile`, the destination directory before and after
+ * creation — so a symlinked `.archive` cannot redirect the move outside the
+ * Project's namespace. Throws when the source is missing, the stem is
+ * already archived, or the destination exists (a rename would silently
+ * clobber it).
+ */
+export function archiveStemFile(sessionDir: string, stem: string): string {
+	if (isArchivedStem(stem)) throw new Error(`Session is already archived: ${stem}`);
+	const real = containedSessionFile(sessionDir, resolveStemPath(sessionDir, stem));
+	if (real === null) throw new Error(`Session has no file to archive: ${stem}`);
+
+	const dirReal = realpathOrSelf(sessionDir);
+	const archiveRoot = join(sessionDir, ARCHIVE_DIR);
+	if (existsSync(archiveRoot) && !isContained(dirReal, realpathSync(archiveRoot))) {
+		throw new Error("Archive directory escapes the project directory");
+	}
+
+	const parts = stem.split("/");
+	const destDir = join(archiveRoot, ...parts.slice(0, -1));
+	mkdirSync(destDir, { recursive: true });
+	const destDirReal = realpathSync(destDir);
+	if (!isContained(dirReal, destDirReal)) throw new Error("Archive directory escapes the project directory");
+
+	const dest = join(destDirReal, `${parts[parts.length - 1]}.jsonl`);
+	if (existsSync(dest)) throw new Error(`Archived session already exists: ${stem}`);
+	renameSync(real, dest);
+	return dest;
 }
 
 /** The inverse of `resolveStemPath`: a session file's canonical stem. */

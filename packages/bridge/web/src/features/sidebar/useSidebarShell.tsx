@@ -55,6 +55,7 @@ export function useSidebarShell() {
 			onOpenSession={rpc.openSession}
 			onOpenProject={rpc.openProject}
 			onCloseSession={rpc.closeSession}
+			onArchiveSession={rpc.archiveSession}
 			onShowLauncher={() => void rpc.detach()}
 			onLoadFolder={rpc.loadFolderSessions}
 			onLoadMoreFolder={rpc.loadMoreFolderSessions}

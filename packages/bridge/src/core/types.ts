@@ -535,6 +535,18 @@ export interface CloseSessionRequest {
 	stem: string;
 }
 
+/** Close a session, then move its file into the reserved archive prefix of the
+ * Project's session directory. The close is unconditional (a dormant session
+ * has no live instance, so only the move happens). Archived sessions are not
+ * discovered by `listSessions` and their stems cannot be addressed, so an
+ * archive leaves the client surface entirely; `ok: false` when there is no
+ * durable file to move (a fresh session whose first turn never flushed). */
+export interface ArchiveSessionRequest {
+	verb: "archiveSession";
+	projectId: string;
+	stem: string;
+}
+
 /** Union of all RPC request shapes (for type-safe verb methods). */
 export type RpcRequestBody =
 	| PromptRequest
@@ -555,7 +567,8 @@ export type RpcRequestBody =
 	| GitShowRequest
 	| ConsoleRequest
 	| DetachRequest
-	| CloseSessionRequest;
+	| CloseSessionRequest
+	| ArchiveSessionRequest;
 
 // ── Verb-specific reply shapes ───────────────────────────────────────────
 
