@@ -2,7 +2,7 @@
 // only; writeRoute touches window and is covered by the app's behavior.
 
 import { describe, expect, it } from "vitest";
-import { launcherPath, parseRoute, projectPath, sessionPath } from "./routes.ts";
+import { aliasPath, launcherPath, parseRoute, projectPath, sessionPath } from "./routes.ts";
 
 describe("parseRoute", () => {
 	it("parses /, project, and session routes", () => {
@@ -26,6 +26,19 @@ describe("parseRoute", () => {
 	it("falls back to the launcher on malformed encoding and empty paths", () => {
 		expect(parseRoute("/%")).toEqual({ kind: "launcher" });
 		expect(parseRoute("///")).toEqual({ kind: "launcher" });
+	});
+
+	it("parses the alias namespace (ADR 13)", () => {
+		expect(parseRoute("/@latest")).toEqual({ kind: "alias", alias: "latest" });
+		// %40 decodes to @ — one decode, like any segment.
+		expect(parseRoute("/%40latest")).toEqual({ kind: "alias", alias: "latest" });
+		// Aliases are single-segment; a @ segment can never be a Project id.
+		expect(parseRoute("/@latest/stem")).toEqual({ kind: "launcher" });
+		// Alias names follow the Project-id charset (minus the sigil).
+		expect(parseRoute("/@BAD")).toEqual({ kind: "launcher" });
+		expect(parseRoute("/@")).toEqual({ kind: "launcher" });
+		expect(parseRoute(aliasPath("latest"))).toEqual({ kind: "alias", alias: "latest" });
+		expect(aliasPath("latest")).toBe("/@latest");
 	});
 
 	it("round-trips through the path builders", () => {

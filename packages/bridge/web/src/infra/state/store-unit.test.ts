@@ -77,6 +77,17 @@ describe("clearCurrentSession", () => {
 		expect(store.getState().activeSessions).toHaveLength(1);
 	});
 
+	it("resets the alias view (ADR 13)", () => {
+		const store = createClientStore();
+		store.getState().setAddressViaAlias(true);
+		openAndDirty(store);
+		expect(store.getState().addressViaAlias).toBe(true);
+
+		store.getState().clearCurrentSession();
+
+		expect(store.getState().addressViaAlias).toBe(false);
+	});
+
 	it("lands on the given Project's home when a Project is passed", () => {
 		const store = createClientStore();
 		openAndDirty(store);

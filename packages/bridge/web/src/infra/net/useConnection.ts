@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../../src/core/index.ts";
 import { parseRoute, writeRoute } from "../lib/routes.ts";
+import { sortByLastActivity } from "../lib/sortByLastActivity.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
@@ -84,6 +85,9 @@ export function useConnection(): { retry: () => void } {
 			// Route-driven open (ADR 11). The URL is read at boot and after
 			// every reconnect; it is not a second live navigation machine.
 			const route = parseRoute(window.location.pathname);
+			// Explicit routes leave any alias view (ADR 13); the alias branch
+			// re-enters it below.
+			store.getState().setAddressViaAlias(false);
 			if (route.kind === "session") {
 				const known = (info.projects ?? []).some((p) => p.id === route.projectId);
 				if (!known) {
@@ -91,6 +95,22 @@ export function useConnection(): { retry: () => void } {
 					writeRoute({ kind: "launcher" });
 				} else {
 					await openSessionAddress(client, route.projectId, route.stem, () => clientRef.current !== client);
+				}
+			} else if (route.kind === "alias") {
+				// ADR 13: resolve the alias once per boot/reconnect — the URL keeps
+				// the alias form while the store holds the resolved address. The
+				// target is the most recently active live session (the global
+				// snapshot fetched above); with nothing active the alias cannot
+				// resolve and falls back to the launcher.
+				const target = sortByLastActivity(activeSessions)[0] ?? null;
+				if (route.alias !== "latest" || !target) {
+					store.getState().clearCurrentSession();
+					writeRoute({ kind: "launcher" });
+				} else {
+					rememberAddress(target.projectId, target.stem, target.sessionId);
+					await openSessionAddress(client, target.projectId, target.stem, () => clientRef.current !== client, {
+						viaAlias: true,
+					});
 				}
 			} else if (route.kind === "project") {
 				const known = (info.projects ?? []).some((p) => p.id === route.projectId);
