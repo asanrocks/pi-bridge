@@ -10,7 +10,9 @@
 import { memo, useCallback, useMemo } from "react";
 import {
 	actionPulls,
+	applyPatchInput,
 	beautifyShellCommand,
+	extractApplyPatchPaths,
 	kindForTool,
 	makeActionHeader,
 	makeActionSummary,
@@ -80,7 +82,17 @@ const ToolActionView = memo(function ToolActionView({
 	// `path` (read/write/edit, unknown tools) gets the eye control. The
 	// viewer re-reads from disk at click time — for directory-listing tools
 	// whose path is a directory, the viewer shows the read error instead.
-	const viewPath = typeof recArgs?.path === "string" && recArgs.path !== "" ? (recArgs.path as string) : null;
+	let viewPath = typeof recArgs?.path === "string" && recArgs.path !== "" ? (recArgs.path as string) : null;
+	// A single-file apply_patch envelope is the same use case — the eye opens
+	// that file; multi-file patches get per-section clickable labels in the
+	// card body instead (an ambiguous eye is worse than none).
+	if (viewPath === null && action.toolName === "apply_patch") {
+		const input = applyPatchInput(args);
+		if (input !== null) {
+			const paths = extractApplyPatchPaths(input);
+			if (paths.length === 1) viewPath = paths[0] ?? null;
+		}
+	}
 	const isShell = SHELL_TOOLS.has(action.toolName);
 	const liveCmd = isShell && typeof recArgs?.command === "string" ? (recArgs.command as string) : null;
 	const timeout = isShell && typeof recArgs?.timeout === "number" ? (recArgs.timeout as number) : null;

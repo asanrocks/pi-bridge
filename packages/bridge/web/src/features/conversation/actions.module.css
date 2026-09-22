@@ -418,6 +418,24 @@
 	word-break: break-word;
 }
 
+/* Clickable variant of the section label — the card-body counterpart of the
+   eye control: opens the section's file in the viewer (the viewer re-reads
+   from disk, so it shows the file as it exists now). Button reset only; the
+   title class above stays the single spec for color/size. */
+.editDiffTitleBtn {
+	width: 100%;
+	display: block;
+	text-align: left;
+	background: none;
+	border: none;
+	font-family: inherit;
+	cursor: pointer;
+}
+
+.editDiffTitleBtn:hover {
+	text-decoration: underline;
+}
+
 /* Seek-marker note rows (apply_patch `@@ …` context lines) — file lines the
    applier matched to locate a chunk, displayed as muted locators. */
 .editDiffNote {

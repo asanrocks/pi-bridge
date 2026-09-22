@@ -12,14 +12,16 @@
 
 import { memo } from "react";
 import { applyPatchInput, displayPath, parseApplyPatch } from "../../../../../src/viewmodel/index.ts";
+import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
 import styles from "../actions.module.css";
 import { type ActionDetailsProps, extToLang, useCwd } from "./args.ts";
 import { type DiffSectionSpec, DiffSections } from "./DiffSections.tsx";
 
 export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resultText }: ActionDetailsProps) {
-	const input = applyPatchInput(args);
+	const openFileViewer = useStore((s) => s.openFileViewer);
 	const cwd = useCwd();
+	const input = applyPatchInput(args);
 	if (input === null) return null;
 	const rel = (p: string) => displayPath(p, cwd);
 
@@ -41,6 +43,7 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 			case "add":
 				sections.push({
 					title: `Add ${rel(section.filePath)}`,
+					viewPath: section.filePath,
 					lang: extToLang(section.filePath),
 					oldText: "",
 					newText: section.content,
@@ -49,7 +52,13 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 			case "delete":
 				// Old content is not in the envelope — the operation label is
 				// the honest rendering; on-disk state is the viewer's job.
-				sections.push({ title: `Delete ${rel(section.filePath)}`, lang: "", oldText: "", newText: "" });
+				sections.push({
+					title: `Delete ${rel(section.filePath)}`,
+					viewPath: section.filePath,
+					lang: "",
+					oldText: "",
+					newText: "",
+				});
 				break;
 			case "update": {
 				const title =
@@ -57,15 +66,19 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 						? `Update ${rel(section.filePath)} → ${rel(section.movePath)}`
 						: `Update ${rel(section.filePath)}`;
 				const lang = extToLang(section.movePath ?? section.filePath);
+				// A move's content lives at the target afterwards — the viewer
+				// shows current disk state, so it opens the move target.
+				const viewPath = section.movePath ?? section.filePath;
 				if (section.chunks.length === 0) {
 					// Header streamed, hunks not yet.
-					sections.push({ title, lang, oldText: "", newText: "" });
+					sections.push({ title, viewPath, lang, oldText: "", newText: "" });
 					break;
 				}
 				for (let i = 0; i < section.chunks.length; i++) {
 					const chunk = section.chunks[i];
 					sections.push({
 						title: i === 0 ? title : null,
+						viewPath: i === 0 ? viewPath : null,
 						notes: chunk.contexts.length > 0 ? chunk.contexts : undefined,
 						lang,
 						oldText: chunk.oldText,
@@ -79,7 +92,7 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 
 	return (
 		<div className={styles.cardBody}>
-			{sections.length > 0 && <DiffSections sections={sections} />}
+			{sections.length > 0 && <DiffSections sections={sections} onOpenView={openFileViewer} />}
 			{resultText && <div className={styles.cardConfirm}>{resultText}</div>}
 		</div>
 	);
