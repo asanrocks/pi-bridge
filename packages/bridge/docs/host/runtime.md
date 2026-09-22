@@ -76,6 +76,16 @@ entry positions. Idle model, thinking-level, and rename operations reconcile
 when necessary; navigation updates the Document leaf directly so it preserves
 the selected branch.
 
+An `entry_appended` whose parent chain does not resolve in the Document is
+not applied live. Mid-turn, the streaming assistant is a `pending:message`
+provisional while pi has already persisted it under its real id, so an
+append at that boundary (the git-stamp `tool_end` anchor) parents on an id
+the Document does not know; applying it would move the leaf onto an
+unresolvable chain and collapse the leaf path. Such entries defer to the
+seal, which discovers them from the durable entries like any other
+silently-appended entry. Known-parent appends — prompt stamps, bash entries,
+and their `user_bash_end` stamps — still apply live.
+
 The Manager API has these Session operations:
 
 - `prompt(text, images?)` awaits the completed pi prompt operation.

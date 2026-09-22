@@ -67,6 +67,11 @@ after the host applies and publishes the bash entry. A slow observation can
 still encounter another append before it writes; the resulting parent is the
 current leaf when the append occurs, so sequence placement is best effort.
 
+A `tool_end` stamp parents on the persisted assistant entry, which mid-turn
+the live Document holds only as its `pending:message` provisional. The
+append therefore defers to the turn-end reconcile: clients see the stamp
+when the turn settles, not during streaming.
+
 ## Payload Versions
 
 New stamps use v2. Readers accept v1 and v2, and versions can be mixed in one
