@@ -4,7 +4,7 @@
 // activation sharing, detach-before-attach, idle GC, session queries, and the
 // address/identity rules, not pi itself.
 
-import { existsSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -64,7 +64,6 @@ function emptyStubDocument(): Document {
 			contextUsage: null,
 			pendingSteer: [],
 		},
-		scopedModels: [],
 		entries: {},
 	};
 }
@@ -524,9 +523,8 @@ describe("daemon: projects", () => {
 		const { agentDir, a } = makeProjectRoots();
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["faux-1"] }));
-		// A project-level override exists but is deliberately not reported: the
-		// Project home shows the global scope, and the post-attach initial sync
-		// carries the project's actual `/scopedModels`.
+		// A project-level override exists but is deliberately not reported:
+		// pinned models is one daemon-global concept (ADR 15), never per-Project.
 		mkdirSync(join(a, ".pi"), { recursive: true });
 		writeFileSync(join(a, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["faux-2"] }));
 
@@ -537,9 +535,78 @@ describe("daemon: projects", () => {
 
 		const id = send(ws, { verb: "getDaemonInfo" });
 		const reply = (await waitForReply(frames, id)) as unknown as {
-			scopedModels: Array<{ provider: string; id: string; name: string }>;
+			pinnedModels: Array<{ provider: string; id: string; name: string }>;
 		};
-		expect(reply.scopedModels).toEqual([{ provider: "faux", id: "faux-1", name: expect.any(String) }]);
+		expect(reply.pinnedModels).toEqual([{ provider: "faux", id: "faux-1", name: expect.any(String) }]);
+
+		ws.close();
+	});
+
+	it("getDaemonInfo resolves the bridge settings' visibleModels against the catalogue", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(join(agentDir, "bridge"), { recursive: true });
+		writeFileSync(join(agentDir, "bridge", "settings.json"), JSON.stringify({ visibleModels: ["faux/*"] }));
+
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const id = send(ws, { verb: "getDaemonInfo" });
+		const reply = (await waitForReply(frames, id)) as unknown as { visibleModels: string[] };
+		expect(reply.visibleModels).toEqual(["faux/faux-1", "faux/faux-2"]);
+
+		ws.close();
+	});
+
+	it("getDaemonInfo reports no visibleModels when the bridge settings file is absent", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const id = send(ws, { verb: "getDaemonInfo" });
+		const reply = (await waitForReply(frames, id)) as unknown as { visibleModels: string[] };
+		expect(reply.visibleModels).toEqual([]);
+
+		ws.close();
+	});
+
+	it("setModelPinned writes the global enabledModels scope and broadcasts", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		await waitForReply(
+			frames,
+			send(ws, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: true }),
+		);
+		const push = await waitForPush(frames, "pinned_models_changed");
+		expect(push.pinnedModels).toEqual([{ provider: "faux", id: "faux-1", name: expect.any(String) }]);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual(["faux/faux-1"]);
+
+		ws.close();
+	});
+
+	it("unpinning the last model clears the global scope", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["faux-1"] }));
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		await waitForReply(
+			frames,
+			send(ws, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: false }),
+		);
+		await waitForPush(frames, "pinned_models_changed");
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toBeUndefined();
 
 		ws.close();
 	});

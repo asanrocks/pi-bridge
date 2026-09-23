@@ -63,7 +63,9 @@ export function useConnection(): { retry: () => void } {
 			// Daemon info — Projects, models, thinking levels, dev mode
 			const info = daemonReply as unknown as GetDaemonInfoReply;
 			if (info.models) {
-				store.getState().setModels(info.models, info.thinkingLevels ?? [], info.scopedModels ?? []);
+				store
+					.getState()
+					.setModels(info.models, info.thinkingLevels ?? [], info.pinnedModels ?? [], info.visibleModels ?? []);
 			}
 			store.getState().setProjects(info.projects ?? []);
 			if (info.devMode) {
