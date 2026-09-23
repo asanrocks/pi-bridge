@@ -1,6 +1,6 @@
 {
 	"name": "@earendil-works/pi-bridge",
-	"version": "0.85.1",
+	"version": "0.87.1",
 	"description": "Browser-based coding agent session protocol — monitor, steer, and explore agent work from a browser",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -38,8 +38,8 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "^0.85.1",
-		"@earendil-works/pi-coding-agent": "^0.85.1",
+		"@earendil-works/pi-ai": "^0.87.1",
+		"@earendil-works/pi-coding-agent": "^0.87.1",
 		"shiki": "4.3.1",
 		"diff": "8.0.4",
 		"minimatch": "10.2.6",
