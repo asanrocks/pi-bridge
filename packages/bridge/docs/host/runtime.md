@@ -331,13 +331,18 @@ registered or collected and when a Manager's streaming state changes; settled
 listeners also refresh it. Connections receive these pushes regardless of
 which Project they currently have attached.
 
-The Daemon serves the SPA shell at `/` and at `/<projectId>` or
-`/<projectId>/<stem...>` for configured Projects. Embedded assets are used
+The Daemon serves the SPA shell at `/` and at every address the client
+resolves: `/<projectId>` and `/<projectId>/<stem...>` for configured Projects,
+and any other path reached by a navigation (`Accept: text/html`) — a stale
+address left by a daemon restart with different Projects loads the shell, and
+the client resolves it down to the launcher instead of the address bar showing
+a 404. Embedded assets are used
 when available; otherwise assets are read from `webRoot` or the built web
-root. Asset paths are served before application routes, the web root is
-containment-checked, and unknown paths return 404. Project ids colliding with
-root asset names are rejected at startup so an asset cannot hide a Project
-route. The same process owns the WebSocket server used by Connections.
+root. Real files win over routes and only regular files serve, the web root is
+containment-checked, and a non-navigation fetch with no file behind it returns
+404. Project ids colliding with root asset names are rejected at startup so an
+asset cannot hide a Project route. The same process owns the WebSocket server
+used by Connections.
 
 The web client turns these frames into URL-driven navigation and a Document
 mirror; the overall layer relationship is described in

@@ -1,7 +1,11 @@
-// HTTP serving tests: SPA route fallback (`/<projectId>`, `/<projectId>/<stem>`)
-// from both the disk web root and the embedded (single-file binary) asset map,
-// plus the 404/403 boundaries. Regression coverage for the embedded path, where
-// app routes previously fell through to a non-existent dist/web and returned 404.
+// HTTP serving tests: SPA shell fallback — application routes
+// (`/<projectId>`, `/<projectId>/<stem>`) and navigations to stale or unknown
+// addresses — from both the disk web root and the embedded (single-file
+// binary) asset map, plus the 404/403 boundaries. Regression coverage for the
+// embedded path, where app routes previously fell through to a non-existent
+// dist/web and returned 404, and for the stale-address navigation: a daemon
+// restart with different Projects must load the shell so the client can
+// resolve the address, not leave a 404 in the address bar.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -45,9 +49,9 @@ async function startDaemon(opts: DaemonOptions): Promise<number> {
 
 /** Raw request (no fetch normalization) so path-escape cases hit the server
  * with the literal bytes a hostile client would send. */
-function request(port: number, path: string): Promise<Reply> {
+function request(port: number, path: string, headers?: Record<string, string>): Promise<Reply> {
 	return new Promise((resolve, reject) => {
-		const req = http.get({ host: "127.0.0.1", port, path }, (res) => {
+		const req = http.get({ host: "127.0.0.1", port, path, headers }, (res) => {
 			let body = "";
 			res.on("data", (chunk) => {
 				body += chunk;
@@ -114,9 +118,14 @@ describe("HTTP serving", () => {
 		expect(asset.status).toBe(200);
 		expect(asset.contentType).toContain("text/javascript");
 		expect(asset.body).toBe("console.log(2)");
+
+		// A navigation to a stale address falls back to the embedded shell.
+		const stale = await request(port, "/old-project/some/stem", { accept: "text/html,*/*" });
+		expect(stale.status).toBe(200);
+		expect(stale.body).toContain("EMBEDDED-SHELL");
 	});
 
-	it("returns 404 for unknown paths and non-project first segments, 403 for path escapes", async () => {
+	it("returns 404 for non-navigation fetches of unknown paths, 403 for path escapes", async () => {
 		const project = makeTempDir("bound-proj");
 		const rootParent = makeTempDir("bound-parent");
 		const webRoot = join(rootParent, "web");
@@ -129,10 +138,15 @@ describe("HTTP serving", () => {
 			webRoot,
 		});
 
+		// A fetch (no `Accept: text/html`) with no file behind it stays 404 — a
+		// missing asset must not masquerade as the shell.
 		expect((await request(port, "/missing.js")).status).toBe(404);
-		// The first segment is not a configured Project id: not an app route.
 		expect((await request(port, "/not-a-project")).status).toBe(404);
 		expect((await request(port, "/not-a-project/some/stem")).status).toBe(404);
+		// A directory (vite's `assets/` output) is not a file: it must fall
+		// through to the 404, not be read as one.
+		mkdirSync(join(webRoot, "assets"));
+		expect((await request(port, "/assets")).status).toBe(404);
 		// Literal `..` resolves outside the web root — containment must reject
 		// it before any read (ADR 11 security boundary).
 		expect((await request(port, "/../secret.txt")).status).toBe(403);
@@ -141,5 +155,23 @@ describe("HTTP serving", () => {
 		mkdirSync(join(rootParent, "web-x"));
 		writeFileSync(join(rootParent, "web-x", "secret.txt"), "outside");
 		expect((await request(port, "/../web-x/secret.txt")).status).toBe(403);
+	});
+
+	it("serves the SPA shell for navigations to stale or unknown addresses", async () => {
+		// The daemon restarted with different Projects: a bookmarked
+		// `/<oldProject>/<stem>` must load the shell so the client resolves the
+		// address down to the launcher — a bare 404 in the address bar is the
+		// failure this covers.
+		const project = makeTempDir("nav-proj");
+		const webRoot = makeTempDir("nav-web");
+		writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>NAV-SHELL</title>");
+		const port = await startDaemon({ agentDir: makeTempDir("nav-agent"), allow: [project], webRoot });
+
+		for (const path of ["/old-project", "/old-project/some/stem", "/missing.js"]) {
+			const res = await request(port, path, { accept: "text/html,application/xhtml+xml,*/*;q=0.1" });
+			expect(res.status, path).toBe(200);
+			expect(res.contentType, path).toContain("text/html");
+			expect(res.body, path).toContain("NAV-SHELL");
+		}
 	});
 });

@@ -897,23 +897,26 @@ export class Daemon {
 
 	// ── Server ────────────────────────────────────────────────────────────
 
-	/** Try to serve an embedded asset; returns true if served. */
-	private tryServeEmbedded(path: string, res: ServerResponse): boolean {
-		if (!this.embeddedAssets) return false;
+	/** Try to serve an embedded asset; returns true if served. `serveShell` adds
+	 *  the shell as a fallback candidate — an application route or a navigation
+	 *  has no embedded asset of its own. */
+	private tryServeEmbedded(path: string, res: ServerResponse, serveShell: boolean): boolean {
+		const assets = this.embeddedAssets;
+		if (!assets) return false;
 		// Normalize: strip leading /, default / → index.html
-		let key = path === "/" ? "index.html" : path.replace(/^\//, "");
-		// SPA routes have no embedded asset of their own — they serve the shell
-		// and the client resolves the address (ADR 11).
-		if (this.isAppRoute(path)) key = "index.html";
-		const encoded = this.embeddedAssets[key];
-		if (!encoded) return false;
-
-		const ext = extname(key);
-		const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-		const content = Buffer.from(encoded, "base64");
-		res.writeHead(200, { "Content-Type": contentType });
-		res.end(content);
-		return true;
+		const key = path === "/" ? "index.html" : path.replace(/^\//, "");
+		// Real assets win over the shell (ADR 11).
+		for (const candidate of serveShell ? [key, "index.html"] : [key]) {
+			const encoded = assets[candidate];
+			if (!encoded) continue;
+			const ext = extname(candidate);
+			const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+			const content = Buffer.from(encoded, "base64");
+			res.writeHead(200, { "Content-Type": contentType });
+			res.end(content);
+			return true;
+		}
+		return false;
 	}
 
 	/** Probe whether a port is available on :: by creating a temporary listener. */
@@ -934,8 +937,8 @@ export class Daemon {
 	 * segment must be a configured Project id — ids match `[a-z0-9-]`, so no
 	 * percent-decoding is needed and an encoded segment simply doesn't match.
 	 * Real files win over routes (assets are tried first), which is why ids
-	 * colliding with root asset names are rejected at startup; unknown paths
-	 * stay 404. */
+	 * colliding with root asset names are rejected at startup; other paths
+	 * reach the shell only through the navigation fallback in `startServer`. */
 	private isAppRoute(path: string): boolean {
 		const first = path.replace(/^\//, "").split("/")[0];
 		return first !== "" && this.projects.has(first);
@@ -948,8 +951,16 @@ export class Daemon {
 			let path = req.url?.split("?")[0] ?? "/";
 			if (path === "/") path = "/index.html";
 
+			// SPA fallback: known application routes always serve the shell, and
+			// so does any navigation (`Accept: text/html`) to an unknown address —
+			// a stale `/<projectId>/<stem>` left by a restart with different
+			// Projects loads the shell and the client resolves the address down
+			// to the launcher. Asset fetches are not navigations, so a missing
+			// asset stays a 404.
+			const serveShell = this.isAppRoute(path) || (req.headers.accept ?? "").includes("text/html");
+
 			// Try embedded assets first (single-file distribution)
-			if (this.tryServeEmbedded(path, res)) return;
+			if (this.tryServeEmbedded(path, res, serveShell)) return;
 
 			const filePath = join(root, path);
 
@@ -963,8 +974,20 @@ export class Daemon {
 				return;
 			}
 
-			// SPA routes: serve the shell; the client resolves the address.
-			if (this.isAppRoute(path)) {
+			// Real files win over routes (ADR 11). Only regular files serve — a
+			// directory (e.g. vite's `assets/` output) falls through to the shell
+			// or the 404 below instead of being read as a file.
+			if (existsSync(filePath) && statSync(filePath).isFile()) {
+				const ext = extname(filePath);
+				const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+				const content = readFileSync(filePath);
+				res.writeHead(200, { "Content-Type": contentType });
+				res.end(content);
+				return;
+			}
+
+			// SPA fallback: serve the shell; the client resolves the address.
+			if (serveShell) {
 				const indexPath = join(root, "index.html");
 				if (existsSync(indexPath)) {
 					res.writeHead(200, { "Content-Type": "text/html" });
@@ -973,17 +996,8 @@ export class Daemon {
 				}
 			}
 
-			if (!existsSync(filePath)) {
-				res.writeHead(404);
-				res.end("Not found");
-				return;
-			}
-
-			const ext = extname(filePath);
-			const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-			const content = readFileSync(filePath);
-			res.writeHead(200, { "Content-Type": contentType });
-			res.end(content);
+			res.writeHead(404);
+			res.end("Not found");
 		});
 
 		const wss = new WebSocketServer({ server: this.httpServer });
