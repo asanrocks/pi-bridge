@@ -16,7 +16,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../../src/core/index.ts";
 import { parseRoute, writeRoute } from "../lib/routes.ts";
-import { sortByLastActivity } from "../lib/sortByLastActivity.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
@@ -24,6 +23,7 @@ import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole } from "./devConsole.ts";
+import { resolveLatestSession } from "./latestSession.ts";
 import { flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
 import { openSessionAddress } from "./sessionBoot.ts";
@@ -101,11 +101,15 @@ export function useConnection(): { retry: () => void } {
 			} else if (route.kind === "alias") {
 				// ADR 13: resolve the alias once per boot/reconnect — the URL keeps
 				// the alias form while the store holds the resolved address. The
-				// target is the most recently active live session (the global
-				// snapshot fetched above); with nothing active the alias cannot
-				// resolve and falls back to the launcher.
-				const target = sortByLastActivity(activeSessions)[0] ?? null;
-				if (route.alias !== "latest" || !target) {
+				// target is the most recently active live session; with none live,
+				// the most recent durable session across Projects, which the open
+				// then activates.
+				const target =
+					route.alias === "latest"
+						? await resolveLatestSession(client, info.projects ?? [], activeSessions)
+						: null;
+				if (clientRef.current !== client) return;
+				if (!target) {
 					store.getState().clearCurrentSession();
 					writeRoute({ kind: "launcher" });
 				} else {

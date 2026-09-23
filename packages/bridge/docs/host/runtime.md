@@ -429,13 +429,19 @@ registered or collected and when a Manager's streaming state changes; settled
 listeners also refresh it. Connections receive these pushes regardless of
 which Project they currently have attached.
 
-The Daemon serves the SPA shell at `/` and at `/<projectId>` or
-`/<projectId>/<stem...>` for configured Projects. Embedded assets are used
-when available; otherwise assets are read from `webRoot` or the built web
-root. Asset paths are served before application routes, the web root is
-containment-checked, and unknown paths return 404. Project ids colliding with
-root asset names are rejected at startup so an asset cannot hide a Project
-route. The same process owns the WebSocket server used by Connections.
+The Daemon serves the built web assets and the SPA shell from one
+`AssetSource` — the disk web root in development, the base64 map inlined at
+bundle time in the single-file binary. The HTTP routing is identical for both;
+only the I/O differs. A request whose first path segment is a top-level entry
+of the asset surface (a build output name, plus vite's `assets/`) is a
+resource: a miss is a 404, and a traversal under the root is rejected by the
+source's containment check before any read. Every other path is a client
+address: the Daemon returns the shell and the web client resolves it, so an
+unknown Project or alias lands on the launcher rather than a 404. Project ids
+colliding with root asset names are rejected at startup so an asset cannot hide
+a Project route. The shell is served `Cache-Control: no-cache`; content-hashed
+`assets/` entries are immutable. The same process owns the WebSocket server
+used by Connections.
 
 The web client turns these frames into URL-driven navigation and a Document
 mirror; the overall layer relationship is described in

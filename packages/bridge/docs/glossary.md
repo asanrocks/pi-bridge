@@ -87,12 +87,13 @@ What exists, how it is named, how long it lives. Owned by
    character outside the Project-id charset, so the two namespaces cannot
    collide and no id is reserved — that names a cross-Project target
    resolved once per boot: `/@latest` resolves to the most recently active
-   live Session (the global active snapshot; with nothing active it does
-   not resolve and falls back to the launcher). The URL keeps the alias
-   form; the client state holds the resolved address until an explicit
-   navigation commits a real one. A reload re-resolves, possibly onto a
-   newer Session. The alias set is closed: new aliases are new claims in
-   this document first.
+   live Session (the global active snapshot); with none live it falls back
+   to the most recent durable Session across Projects and opens it
+   (activating it), and only with no Session at all falls back to the
+   launcher. The URL keeps the alias form; the client state holds the
+   resolved address until an explicit navigation commits a real one. A reload
+   re-resolves, possibly onto a newer Session. The alias set is closed: new
+   aliases are new claims in this document first.
 
 8. A Session is **archived** *(bound)* when its file has been moved under the
    reserved `.archive` prefix of its Project's session directory. An archived
