@@ -160,7 +160,6 @@ describe("buildInitialSync: full replacement", () => {
 		expect(entries["pending:user:1"]).toBeDefined();
 		expect(entries["pending:message"]).toBeDefined();
 		expect(frame.document.status).toEqual(doc.status);
-		expect(frame.document.scopedModels).toEqual(doc.scopedModels);
 	});
 
 	it("keeps prior committed assistant messages when a new turn is in flight", () => {
@@ -272,9 +271,8 @@ describe("buildInitialSync: delta patch", () => {
 		// Adds carry their ord.
 		const cAdd = frame.ops.find((o) => o.path === "/entries/c");
 		expect(cAdd && "value" in cAdd ? (cAdd.value as { ord?: number }).ord : undefined).toBe(3);
-		// Complete status and scoped models, unconditionally.
+		// Complete status, unconditionally.
 		expect(frame.ops).toContainEqual({ op: "replace", path: "/status", value: doc.status });
-		expect(frame.ops).toContainEqual({ op: "replace", path: "/scopedModels", value: doc.scopedModels });
 	});
 
 	it("includes provisional skeletons during a mid-turn reconnect", () => {
@@ -294,10 +292,10 @@ describe("buildInitialSync: delta patch", () => {
 		const doc = initFromEntries([userEntry("a")]);
 		const piEntries = [userEntry("a")];
 		// Cursor covers the whole file: no committed adds, no provisionals —
-		// still two unconditional replaces.
+		// still the unconditional status replace.
 		const frame = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "a", entryCount: 1 });
 		if (frame.kind !== "patch") throw new Error("expected patch");
-		expect(frame.ops.length).toBeGreaterThanOrEqual(2);
+		expect(frame.ops).toContainEqual({ op: "replace", path: "/status", value: doc.status });
 		expect(frame.ops.every((o) => o.op === "append")).toBe(false);
 	});
 

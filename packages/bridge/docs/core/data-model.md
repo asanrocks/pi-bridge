@@ -9,13 +9,12 @@ are described in [sync.md](sync.md). The vocabulary follows
 
 ## Document
 
-`Document` has three fields:
+`Document` has two fields:
 
 ```ts
 interface Document {
   status: Status;
   entries: Record<string, Entry>;
-  scopedModels: ScopedModelInfo[];
 }
 ```
 
@@ -29,9 +28,11 @@ patch have been applied.
 `status` is the current session projection. It contains `leafId`, `name`,
 `model` (`ModelRef` with `provider` and `modelId`), `thinkingLevel`,
 `isStreaming`, `isCompacting`, `stats`, `contextUsage`, and `pendingSteer`.
-`scopedModels` is the session's curated model list. Status fields derived from
-entries are recomputed by the pure document functions; live model and context
-state can also be supplied by the host during reconcile.
+Pinned models is not Document state: it is one daemon-global list resolved
+from pi's global `enabledModels` and delivered by `getDaemonInfo` and the
+`pinned_models_changed` push (ADR 15). Status fields derived from entries are
+recomputed by the pure document functions; live model and context state can
+also be supplied by the host during reconcile.
 
 The server's document is full fidelity. A client mirror is never authoritative
 and is replaced by the next initial-sync snapshot after reconnect or a failed

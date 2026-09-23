@@ -497,7 +497,6 @@ export function initFromEntries(entries: SessionEntry[]): Document {
 	return {
 		status: deriveStatus(entryMap),
 		entries: entryMap,
-		scopedModels: [],
 	};
 }
 
@@ -708,7 +707,7 @@ export function snapshotForWire(doc: Document): Document {
 	for (const [id, entry] of Object.entries(doc.entries)) {
 		entries[id] = stripLazyFields(entry);
 	}
-	return { status: doc.status, entries, scopedModels: doc.scopedModels };
+	return { status: doc.status, entries };
 }
 
 export function stripLazyFields(entry: Entry): Entry {

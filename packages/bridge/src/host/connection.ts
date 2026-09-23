@@ -18,16 +18,17 @@ import type {
 	NavigateRequest,
 	NewSessionRequest,
 	OpenSessionRequest,
+	PinnedModelInfo,
 	PrefixCursor,
 	ProjectInfo,
 	PromptRequest,
 	PullRequest,
 	ReadFileRequest,
 	RenameSessionRequest,
-	ScopedModelInfo,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
+	SetModelPinnedRequest,
 	SetModelRequest,
 	SetThinkingLevelRequest,
 	SnapshotFile,
@@ -60,10 +61,15 @@ export interface DaemonVerbs {
 			reasoning: boolean;
 			supportedThinkingLevels?: string[];
 		}[];
-		scopedModels: ScopedModelInfo[];
+		pinnedModels: PinnedModelInfo[];
+		/** Resolved `provider/modelId` keys of the picker's normal tier (ADR 15). */
+		visibleModels: string[];
 		thinkingLevels: string[];
 		devMode: boolean;
 	}>;
+	/** Pin or unpin one model in the daemon-global list (ADR 15). The new list
+	 * arrives as a `pinned_models_changed` push. */
+	setModelPinned: (provider: string, modelId: string, pinned: boolean) => Promise<void>;
 	/** Paginated history query for one Project. */
 	listSessions: (
 		projectId: string,
@@ -391,6 +397,15 @@ export class Connection {
 					const info = await this.daemonVerbs.getDaemonInfo();
 					const reply: GetDaemonInfoReply = { id, ok: true, ...info };
 					this.send(reply as unknown as Record<string, unknown>);
+					break;
+				}
+				case "setModelPinned": {
+					const m = msg as unknown as SetModelPinnedRequest;
+					if (typeof m.provider !== "string" || m.provider === "") throw new Error("Missing `provider`");
+					if (typeof m.modelId !== "string" || m.modelId === "") throw new Error("Missing `modelId`");
+					if (typeof m.pinned !== "boolean") throw new Error("Missing `pinned`");
+					await this.daemonVerbs.setModelPinned(m.provider, m.modelId, m.pinned);
+					this.send({ id, ok: true });
 					break;
 				}
 				case "listFiles": {

@@ -364,7 +364,6 @@ describe("seedDocument", () => {
 		expect(Object.keys(doc.entries)).toEqual(["a", "b", "n1"]);
 		expect(doc.status.leafId).toBe("n1");
 		expect(doc.status.name).toBe("my session");
-		expect(doc.scopedModels).toEqual([]);
 	});
 
 	it("overlays the status hint without letting undefined fields regress derived values", () => {

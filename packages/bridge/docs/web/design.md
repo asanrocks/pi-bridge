@@ -39,12 +39,24 @@ browse branches in History. A steerer can do the following:
   save, or Escape to cancel.
 - Choose a model and thinking level from the model picker. The picker is
   searchable, grouped by provider, marks the selected model, and filters the
-  thinking slider to levels supported by that model. A curated group sits at
-  the top: "Pinned" when the Session's scope is configured, else "Suggested"
-  (one representative per provider). On Project home, where no Session exists,
-  Pinned comes from the daemon's global `enabledModels`. Ctrl/Cmd+P cycles
-  models; Shift reverses the cycle. The controls remain available whenever
-  connected.
+  thinking slider to levels supported by that model. Its catalogue is three
+  tiers (ADR 15). A "Pinned" group sits at the top when models are pinned —
+  the daemon-global list resolved from pi's global `enabledModels`; there is no
+  Suggested fallback. Below it, one group per provider holds the whole catalogue
+  for that provider; its normal models — those matching a `visibleModels`
+  pattern from the bridge settings file, plus every pinned model — are shown.
+  Each group's remaining models fold behind that group's own `More…` row and are
+  revealed in place; a provider with only folded models still gets a group, so
+  its `More…` row is the whole group. With no `visibleModels` configured
+  nothing folds. A pinned model is a promotion: it repeats in its provider group
+  and stays normal, never folded. Searching bypasses the
+  tiers so a folded model stays findable. Hovering a row reveals its
+  `provider/modelId` and, on an unpinned row, a ghost pin toggle; a pinned row
+  keeps a filled pin visible, so the pinned set is scannable. The glyph is
+  state only — hovering it changes the button surface, never the symbol, and
+  the tooltip names the action. Shift+Enter toggles the focused row. Ctrl/Cmd+P
+  cycles the pinned list; Shift reverses the cycle. The controls remain
+  available whenever connected.
 - Attach PNG, JPEG, WebP, or GIF images by file picker, paste, or drag and
   drop. Attachments are resized when necessary, show thumbnail chips, and can
   be removed individually. The per-message attachment cap and per-file
@@ -121,9 +133,8 @@ first prompt is sent. The first prompt, images, and explicitly chosen
 pre-session model and thinking level are admitted together. The draft is
 scoped to the Project, and the model choice is persisted in one local Project
 slot. An unset choice leaves model resolution to the daemon. Its picker's
-Pinned group uses the daemon's global `enabledModels` scope; a project-level
-`.pi/settings.json` override is not reflected until the Session attaches and
-its own scope arrives. The home has no
+Pinned group is the daemon-global list: pinned models is one concept, backed by
+pi's global `enabledModels` and never a project override (ADR 15). The home has no
 collapsed compose bar, session ledger, Stop button, or attached-session
 controls.
 

@@ -92,6 +92,12 @@ export function useRpc() {
 		[],
 	);
 
+	const setModelPinned = useCallback(
+		(provider: string, modelId: string, pinned: boolean) =>
+			rpc(() => getGlobalClient()?.setModelPinned(provider, modelId, pinned), "pin model failed"),
+		[],
+	);
+
 	const renameSession = useCallback(async (name: string) => {
 		// The server broadcasts sessions_changed for the Project (ADR 11), so
 		// no client-side refresh is needed.
@@ -298,6 +304,7 @@ export function useRpc() {
 			abort,
 			discardSteer,
 			setModel,
+			setModelPinned,
 			setThinkingLevel,
 			renameSession,
 			navigate,
@@ -317,6 +324,7 @@ export function useRpc() {
 			abort,
 			discardSteer,
 			setModel,
+			setModelPinned,
 			setThinkingLevel,
 			renameSession,
 			navigate,

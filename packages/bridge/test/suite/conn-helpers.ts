@@ -95,10 +95,12 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	getDaemonInfo: async () => ({
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
-		scopedModels: [],
+		pinnedModels: [],
+		visibleModels: [],
 		thinkingLevels: ["off", "low", "medium", "high"],
 		devMode: false,
 	}),
+	setModelPinned: async () => {},
 	openSession: async () => ({ ok: true, session: mockSessionRef }),
 	newSession: async () => ({ ok: true, session: mockSessionRef }),
 	detach: () => {},

@@ -795,23 +795,109 @@
 	background: var(--color-sidebar);
 }
 
-.portalItem {
+/* Per-group "More…" row (ADR 15): hides a provider's folded tail. It reads as
+   a list row, not a section header; clicking reveals the tail in place and the
+   row disappears. */
+.portalMore {
 	display: block;
 	width: 100%;
 	text-align: left;
 	padding: 4px 10px 4px 16px;
 	font-size: var(--fs-md);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-	color: var(--color-foreground);
+	color: var(--color-muted-foreground);
 	background: none;
 	border: none;
 	cursor: pointer;
+}
+
+.portalMore:hover {
+	color: var(--color-foreground);
+	background: var(--color-muted);
+}
+
+/* Row: a flex container so the select area and the ghost pin button share one
+   line. The row owns hover/selected/focused styling; it is not itself a button
+   (the pin must be a nested button). */
+.portalItem {
+	display: flex;
+	align-items: center;
 	border-left: 2px solid transparent;
 	user-select: none;
 }
 
-.portalItem:hover {
+.portalItemSelect {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	text-align: left;
+	padding: 4px 0 4px 16px;
+	font-size: var(--fs-md);
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	color: var(--color-foreground);
+	background: none;
+	border: none;
+	cursor: pointer;
+}
+
+.portalItemName {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* provider/modelId is exposed through the row's built-in `title` tooltip; no
+   custom hover affordance. */
+
+/* Ghost pin toggle. The glyph is state only: a filled accent pin on a pinned
+   row, an outline pin on an unpinned row. Hover never swaps the glyph — the
+   action lives in the tooltip/aria-label, and hover is signalled by the button
+   surface. Unpinned pins stay hidden until the row is hovered so the row reads
+   as the model; a pinned row keeps its pin visible so the pinned set is
+   scannable. The box is reserved either way, so revealing a pin never shifts
+   the row. */
+.portalPin {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px 10px 4px 8px;
+	border-radius: 4px;
+	color: var(--color-muted-foreground);
+	background: none;
+	border: none;
+	cursor: pointer;
+	opacity: 0;
+}
+
+.portalItem:hover .portalPin {
+	opacity: 1;
+}
+
+/* Declared after `.portalPin`, so equal specificity resolves to the pinned
+   state and the pin stays visible without row hover. */
+.portalPinActive {
+	opacity: 1;
+	color: var(--color-accent);
+}
+
+.portalPin:hover {
+	color: var(--color-foreground);
 	background: var(--color-sidebar);
+}
+
+.portalPinActive:hover {
+	color: var(--color-accent);
+}
+
+/* One highlight surface for row hover and the keyboard cursor — `--color-muted`
+   is the token's documented hover role and matches the sidebar's rows, so a
+   row reads the same whether the pointer or the cursor is on it. Selection is
+   carried by the accent border, not a second background. */
+.portalItem:hover {
+	background: var(--color-muted);
 }
 
 .portalItemSelected {
@@ -819,7 +905,7 @@
 	background: var(--color-muted);
 }
 
-/* Keyboard-focus highlight for non-selected items (selected already gets this bg). */
+/* Keyboard cursor on a non-selected row; same surface as hover. */
 .portalItemFocused {
 	background: var(--color-muted);
 }

@@ -204,7 +204,6 @@ describe("client restore convergence", () => {
 		const promoted = promoteSessionCandidate("s", [
 			{ op: "add", path: "/entries/c", value: { ...full.entries.c } as never },
 			{ op: "replace", path: "/status", value: full.status as never },
-			{ op: "replace", path: "/scopedModels", value: full.scopedModels as never },
 		]);
 		expect(promoted).not.toBeNull();
 
@@ -238,10 +237,7 @@ describe("client restore convergence", () => {
 		// full-session writes. The base must be the target session's
 		// cache-derived seed (promoted.before), not the store's document.
 		const cached = seedDocument(recordsOf("s2", docOf([userEntry("a"), userEntry("b", "a")])));
-		const promoted = applyPatch(cached, [
-			{ op: "replace", path: "/status", value: cached.status as never },
-			{ op: "replace", path: "/scopedModels", value: [] as never },
-		]);
+		const promoted = applyPatch(cached, [{ op: "replace", path: "/status", value: cached.status as never }]);
 
 		// Correct base: the candidate seed — a status-only delta writes nothing.
 		expect(planCacheWrites("s2", cached, promoted)).toEqual([]);

@@ -105,7 +105,7 @@ export function buildInitialSync(
 		return {
 			kind: "replace",
 			session,
-			document: { status: doc.status, entries, scopedModels: doc.scopedModels },
+			document: { status: doc.status, entries },
 		};
 	}
 
@@ -119,6 +119,5 @@ export function buildInitialSync(
 		ops.push({ op: "add", path: `/entries/${id}`, value: value as unknown as JsonValue });
 	}
 	ops.push({ op: "replace", path: "/status", value: doc.status as unknown as JsonValue });
-	ops.push({ op: "replace", path: "/scopedModels", value: doc.scopedModels as unknown as JsonValue });
 	return { kind: "patch", session, ops };
 }

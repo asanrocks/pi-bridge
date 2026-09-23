@@ -26,6 +26,7 @@ while exposing all pushes to the web store.
 | `patch` | `{ ops: PatchOp[], session?: SessionRef }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. |
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
 | `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
+| `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
 
 `replace` always carries a `SessionRef`. A `patch` carries a `SessionRef` only
 when it is the initial-sync delta selected by cursor validation. A live patch
@@ -38,8 +39,8 @@ the client address; `sessionId` is the durable cache and activation key. A
 separate total-order cursor for Project history pagination and is not a
 Document prefix cursor.
 
-A push is unsolicited. `sessions_changed` and `active_sessions_changed` do not
-alter the Document mirror. The connection sends session-list pushes to every
+A push is unsolicited. `sessions_changed`, `active_sessions_changed` and
+`pinned_models_changed` do not alter the Document mirror. The connection sends session-list pushes to every
 socket; the web client updates the relevant Project page or global active
 snapshot.
 
@@ -57,6 +58,7 @@ state channel.
 | `abort` | Attached Session | `{ ok: true }` after abort and its finalization; final document patches precede the reply. |
 | `discardSteer` | Attached Session | `{ ok: true }`; the queue-clear `status.pendingSteer` patch is the effect. |
 | `setModel` | Attached Session | `{ ok: true }`; the Manager reconciles the model and any silent entry while idle. Invalid models fail. |
+| `setModelPinned` | Daemon-global (ADR 15) | `{ ok: true }` after the global `enabledModels` scope is updated and flushed. The new resolved list follows as a `pinned_models_changed` push. |
 | `setThinkingLevel` | Attached Session | `{ ok: true }`; status and any silent entry are reconciled. Invalid levels fail. |
 | `renameSession` | Attached Session | `{ ok: true }`; the session name change and Project session-list refresh are pushed. |
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
@@ -68,7 +70,7 @@ state channel.
 | `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Fails when no durable file exists to move. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
 | `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
-| `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, scopedModels, thinkingLevels, devMode }`; no attachment and no Document push. |
+| `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, pinnedModels, visibleModels, thinkingLevels, devMode }`; no attachment and no Document push. `pinnedModels` is the resolved daemon-global pinned list (not Document state, ADR 15); `visibleModels` is the resolved `provider/modelId` key list of the picker's normal tier. |
 | `listFiles` | Project plus `prefix` | `{ ok: true, entries: { path, isDirectory }[] }`; paths resolve against the named Project cwd, so it works without an attachment. |
 | `readFile` | Absolute path (ADR 14) | Content of one path at one snapshot state. `state` is a pinned 40/64-hex oid, `"head"`, `"index"` (the staged tree), or `"worktree"`; omitted means `"worktree"`. The reply is discriminated by `kind`: `"file"` (`{ state, path, content, truncated, bytes }`), `"absent"` (`{ state, path }` — a deleted file, a path not in a commit's tree, a directory, an unmerged index entry, or a path outside a repository for a snapshot state), or `"binary"` (`{ state, path, bytes }`, detected from a NUL byte). The path is absolute (`~`-rooted is the one other accepted form, expanded host-side because the client has no HOME); the host finds the containing repository and translates the path to a repository-relative one for `git cat-file blob <rev>:<path>` / `:<path>`. No attachment. |
 | `listDirectory` | Absolute path (ADR 14) | One directory's immediate children at one snapshot state: `{ ok: true, path, state, entries: { name, path, isDirectory }[], omitted, absent }`. A missing directory — or a snapshot state for a path outside a repository — is `absent`, not an error. Listing is lazy (one directory per call, never a recursive scan); `.git` is never listed; `omitted` reports entries the host cap left out. No attachment. |
@@ -112,7 +114,7 @@ The initial-sync contract is cursor-aware:
 
 - A valid `PrefixCursor` produces one multi-operation `patch` with a `session`
   reference. It adds the missing committed suffix, current provisional
-  skeletons, full `status`, and full `scopedModels`.
+  skeletons, and full `status`.
 - An absent or invalid cursor produces one `replace` with a `session` reference
   and the complete initial-sync projection.
 

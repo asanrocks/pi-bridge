@@ -31,7 +31,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
 	const models = useStore((s) => s.models);
 	/** The daemon's global `enabledModels` scope — the home's Pinned group. */
-	const scopedModels = useStore((s) => s.scopedModels);
+	const pinnedModels = useStore((s) => s.pinnedModels);
+	/** The daemon's resolved normal-tier keys (ADR 15) — the home's folded boundary. */
+	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
 	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
 	/** ADR 13: the launcher's discovery entry for the `@latest` alias — the
@@ -70,10 +72,12 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				<HomeCompose
 					projectId={projectId}
 					models={models}
-					scopedModels={scopedModels}
+					pinnedModels={pinnedModels}
+					visibleModels={visibleModels}
 					defaultModel={project?.defaultModel ?? null}
 					defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
 					connected={connection.kind === "connected"}
+					onTogglePin={rpc.setModelPinned}
 					onNewSession={(projectId, text, images, model, thinkingLevel) =>
 						// ADR 12 slice: the daemon admits the first prompt (with any
 						// attachments and the pre-session model choice) before attach.
