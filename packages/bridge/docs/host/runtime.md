@@ -291,14 +291,16 @@ registry instead of a disk scan, is global across Projects, is not paginated,
 and returns the same row shape ordered by timestamp.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
-model and thinking defaults, available model metadata, the daemon's global
-`enabledModels` scope, supported thinking levels, and dev-mode state. Model
-defaults are resolved from each Project's settings and the shared model
-runtime; they are display data and do not pin a future `newSession` request
-when the client omits an override. The scope is global settings only — a
-project-level `.pi/settings.json` override is not reflected — and exists so the
-Project home can render curated models before a Session (and its Document)
-exists; an attached Session's own scope arrives with its initial sync.
+model and thinking defaults, available model metadata, the daemon-global
+`pinnedModels` list resolved from pi's global `enabledModels`, the
+normal-tier `visibleModels` keys resolved from the bridge settings file,
+supported thinking levels, and dev-mode state. Model defaults are resolved
+from each Project's settings and the shared model runtime; they are display
+data and do not pin a future `newSession` request when the client omits an
+override. Pinned models is one daemon-global concept (ADR 15): a project-level
+`.pi/settings.json` `enabledModels` override is not reflected, and the
+`setModelPinned` verb writes the same global list (broadcasting
+`pinned_models_changed`).
 
 ### Files and repository detail
 
@@ -393,6 +395,25 @@ parser and no patch byte cap; a truncated snapshot is refused for diffing
 rather than rendered as a phantom tail. Like `gitShow`, failures and timeouts
 are RPC errors; the browser is read-only — no verb here mutates the repository
 or the index.
+
+### Bridge settings and model visibility
+
+The daemon reads `<agentDir>/bridge/settings.json` on each `getDaemonInfo`
+(ADR 15). It is a bridge-owned preferences file, separate from pi's
+`settings.json`, so bridge needs no pi setter. Its `visibleModels` field is an
+array of canonical `provider/modelId` minimatch patterns, matched
+case-insensitively against the full `provider/modelId` reference. `/` is a path
+separator, so `*` stays within a segment and `**` crosses them: `deepseek/*`
+selects the models DeepSeek serves and never an OpenRouter-routed model, while
+`**/claude-*-5*` reaches a routed `openrouter/anthropic/claude-…`. A pattern
+without `/` matches nothing. An optional `:thinkingLevel` suffix is stripped.
+The daemon resolves the patterns against the catalogue it already reports and
+returns the matched `provider/modelId` keys as `visibleModels` on the reply.
+
+A missing, unreadable, or malformed file, an absent key, or an empty array
+means no filter: every non-pinned model is normal. There is no watcher, so an
+edit is picked up at the next `getDaemonInfo`. The daemon never writes the
+file; the preference is hand-edited until an editing verb exists.
 
 ## Pushes and HTTP Serving
 

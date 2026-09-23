@@ -33,7 +33,6 @@ function emptyDoc(): Document {
 			pendingSteer: [],
 		},
 		entries: {},
-		scopedModels: [],
 	};
 }
 

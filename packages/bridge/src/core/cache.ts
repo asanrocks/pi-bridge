@@ -203,5 +203,5 @@ export function seedDocument(records: CacheEntryRecord[], statusHint?: Partial<S
 		}
 	}
 
-	return { status, entries, scopedModels: [] };
+	return { status, entries };
 }

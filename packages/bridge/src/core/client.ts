@@ -188,6 +188,10 @@ export class BridgeClient {
 		return this.call({ verb: "setThinkingLevel", level });
 	}
 
+	setModelPinned(provider: string, modelId: string, pinned: boolean): Promise<RpcReply> {
+		return this.call({ verb: "setModelPinned", provider, modelId, pinned });
+	}
+
 	renameSession(name: string): Promise<RpcReply> {
 		return this.call({ verb: "renameSession", name });
 	}
@@ -358,6 +362,5 @@ function emptyMirror(): Document {
 			pendingSteer: [],
 		},
 		entries: {},
-		scopedModels: [],
 	};
 }

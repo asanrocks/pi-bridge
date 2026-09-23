@@ -86,7 +86,8 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const connected = useStore((s) => s.connection.kind === "connected");
 	const model = useStore((s) => s.document.status.model);
 	const thinkingLevel = useStore((s) => s.document.status.thinkingLevel);
-	const scopedModels = useStore((s) => s.document.scopedModels);
+	const pinnedModels = useStore((s) => s.pinnedModels);
+	const visibleModels = useStore((s) => s.visibleModels);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 
 	// Cost-breakdown popover state
@@ -331,12 +332,14 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					onStop={handleStop}
 					model={model}
 					models={models}
-					scopedModels={scopedModels}
+					pinnedModels={pinnedModels}
+					visibleModels={visibleModels}
 					thinkingLevel={thinkingLevel}
 					thinkingLevels={thinkingLevels}
 					onSetModel={rpc.setModel}
 					onSetThinkingLevel={rpc.setThinkingLevel}
 					onCycleModel={onCycleModel}
+					onTogglePin={rpc.setModelPinned}
 					leftControls={leftControls}
 				/>
 			)}

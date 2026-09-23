@@ -233,8 +233,6 @@ export interface Document {
 	status: Status;
 	/** All entries, committed (immutable) + in-flight (provisional id). */
 	entries: Record<string, Entry>;
-	/** Curated list of models from the session's scopedModels (--models flag / settings). */
-	scopedModels: ScopedModelInfo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +312,20 @@ export interface ActiveSessionsChangedMessage {
 	sessions: SessionInfo[];
 }
 
-export type ServerPushMessage = ReplaceMessage | PatchMessage | SessionsChangedMessage | ActiveSessionsChangedMessage;
+/** The daemon-global pinned model list changed (ADR 15). `pinnedModels` is the
+ * resolved list; the client replaces its store copy. One concept, one list,
+ * backed by pi's global `enabledModels`. */
+export interface PinnedModelsChangedMessage {
+	kind: "pinned_models_changed";
+	pinnedModels: PinnedModelInfo[];
+}
+
+export type ServerPushMessage =
+	| ReplaceMessage
+	| PatchMessage
+	| SessionsChangedMessage
+	| ActiveSessionsChangedMessage
+	| PinnedModelsChangedMessage;
 
 // ── RPC (client → server, with `id`) ─────────────────────────────────────
 
@@ -370,6 +381,16 @@ export interface SetModelRequest {
 	verb: "setModel";
 	provider: string;
 	model: string;
+}
+
+/** Pin or unpin one model in the daemon-global list (ADR 15). The host mutates
+ * the global `enabledModels` scope; the new list arrives as a
+ * `pinned_models_changed` push, so the reply is acknowledgement only. */
+export interface SetModelPinnedRequest {
+	verb: "setModelPinned";
+	provider: string;
+	modelId: string;
+	pinned: boolean;
 }
 
 export interface SetThinkingLevelRequest {
@@ -672,6 +693,7 @@ export type RpcRequestBody =
 	| AbortRequest
 	| DiscardSteerRequest
 	| SetModelRequest
+	| SetModelPinnedRequest
 	| SetThinkingLevelRequest
 	| RenameSessionRequest
 	| NavigateRequest
@@ -735,7 +757,7 @@ export interface ListActiveSessionsReply {
 	sessions: SessionInfo[];
 }
 
-export interface ScopedModelInfo {
+export interface PinnedModelInfo {
 	provider: string;
 	id: string;
 	name: string;
@@ -778,7 +800,13 @@ export interface GetDaemonInfoReply {
 	 * the picker's "Pinned" group before a session exists. Project-level
 	 * `enabledModels` overrides in `.pi/settings.json` are intentionally not
 	 * reflected — this is the global scope only. */
-	scopedModels: ScopedModelInfo[];
+	pinnedModels: PinnedModelInfo[];
+	/** The picker's "normal" tier: `provider/modelId` keys whose catalogue
+	 * models match a `visibleModels` pattern from the bridge settings file
+	 * (ADR 15). Empty means no filter is configured, so every non-pinned model
+	 * is normal and nothing folds. Resolution happens host-side; the client
+	 * checks these keys against its catalogue. */
+	visibleModels: string[];
 	thinkingLevels: string[];
 	devMode: boolean;
 }
