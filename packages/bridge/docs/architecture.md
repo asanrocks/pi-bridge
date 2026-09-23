@@ -119,7 +119,6 @@ The canonical value is:
 Document {
   status: Status
   entries: Record<id, Entry>
-  scopedModels: ScopedModelInfo[]
 }
 ```
 

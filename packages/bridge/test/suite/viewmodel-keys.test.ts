@@ -32,7 +32,6 @@ function doc(overrides: Partial<Document["status"]> = {}): Document {
 			pendingSteer: [],
 			...overrides,
 		},
-		scopedModels: [],
 		entries: {},
 	};
 }
@@ -88,8 +87,8 @@ describe("viewModelCacheKey", () => {
 
 	it("is stable across fields the projection does not read", () => {
 		const base = viewModelCacheKey(doc(), "stem", 0);
-		// pendingSteer/scopedModels are not projected (the renderer reads them
-		// from the store directly) — flipping them must not re-key the VM.
+		// pendingSteer is not projected (the renderer reads it from the store
+		// directly) — flipping it must not re-key the VM.
 		expect(viewModelCacheKey(doc({ pendingSteer: ["queued"] }), "stem", 0)).toBe(base);
 	});
 });

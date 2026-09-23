@@ -54,7 +54,6 @@ describe("DocumentMirror", () => {
 						content: [],
 					},
 				},
-				scopedModels: [],
 			};
 
 			mirror.applyReplace(snapshot);
@@ -165,7 +164,6 @@ describe("DocumentMirror", () => {
 						isError: false,
 					},
 				},
-				scopedModels: [],
 			});
 
 			const wants: PullRequestItem[] = [
@@ -212,7 +210,6 @@ describe("DocumentMirror", () => {
 						content: [{ type: "text", text: "Hello" }],
 					},
 				},
-				scopedModels: [],
 			});
 
 			const needed = mirror.needsPull([{ entryId: "e1", fieldPath: "/entries/e1/content/0/text" }]);
@@ -246,7 +243,6 @@ describe("DocumentMirror", () => {
 						content: [{ type: "thinking", thinking: null }],
 					},
 				},
-				scopedModels: [],
 			});
 
 			const values: PullResponseItem[] = [
@@ -288,7 +284,6 @@ describe("DocumentMirror", () => {
 						content: [{ type: "text", text: "Hello" }],
 					},
 				},
-				scopedModels: [],
 			});
 
 			// 2. Text is already present — no pull needed

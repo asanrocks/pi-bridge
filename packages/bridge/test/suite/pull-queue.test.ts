@@ -32,7 +32,7 @@ function defaultStatus(): Document["status"] {
 }
 
 function makeDoc(overrides: Partial<Document> = {}): Document {
-	const doc: Document = { status: defaultStatus(), scopedModels: [], entries: {} };
+	const doc: Document = { status: defaultStatus(), entries: {} };
 	Object.assign(doc, overrides);
 	return doc;
 }

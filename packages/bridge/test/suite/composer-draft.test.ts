@@ -36,7 +36,6 @@ function emptyDoc(): Document {
 			contextUsage: null,
 			pendingSteer: [],
 		},
-		scopedModels: [],
 		entries: {},
 	};
 }

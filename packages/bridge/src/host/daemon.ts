@@ -25,9 +25,9 @@ import type {
 	GitDiffFileStatus,
 	ModelInfo,
 	ModelRef,
+	PinnedModelInfo,
 	PrefixCursor,
 	ProjectInfo,
-	ScopedModelInfo,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
@@ -37,6 +37,7 @@ import { Connection, type DaemonVerbs } from "./connection.ts";
 import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
 import { createManager, type Manager } from "./manager.ts";
+import { resolveVisibleModelKeys } from "./model-visibility.ts";
 import {
 	archiveStemFile,
 	buildProjects,
@@ -48,6 +49,7 @@ import {
 	resolveStemPath,
 	stemFromSessionPath,
 } from "./projects.ts";
+import { readBridgeSettings } from "./settings.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -698,6 +700,30 @@ export class Daemon {
 		for (const conn of this.connections) conn.push(frame);
 	}
 
+	/** Resolve pi's global `enabledModels` scope into the pinned list (ADR 15).
+	 * Project-level overrides are intentionally ignored: pinned models is one
+	 * daemon-global concept, not a per-Project setting. */
+	private async resolvePinnedModels(): Promise<PinnedModelInfo[]> {
+		const patterns = this.globalSettings?.getGlobalSettings().enabledModels;
+		if (!patterns || patterns.length === 0) return [];
+		const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
+		return resolved.map((sm) => ({
+			provider: sm.model.provider,
+			id: sm.model.id,
+			name: sm.model.name ?? sm.model.id,
+			thinkingLevel: sm.thinkingLevel,
+		}));
+	}
+
+	/** Push the daemon-global pinned list to every Connection (ADR 15). */
+	private async broadcastPinnedModels(): Promise<void> {
+		const frame: Record<string, unknown> = {
+			kind: "pinned_models_changed",
+			pinnedModels: await this.resolvePinnedModels(),
+		};
+		for (const conn of this.connections) conn.push(frame);
+	}
+
 	// ── Daemon verbs (called by Connection) ───────────────────────────────
 
 	private daemonVerbs: DaemonVerbs = {
@@ -840,7 +866,6 @@ export class Daemon {
 		getDaemonInfo: async () => {
 			const runtime = this.modelRuntime;
 			let models: ModelInfo[] = [];
-			let scopedModels: ScopedModelInfo[] = [];
 			if (runtime) {
 				models = runtime.getAvailableSnapshot().map((m) => ({
 					provider: m.provider,
@@ -851,21 +876,16 @@ export class Daemon {
 					supportedThinkingLevels: getSupportedThinkingLevels(m),
 					contextWindow: m.contextWindow,
 				}));
-				// Global scope only (settings.json `enabledModels`): the Project home
-				// has no session Document to read `/scopedModels` from. A project-level
-				// override in `.pi/settings.json` is deliberately ignored here — the
-				// post-attach initial sync carries the project's actual scope.
-				const patterns = this.globalSettings?.getGlobalSettings().enabledModels;
-				if (patterns && patterns.length > 0) {
-					const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, runtime);
-					scopedModels = resolved.map((sm) => ({
-						provider: sm.model.provider,
-						id: sm.model.id,
-						name: sm.model.name ?? sm.model.id,
-						thinkingLevel: sm.thinkingLevel,
-					}));
-				}
 			}
+			// The pinned list is daemon-global (ADR 15): pi's global `enabledModels`,
+			// never a project override.
+			const pinnedModels = await this.resolvePinnedModels();
+			// Bridge settings own the picker's "normal" tier (ADR 15). Resolve the
+			// patterns host-side so the client needs no glob engine; an absent or
+			// empty scope means "everything normal".
+			const visiblePatterns = readBridgeSettings(this.agentDir).visibleModels ?? [];
+			const visibleModels = visiblePatterns.length > 0 ? resolveVisibleModelKeys(visiblePatterns, models) : [];
+
 			const projects: ProjectInfo[] = await Promise.all(
 				[...this.projects.values()].map(async (p) => {
 					const defaults = await this.projectDefaults(p.id);
@@ -877,7 +897,33 @@ export class Daemon {
 					};
 				}),
 			);
-			return { projects, models, scopedModels, thinkingLevels: THINKING_LEVELS, devMode: this.devMode };
+			return {
+				projects,
+				models,
+				pinnedModels,
+				visibleModels,
+				thinkingLevels: THINKING_LEVELS,
+				devMode: this.devMode,
+			};
+		},
+
+		setModelPinned: async (provider: string, modelId: string, pinned: boolean) => {
+			const settings = this.globalSettings;
+			if (!settings) throw new Error("No global settings available");
+			// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
+			// same way on save), then add or remove this one model.
+			const patterns = settings.getGlobalSettings().enabledModels ?? [];
+			const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
+			const key = `${provider}/${modelId}`;
+			const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
+			const next = pinned
+				? ids.some((id) => id.toLowerCase() === key.toLowerCase())
+					? ids
+					: [...ids, key]
+				: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
+			settings.setEnabledModels(next.length > 0 ? next : undefined);
+			await settings.flush();
+			await this.broadcastPinnedModels();
 		},
 	};
 

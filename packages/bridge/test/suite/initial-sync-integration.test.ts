@@ -121,9 +121,8 @@ describe("initial sync: attach", () => {
 			`/entries/${committed[entryCount].id}`,
 			`/entries/${committed[entryCount + 1].id}`,
 		]);
-		// Complete status and scoped models are always present.
+		// Complete status is always present.
 		expect(delta.ops.some((op) => op.path === "/status")).toBe(true);
-		expect(delta.ops.some((op) => op.path === "/scopedModels")).toBe(true);
 
 		pairA.serverWs.close();
 		pairA.clientWs.close();
@@ -268,7 +267,6 @@ describe("initial sync: subscription reset", () => {
 					content: [{ type: "thinking", thinking: "partial" }],
 				},
 			},
-			scopedModels: [],
 		};
 		const handles = new Set<ConnectionHandle>();
 		const manager: Manager = {

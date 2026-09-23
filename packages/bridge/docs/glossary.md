@@ -206,6 +206,15 @@ and [web design](web/design.md).
     changed paths and the content pane can diff; without one, the browser
     reads a single state. The baseline end cannot be `worktree`.
 
+16. The **model picker** *(bound)* chooses the active model. Its catalogue is
+    three **tiers** *(bound)*: **Pinned** (the daemon-global list from pi's
+    global `enabledModels`, cycle-able), **normal** (shown in provider
+    groups), and **folded** (revealed on demand). A model is normal when it
+    matches a `visibleModels` pattern from the bridge settings file; with no
+    such preference every non-pinned model is normal, so nothing folds.
+    Pinning is explicit — the picker writes the one global list, and bridge
+    never reads a project override.
+
 ## The seams
 
 Two components legitimately span domains; they are sanctioned exceptions,
