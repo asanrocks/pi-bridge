@@ -22,11 +22,14 @@ address namespace alongside Project ids:
 - `/@latest` resolves, once per boot/reconnect, to the most recently active
   **live** session — the first row of the global active-session snapshot the
   client already fetches at initialization and keeps fresh via
-  `active_sessions_changed` pushes. **No daemon-side support exists**: no new
-  verb, no reply field, no scan. With nothing active (e.g. right after a
-  daemon restart) the alias does not resolve and boot falls back to the
-  launcher; the launcher's Latest row — the same first row — disappears with
-  it.
+  `active_sessions_changed` pushes. When no session is live (e.g. right after
+  a daemon restart) it falls back to the most recent **durable** session
+  across Projects — each Project's first `listSessions` row — and opens it,
+  which activates it; only when no session exists at all does it fall back to
+  the launcher. **No daemon-side support exists**: no new verb, no reply
+  field; the fallback reuses the Project-scoped `listSessions` verb the client
+  already has. (The launcher's Latest row — the live snapshot's first row —
+  still disappears when nothing is active.)
 - **The URL never redirects.** While the session was reached through the
   alias, the store holds the resolved address and the pipeline suppresses the
   route write on address-bearing initial-sync frames. The URL stays `/@latest`
@@ -56,7 +59,11 @@ address namespace alongside Project ids:
   the bookmark anyway — a dormant session is an old conversation, findable
   in the sidebar, while the alias's promise is "the live one." The active
   snapshot already exists, is already cross-Project, is already refreshed by
-  pushes, and is the launcher's own ordering.
+  pushes, and is the launcher's own ordering. (Amended after implementation:
+  with no live session the client now does scan each Project's first
+  `listSessions` page and treats a dormant session as the target — the
+  bookmark must open *something* after a daemon restart. The scan is paid only
+  on that no-live-session path.)
 - **Reserve the id `latest`** (as web-asset names are reserved). Rejected:
   the reserved set there is closed and derived from real assets; an alias set
   grows, and every growth would be a breaking startup rejection for someone's
@@ -73,8 +80,8 @@ address namespace alongside Project ids:
   feature, not a bug, but it means two tabs on `/@latest` can show different
   sessions. The alias form is never written into `addressIndex` or used as a
   cache key — those stay keyed on the resolved address.
-- After a daemon restart with nothing active, `/@latest` is dead until some
-  session activates. This is the cost of the no-daemon-change design and was
-  accepted deliberately.
+- After a daemon restart with nothing active, `/@latest` opens the most
+  recent durable session (activating it). This costs one `listSessions` call
+  per Project, paid only on the no-live-session path.
 - A new alias is a cross-cutting change (route grammar, boot path, launcher)
   and a glossary claim first.

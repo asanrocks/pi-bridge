@@ -50,7 +50,7 @@ async function main() {
 	await daemon.start(options);
 
 	const port = daemon.address?.port ?? 0;
-	console.log(`pi-bridge listening on http://localhost:${port}`);
+	console.log(`pi-bridge listening on http://localhost:${port}/@latest`);
 
 	// Keep alive
 	process.on("SIGINT", async () => {
