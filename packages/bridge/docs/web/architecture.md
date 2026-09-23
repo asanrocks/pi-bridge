@@ -324,6 +324,11 @@ not the old Document.
 the address-to-session identity for each row. The first page is ten rows; the
 page's compound cursor is retained for load-more requests.
 
+`latestSession.ts` resolves the `/@latest` target: the most recently active
+live Session from the global snapshot, else the most recent durable Session
+across Projects (each Project's first `listSessions` row), which the open then
+activates.
+
 ### Lazy pull loop
 
 Rendered actions enqueue `PullRequestItem` values into `pullQueue.ts` during
@@ -388,13 +393,16 @@ address and its cache identity; a failed open lands on the Project home.
 Aliases (ADR 13) are single-segment routes beginning with `@` — a character
 outside the Project-id charset, so the namespaces cannot collide. Boot
 resolves `@latest` to the most recently active live Session from the global
-active snapshot already fetched by initialization (nothing active → the
-launcher) and opens it; while the alias view holds, the pipeline suppresses
-the route write on address-bearing initial-sync frames, so the URL keeps the
-alias form and the store holds the resolved address. Any explicit navigation
-(open, Project switch, detach, first prompt) clears the alias view and
-commits a real URL; a reload re-resolves, possibly onto a newer session. The
-alias never enters the address index or the cache key.
+active snapshot already fetched by initialization; when none is live it
+falls back to the most recent durable Session across Projects (each Project's
+first `listSessions` row) and opens it, which activates it — only when no
+Session exists at all does it land on the launcher. While the alias view
+holds, the pipeline suppresses the route write on address-bearing initial-sync
+frames, so the URL keeps the alias form and the store holds the resolved
+address. Any explicit navigation (open, Project switch, detach, first prompt)
+clears the alias view and commits a real URL; a reload re-resolves, possibly
+onto a newer session. The alias never enters the address index or the cache
+key.
 
 Other `infra/lib` modules have narrow boundaries:
 

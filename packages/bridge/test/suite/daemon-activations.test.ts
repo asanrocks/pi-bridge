@@ -1811,7 +1811,7 @@ describe("daemon: http static serving", () => {
 
 		const { port } = await startDaemon({ agentDir, allow: [a], webRoot, managerFactory: stubMediator() });
 
-		const rejected = await rawHttpRequest(port, "/../webx/secret.txt");
+		const rejected = await rawHttpRequest(port, "/assets/../../webx/secret.txt");
 		expect(rejected.status).toBe(403);
 		expect(rejected.body).not.toContain("secret");
 

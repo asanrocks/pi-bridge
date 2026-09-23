@@ -33,6 +33,7 @@ import type {
 	SessionRef,
 	SnapshotFile,
 } from "../core/index.ts";
+import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection, type DaemonVerbs } from "./connection.ts";
 import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
@@ -43,7 +44,6 @@ import {
 	buildProjects,
 	containedSessionFile,
 	isArchivedStem,
-	isContained,
 	normalizeStem,
 	type ProjectConfig,
 	resolveStemPath,
@@ -140,7 +140,8 @@ export class Daemon {
 	private httpServer: HttpServer | null = null;
 	private port: number | undefined;
 	private webRoot: string | undefined;
-	private embeddedAssets: Record<string, string> | null = null;
+	private assetSource!: AssetSource;
+	private staticRoots = new Set<string>();
 	private logger: TrafficLogger | null = null;
 	private devMode = false;
 	private agentDir: string = "";
@@ -162,18 +163,23 @@ export class Daemon {
 
 		// Injectable embedded assets (test seam); otherwise the bundled web
 		// assets serve when no --web-root is given (single-file distribution).
-		// Computed before Projects: reserved project-id derivation reads the
-		// asset surface.
-		if (options.embeddedAssets) {
-			this.embeddedAssets = options.embeddedAssets;
-		} else if (!options.webRoot && Object.keys(embeddedAssets).length > 0) {
-			this.embeddedAssets = embeddedAssets as Record<string, string>;
-		}
+		const embedded =
+			options.embeddedAssets ??
+			(!options.webRoot && Object.keys(embeddedAssets).length > 0
+				? (embeddedAssets as Record<string, string>)
+				: null);
+		this.assetSource = embedded
+			? createEmbeddedAssetSource(embedded)
+			: createDiskAssetSource(this.webRoot ?? join(import.meta.dirname, "../../dist/web"));
+		// A Project id may not collide with a top-level asset name: the server
+		// would serve the asset instead of the Project's page. `assets` is
+		// vite's output dir, present in every build.
+		this.staticRoots = new Set(["assets", ...this.assetSource.rootNames()]);
 
 		// Projects are static daemon configuration (ADR 11). Invalid ids,
 		// duplicate ids, shared session storage, and web-asset collisions fail
 		// startup.
-		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir, this.reservedProjectIds());
+		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir, this.staticRoots);
 		this.projects = new Map(projects.map((p) => [p.id, p]));
 		for (const project of projects) {
 			try {
@@ -243,27 +249,6 @@ export class Daemon {
 		for (const mgr of managers) {
 			await mgr.dispose();
 		}
-	}
-
-	/** First path segments a Project id must not collide with: real files win
-	 * over routes in the HTTP server, so a same-named Project's page would be
-	 * unreachable (`/assets/...` serves the file, never the shell). Derived
-	 * from the actual asset surface — the web root's entries when serving
-	 * from disk, the embedded asset keys otherwise — plus `assets` (vite's
-	 * output dir, present in every build). */
-	private reservedProjectIds(): Set<string> {
-		const reserved = new Set<string>(["assets"]);
-		const root = this.webRoot ?? join(import.meta.dirname, "../../dist/web");
-		try {
-			for (const name of readdirSync(root)) reserved.add(name);
-		} catch {
-			// No web root on disk (embedded-only distribution) — the embedded
-			// keys below are the surface.
-		}
-		if (this.embeddedAssets) {
-			for (const key of Object.keys(this.embeddedAssets)) reserved.add(key.split("/")[0]);
-		}
-		return reserved;
 	}
 
 	/**
@@ -955,23 +940,16 @@ export class Daemon {
 
 	// ── Server ────────────────────────────────────────────────────────────
 
-	/** Try to serve an embedded asset; returns true if served. */
-	private tryServeEmbedded(path: string, res: ServerResponse): boolean {
-		if (!this.embeddedAssets) return false;
-		// Normalize: strip leading /, default / → index.html
-		let key = path === "/" ? "index.html" : path.replace(/^\//, "");
-		// SPA routes have no embedded asset of their own — they serve the shell
-		// and the client resolves the address (ADR 11).
-		if (this.isAppRoute(path)) key = "index.html";
-		const encoded = this.embeddedAssets[key];
-		if (!encoded) return false;
-
-		const ext = extname(key);
-		const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-		const content = Buffer.from(encoded, "base64");
-		res.writeHead(200, { "Content-Type": contentType });
-		res.end(content);
-		return true;
+	/** Serve the shell: the client resolves the address (ADR 11). */
+	private serveShell(res: ServerResponse): void {
+		const shell = this.assetSource.read("/index.html");
+		if (shell.kind !== "file") {
+			res.writeHead(404);
+			res.end("Not found");
+			return;
+		}
+		res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" });
+		res.end(shell.content);
 	}
 
 	/** Probe whether a port is available on :: by creating a temporary listener. */
@@ -987,61 +965,42 @@ export class Daemon {
 		});
 	}
 
-	/** Known application routes serve index.html (ADR 11): `/<projectId>` is
-	 * the Project's home and `/<projectId>/<stem...>` one session. The first
-	 * segment must be a configured Project id — ids match `[a-z0-9-]`, so no
-	 * percent-decoding is needed and an encoded segment simply doesn't match.
-	 * Real files win over routes (assets are tried first), which is why ids
-	 * colliding with root asset names are rejected at startup; unknown paths
-	 * stay 404. */
-	private isAppRoute(path: string): boolean {
-		const first = path.replace(/^\//, "").split("/")[0];
-		return first !== "" && this.projects.has(first);
-	}
-
 	private async startServer(): Promise<void> {
-		const root = this.webRoot ?? join(import.meta.dirname, "../../dist/web");
-
 		this.httpServer = createServer((req, res) => {
-			let path = req.url?.split("?")[0] ?? "/";
-			if (path === "/") path = "/index.html";
+			const path = req.url?.split("?")[0] || "/";
+			const first = path.split("/")[1] ?? "";
 
-			// Try embedded assets first (single-file distribution)
-			if (this.tryServeEmbedded(path, res)) return;
+			// Paths under the asset surface are resources: a miss is a 404, and
+			// traversal (`..`) under a root is rejected by the source's containment
+			// check before any read (ADR 11 security boundary rule). Everything
+			// else is a client address — hand back the shell and let the SPA route
+			// it (ADR 11).
+			if (first === "" || !this.staticRoots.has(first)) {
+				this.serveShell(res);
+				return;
+			}
 
-			const filePath = join(root, path);
-
-			// Path-boundary containment: `join()` resolves literal `..`
-			// components, and a plain string-prefix check would pass
-			// `<parentOfRoot>/root-x/...` against root `/.../root` — exposing
-			// sibling directories of webRoot (ADR 11 security boundary rule).
-			if (!isContained(root, filePath)) {
+			const read = this.assetSource.read(path);
+			if (read.kind === "forbidden") {
 				res.writeHead(403);
 				res.end("Forbidden");
 				return;
 			}
-
-			// SPA routes: serve the shell; the client resolves the address.
-			if (this.isAppRoute(path)) {
-				const indexPath = join(root, "index.html");
-				if (existsSync(indexPath)) {
-					res.writeHead(200, { "Content-Type": "text/html" });
-					res.end(readFileSync(indexPath));
-					return;
-				}
-			}
-
-			if (!existsSync(filePath)) {
+			if (read.kind === "missing") {
 				res.writeHead(404);
 				res.end("Not found");
 				return;
 			}
 
-			const ext = extname(filePath);
-			const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-			const content = readFileSync(filePath);
-			res.writeHead(200, { "Content-Type": contentType });
-			res.end(content);
+			const headers: Record<string, string> = {
+				"Content-Type": MIME_TYPES[extname(path)] ?? "application/octet-stream",
+			};
+			// Vite content-hashes everything under `assets/`; `index.html` must
+			// revalidate so a redeploy isn't masked by a stale shell.
+			if (path.startsWith("/assets/")) headers["Cache-Control"] = "public, max-age=31536000, immutable";
+			else if (path === "/index.html") headers["Cache-Control"] = "no-cache";
+			res.writeHead(200, headers);
+			res.end(read.content);
 		});
 
 		const wss = new WebSocketServer({ server: this.httpServer });

@@ -1,7 +1,9 @@
-// HTTP serving tests: SPA route fallback (`/<projectId>`, `/<projectId>/<stem>`)
-// from both the disk web root and the embedded (single-file binary) asset map,
-// plus the 404/403 boundaries. Regression coverage for the embedded path, where
-// app routes previously fell through to a non-existent dist/web and returned 404.
+// HTTP serving tests. The daemon owns a small asset surface: a request whose
+// first path segment names a top-level entry of the web build is a resource
+// (miss -> 404, traversal -> 403); every other path is a client address and
+// gets the shell. Covered for both asset sources — the disk web root and the
+// embedded (single-file binary) map — which share the routing and differ only
+// in I/O.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -13,6 +15,7 @@ import { Daemon, type DaemonOptions } from "../../src/host/index.ts";
 interface Reply {
 	status: number | undefined;
 	contentType: string | undefined;
+	cacheControl: string | undefined;
 	body: string;
 }
 
@@ -53,47 +56,73 @@ function request(port: number, path: string): Promise<Reply> {
 				body += chunk;
 			});
 			res.on("end", () => {
-				resolve({ status: res.statusCode, contentType: res.headers["content-type"], body });
+				resolve({
+					status: res.statusCode,
+					contentType: res.headers["content-type"],
+					cacheControl: res.headers["cache-control"],
+					body,
+				});
 			});
 		});
 		req.on("error", reject);
 	});
 }
 
-/** App routes for a project id: the Project home and one session, including a
- * nested (multi-segment) stem. */
-const appRoutes = (pid: string) => [`/${pid}`, `/${pid}/2026-01-01T00-00-00-000Z_sess`, `/${pid}/nested/stem`];
+/** Address-shaped paths (the client resolves them): the Project home, one
+ * session with a nested stem, the alias, and an unknown first segment. */
+const addressRoutes = (pid: string) => [
+	"/",
+	`/${pid}`,
+	`/${pid}/2026-01-01T00-00-00-000Z_sess`,
+	`/${pid}/nested/stem`,
+	"/@latest",
+	"/%40latest",
+	"/not-a-project",
+	"///",
+];
 
 describe("HTTP serving", () => {
-	it("serves the SPA shell for app routes from the disk web root", async () => {
+	it("serves the shell for addresses and files for resources from the disk web root", async () => {
 		const project = makeTempDir("disk-proj");
 		const webRoot = makeTempDir("disk-web");
 		writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>DISK-SHELL</title>");
 		writeFileSync(join(webRoot, "app.js"), "console.log(1)");
+		mkdirSync(join(webRoot, "assets"));
+		writeFileSync(join(webRoot, "assets", "index-abc.js"), "console.log(2)");
 		const port = await startDaemon({ agentDir: makeTempDir("disk-agent"), allow: [project], webRoot });
 		const pid = basename(project).toLowerCase();
 
-		for (const path of appRoutes(pid)) {
+		const shell = await request(port, `/${pid}`);
+		expect(shell.body).toContain("DISK-SHELL");
+		expect(shell.cacheControl).toBe("no-cache");
+		for (const path of addressRoutes(pid)) {
 			const res = await request(port, path);
 			expect(res.status, path).toBe(200);
 			expect(res.contentType, path).toContain("text/html");
 			expect(res.body, path).toContain("DISK-SHELL");
+			expect(res.cacheControl, path).toBe("no-cache");
 		}
 
-		const asset = await request(port, "/app.js");
-		expect(asset.status).toBe(200);
-		expect(asset.contentType).toContain("text/javascript");
-		expect(asset.body).toBe("console.log(1)");
+		const rootFile = await request(port, "/app.js");
+		expect(rootFile.status).toBe(200);
+		expect(rootFile.contentType).toContain("text/javascript");
+		expect(rootFile.body).toBe("console.log(1)");
+
+		const hashed = await request(port, "/assets/index-abc.js");
+		expect(hashed.status).toBe(200);
+		expect(hashed.body).toBe("console.log(2)");
+		expect(hashed.cacheControl).toContain("immutable");
+
+		expect((await request(port, "/assets/missing.js")).status).toBe(404);
 	});
 
-	it("serves the SPA shell for app routes from embedded assets (single-file binary path)", async () => {
+	it("serves the shell for addresses and files for resources from embedded assets (single-file binary path)", async () => {
 		const project = makeTempDir("emb-proj");
-		// An empty web root isolates the test from any real dist/web on disk:
-		// if the embedded path fails to serve, the request 404s.
+		// An empty web root isolates the test from any real dist/web on disk.
 		const webRoot = makeTempDir("emb-web");
 		const embeddedAssets = {
 			"index.html": Buffer.from("<!doctype html><title>EMBEDDED-SHELL</title>").toString("base64"),
-			"assets/app.js": Buffer.from("console.log(2)").toString("base64"),
+			"assets/index-abc.js": Buffer.from("console.log(3)").toString("base64"),
 		};
 		const port = await startDaemon({
 			agentDir: makeTempDir("emb-agent"),
@@ -103,25 +132,29 @@ describe("HTTP serving", () => {
 		});
 		const pid = basename(project).toLowerCase();
 
-		for (const path of ["/", ...appRoutes(pid)]) {
+		for (const path of addressRoutes(pid)) {
 			const res = await request(port, path);
 			expect(res.status, path).toBe(200);
 			expect(res.contentType, path).toContain("text/html");
 			expect(res.body, path).toContain("EMBEDDED-SHELL");
+			expect(res.cacheControl, path).toBe("no-cache");
 		}
 
-		const asset = await request(port, "/assets/app.js");
-		expect(asset.status).toBe(200);
-		expect(asset.contentType).toContain("text/javascript");
-		expect(asset.body).toBe("console.log(2)");
+		const hashed = await request(port, "/assets/index-abc.js");
+		expect(hashed.status).toBe(200);
+		expect(hashed.body).toBe("console.log(3)");
+		expect(hashed.cacheControl).toContain("immutable");
+
+		expect((await request(port, "/assets/missing.js")).status).toBe(404);
 	});
 
-	it("returns 404 for unknown paths and non-project first segments, 403 for path escapes", async () => {
+	it("rejects traversal under a resource root and 404s resource misses", async () => {
 		const project = makeTempDir("bound-proj");
 		const rootParent = makeTempDir("bound-parent");
 		const webRoot = join(rootParent, "web");
-		mkdirSync(webRoot);
-		writeFileSync(join(webRoot, "index.html"), "<!doctype html>");
+		mkdirSync(join(webRoot, "assets"), { recursive: true });
+		writeFileSync(join(webRoot, "index.html"), "<!doctype html>SHELL");
+		writeFileSync(join(webRoot, "assets", "app.js"), "ok");
 		writeFileSync(join(rootParent, "secret.txt"), "outside");
 		const port = await startDaemon({
 			agentDir: makeTempDir("bound-agent"),
@@ -129,17 +162,22 @@ describe("HTTP serving", () => {
 			webRoot,
 		});
 
-		expect((await request(port, "/missing.js")).status).toBe(404);
-		// The first segment is not a configured Project id: not an app route.
-		expect((await request(port, "/not-a-project")).status).toBe(404);
-		expect((await request(port, "/not-a-project/some/stem")).status).toBe(404);
-		// Literal `..` resolves outside the web root — containment must reject
-		// it before any read (ADR 11 security boundary).
-		expect((await request(port, "/../secret.txt")).status).toBe(403);
+		// A resource miss inside the server's surface is a 404.
+		expect((await request(port, "/assets/missing.js")).status).toBe(404);
+		// Literal `..` under a root resolves outside the web root — containment
+		// must reject it before any read (ADR 11 security boundary).
+		expect((await request(port, "/assets/../../secret.txt")).status).toBe(403);
 		// A plain string-prefix pass would also leak sibling directories whose
 		// names extend the root's (`web-x` vs `web`).
 		mkdirSync(join(rootParent, "web-x"));
 		writeFileSync(join(rootParent, "web-x", "secret.txt"), "outside");
-		expect((await request(port, "/../web-x/secret.txt")).status).toBe(403);
+		expect((await request(port, "/assets/../../web-x/secret.txt")).status).toBe(403);
+		// Outside the asset surface there is no file read: a path outside every
+		// root (including a literal `..`) is just an address and gets the shell.
+		for (const path of ["/secret.txt", "/../secret.txt"]) {
+			const res = await request(port, path);
+			expect(res.status, path).toBe(200);
+			expect(res.body, path).toContain("SHELL");
+		}
 	});
 });

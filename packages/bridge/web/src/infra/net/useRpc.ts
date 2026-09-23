@@ -26,12 +26,12 @@ import type {
 	SnapshotState,
 } from "../../../../src/core/index.ts";
 import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
-import { sortByLastActivity } from "../lib/sortByLastActivity.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { prepareSwitch } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
 import { selectRenderDiverged } from "../state/ui.ts";
 import { getGlobalClient } from "./client.ts";
+import { resolveLatestSession } from "./latestSession.ts";
 import { openSessionAddress } from "./sessionBoot.ts";
 import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
 import { projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
@@ -180,15 +180,18 @@ export function useRpc() {
 		[],
 	);
 
-	/** Open the alias address `/@latest` (ADR 13): open the most recently
-	 * active live session (the global snapshot) without leaving the alias URL.
-	 * Any later explicit navigation rewrites the URL to the real address; a
-	 * reload re-resolves the alias, possibly onto a newer session. */
+	/** Open the alias address `/@latest` (ADR 13): the most recently active
+	 * live Session, or the most recent durable Session across Projects (which
+	 * the open activates), without leaving the alias URL. Any later explicit
+	 * navigation rewrites the URL to the real address; a reload re-resolves
+	 * the alias, possibly onto a newer session. */
 	const openLatest = useCallback(async () => {
 		if (sessionCandidatePending()) return;
-		const target = sortByLastActivity(getStore().getState().activeSessions)[0] ?? null;
 		const client = getGlobalClient();
-		if (!target || !client) return;
+		if (!client) return;
+		const store = getStore();
+		const target = await resolveLatestSession(client, store.getState().projects, store.getState().activeSessions);
+		if (!target) return;
 		writeRoute({ kind: "alias", alias: "latest" });
 		try {
 			await openSessionAddress(client, target.projectId, target.stem, () => false, { viaAlias: true });
