@@ -174,8 +174,10 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		if (push.kind === "replace") {
 			flush("skip");
 			const ref = push.session;
-			store.getState().setActiveSessionId(ref.sessionId);
+			// Address first, then the id: setCurrentSession unbinds a stale id
+			// on an address change, so the pair must land in this order.
 			store.getState().setCurrentSession(ref.projectId, ref.stem);
+			store.getState().setActiveSessionId(ref.sessionId);
 			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
 			if (!store.getState().addressViaAlias) {
 				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
@@ -206,8 +208,9 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 				// persists only the delta's new entries.
 				cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
 			}
-			store.getState().setActiveSessionId(ref.sessionId);
+			// Address first, then the id (see the replace handler).
 			store.getState().setCurrentSession(ref.projectId, ref.stem);
+			store.getState().setActiveSessionId(ref.sessionId);
 			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
 			if (!store.getState().addressViaAlias) {
 				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });

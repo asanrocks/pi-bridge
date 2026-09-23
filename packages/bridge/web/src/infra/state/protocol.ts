@@ -99,7 +99,10 @@ export interface ProtocolSlice {
 	/** Set the global active/streaming snapshot. */
 	setActiveSessions: (sessions: SessionInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
-	 * global launcher; `null` stem = that Project's home. */
+	 * global launcher; `null` stem = that Project's home. Committing a
+	 * different address unbinds `activeSessionId`: the id is only meaningful
+	 * paired with its own address, and the initial-sync frame that opens the
+	 * session re-pairs both. */
 	setCurrentSession: (projectId: string | null, stem: string | null) => void;
 	/** Unbind from the current Project/session (Launcher, open failure). Pass a
 	 * `projectId` to land on that Project's home instead of the launcher. */
@@ -217,7 +220,16 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	setActiveSessions: (activeSessions) => set({ activeSessions }),
 
-	setCurrentSession: (currentProjectId, currentStem) => set({ currentProjectId, currentStem }),
+	setCurrentSession: (currentProjectId, currentStem) =>
+		set((s) =>
+			// Unbind the session id on an address change: an id paired with a
+			// foreign address would make the draft slot (draftKey) read and write
+			// the previous session's slot. Until the initial-sync frame re-pairs,
+			// the slot is null and draft writes gate — never another slot.
+			s.currentProjectId === currentProjectId && s.currentStem === currentStem
+				? s
+				: { currentProjectId, currentStem, activeSessionId: null },
+		),
 
 	clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
 
