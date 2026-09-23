@@ -2349,7 +2349,7 @@ export function kindHue(kind: ActionKind): ActionHue {
 // correct slot instead of the first id match.
 // ---------------------------------------------------------------------------
 
-/** A catalog entry (ModelInfo / ScopedModelInfo) — both carry provider + id. */
+/** A catalog entry (ModelInfo / PinnedModelInfo) — both carry provider + id. */
 export interface ModelRefLike {
 	provider: string;
 	id: string;

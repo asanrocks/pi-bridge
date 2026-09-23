@@ -14,7 +14,7 @@
 // ============================================================================
 
 import { memo, type ReactNode, useCallback, useRef, useState } from "react";
-import type { ImageContent, ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
+import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { displayModelName } from "../../render/modelNames.ts";
@@ -69,12 +69,16 @@ export interface ComposeCardProps {
 	// ── Model picker ──
 	model: ModelRef | null;
 	models: ModelInfo[];
-	scopedModels: ScopedModelInfo[];
+	pinnedModels: PinnedModelInfo[];
+	/** Resolved `provider/modelId` keys of the picker's normal tier (ADR 15). */
+	visibleModels: string[];
 	thinkingLevel: string;
 	thinkingLevels: string[];
 	onSetModel: (provider: string, modelId: string) => void;
 	onSetThinkingLevel?: (level: string) => void;
 	onCycleModel: (direction: "forward" | "backward") => void;
+	/** Pin or unpin one model in the daemon-global list (ADR 15). */
+	onTogglePin: (provider: string, modelId: string, pinned: boolean) => void;
 
 	// ── Slots ──
 	/** Left control group (session: context % + bar + cost). */
@@ -113,12 +117,14 @@ export const ComposeCard = memo(function ComposeCard({
 	onStop,
 	model,
 	models,
-	scopedModels,
+	pinnedModels,
+	visibleModels,
 	thinkingLevel,
 	thinkingLevels,
 	onSetModel,
 	onSetThinkingLevel,
 	onCycleModel,
+	onTogglePin,
 	leftControls,
 	completion,
 	beforeKeyDown,
@@ -364,7 +370,8 @@ export const ComposeCard = memo(function ComposeCard({
 				<ModelPickerPortal
 					anchorRect={portalAnchor}
 					models={models}
-					scopedModels={scopedModels}
+					pinnedModels={pinnedModels}
+					visibleModels={visibleModels}
 					thinkingLevels={availableThinkingLevels}
 					currentModelRef={model ?? { provider: "", modelId: "" }}
 					currentThinkingLevel={thinkingLevel}
@@ -375,6 +382,7 @@ export const ComposeCard = memo(function ComposeCard({
 					onSelectThinkingLevel={(level) => {
 						onSetThinkingLevel?.(level);
 					}}
+					onTogglePin={onTogglePin}
 					onClose={() => setPortalOpen(false)}
 				/>
 			)}

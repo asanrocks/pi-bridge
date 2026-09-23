@@ -33,7 +33,6 @@ function emptyDoc(): Document {
 			contextUsage: null,
 			pendingSteer: [],
 		},
-		scopedModels: [],
 		entries: {},
 	};
 }
@@ -41,7 +40,6 @@ function emptyDoc(): Document {
 function docWithStatus(overrides: Partial<Document["status"]>): Document {
 	return {
 		status: { ...emptyDoc().status, ...overrides },
-		scopedModels: [],
 		entries: {},
 	};
 }
@@ -139,14 +137,16 @@ describe("createClientStore", () => {
 		expect(state.loadingPaths).toEqual(new Set());
 	});
 
-	it("setModels updates models, thinking levels, and scoped models", () => {
+	it("setModels updates models, thinking levels, and pinned models", () => {
 		const store = createClientStore();
 		const models = [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: false }];
-		const scopedModels = [{ provider: "faux", id: "faux-1", name: "Faux 1" }];
-		store.getState().setModels(models, ["off", "low", "high"], scopedModels);
+		const pinnedModels = [{ provider: "faux", id: "faux-1", name: "Faux 1" }];
+		const visibleModels = ["faux/faux-1"];
+		store.getState().setModels(models, ["off", "low", "high"], pinnedModels, visibleModels);
 		expect(store.getState().models).toEqual(models);
 		expect(store.getState().thinkingLevels).toEqual(["off", "low", "high"]);
-		expect(store.getState().scopedModels).toEqual(scopedModels);
+		expect(store.getState().pinnedModels).toEqual(pinnedModels);
+		expect(store.getState().visibleModels).toEqual(visibleModels);
 	});
 
 	it("applyReplace replaces document root", () => {

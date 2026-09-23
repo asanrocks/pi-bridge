@@ -5,10 +5,13 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
+import type { ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { isModelSelected } from "../../../../src/viewmodel/index.ts";
-import { displayProviderName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
+import { buildModelGroups, type ModelGroup } from "./modelGroups.ts";
+
+/** Keyboard-navigable rows: a model row, or a group's `More…` row. */
+type FlatItem = { kind: "model"; model: ModelInfo | PinnedModelInfo } | { kind: "more"; groupKey: string };
 
 /** Anchor the portal above the button (the session dock's position), or
  * flip below it when there is no room above (the Project home's centered
@@ -25,24 +28,47 @@ function portalPosition(anchor: DOMRect): React.CSSProperties {
 	return { position: "fixed", top: anchor.bottom + 4, left, width: 320, maxHeight };
 }
 
+/** Push-pin glyph: filled = pinned, outline = unpinned. The glyph is state
+ * only — hover styling lives on the button surface, never on the symbol. */
+function PinIcon({ filled }: { filled: boolean }) {
+	return (
+		<svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+			<path
+				d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"
+				fill={filled ? "currentColor" : "none"}
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinejoin="round"
+			/>
+		</svg>
+	);
+}
+
 export function ModelPickerPortal({
 	models,
-	scopedModels,
+	pinnedModels,
+	visibleModels,
 	thinkingLevels,
 	currentModelRef,
 	currentThinkingLevel,
 	onSelectModel,
 	onSelectThinkingLevel,
+	onTogglePin,
 	onClose,
 	anchorRect,
 }: {
 	models: ModelInfo[];
-	scopedModels: ScopedModelInfo[];
+	pinnedModels: PinnedModelInfo[];
+	/** Resolved `provider/modelId` keys of the normal tier (ADR 15); empty =
+	 * no folding. */
+	visibleModels: string[];
 	thinkingLevels: string[];
 	currentModelRef: ModelRef;
 	currentThinkingLevel: string;
 	onSelectModel: (provider: string, modelId: string) => void;
 	onSelectThinkingLevel: (level: string) => void;
+	/** Pin or unpin one model in the daemon-global list (ADR 15). */
+	onTogglePin: (provider: string, modelId: string, pinned: boolean) => void;
 	onClose: () => void;
 	anchorRect: DOMRect | null;
 }) {
@@ -62,86 +88,104 @@ export function ModelPickerPortal({
 		el?.scrollIntoView({ block: "nearest" });
 	}, [focusIdx]);
 
-	const curatedModels = useMemo(() => {
-		if (scopedModels.length > 0) return scopedModels;
-		return models.reduce<{ provider: string; id: string; name: string }[]>((acc, m) => {
-			if (!acc.find((x) => x.provider === m.provider)) {
-				acc.push({ provider: m.provider, id: m.id, name: m.name });
-			}
-			return acc;
-		}, []);
-	}, [scopedModels, models]);
+	// Freeze the grouping for the portal's lifetime: pinning must not move a row
+	// out from under the cursor, so the catalogue re-partitions only on the next
+	// open. The live `pinnedModels` still drives each row's pin state.
+	const [groupingPinned] = useState(pinnedModels);
+	const groups = useMemo(
+		() => buildModelGroups({ models, pinnedModels: groupingPinned, visibleModels, search }),
+		[models, groupingPinned, visibleModels, search],
+	);
+	// Per-group reveal state: an expanded group shows its folded tail in place
+	// of its `More…` row. One-shot (no collapse); reset when the query changes.
+	const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
-	const scopedKeys = useMemo(() => new Set(scopedModels.map((sm) => `${sm.provider}/${sm.id}`)), [scopedModels]);
+	const pinnedKeys = useMemo(() => new Set(pinnedModels.map((m) => `${m.provider}/${m.id}`)), [pinnedModels]);
 
-	const filtered = useMemo(() => {
-		const base = search.trim()
-			? models.filter(
-					(m) =>
-						m.name.toLowerCase().includes(search.toLowerCase()) ||
-						m.provider.toLowerCase().includes(search.toLowerCase()) ||
-						m.id.toLowerCase().includes(search.toLowerCase()),
-				)
-			: models;
-		// Browsing (not searching) with a pinned scope: pinned models
-		// already appear under "Pinned", so drop them from provider
-		// groups so each model appears exactly once. While searching
-		// the curated group is hidden and every model must stay
-		// findable in its provider group, so no dedup.
-		if (!search.trim() && scopedKeys.size > 0) {
-			return base.filter((m) => !scopedKeys.has(`${m.provider}/${m.id}`));
+	const expandGroup = (key: string) => setExpanded((prev) => new Set(prev).add(key));
+
+	// Unified flatItems for keyboard navigation — each group's shown rows, then
+	// either its `More…` row or its revealed folded tail.
+	const flatItems = useMemo(() => {
+		const items: FlatItem[] = [];
+		for (const g of groups) {
+			for (const m of g.items) items.push({ kind: "model", model: m });
+			if (g.folded.length === 0) continue;
+			if (expanded.has(g.key)) for (const m of g.folded) items.push({ kind: "model", model: m });
+			else items.push({ kind: "more", groupKey: g.key });
 		}
-		return base;
-	}, [models, search, scopedKeys]);
+		return items;
+	}, [groups, expanded]);
 
-	// Build groups: curated section first (when not searching), then provider
-	// groups. Group header shows the provider display name (Provider registry
-	// name via ModelInfo.providerName, with capitalization fallback); the raw
-	// provider id stays as the React key.
-	const groups: { provider: string; label: string; items: (ModelInfo | ScopedModelInfo)[] }[] = [];
-	if (!search.trim() && curatedModels.length > 0) {
-		const curatedLabel = scopedModels.length > 0 ? "Pinned" : "Suggested";
-		groups.push({ provider: curatedLabel, label: curatedLabel, items: curatedModels });
-	}
-	const seen = new Set<string>();
-	for (const m of filtered) {
-		if (!seen.has(m.provider)) {
-			seen.add(m.provider);
-			groups.push({ provider: m.provider, label: displayProviderName(m.provider, models), items: [] });
-		}
-		groups[groups.length - 1].items.push(m);
-	}
-	// Provider groups sorted ascending by item count: providers with fewer
-	// models come first, so niche providers are not buried under large
-	// catalogs. Stable sort — ties keep catalog order. The curated group
-	// stays pinned at the top.
-	const curated = groups.filter((g) => g.provider === "Pinned" || g.provider === "Suggested");
-	const providerGroups = groups
-		.filter((g) => g.provider !== "Pinned" && g.provider !== "Suggested")
-		.sort((a, b) => a.items.length - b.items.length);
-	groups.length = 0;
-	groups.push(...curated, ...providerGroups);
-
-	// Unified flatItems for keyboard navigation — includes curated items first
-	const flatItems: { kind: "curated" | "model"; model: ModelInfo | ScopedModelInfo }[] = [];
-	for (const g of groups) {
-		for (const m of g.items) {
-			flatItems.push({
-				kind: g.provider === "Pinned" || g.provider === "Suggested" ? "curated" : "model",
-				model: m,
-			});
-		}
-	}
-
-	// Sync focusIdx to the current model on mount and when the list/provider changes
-	// biome-ignore lint/correctness/useExhaustiveDependencies: flatItems is derived from search (via filtered), so search is needed to re-sync on search clear/change
+	// Sync focusIdx to the current model on mount and when the query changes.
+	// Deliberately NOT on `expanded`: expanding a group keeps the focused index
+	// where the pointer/keyboard left it (the `More…` row's slot is taken by the
+	// first revealed row), so revealing never re-centers the list and yanks the
+	// scroll position.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: flatItems is derived from the inputs listed here; `expanded` is intentionally omitted
 	useEffect(() => {
 		const idx = Math.max(
 			0,
-			flatItems.findIndex((fi) => "id" in fi.model && isModelSelected(fi.model, currentModelRef)),
+			flatItems.findIndex((fi) => fi.kind === "model" && isModelSelected(fi.model, currentModelRef)),
 		);
 		setFocusIdx(idx);
 	}, [currentModelRef, search]);
+
+	const renderRow = (m: ModelInfo | PinnedModelInfo) => {
+		const flatIdx = flatItems.findIndex((f) => f.kind === "model" && f.model === m);
+		const isSelected = isModelSelected(m, currentModelRef);
+		const isFocused = flatIdx === focusIdx;
+		const isPinned = pinnedKeys.has(`${m.provider}/${m.id}`);
+		let cls = styles.portalItem;
+		if (isSelected) cls += ` ${styles.portalItemSelected}`;
+		if (isFocused) cls += ` ${styles.portalItemFocused}`;
+		return (
+			<div key={`${m.provider}/${m.id}`} className={cls} data-flat-idx={flatIdx}>
+				<button
+					type="button"
+					className={styles.portalItemSelect}
+					title={`${m.provider}/${m.id}`}
+					onMouseEnter={() => setFocusIdx(flatIdx)}
+					onClick={() => onSelectModel(m.provider, m.id)}
+				>
+					<span className={styles.portalItemName}>{m.name}</span>
+				</button>
+				<button
+					type="button"
+					className={`${styles.portalPin} ${isPinned ? styles.portalPinActive : ""}`}
+					tabIndex={-1}
+					aria-label={isPinned ? `Unpin ${m.name}` : `Pin ${m.name}`}
+					title={isPinned ? "Unpin" : "Pin"}
+					onClick={() => onTogglePin(m.provider, m.id, !isPinned)}
+				>
+					<PinIcon filled={isPinned} />
+				</button>
+			</div>
+		);
+	};
+
+	const renderGroup = (g: ModelGroup) => {
+		const isExpanded = expanded.has(g.key);
+		const moreIdx = flatItems.findIndex((f) => f.kind === "more" && f.groupKey === g.key);
+		return (
+			<div key={g.key} className={styles.portalGroup}>
+				<div className={styles.portalGroupHeader}>{g.label}</div>
+				{g.items.map(renderRow)}
+				{g.folded.length > 0 && !isExpanded && (
+					<button
+						type="button"
+						className={`${styles.portalMore} ${focusIdx === moreIdx ? styles.portalItemFocused : ""}`}
+						data-flat-idx={moreIdx}
+						onMouseEnter={() => setFocusIdx(moreIdx)}
+						onClick={() => expandGroup(g.key)}
+					>
+						More…
+					</button>
+				)}
+				{isExpanded && g.folded.map(renderRow)}
+			</div>
+		);
+	};
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		switch (e.key) {
@@ -153,13 +197,23 @@ export function ModelPickerPortal({
 				e.preventDefault();
 				setFocusIdx((i) => Math.max(i - 1, 0));
 				break;
-			case "Enter":
+			case "Enter": {
 				e.preventDefault();
-				if (flatItems[focusIdx]) {
-					const mi = flatItems[focusIdx].model;
-					onSelectModel(mi.provider, mi.id);
+				const item = flatItems[focusIdx];
+				if (!item) break;
+				if (item.kind === "more") {
+					expandGroup(item.groupKey);
+					break;
+				}
+				// Shift+Enter toggles the focused row's pin; plain Enter selects.
+				if (e.shiftKey) {
+					const key = `${item.model.provider}/${item.model.id}`;
+					onTogglePin(item.model.provider, item.model.id, !pinnedKeys.has(key));
+				} else {
+					onSelectModel(item.model.provider, item.model.id);
 				}
 				break;
+			}
 			case "Escape":
 				onClose();
 				break;
@@ -186,37 +240,14 @@ export function ModelPickerPortal({
 						value={search}
 						onChange={(e) => {
 							setSearch(e.target.value);
+							setExpanded(new Set());
 						}}
 					/>
 				</div>
 
 				<div className={styles.portalList} ref={listRef}>
 					{flatItems.length === 0 && <div className={styles.portalNoMatch}>No models match</div>}
-					{groups.map((g) => (
-						<div key={g.provider} className={styles.portalGroup}>
-							<div className={styles.portalGroupHeader}>{g.label}</div>
-							{g.items.map((m) => {
-								const flatIdx = flatItems.findIndex((f) => f.model === m);
-								const isSelected = isModelSelected(m, currentModelRef);
-								const isFocused = flatIdx === focusIdx;
-								let cls = styles.portalItem;
-								if (isSelected) cls += ` ${styles.portalItemSelected}`;
-								if (isFocused) cls += ` ${styles.portalItemFocused}`;
-								return (
-									<button
-										key={m.id}
-										type="button"
-										className={cls}
-										data-flat-idx={flatIdx}
-										onClick={() => onSelectModel(m.provider, m.id)}
-										onMouseEnter={() => setFocusIdx(flatIdx)}
-									>
-										{m.name}
-									</button>
-								);
-							})}
-						</div>
-					))}
+					{groups.map(renderGroup)}
 				</div>
 			</div>
 		</>

@@ -73,12 +73,11 @@ With a valid cursor it emits a `patch` whose `session` is the supplied
 
 1. `add` each committed file entry with `ord >= cursor.entryCount`, in file
    order, with lazy fields stripped;
-2. `add` all current provisional entries as lazy-stripped skeletons;
-3. `replace /status` with current status; and
-4. `replace /scopedModels` with the current model list.
+2. `add` all current provisional entries as lazy-stripped skeletons; and
+3. `replace /status` with current status.
 
-The status and scoped-model replacements are unconditional, so this patch is
-never a compact single-append frame. It supplies provisional skeletons even
+The status replacement is unconditional, so this patch is never a compact
+single-append frame. It supplies provisional skeletons even
 when the cache already contains a committed prefix, because later live
 streaming patches need those paths to exist.
 

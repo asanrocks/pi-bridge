@@ -11,7 +11,6 @@ import {
 	getDefaultSessionDir,
 	ModelRuntime,
 	type ContextUsage as PiContextUsage,
-	resolveModelScopeWithDiagnostics,
 	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -32,7 +31,6 @@ import {
 	type ReconcileOptions,
 	type ReplaceMessage,
 	reconcile,
-	type ScopedModelInfo,
 	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
@@ -331,33 +329,6 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		if (cu !== undefined) {
 			document = setAtPath(document, "/status/contextUsage", cu as unknown as JsonValue);
 		}
-	}
-
-	// Resolve scoped models from settings (global ~/.pi config) if the session has none
-	if (session.scopedModels.length === 0 && settingsManager) {
-		const patterns = settingsManager.getEnabledModels();
-		if (patterns && patterns.length > 0) {
-			const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime);
-			if (resolved.length > 0) {
-				session.setScopedModels(
-					resolved.map((sm) => ({
-						model: sm.model,
-						thinkingLevel: sm.thinkingLevel,
-					})),
-				);
-			}
-		}
-	}
-
-	// Sync scoped models from the session
-	{
-		const scoped: ScopedModelInfo[] = session.scopedModels.map((sm) => ({
-			provider: sm.model.provider,
-			id: sm.model.id,
-			name: sm.model.name ?? sm.model.id,
-			thinkingLevel: sm.thinkingLevel,
-		}));
-		document = setAtPath(document, "/scopedModels", scoped as unknown as JsonValue);
 	}
 
 	// Subscribe to pi events

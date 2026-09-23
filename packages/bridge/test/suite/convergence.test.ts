@@ -191,7 +191,7 @@ function nullThinking(doc: Document): Document {
 			entries[id] = entry;
 		}
 	}
-	return { status: doc.status, entries, scopedModels: [] };
+	return { status: doc.status, entries };
 }
 
 /** Raw JSON round-trip (eliminates undefined vs missing) — no lazy stripping. */

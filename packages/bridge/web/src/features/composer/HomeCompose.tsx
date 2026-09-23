@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ImageContent, ModelInfo, ModelRef, ScopedModelInfo } from "../../../../src/core/index.ts";
+import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -56,17 +56,21 @@ function saveHomeModelChoice(projectId: string, choice: HomeModelChoice | null):
 export const HomeCompose = memo(function HomeCompose({
 	projectId,
 	models,
-	scopedModels,
+	pinnedModels,
+	visibleModels,
 	defaultModel,
 	defaultThinkingLevel,
 	connected,
 	onNewSession,
+	onTogglePin,
 }: {
 	projectId: string;
 	models: ModelInfo[];
 	/** The daemon's global `enabledModels` scope from getDaemonInfo — the
 	 * pre-session Pinned group. Not project-specific (see GetDaemonInfoReply). */
-	scopedModels: ScopedModelInfo[];
+	pinnedModels: PinnedModelInfo[];
+	/** Resolved `provider/modelId` keys of the picker's normal tier (ADR 15). */
+	visibleModels: string[];
 	/** The model a fresh session resolves to (ProjectInfo.defaultModel from
 	 * getDaemonInfo) — display only. The send still omits `model` when unset,
 	 * so the daemon keeps resolving (settings/auth changes stay live). */
@@ -84,6 +88,8 @@ export const HomeCompose = memo(function HomeCompose({
 		model?: ModelRef,
 		thinkingLevel?: string,
 	) => Promise<boolean>;
+	/** Pin or unpin one model in the daemon-global list (ADR 15). */
+	onTogglePin: (provider: string, modelId: string, pinned: boolean) => void;
 }) {
 	const draft = useStore((s) => s.draft);
 	const setDraftText = useStore((s) => s.setDraftText);
@@ -153,14 +159,14 @@ export const HomeCompose = memo(function HomeCompose({
 	// provider-deduped list the session dock uses; cycling from the (unpicked)
 	// default starts at the default's position.
 	const cycleModels = useMemo(() => {
-		if (scopedModels.length > 0) return scopedModels;
+		if (pinnedModels.length > 0) return pinnedModels;
 		const seen = new Set<string>();
 		return models.filter((m) => {
 			if (seen.has(m.provider)) return false;
 			seen.add(m.provider);
 			return true;
 		});
-	}, [scopedModels, models]);
+	}, [pinnedModels, models]);
 
 	const handleCycleModel = useCallback(
 		(direction: "forward" | "backward") => {
@@ -215,12 +221,14 @@ export const HomeCompose = memo(function HomeCompose({
 				textareaRef={textareaRef}
 				model={effectiveModel}
 				models={models}
-				scopedModels={scopedModels}
+				pinnedModels={pinnedModels}
+				visibleModels={visibleModels}
 				thinkingLevel={effectiveLevel}
 				thinkingLevels={thinkingLevels}
 				onSetModel={handleSetModel}
 				onSetThinkingLevel={handleSetThinkingLevel}
 				onCycleModel={handleCycleModel}
+				onTogglePin={onTogglePin}
 			/>
 			<div className={styles.hint}>
 				Enter starts a new session · Shift+Enter for a new line

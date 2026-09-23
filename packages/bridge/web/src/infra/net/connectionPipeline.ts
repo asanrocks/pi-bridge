@@ -102,7 +102,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 				const baseDoc: Document =
 					cacheBase.value !== null && cacheBase.value.sessionId === sessionId
 						? cacheBase.value.doc
-						: { status: after.status, entries: {}, scopedModels: [] };
+						: { status: after.status, entries: {} };
 				const writes = planCacheWrites(sessionId, baseDoc, after);
 				cacheBase.value = { sessionId, doc: after };
 				if (writes.length > 0) {
@@ -165,6 +165,12 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		if (push.kind === "active_sessions_changed") {
 			for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
 			store.getState().setActiveSessions(push.sessions);
+			return;
+		}
+
+		// Daemon-global pinned list (ADR 15): one concept, replaced wholesale.
+		if (push.kind === "pinned_models_changed") {
+			store.getState().setPinnedModels(push.pinnedModels);
 			return;
 		}
 
