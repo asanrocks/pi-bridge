@@ -28,7 +28,7 @@ import {
 } from "../../src/core/index.ts";
 import { findNextModel, isModelSelected, type ModelRefLike } from "../../src/viewmodel/index.ts";
 
-// Minimal catalog entry shape (ModelInfo / ScopedModelInfo both satisfy this).
+// Minimal catalog entry shape (ModelInfo / PinnedModelInfo both satisfy this).
 interface Cat {
 	provider: string;
 	id: string;

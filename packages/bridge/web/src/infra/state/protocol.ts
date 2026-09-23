@@ -11,8 +11,8 @@ import type { StateCreator } from "zustand/vanilla";
 import type {
 	Document,
 	ModelInfo,
+	PinnedModelInfo,
 	ProjectInfo,
-	ScopedModelInfo,
 	SessionInfo,
 	SessionListCursor,
 } from "../../../../src/core/types.ts";
@@ -74,10 +74,15 @@ export interface ProtocolSlice {
 	/** Active/streaming sessions across all Projects (ADR 11). */
 	activeSessions: SessionInfo[];
 	models: ModelInfo[];
-	/** The daemon's global `enabledModels` scope (getDaemonInfo) — the Project
-	 * home's pre-session "Pinned" group. An attached session uses its
-	 * Document's `scopedModels` instead. */
-	scopedModels: ScopedModelInfo[];
+	/** The daemon-global pinned list (ADR 15), resolved from pi's global
+	 * `enabledModels`. One concept for the whole daemon: both the Project home
+	 * and an attached Session read this, and the picker writes it. */
+	pinnedModels: PinnedModelInfo[];
+	/** Resolved `provider/modelId` keys of the picker's "normal" tier (ADR 15).
+	 * Empty = no filter configured, so every non-pinned model is normal and
+	 * nothing folds. Daemon-global; an attached session still uses it for the
+	 * catalogue it shows. */
+	visibleModels: string[];
 	thinkingLevels: string[];
 	/** Dev mode — when true, browser console.* calls are relayed to server. */
 	devMode: boolean;
@@ -98,6 +103,8 @@ export interface ProtocolSlice {
 	setAddressViaAlias: (viaAlias: boolean) => void;
 	/** Set the global active/streaming snapshot. */
 	setActiveSessions: (sessions: SessionInfo[]) => void;
+	/** Replace the daemon-global pinned list (from a `pinned_models_changed` push). */
+	setPinnedModels: (pinnedModels: PinnedModelInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
 	 * global launcher; `null` stem = that Project's home. Changing the address
 	 * also closes the file-viewer and diff-view portals — they showed content
@@ -127,7 +134,12 @@ export interface ProtocolSlice {
 	) => void;
 	/** Drop all sidebar folder pages (reconnect — the daemon may have restarted). */
 	resetSessionPages: () => void;
-	setModels: (models: ModelInfo[], thinkingLevels: string[], scopedModels: ScopedModelInfo[]) => void;
+	setModels: (
+		models: ModelInfo[],
+		thinkingLevels: string[],
+		pinnedModels: PinnedModelInfo[],
+		visibleModels: string[],
+	) => void;
 	setDevMode: (mode: boolean) => void;
 	applyReplace: (doc: Document) => void;
 }
@@ -154,7 +166,6 @@ function emptyDocument(): Document {
 			pendingSteer: [],
 		},
 		entries: {},
-		scopedModels: [],
 	};
 }
 
@@ -200,7 +211,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	activeSessions: [],
 	addressViaAlias: false,
 	models: [],
-	scopedModels: [],
+	pinnedModels: [],
+	visibleModels: [],
 	thinkingLevels: [],
 	devMode: false,
 
@@ -221,6 +233,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	setAddressViaAlias: (addressViaAlias) => set({ addressViaAlias }),
 
 	setActiveSessions: (activeSessions) => set({ activeSessions }),
+
+	setPinnedModels: (pinnedModels) => set({ pinnedModels }),
 
 	// An address change is a different session's content: both portals hold
 	// something read from the session being left (a path, or a commit pair in
@@ -275,7 +289,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	resetSessionPages: () => set({ sessionPages: {} }),
 
-	setModels: (models, thinkingLevels, scopedModels) => set({ models, thinkingLevels, scopedModels }),
+	setModels: (models, thinkingLevels, pinnedModels, visibleModels) =>
+		set({ models, thinkingLevels, pinnedModels, visibleModels }),
 
 	setDevMode: (devMode) => set({ devMode }),
 
