@@ -517,7 +517,11 @@ keyboard focus and scroll anchors remain stable.
   and output-length stops render beneath the content.
 - **System turns** render compaction and branch summaries as a divider plus
   Markdown summary. Model changes render as one divider line naming the new
-  model and thinking level.
+  model and thinking level. An entry the projection cannot classify — an
+  upstream entry type with no bridge kind, or an extension's custom entry —
+  renders as an `Unrecognized` divider naming the source type, with the raw
+  source entry in a collapsed detail block, so a path entry is never dropped
+  silently.
 - **User-bash turns** are standalone bash-tinted action rows. The command is
   shown beside `$`; the shared wrap toggle governs it like the output (wrap
   on: full multi-line command; off: one-line ellipsis). Output uses the

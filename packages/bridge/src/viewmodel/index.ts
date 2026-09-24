@@ -246,7 +246,7 @@ export interface InlineGitStamp {
 	afterBlockKey: string;
 }
 
-export type SystemTurnType = "compaction" | "branch_summary" | "model_switch";
+export type SystemTurnType = "compaction" | "branch_summary" | "model_switch" | "unknown";
 
 export interface SystemTurn {
 	kind: "system";
@@ -255,6 +255,8 @@ export interface SystemTurn {
 	index: number;
 	/** Markdown, for compaction/branch_summary (wire-eager). */
 	summary?: string;
+	/** Raw source entry, for the unrecognized fallback's detail dump. */
+	detail?: Entry;
 	/** Final state of a merged turn of consecutive model_change /
 	 * thinking_level_change entries. pi appends these back-to-back on a
 	 * model switch (setModel → appendModelChange, then the thinking re-clamp
@@ -558,7 +560,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						if (pending.length === 0) pendingAnchor = prevSealTs;
 						pending.push({ entry: synthetic, blockIndex: 0 });
 					}
-				} else {
+				} else if (entry.role === "user") {
 					flushSwitchTurn();
 					flushPending();
 					const t = buildUserTurn(
@@ -573,6 +575,14 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
+				} else {
+					// A message role that is not a conversation turn — the system
+					// prompt diff, or a future upstream role. Render it as an
+					// unrecognized turn rather than coercing it into a user turn; the
+					// duplicated-user-turn bug was exactly that coercion.
+					flushSwitchTurn();
+					flushPending();
+					turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.role, prevTurns, entry));
 				}
 				break;
 			case "compaction":
@@ -605,7 +615,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					switchTurn.thinkingLevel = entry.thinkingLevel;
 				}
 				break;
-			default:
+			case "custom": {
 				// ADR 10: a valid git stamp updates the carried identity. Mid-turn
 				// stamps (tool_end/turn_end while a turn is open) fold into the turn
 				// — the turn does NOT split; the stamp rides the pending refs and
@@ -614,7 +624,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				// header chip. Other boundary stamps (user_bash_end, or a turn
 				// anchor with no open turn) render as standalone cards at their
 				// path position, flushing the turn first so the order holds.
-				if (entry.kind === "custom" && entry.customType === GIT_STAMP_CUSTOM_TYPE) {
+				if (entry.customType === GIT_STAMP_CUSTOM_TYPE) {
 					const stamp = parseGitStampEntry(entry);
 					if (stamp) {
 						const identity = { commit: stamp.commit, branch: stamp.branch };
@@ -638,10 +648,42 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						carriedGit = { identity, subject };
 						seenGitStamp = true;
 					}
+				} else {
+					// Not a git stamp: an extension entry, or an upstream entry type
+					// the projection cannot classify. Render it as an unrecognized
+					// turn rather than dropping it — unknown data stays visible.
+					flushSwitchTurn();
+					flushPending();
+					turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.customType, prevTurns, entry));
 				}
-				// tool_result (joined into ToolActionVM), label, session_info,
-				// custom, custom_message — invisible; do not break the merge.
 				break;
+			}
+			case "tool_result":
+			case "label":
+			case "session_info":
+			case "custom_message":
+				// tool_result joins into its action; label, session_info, and
+				// extension messages are deliberately not conversation content.
+				break;
+			default: {
+				// Compile-time exhaustiveness: a new Entry kind fails this
+				// assignment. Only wire/cache skew reaches it at runtime, so
+				// render the fallback rather than dropping or crashing.
+				const unhandled: never = entry;
+				flushSwitchTurn();
+				flushPending();
+				turns.push(
+					buildSystemTurn(
+						unhandled,
+						turns.length,
+						"unknown",
+						(unhandled as Entry).kind,
+						prevTurns,
+						unhandled as Entry,
+					),
+				);
+				break;
+			}
 		}
 		if (entry.timestamp) prevSealTs = entry.timestamp;
 	}
@@ -1204,18 +1246,20 @@ function buildUserBashTurn(entry: BashExecutionEntry, index: number): UserBashTu
 function buildSystemTurn(
 	entry: Entry,
 	index: number,
-	type: "compaction" | "branch_summary",
+	type: SystemTurnType,
 	summary: string | undefined,
 	prevTurns: Map<string, TurnVM>,
+	detail?: Entry,
 ): SystemTurn {
-	const turn: SystemTurn = { kind: "system", type, entryId: entry.id, index, summary };
+	const turn: SystemTurn = { kind: "system", type, entryId: entry.id, index, summary, detail };
 	const prev = prevTurns.get(`system:${entry.id}`);
 	if (
 		prev &&
 		prev.kind === "system" &&
 		prev.type === turn.type &&
 		prev.index === turn.index &&
-		prev.summary === turn.summary
+		prev.summary === turn.summary &&
+		prev.detail === turn.detail
 	) {
 		return prev;
 	}

@@ -116,8 +116,13 @@ export const ConversationArea = memo(function ConversationArea({
 						return <UserBashView key={turn.entryId} turn={turn} />;
 					case "gitChange":
 						return <GitChangeView key={turn.entryId} turn={turn} />;
-					default:
+					default: {
+						// Compile-time exhaustiveness: a new TurnVM kind fails this
+						// assignment instead of silently rendering nothing.
+						const unhandled: never = turn;
+						void unhandled;
 						return null;
+					}
 				}
 			})}
 			{/* Always mounted — visibility animates (opacity/translate) rather than
