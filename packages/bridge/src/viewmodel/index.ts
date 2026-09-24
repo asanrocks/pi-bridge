@@ -246,7 +246,14 @@ export interface InlineGitStamp {
 	afterBlockKey: string;
 }
 
-export type SystemTurnType = "compaction" | "branch_summary" | "model_switch" | "system_prompt" | "unknown";
+export type SystemTurnType =
+	| "compaction"
+	| "branch_summary"
+	| "model_switch"
+	| "system_prompt"
+	| "extension"
+	| "extension_message"
+	| "unknown";
 
 export interface SystemTurn {
 	kind: "system";
@@ -659,21 +666,43 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						seenGitStamp = true;
 					}
 				} else {
-					// Not a git stamp: an extension entry, or an upstream entry type
-					// the projection cannot classify. Render it as an unrecognized
-					// turn rather than dropping it — unknown data stays visible.
+					// Not a git stamp: an extension-owned entry. The bridge does not
+					// interpret extension state, but never drops it — render it as an
+					// extension turn named by its custom type.
 					flushSwitchTurn();
 					flushPending();
-					turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.customType, prevTurns, entry));
+					turns.push(buildSystemTurn(entry, turns.length, "extension", entry.customType, prevTurns, entry));
 				}
 				break;
 			}
+			case "unknown": {
+				// An upstream entry type the projection cannot classify. Render it as
+				// an unrecognized turn rather than dropping it.
+				flushSwitchTurn();
+				flushPending();
+				turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.sourceType, prevTurns, entry));
+				break;
+			}
+			case "custom_message":
+				// An extension message: rendered only when it asks to be displayed.
+				if (entry.display) {
+					flushSwitchTurn();
+					flushPending();
+					const text = (entry.content ?? [])
+						.filter((c) => c.type === "text")
+						.map((c) => c.text)
+						.join("\n");
+					turns.push(
+						buildSystemTurn(entry, turns.length, "extension_message", text || entry.customType, prevTurns, entry),
+					);
+				}
+				break;
 			case "tool_result":
 			case "label":
 			case "session_info":
-			case "custom_message":
-				// tool_result joins into its action; label, session_info, and
-				// extension messages are deliberately not conversation content.
+			case "internal":
+				// tool_result joins into its action; label, session_info, and named
+				// internal types are deliberately not conversation content.
 				break;
 			default: {
 				// Compile-time exhaustiveness: a new Entry kind fails this
@@ -1257,13 +1286,18 @@ function buildUserBashTurn(entry: BashExecutionEntry, index: number): UserBashTu
  * replaces a section, `null` removes it. Returns a compact summary of the
  * changed names, or undefined when the payload carries no readable sections. */
 function promptChangeSummary(entry: MessageEntry): string | undefined {
-	const raw = entry.sections;
-	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-	const set: string[] = [];
-	const removed: string[] = [];
-	for (const [name, value] of Object.entries(raw)) {
-		if (value === null) removed.push(name);
-		else set.push(name);
+	const set = entry.sectionNames ?? [];
+	const removed = entry.removedSectionNames ?? [];
+	if (set.length === 0 && removed.length === 0) {
+		// Fallback for a record with eager section text but no name fields
+		// (a hand-built entry, or a cache record that predates them).
+		const raw = entry.sections;
+		if (raw !== null && raw !== undefined && typeof raw === "object" && !Array.isArray(raw)) {
+			for (const [name, value] of Object.entries(raw)) {
+				if (value === null) removed.push(name);
+				else set.push(name);
+			}
+		}
 	}
 	const parts: string[] = [];
 	if (set.length > 0) parts.push(set.join(", "));
@@ -1377,9 +1411,22 @@ function buildBlockVM(
 				status,
 			};
 		}
-		default:
-			// image — not rendered in v1
-			return null;
+		case "image":
+			// Assistant image output: not a first-class card, but never dropped —
+			// render a visible placeholder so the block is accounted for.
+			return { blockType: "text", entryId, blockIndex, text: "[image output]", isProvisional };
+		default: {
+			// Compile-time exhaustiveness: a new Content type fails this
+			// assignment. Only wire skew reaches it at runtime.
+			const unhandled: never = block;
+			return {
+				blockType: "text",
+				entryId,
+				blockIndex,
+				text: `[unsupported ${(unhandled as { type?: string }).type ?? "content"} block]`,
+				isProvisional,
+			};
+		}
 	}
 }
 

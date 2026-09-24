@@ -82,9 +82,14 @@ export interface MessageEntry extends EntryBase {
 	 * renders them as a system-prompt turn (they are not conversation turns). */
 	role: "user" | "assistant" | "system";
 	content: Content[];
-	/** System-prompt diff sections (role `system` only): a string sets or
-	 * replaces a named section, `null` removes it. */
-	sections?: JsonValue;
+	/** System-prompt diff (role `system` only), eager: the section names this
+	 * boundary sets and removes, so the collapsed card summarizes without the
+	 * text. */
+	sectionNames?: string[];
+	removedSectionNames?: string[];
+	/** System-prompt diff text (role `system` only): a string sets or replaces
+	 * a named section, `null` removes it. Lazy — `null` until pulled. */
+	sections?: JsonValue | null;
 	// assistant-only fields. Optional metadata is normalized to `null` when
 	// absent (never `undefined`) so the streaming skeleton, the file
 	// projection, and cache records all produce one deterministic shape.
@@ -162,6 +167,22 @@ export interface CustomMessageEntry extends EntryBase {
 	display: boolean;
 }
 
+/** An upstream entry type the projection cannot classify. Carries the raw
+ * entry so the unrecognized fallback can show its fields. */
+export interface UnknownEntry extends EntryBase {
+	kind: "unknown";
+	sourceType: string;
+	data: JsonValue;
+}
+
+/** A named upstream entry type the bridge deliberately does not render
+ * (context edits, usage records). Named rather than dropped so the silence is
+ * an explicit, compiler-checked decision. */
+export interface InternalEntry extends EntryBase {
+	kind: "internal";
+	sourceType: string;
+}
+
 export interface BashExecutionEntry extends EntryBase {
 	kind: "bash_execution";
 	/** The command the user ran (the `!` / `!!` composer prefix). */
@@ -189,7 +210,9 @@ export type Entry =
 	| LabelEntry
 	| SessionInfoEntry
 	| CustomEntry
-	| CustomMessageEntry;
+	| CustomMessageEntry
+	| UnknownEntry
+	| InternalEntry;
 
 // ---------------------------------------------------------------------------
 // Status
@@ -890,6 +913,7 @@ export const LAZY_FIELD_PATTERNS: RegExp[] = [
 	/^\/entries\/[^/]+\/content\/\d+\/arguments$/,
 	/^\/entries\/[^/]+\/content$/,
 	/^\/entries\/[^/]+\/details$/,
+	/^\/entries\/[^/]+\/sections$/,
 ];
 
 /**
@@ -900,6 +924,7 @@ export const LAZY_FIELD_PATTERNS: RegExp[] = [
 const LAZY_OBJECT_PATTERNS: RegExp[] = [
 	/^\/entries\/[^/]+\/content\/\d+\/arguments$/, // ToolCall arguments
 	/^\/entries\/[^/]+\/details$/, // ToolResult details
+	/^\/entries\/[^/]+\/sections$/, // System-prompt diff text
 ];
 
 /** Returns true if the given patch path is a lazy content-bearing field.

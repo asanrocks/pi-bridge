@@ -519,11 +519,12 @@ keyboard focus and scroll anchors remain stable.
   Markdown summary. Model changes render as one divider line naming the new
   model and thinking level. A system-prompt diff renders as a read-style card:
   a tinted collapsible row named `System prompt update`, expanding to a details
-  card with the changed sections and the prompt text highlighted (markdown). An
-  entry the projection cannot classify — an upstream entry type with no bridge
-  kind, or an extension's custom entry — renders as an `Unrecognized` divider
-  naming the source type, with the raw source entry in a collapsed detail
-  block, so a path entry is never dropped silently.
+  card with the changed sections and the prompt text (pulled lazily) highlighted
+  as markdown. An extension entry renders as an `Extension` divider; a
+  display-flagged extension message renders as an `Extension message` divider
+  with its text as Markdown; an upstream entry type with no bridge kind renders
+  as an `Unrecognized` divider. Each names the source type, with the raw source
+  entry in a collapsed detail block, so a path entry is never dropped silently.
 - **User-bash turns** are standalone bash-tinted action rows. The command is
   shown beside `$`; the shared wrap toggle governs it like the output (wrap
   on: full multi-line command; off: one-line ellipsis). Output uses the
