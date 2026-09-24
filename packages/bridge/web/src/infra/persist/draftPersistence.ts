@@ -6,8 +6,10 @@
 // session keys by its durable session id (globally unique, and what the ADR
 // 09 cache and the initial-sync SessionRef already carry), the Project home
 // keys by projectId (the pre-session "floating draft", an ADR 12 slice), and
-// the global launcher has none. The session id is set on every
-// openSession/newSession, before any draft write.
+// the global launcher has none. While a session open is in flight the id is
+// unbound (setCurrentSession clears it on an address change), so the slot is
+// null and writes gate until the initial sync re-pairs id and address — a
+// write can never land in another session's slot.
 //
 // Persistence is imperative (store.subscribe), not a reactive effect: a
 // reactive persist effect would race the restore effect on scope switch

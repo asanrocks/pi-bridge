@@ -108,7 +108,9 @@ export interface ProtocolSlice {
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
 	 * global launcher; `null` stem = that Project's home. Changing the address
 	 * also closes the file-viewer and diff-view portals — they showed content
-	 * from the session being left. */
+	 * from the session being left — and unbinds `activeSessionId`: the id is
+	 * only meaningful paired with its own address, and the initial-sync frame
+	 * that opens the session re-pairs both. */
 	setCurrentSession: (projectId: string | null, stem: string | null) => void;
 	/** Unbind from the current Project/session (Launcher, open failure). Pass a
 	 * `projectId` to land on that Project's home instead of the launcher. */
@@ -240,12 +242,15 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	// something read from the session being left (a path, or a commit pair in
 	// that repository), so they close with it. A same-address re-assert (the
 	// initial-sync push after an optimistic open, a reconnect replace) keeps
-	// them open.
+	// them open. The session id is unbound too: an id paired with a foreign
+	// address would make the draft slot (draftKey) read and write the previous
+	// session's slot. Until the initial-sync frame re-pairs, the slot is null
+	// and draft writes gate — never another slot.
 	setCurrentSession: (currentProjectId, currentStem) =>
 		set((s) =>
 			s.currentProjectId === currentProjectId && s.currentStem === currentStem
 				? s
-				: { currentProjectId, currentStem, browser: null },
+				: { currentProjectId, currentStem, browser: null, activeSessionId: null },
 		),
 
 	clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
