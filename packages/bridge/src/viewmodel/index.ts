@@ -246,7 +246,7 @@ export interface InlineGitStamp {
 	afterBlockKey: string;
 }
 
-export type SystemTurnType = "compaction" | "branch_summary" | "model_switch" | "unknown";
+export type SystemTurnType = "compaction" | "branch_summary" | "model_switch" | "system_prompt" | "unknown";
 
 export interface SystemTurn {
 	kind: "system";
@@ -255,7 +255,8 @@ export interface SystemTurn {
 	index: number;
 	/** Markdown, for compaction/branch_summary (wire-eager). */
 	summary?: string;
-	/** Raw source entry, for the unrecognized fallback's detail dump. */
+	/** Raw source entry: the prompt diff behind a `system_prompt` turn, or the
+	 * detail dump of an unrecognized one. */
 	detail?: Entry;
 	/** Final state of a merged turn of consecutive model_change /
 	 * thinking_level_change entries. pi appends these back-to-back on a
@@ -575,11 +576,20 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
+				} else if (entry.role === "system") {
+					// The system prompt diff: the named sections this boundary sets,
+					// replaces, or removes. It is not a conversation turn, but it is a
+					// real prompt change — render it as its own system turn naming the
+					// sections, with the full section text behind the collapsed detail.
+					flushSwitchTurn();
+					flushPending();
+					turns.push(
+						buildSystemTurn(entry, turns.length, "system_prompt", promptChangeSummary(entry), prevTurns, entry),
+					);
 				} else {
-					// A message role that is not a conversation turn — the system
-					// prompt diff, or a future upstream role. Render it as an
-					// unrecognized turn rather than coercing it into a user turn; the
-					// duplicated-user-turn bug was exactly that coercion.
+					// A future upstream role. Render it as an unrecognized turn rather
+					// than coercing it into a user turn; the duplicated-user-turn bug
+					// was exactly that coercion.
 					flushSwitchTurn();
 					flushPending();
 					turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.role, prevTurns, entry));
@@ -1241,6 +1251,24 @@ function buildUserBashTurn(entry: BashExecutionEntry, index: number): UserBashTu
 		fullOutputPath: entry.fullOutputPath,
 		excludeFromContext: entry.excludeFromContext,
 	};
+}
+
+/** The named prompt sections a system message changes: a string value sets or
+ * replaces a section, `null` removes it. Returns a compact summary of the
+ * changed names, or undefined when the payload carries no readable sections. */
+function promptChangeSummary(entry: MessageEntry): string | undefined {
+	const raw = entry.sections;
+	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+	const set: string[] = [];
+	const removed: string[] = [];
+	for (const [name, value] of Object.entries(raw)) {
+		if (value === null) removed.push(name);
+		else set.push(name);
+	}
+	const parts: string[] = [];
+	if (set.length > 0) parts.push(set.join(", "));
+	if (removed.length > 0) parts.push(`removed: ${removed.join(", ")}`);
+	return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 function buildSystemTurn(
