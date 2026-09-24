@@ -125,7 +125,8 @@ function toMessageEntry(entry: SessionMessageEntry): Entry {
 		} as unknown as Entry;
 	}
 	if (role === "system") {
-		// The prompt diff is carried so the unrecognized fallback can show it.
+		// The prompt diff is carried so the system-prompt turn can name the
+		// changed sections and show their text.
 		return { ...base, sections: (msgRaw.sections as JsonValue | undefined) ?? null } as unknown as Entry;
 	}
 	return base;

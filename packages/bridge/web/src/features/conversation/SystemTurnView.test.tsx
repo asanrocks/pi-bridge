@@ -1,10 +1,11 @@
-// SystemTurnView — the unrecognized-entry fallback. Proves the projection's
-// unknown system turn reaches the view with its source type and the raw source
-// entry, so an entry the projection cannot classify is shown rather than
-// dropped.
+// SystemTurnView — the system-prompt turn renders as a read-style card: a
+// tinted collapsible row named `System prompt update`, expanding to a details
+// card with the changed sections and the prompt text highlighted as markdown.
+// The unrecognized-entry fallback shows its source type and raw detail, so an
+// entry the projection cannot classify is shown rather than dropped.
 //
 // Lives under web/ (not test/suite/) because it imports .tsx components;
-// root tsgo has no --jsx, so it is type-checked by check:bridge-web instead.
+// root tsc has no --jsx, so it is type-checked by check:bridge-web instead.
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -42,5 +43,31 @@ describe("SystemTurnView — unrecognized entry fallback", () => {
 		expect(html).toContain("context_edit");
 		// The raw entry is dumped, not just its type name.
 		expect(html).toContain("targetId");
+	});
+
+	test("renders a prompt change as a collapsed read-style card", () => {
+		const html = render({
+			kind: "system",
+			type: "system_prompt",
+			entryId: "s1",
+			index: 0,
+			summary: "tools, rules",
+			detail: {
+				kind: "message",
+				id: "s1",
+				parentId: "a1",
+				timestamp: "2024-01-01T00:00:00Z",
+				role: "system",
+				content: [],
+				sections: { tools: "read, write", rules: "be nice" },
+			},
+		});
+		// Collapsed by default: the row is named, not a list of sections.
+		expect(html).toContain("System prompt update");
+		expect(html).toContain("Expand System prompt update");
+		// The section list and the prompt text live inside the card, not the row.
+		expect(html).not.toContain("tools, rules");
+		expect(html).not.toContain("read, write");
+		expect(html).not.toContain("Unrecognized");
 	});
 });
