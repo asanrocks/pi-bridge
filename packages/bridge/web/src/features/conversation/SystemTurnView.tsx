@@ -13,6 +13,7 @@ const SYSTEM_LABEL: Record<SystemTurn["type"], string> = {
 	compaction: "Compaction",
 	branch_summary: "Branch",
 	model_switch: "Model Change",
+	unknown: "Unrecognized",
 };
 
 export const SystemTurnView = memo(function SystemTurnView({ turn }: { turn: SystemTurn }) {
@@ -34,6 +35,23 @@ export const SystemTurnView = memo(function SystemTurnView({ turn }: { turn: Sys
 				className={`${styles.systemDivider} ${styles.systemSwitch} ${styles.markdownContent} ${isDimmed ? styles.msgDimmed : ""}`}
 			>
 				<Markdown text={text} mode="static" />
+			</div>
+		);
+	}
+
+	if (turn.type === "unknown") {
+		return (
+			<div className={isDimmed ? styles.msgDimmed : undefined}>
+				<div className={styles.systemDivider}>
+					<span className={styles.systemDividerLabel}>{SYSTEM_LABEL[turn.type]}</span>
+					{turn.summary !== undefined && <span>{turn.summary}</span>}
+				</div>
+				{turn.detail !== undefined && (
+					<details className={styles.systemRawWrap}>
+						<summary className={styles.systemRawSummary}>Details</summary>
+						<pre className={styles.systemRaw}>{JSON.stringify(turn.detail, null, 2)}</pre>
+					</details>
+				)}
 			</div>
 		);
 	}
