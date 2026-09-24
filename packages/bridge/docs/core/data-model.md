@@ -59,11 +59,14 @@ seal. `ord`, when present, is the zero-based position in the complete
 list is available, never by `applyEvent`, and is absent on provisional
 entries. Its sync and cache meaning is specified in [sync.md](sync.md).
 
-The union has exactly these eleven variants:
+The union has exactly these thirteen variants:
 
-- `MessageEntry`, `kind: "message"`: `role` is `"user"` or `"assistant"`,
-  with `content: Content[]`. Assistant entries can carry provider/model,
-  response metadata, usage, stop reason, and an error message.
+- `MessageEntry`, `kind: "message"`: `role` is `"user"`, `"assistant"`, or
+  `"system"`, with `content: Content[]`. Assistant entries can carry
+  provider/model, response metadata, usage, stop reason, and an error
+  message. A `system` entry is pi's prompt-section diff, not a conversation
+  turn: it carries eager `sectionNames`/`removedSectionNames` (for the
+  collapsed summary) and the section text in `sections`, which is lazy.
 - `ToolResultEntry`, `kind: "tool_result"`: `toolCallId`, `toolName`,
   `content: Content[] | null`, `details: JsonValue | null`, and `isError`.
 - `BashExecutionEntry`, `kind: "bash_execution"`: the user command, eager
@@ -79,13 +82,23 @@ The union has exactly these eleven variants:
 - `LabelEntry`, `kind: "label"`: `targetId` and an optional `label`.
 - `SessionInfoEntry`, `kind: "session_info"`: an optional `name`.
 - `CustomEntry`, `kind: "custom"`: `customType` and nullable JSON `data`.
+  Extension-owned; the viewmodel renders it as an extension turn unless a
+  bridge extension (the git stamp) claims the type.
 - `CustomMessageEntry`, `kind: "custom_message"`: `customType`, nullable
-  `content`, nullable `details`, and `display`.
+  `content`, nullable `details`, and `display`. Rendered only when `display`
+  is set.
+- `UnknownEntry`, `kind: "unknown"`: `sourceType` and the raw `data` of an
+  upstream entry type the projection cannot classify. Rendered as the
+  unrecognized fallback so drift stays visible.
+- `InternalEntry`, `kind: "internal"`: `sourceType` of a named upstream
+  entry type the bridge deliberately does not render (context edits, usage
+  records). Named rather than dropped so the silence is explicit.
 
 `Content` is `TextContent`, `ThinkingContent`, `ImageContent`, or
 `ToolCallBlock`. Text is eager. Thinking content has nullable `thinking`, and
 a tool call has nullable `arguments`; those nulls mean that the value has not
-been pulled on that wire path, not that the canonical value is absent.
+been pulled on that wire path, not that the canonical value is absent. A
+system message's `sections` is lazy the same way.
 
 ## Events, reconciliation, and seal
 

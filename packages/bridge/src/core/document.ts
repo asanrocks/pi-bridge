@@ -88,8 +88,24 @@ function toContent(block: unknown): Content {
 				thoughtSignature: b.thoughtSignature as string | undefined,
 			};
 		default:
-			return { type: "text", text: String(block) };
+			// An unrecognized content block: a labeled placeholder, never the
+			// object's string form.
+			return { type: "text", text: `[unsupported ${b.type ?? "content"} block]` };
 	}
+}
+
+/** Names of the prompt sections a diff sets vs removes (a string sets or
+ * replaces, `null` removes). */
+function splitSectionNames(sections: JsonValue | null): { set: string[]; removed: string[] } {
+	const set: string[] = [];
+	const removed: string[] = [];
+	if (sections !== null && typeof sections === "object" && !Array.isArray(sections)) {
+		for (const [name, value] of Object.entries(sections)) {
+			if (value === null) removed.push(name);
+			else set.push(name);
+		}
+	}
+	return { set, removed };
 }
 
 function toMessageEntry(entry: SessionMessageEntry): Entry {
@@ -125,9 +141,16 @@ function toMessageEntry(entry: SessionMessageEntry): Entry {
 		} as unknown as Entry;
 	}
 	if (role === "system") {
-		// The prompt diff is carried so the system-prompt turn can name the
-		// changed sections and show their text.
-		return { ...base, sections: (msgRaw.sections as JsonValue | undefined) ?? null } as unknown as Entry;
+		// The prompt diff: eager section names for the collapsed summary, the
+		// section text lazily (see LAZY_FIELD_PATTERNS).
+		const sections = (msgRaw.sections as JsonValue | undefined) ?? null;
+		const { set, removed } = splitSectionNames(sections);
+		return {
+			...base,
+			sectionNames: set,
+			removedSectionNames: removed,
+			sections,
+		} as unknown as Entry;
 	}
 	return base;
 }
@@ -308,20 +331,33 @@ export function toEntry(entry: SessionEntry): Entry {
 			return toCustomEntry(entry);
 		case "custom_message":
 			return toCustomMessageEntry(entry);
+		case "context_edit":
+		case "usage":
+			return toInternalEntry(entry);
 		default: {
 			const e = entry as unknown as { id: string; parentId: string | null; timestamp: string; type: string };
 			return {
-				kind: "custom" as const,
+				kind: "unknown" as const,
 				id: e.id,
 				parentId: e.parentId,
 				timestamp: e.timestamp,
-				customType: e.type,
+				sourceType: e.type,
 				// Preserve the raw entry so the unrecognized fallback can show its
 				// fields instead of only its type name.
 				data: entry as unknown as JsonValue,
 			};
 		}
 	}
+}
+
+function toInternalEntry(entry: { id: string; parentId: string | null; timestamp: string; type: string }): Entry {
+	return {
+		kind: "internal",
+		id: entry.id,
+		parentId: entry.parentId,
+		timestamp: entry.timestamp,
+		sourceType: entry.type,
+	};
 }
 
 // ============================================================================
@@ -719,6 +755,10 @@ export function snapshotForWire(doc: Document): Document {
 
 export function stripLazyFields(entry: Entry): Entry {
 	const clone = { ...entry } as AnyRecord;
+	if (clone.kind === "message" && clone.sections != null) {
+		// System-prompt diff text is lazy — pulled on card expansion.
+		clone.sections = null;
+	}
 	if ("content" in clone) {
 		const content = clone.content;
 		if (clone.kind === "tool_result") {
@@ -805,7 +845,12 @@ function sanitizeEntryValue(path: string, entry: AnyRecord, subscriptions: Set<s
 		if (stripDetails) clone.details = null;
 		return clone;
 	}
-	const content = entry.content;
+	let result = entry;
+	// System-prompt diff text is lazy as a whole field.
+	if (entry.kind === "message" && entry.sections != null && !isSubscribedPath(`${path}/sections`, subscriptions)) {
+		result = { ...result, sections: null };
+	}
+	const content = result.content;
 	if (Array.isArray(content)) {
 		let changed = false;
 		const sanitizedContent = content.map((block, i) => {
@@ -813,9 +858,9 @@ function sanitizeEntryValue(path: string, entry: AnyRecord, subscriptions: Set<s
 			if (sanitized !== block) changed = true;
 			return sanitized;
 		});
-		if (changed) return { ...entry, content: sanitizedContent };
+		if (changed) result = { ...result, content: sanitizedContent };
 	}
-	return entry;
+	return result;
 }
 
 function sanitizeBlockValue(path: string, block: AnyRecord, subscriptions: Set<string>): AnyRecord {

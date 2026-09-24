@@ -7,6 +7,7 @@
 import { memo, useCallback, useState } from "react";
 import type { SystemTurn } from "../../../../src/viewmodel/index.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
+import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CodeSnippet } from "../../render/CodeSnippet.tsx";
 import { Markdown } from "../../render/markdown.tsx";
@@ -19,6 +20,8 @@ const SYSTEM_LABEL: Record<SystemTurn["type"], string> = {
 	branch_summary: "Branch",
 	model_switch: "Model Change",
 	system_prompt: "System prompt update",
+	extension: "Extension",
+	extension_message: "Extension message",
 	unknown: "Unrecognized",
 };
 
@@ -42,6 +45,11 @@ function promptText(detail: SystemTurn["detail"]): string | null {
  * same skeleton, no tool status line. */
 const SystemPromptCard = memo(function SystemPromptCard({ turn, isDimmed }: { turn: SystemTurn; isDimmed: boolean }) {
 	const [expanded, setExpanded] = useState(false);
+	// The section text is lazy (LAZY_FIELD_PATTERNS): declare the pull while
+	// expanded; the VM re-projects once it lands.
+	if (expanded) {
+		enqueuePulls([{ entryId: turn.entryId, fieldPath: `/entries/${turn.entryId}/sections` }]);
+	}
 	const text = promptText(turn.detail);
 	const ts = formatTimestamp(turn.detail?.timestamp ?? "");
 	const name = SYSTEM_LABEL[turn.type];
@@ -107,7 +115,7 @@ export const SystemTurnView = memo(function SystemTurnView({ turn }: { turn: Sys
 		return <SystemPromptCard turn={turn} isDimmed={isDimmed} />;
 	}
 
-	if (turn.type === "unknown") {
+	if (turn.type === "unknown" || turn.type === "extension") {
 		return (
 			<div className={isDimmed ? styles.msgDimmed : undefined}>
 				<div className={styles.systemDivider}>
