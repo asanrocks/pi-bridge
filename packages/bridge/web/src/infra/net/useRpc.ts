@@ -118,7 +118,11 @@ export function useRpc() {
 		// An explicit open is a real navigation: it leaves the alias view and
 		// commits a real URL (ADR 13).
 		store.getState().setAddressViaAlias(false);
-		const previous = { projectId: store.getState().currentProjectId, stem: store.getState().currentStem };
+		const previous = {
+			projectId: store.getState().currentProjectId,
+			stem: store.getState().currentStem,
+			sessionId: store.getState().activeSessionId,
+		};
 		// Optimistic address commit: the URL and header update before the
 		// initial-sync push lands.
 		store.getState().setCurrentSession(projectId, stem);
@@ -134,8 +138,12 @@ export function useRpc() {
 			// restore the previous address instead of clearing to the launcher —
 			// otherwise the client would show no session while the server keeps
 			// the old Manager attached (uncollectable, and a UI/route mismatch).
-			const { projectId: prevProjectId, stem: prevStem } = previous;
+			const { projectId: prevProjectId, stem: prevStem, sessionId: prevSessionId } = previous;
 			store.getState().setCurrentSession(prevProjectId, prevStem);
+			// Re-bind the previous session id too: the optimistic commit above
+			// unbound it, and without this the restored session's draft slot
+			// would stay gated (null key) until its next initial sync.
+			store.getState().setActiveSessionId(prevSessionId);
 			if (prevProjectId === null) writeRoute({ kind: "launcher" });
 			else if (prevStem === null) writeRoute({ kind: "project", projectId: prevProjectId });
 			else writeRoute({ kind: "session", projectId: prevProjectId, stem: prevStem });

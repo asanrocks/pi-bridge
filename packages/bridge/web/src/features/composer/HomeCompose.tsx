@@ -94,6 +94,7 @@ export const HomeCompose = memo(function HomeCompose({
 	const draft = useStore((s) => s.draft);
 	const setDraftText = useStore((s) => s.setDraftText);
 	const clearDraft = useStore((s) => s.clearDraft);
+	const setDraft = useStore((s) => s.setDraft);
 	const text = draft.kind === "idle" ? "" : draft.text;
 
 	const [choice, setChoice] = useState<HomeModelChoice | null>(() => loadHomeModelChoice(projectId));
@@ -187,6 +188,15 @@ export const HomeCompose = memo(function HomeCompose({
 		const images = capabilities.images;
 		if (!text.trim() && images.length === 0) return;
 		setSending(true);
+		// Clear BEFORE the create RPC (mirrors useComposerCommit): the
+		// initial-sync push that promotes the new session switches the draft
+		// slot (`p:<projectId>` → `s:<sessionId>`), so a clear after the await
+		// would target the new slot and leave the sent prompt persisted in the
+		// Project slot — restored into the input of the next new session. The
+		// failure restore is safe: a failed create never navigates, so the
+		// draft re-persists into the same slot.
+		const savedDraft = draft;
+		clearDraft();
 		let ok = false;
 		try {
 			ok = await onNewSession(
@@ -199,14 +209,13 @@ export const HomeCompose = memo(function HomeCompose({
 		} finally {
 			setSending(false);
 		}
-		if (ok) {
-			clearDraft();
-		} else {
-			// Failed create: keep the draft for retry and put the caret back —
+		if (!ok) {
+			// Failed create: restore the draft for retry and put the caret back —
 			// the textarea stays enabled through the send.
+			setDraft(savedDraft);
 			textareaRef.current?.focus();
 		}
-	}, [sending, text, capabilities.images, model, choice, onNewSession, projectId, clearDraft]);
+	}, [sending, draft, text, capabilities.images, model, choice, onNewSession, projectId, clearDraft, setDraft]);
 
 	return (
 		<div className={styles.home}>
