@@ -171,6 +171,10 @@ when it resolves to a known entry, `status.leafId` otherwise — through
 becomes the conversation ViewModel. It joins tool-result entries to their tool
 calls, keeps lazy values nullable until pulled, and returns display
 descriptors for user, assistant, system, user-bash, and git-change turns.
+An entry kind the projection cannot classify falls back to an unrecognized
+system turn naming the source type and carrying the raw source entry, so no
+path entry is dropped; the entry-kind and turn-kind switches are exhaustive,
+making a new kind a compile error rather than a silent omission.
 Consecutive assistant entries merge into one assistant turn. Text does not
 split the turn; the flat
 block sequence preserves text/action order for the renderer.

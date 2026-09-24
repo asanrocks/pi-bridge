@@ -2008,23 +2008,18 @@ describe("git identity fold", () => {
 		expect(userTurnAt(vm, 1).gitIdentity).toEqual({ commit: SHA1, branch: null });
 	});
 
-	it("unknown versions, malformed payloads, and foreign custom types are invisible", () => {
+	it("unknown versions and malformed payloads never produce turns", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, stampEntry("s1", null, { v: 3, anchor: "prompt", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u1", "s1", "2024-01-01T00:00:01Z"));
 		appendEntry(doc, stampEntry("s2", "u1", { v: 1, anchor: "tool_end", commit: SHA1, branch: "main" }));
 		appendEntry(doc, userEntry("u2", "s2", "2024-01-01T00:00:02Z"));
-		appendEntry(
-			doc,
-			makeEntry("s3", "u2", "2024-01-01T00:00:00Z", "custom", { customType: "other.ext", data: { v: 1 } }),
-		);
+		appendEntry(doc, stampEntry("s3", "u2", null));
 		appendEntry(doc, userEntry("u3", "s3", "2024-01-01T00:00:03Z"));
-		appendEntry(doc, stampEntry("s4", "u3", null));
-		appendEntry(doc, userEntry("u4", "s4", "2024-01-01T00:00:04Z"));
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		for (let i = 0; i < 4; i++) expect(userTurnAt(vm, i).gitIdentity).toBeUndefined();
-		expect(vm.turns).toHaveLength(4); // invalid stamps never produce turns
+		for (let i = 0; i < 3; i++) expect(userTurnAt(vm, i).gitIdentity).toBeUndefined();
+		expect(vm.turns).toHaveLength(3); // invalid stamps never produce turns
 	});
 
 	it("no stamps means unknown (undefined), never an error", () => {
@@ -2643,5 +2638,86 @@ describe("review diff windows", () => {
 		expect(userTurnAt(third, 0)).not.toBe(userTurnAt(second, 0));
 		expect(userTurnAt(third, 0).gitTransitions).toHaveLength(1);
 		expect(userTurnAt(third, 0).gitTransitions[0]!.new).toBe(SHA_B);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unrecognized entries — the fallback turn
+// ---------------------------------------------------------------------------
+
+describe("computeViewModel — unrecognized entries", () => {
+	function customEntry(
+		id: string,
+		parentId: string | null,
+		customType: string,
+		data: unknown,
+	): Record<string, unknown> {
+		return makeEntry(id, parentId, "2024-01-01T00:00:01Z", "custom", { customType, data });
+	}
+
+	it("renders an unclassifiable custom entry as an unrecognized system turn", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(doc, customEntry("e2", "e1", "context_edit", null));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(2);
+		const sys = vm.turns[1];
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("unknown");
+		expect(sys.summary).toBe("context_edit");
+		expect(sys.detail).toBe(doc.entries["e2"]);
+	});
+
+	it("keeps a git stamp out of the fallback", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			customEntry("s1", "e1", "pi-bridge.git-stamp", {
+				v: 2,
+				anchor: "user_bash_end",
+				commit: "1111111111111111111111111111111111111111",
+				branch: "main",
+				commitSubject: "a",
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns.some((t) => t.kind === "system" && t.type === "unknown")).toBe(false);
+		expect(vm.turns.some((t) => t.kind === "gitChange")).toBe(true);
+	});
+
+	it("reuses the unrecognized turn identity across recomputes", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(doc, customEntry("e2", "e1", "usage", null));
+
+		const first = computeViewModel({ document: doc, models: [] });
+		const second = computeViewModel({ document: doc, models: [] }, first);
+		expect(second.turns.find((t) => t.kind === "system")).toBe(first.turns.find((t) => t.kind === "system"));
+	});
+
+	it("renders a system message as an unrecognized turn, never a user turn", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "hi" }],
+			}),
+		);
+		appendEntry(doc, makeEntry("s1", "a1", "2024-01-01T00:00:02Z", "message", { role: "system", content: [] }));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		// The system prompt diff is not a conversation turn: exactly one user turn
+		// (no ghost), and the system entry renders as unrecognized.
+		expect(vm.turns.filter((t) => t.kind === "user")).toHaveLength(1);
+		const sys = vm.turns.find((t) => t.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("unknown");
+		expect(sys.summary).toBe("system");
+		expect(sys.detail).toBe(doc.entries["s1"]);
 	});
 });
