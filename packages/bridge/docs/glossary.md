@@ -130,7 +130,13 @@ How Session content travels. Defined by the [core data model](core/data-model.md
 1. A **Document** *(bound)* is the canonical content of a Session: status
    plus entry map. Clients sync to a Document, not to an event stream.
 2. An **Entry** *(bound)* is one item in a Session: the unit of sync,
-   persistence, and rendering.
+   persistence, and rendering. Its **kind** names how it renders. An
+   upstream entry type the projection cannot classify is an **unrecognized
+   entry** and renders a fallback; an extension-owned custom entry is an
+   **extension entry**; a named non-conversation upstream type (a context
+   edit, a usage record) is an **internal entry** and is hidden. A message
+   whose role is neither user nor assistant is not a conversation turn: a
+   system-role message is a prompt-section diff.
 3. An Entry is **committed** *(bound)* or **provisional** *(bound)*;
    provisional identity is mutable until it is sealed.
 4. **Reconcile** *(bound)* aligns the Document with the durable entries; it
@@ -144,8 +150,8 @@ How Session content travels. Defined by the [core data model](core/data-model.md
    Document.
 6. Entry fields are **lazy** *(bound)* or **eager** *(bound)*. Lazy fields
    are withheld on the wire and fetched on demand; the canonical Document
-   always holds real content. Text is eager; thinking, tool arguments, and
-   tool results are lazy.
+   always holds real content. Text is eager; thinking, tool arguments, tool
+   results, and a system message's section text are lazy.
 7. A **pull** *(bound)* fetches withheld content: on a provisional Entry it
    is a live subscription that streams until commit; on a committed Entry
    it is one-shot. A Mirror declares its demand as **pending pulls**
@@ -173,7 +179,9 @@ and [web design](web/design.md).
 3. A turn is one node of that tree and is composed of one or more entries.
    A user turn is one entry; an **assistant turn** merges consecutive
    assistant entries. Turns are user, assistant, system, user-bash, or
-   git-change.
+   git-change. A system turn covers compaction and branch summaries, model
+   and thinking switches, a system-prompt diff, an extension entry or
+   message, and the unrecognized fallback.
 4. Inside an assistant turn, consecutive tool and thinking blocks become an
    **action group** *(composed)*; text blocks never join a group.
 5. A member of an action group is an **action** *(common word)*: a tool
