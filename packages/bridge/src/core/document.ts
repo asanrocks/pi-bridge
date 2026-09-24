@@ -124,6 +124,10 @@ function toMessageEntry(entry: SessionMessageEntry): Entry {
 			errorMessage: (am.errorMessage as string | undefined) ?? null,
 		} as unknown as Entry;
 	}
+	if (role === "system") {
+		// The prompt diff is carried so the unrecognized fallback can show it.
+		return { ...base, sections: (msgRaw.sections as JsonValue | undefined) ?? null } as unknown as Entry;
+	}
 	return base;
 }
 
@@ -311,7 +315,9 @@ export function toEntry(entry: SessionEntry): Entry {
 				parentId: e.parentId,
 				timestamp: e.timestamp,
 				customType: e.type,
-				data: null,
+				// Preserve the raw entry so the unrecognized fallback can show its
+				// fields instead of only its type name.
+				data: entry as unknown as JsonValue,
 			};
 		}
 	}
