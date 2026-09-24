@@ -272,7 +272,7 @@ describe("initFromEntries", () => {
 		expect(doc.status.leafId).toBe("t1");
 	});
 
-	it("handles unknown entry types as custom", () => {
+	it("handles unknown entry types as unknown", () => {
 		const entry = {
 			type: "future_type",
 			id: "f1",
@@ -281,11 +281,11 @@ describe("initFromEntries", () => {
 			data: {},
 		} as unknown as SessionEntry;
 		const doc = initFromEntries([entry]);
-		expect(doc.entries.f1.kind).toBe("custom");
-		const custom = doc.entries.f1 as Extract<Entry, { kind: "custom" }>;
-		expect(custom.customType).toBe("future_type");
+		expect(doc.entries.f1.kind).toBe("unknown");
+		const unknown = doc.entries.f1 as Extract<Entry, { kind: "unknown" }>;
+		expect(unknown.sourceType).toBe("future_type");
 		// The raw entry is preserved so the unrecognized fallback can show it.
-		expect(custom.data).toBe(entry);
+		expect(unknown.data).toBe(entry);
 	});
 
 	it("preserves a system message's prompt sections for the fallback", () => {
@@ -294,12 +294,43 @@ describe("initFromEntries", () => {
 			id: "s1",
 			parentId: null,
 			timestamp: "t",
-			message: { role: "system", content: "", sections: { rules: "be nice" } },
+			message: { role: "system", content: "", sections: { rules: "be nice", docs: null } },
 		} as unknown as SessionEntry;
 		const doc = initFromEntries([entry]);
 		const msg = doc.entries.s1 as Extract<Entry, { kind: "message" }>;
 		expect(msg.role).toBe("system");
-		expect(msg.sections).toEqual({ rules: "be nice" });
+		expect(msg.sections).toEqual({ rules: "be nice", docs: null });
+		// Names are eager so the collapsed card summarizes without the text.
+		expect(msg.sectionNames).toEqual(["rules"]);
+		expect(msg.removedSectionNames).toEqual(["docs"]);
+	});
+
+	it("strips a system message's section text for the wire", () => {
+		const entry = {
+			type: "message",
+			id: "s1",
+			parentId: null,
+			timestamp: "t",
+			message: { role: "system", content: "", sections: { rules: "be nice" } },
+		} as unknown as SessionEntry;
+		const doc = initFromEntries([entry]);
+		const wire = snapshotForWire(doc);
+		const msg = wire.entries.s1 as Extract<Entry, { kind: "message" }>;
+		expect(msg.sections).toBeNull();
+		expect(msg.sectionNames).toEqual(["rules"]);
+	});
+
+	it("names context edits and usage records as internal, not unknown", () => {
+		const entry = {
+			type: "context_edit",
+			id: "c1",
+			parentId: null,
+			timestamp: "t",
+			targetId: "x",
+			replacement: null,
+		} as unknown as SessionEntry;
+		const doc = initFromEntries([entry]);
+		expect(doc.entries.c1.kind).toBe("internal");
 	});
 });
 

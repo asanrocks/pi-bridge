@@ -2655,17 +2655,17 @@ describe("computeViewModel — unrecognized entries", () => {
 		return makeEntry(id, parentId, "2024-01-01T00:00:01Z", "custom", { customType, data });
 	}
 
-	it("renders an unclassifiable custom entry as an unrecognized system turn", () => {
+	it("renders an extension custom entry as an extension turn", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(doc, customEntry("e2", "e1", "context_edit", null));
+		appendEntry(doc, customEntry("e2", "e1", "rewind-turn", null));
 
 		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(2);
 		const sys = vm.turns[1];
 		if (sys?.kind !== "system") throw new Error("system turn not found");
-		expect(sys.type).toBe("unknown");
-		expect(sys.summary).toBe("context_edit");
+		expect(sys.type).toBe("extension");
+		expect(sys.summary).toBe("rewind-turn");
 		expect(sys.detail).toBe(doc.entries["e2"]);
 	});
 
@@ -2738,5 +2738,85 @@ describe("computeViewModel — unrecognized entries", () => {
 		if (sys?.kind !== "system") throw new Error("system turn not found");
 		expect(sys.type).toBe("system_prompt");
 		expect(sys.summary).toBeUndefined();
+	});
+
+	it("renders an unknown entry kind as an unrecognized turn", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "unknown", { sourceType: "future_type", data: { x: 1 } }),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const sys = vm.turns.find((t) => t.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("unknown");
+		expect(sys.summary).toBe("future_type");
+	});
+
+	it("hides a named internal entry", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(doc, makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "internal", { sourceType: "context_edit" }));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(1);
+		expect(vm.turns.some((t) => t.kind === "system")).toBe(false);
+	});
+
+	it("renders a display-flagged extension message", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "custom_message", {
+				customType: "notify",
+				content: [{ type: "text", text: "heads up" }],
+				details: null,
+				display: true,
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const sys = vm.turns.find((t) => t.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("extension_message");
+		expect(sys.summary).toBe("heads up");
+	});
+
+	it("does not render a non-display extension message", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "custom_message", {
+				customType: "notify",
+				content: [{ type: "text", text: "heads up" }],
+				details: null,
+				display: false,
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(1);
+	});
+
+	it("renders an assistant image block as a placeholder, never drops it", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const a = vm.turns.find((t) => t.kind === "assistant");
+		if (a?.kind !== "assistant") throw new Error("assistant turn not found");
+		expect(a.blocks).toHaveLength(1);
+		expect(a.blocks[0]?.blockType).toBe("text");
 	});
 });
