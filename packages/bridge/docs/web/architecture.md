@@ -174,7 +174,9 @@ descriptors for user, assistant, system, user-bash, and git-change turns.
 An entry kind the projection cannot classify falls back to an unrecognized
 system turn naming the source type and carrying the raw source entry, so no
 path entry is dropped; the entry-kind and turn-kind switches are exhaustive,
-making a new kind a compile error rather than a silent omission.
+making a new kind a compile error rather than a silent omission. A
+system-role message is a prompt-section diff, not a conversation turn: it
+projects to a system-prompt turn naming the sections it changed.
 Consecutive assistant entries merge into one assistant turn. Text does not
 split the turn; the flat
 block sequence preserves text/action order for the renderer.

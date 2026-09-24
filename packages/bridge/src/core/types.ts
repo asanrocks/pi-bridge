@@ -79,11 +79,11 @@ export interface EntryBase {
 export interface MessageEntry extends EntryBase {
 	kind: "message";
 	/** `system` entries are pi's per-turn system-prompt diffs; the viewmodel
-	 * renders them as unrecognized turns (they are not conversation turns). */
+	 * renders them as a system-prompt turn (they are not conversation turns). */
 	role: "user" | "assistant" | "system";
 	content: Content[];
-	/** System-prompt diff sections (role `system` only); preserved so the
-	 * unrecognized fallback can show what changed. */
+	/** System-prompt diff sections (role `system` only): a string sets or
+	 * replaces a named section, `null` removes it. */
 	sections?: JsonValue;
 	// assistant-only fields. Optional metadata is normalized to `null` when
 	// absent (never `undefined`) so the streaming skeleton, the file
