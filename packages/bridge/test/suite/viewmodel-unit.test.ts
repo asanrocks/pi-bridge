@@ -2698,7 +2698,7 @@ describe("computeViewModel — unrecognized entries", () => {
 		expect(second.turns.find((t) => t.kind === "system")).toBe(first.turns.find((t) => t.kind === "system"));
 	});
 
-	it("renders a system message as an unrecognized turn, never a user turn", () => {
+	it("renders a system message as a prompt-change turn naming its sections, never a user turn", () => {
 		const doc = emptyDoc();
 		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
 		appendEntry(
@@ -2708,16 +2708,35 @@ describe("computeViewModel — unrecognized entries", () => {
 				content: [{ type: "text", text: "hi" }],
 			}),
 		);
-		appendEntry(doc, makeEntry("s1", "a1", "2024-01-01T00:00:02Z", "message", { role: "system", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("s1", "a1", "2024-01-01T00:00:02Z", "message", {
+				role: "system",
+				content: [],
+				sections: { tools: "t", rules: "r", docs: null },
+			}),
+		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
-		// The system prompt diff is not a conversation turn: exactly one user turn
-		// (no ghost), and the system entry renders as unrecognized.
+		// The prompt diff is not a conversation turn: exactly one user turn (no ghost),
+		// and the system entry renders as a prompt change naming the changed sections.
 		expect(vm.turns.filter((t) => t.kind === "user")).toHaveLength(1);
 		const sys = vm.turns.find((t) => t.kind === "system");
 		if (sys?.kind !== "system") throw new Error("system turn not found");
-		expect(sys.type).toBe("unknown");
-		expect(sys.summary).toBe("system");
+		expect(sys.type).toBe("system_prompt");
+		expect(sys.summary).toBe("tools, rules · removed: docs");
 		expect(sys.detail).toBe(doc.entries["s1"]);
+	});
+
+	it("renders a system message with no readable sections without a summary", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(doc, makeEntry("s1", "u1", "2024-01-01T00:00:01Z", "message", { role: "system", content: [] }));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const sys = vm.turns.find((t) => t.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("system_prompt");
+		expect(sys.summary).toBeUndefined();
 	});
 });
