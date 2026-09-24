@@ -282,7 +282,24 @@ describe("initFromEntries", () => {
 		} as unknown as SessionEntry;
 		const doc = initFromEntries([entry]);
 		expect(doc.entries.f1.kind).toBe("custom");
-		expect((doc.entries.f1 as Extract<Entry, { kind: "custom" }>).customType).toBe("future_type");
+		const custom = doc.entries.f1 as Extract<Entry, { kind: "custom" }>;
+		expect(custom.customType).toBe("future_type");
+		// The raw entry is preserved so the unrecognized fallback can show it.
+		expect(custom.data).toBe(entry);
+	});
+
+	it("preserves a system message's prompt sections for the fallback", () => {
+		const entry = {
+			type: "message",
+			id: "s1",
+			parentId: null,
+			timestamp: "t",
+			message: { role: "system", content: "", sections: { rules: "be nice" } },
+		} as unknown as SessionEntry;
+		const doc = initFromEntries([entry]);
+		const msg = doc.entries.s1 as Extract<Entry, { kind: "message" }>;
+		expect(msg.role).toBe("system");
+		expect(msg.sections).toEqual({ rules: "be nice" });
 	});
 });
 
