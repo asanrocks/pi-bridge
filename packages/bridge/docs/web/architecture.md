@@ -171,12 +171,15 @@ when it resolves to a known entry, `status.leafId` otherwise — through
 becomes the conversation ViewModel. It joins tool-result entries to their tool
 calls, keeps lazy values nullable until pulled, and returns display
 descriptors for user, assistant, system, user-bash, and git-change turns.
-An entry kind the projection cannot classify falls back to an unrecognized
-system turn naming the source type and carrying the raw source entry, so no
-path entry is dropped; the entry-kind and turn-kind switches are exhaustive,
-making a new kind a compile error rather than a silent omission. A
-system-role message is a prompt-section diff, not a conversation turn: it
-projects to a system-prompt turn naming the sections it changed.
+An upstream entry type the projection cannot classify becomes an unrecognized
+system turn naming the source type and carrying the raw source entry; an
+extension-owned custom entry becomes an extension turn; a named
+non-conversation type (a context edit, a usage record) becomes a hidden
+internal entry. No path entry is dropped, and the entry-kind and turn-kind
+switches are exhaustive, making a new kind a compile error rather than a
+silent omission. A system-role message is a prompt-section diff, not a
+conversation turn: it projects to a system-prompt turn naming the sections it
+changed, with the section text lazy.
 Consecutive assistant entries merge into one assistant turn. Text does not
 split the turn; the flat
 block sequence preserves text/action order for the renderer.

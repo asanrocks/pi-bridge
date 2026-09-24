@@ -64,7 +64,11 @@ export const ActionDetails = memo(function ActionDetails({ action }: { action: T
 		),
 	);
 	const fullResultText = resultContent
-		? sanitizeOutputText(resultContent.map((c) => (c.type === "text" && c.text) || "").join("\n"))
+		? sanitizeOutputText(
+				resultContent
+					.map((c) => (c.type === "text" ? c.text : c.type === "image" ? "" : `[unsupported ${c.type} content]`))
+					.join("\n"),
+			)
 		: null;
 
 	const args: ToolArgs | null = arguments_ && typeof arguments_ === "object" ? (arguments_ as ToolArgs) : null;
