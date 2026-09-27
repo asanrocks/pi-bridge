@@ -627,6 +627,25 @@ describe("daemon: projects", () => {
 		await expect(new Daemon().start({ agentDir, allow: [join(a, "nope")] })).rejects.toThrow(/does not exist/);
 		await expect(new Daemon().start({ agentDir, allow: [`Bad_Id=${a}`] })).rejects.toThrow(/Invalid project id/);
 	});
+
+	it("slugifies a derived id from a basename with invalid characters", async () => {
+		const { root, agentDir } = makeProjectRoots();
+		const dir = join(root, "43_Multimodal.Detection");
+		mkdirSync(dir, { recursive: true });
+		const { port } = await startDaemon({ agentDir, allow: [dir] });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const id = send(ws, { verb: "getDaemonInfo" });
+		const reply = (await waitForReply(frames, id)) as unknown as {
+			ok: boolean;
+			projects: Array<{ id: string }>;
+		};
+		expect(reply.ok).toBe(true);
+		expect(reply.projects.map((p) => p.id)).toEqual(["43-multimodal-detection"]);
+
+		ws.close();
+	});
 });
 
 describe("daemon: session scan containment", () => {

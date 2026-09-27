@@ -53,9 +53,20 @@ export function canonicalizeCwd(path: string): string {
 	return real;
 }
 
-/** Lowercase basename of a canonical cwd. Empty for a filesystem root. */
+/**
+ * Slugified basename of a canonical cwd: lowercase, every run of characters
+ * outside `[a-z0-9]` collapsed to a single `-`, leading/trailing `-` trimmed.
+ * A raw basename would fail `PROJECT_ID_RE` for common directories
+ * (`my_repo`, `v1.2`), so the derived id must be normalized; empty for a
+ * filesystem root or an all-symbol basename.
+ */
 export function deriveProjectId(cwd: string): string {
-	return basename(cwd).toLowerCase();
+	return basename(cwd)
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "") // strip combining accents from Latin diacritics
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
 }
 
 /**

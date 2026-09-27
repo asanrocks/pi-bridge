@@ -18,8 +18,9 @@ A Project is static daemon configuration: one canonical, allowlisted directory
 and pi's cwd-derived Session storage namespace. The daemon materializes
 Projects from `--allow` entries:
 
-- `<path>` derives the id from the lowercase basename of the canonical real
-  path.
+- `<path>` derives the id from the canonical real path's basename, lowercased
+  and slugified into the id shape (non-alphanumeric runs collapse to `-`, with
+  leading/trailing `-` trimmed).
 - `<id>=<path>` supplies the id explicitly; the first `=` separates the id
   from the path, so the path may contain `=`.
 - The path must exist, resolve to a directory, and be canonicalized with the
