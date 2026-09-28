@@ -253,6 +253,14 @@ auto-retries. The transport uses exponential backoff with a 500 ms base, a
 timer, resets the attempt count, and connects immediately. A superseded or
 disposed connection cannot write to the store or cache.
 
+Connection state gates capabilities, never rendering. The store's document
+is always the last known state of the watched session and renders whatever
+the connection says: mutation surfaces (composer, keyboard ring) and RPC
+paths gate on `connected`, while the TopBar chip and the Launcher's down
+states carry the wording. At mount, the local half of boot seeds the document
+from the IndexedDB cache in parallel with the first connect, so a cold boot
+is the same shape as a reconnect that still holds its document in memory.
+
 ### Per-connection modules
 
 `connectionTransport.ts` adapts WebSocket send/receive to the browser-safe
@@ -284,13 +292,21 @@ wrapper may stage the requested address while the operation is in flight and
 restores the previous address on failure; the initial-sync handler reasserts
 the committed address and cache identity.
 
-`sessionBoot.ts` implements the route-driven open used at initial connection
-and reconnect. It looks up the address's remembered `sessionId`, loads its
-cache records and status hint, seeds the BridgeClient mirror, derives a valid
-prefix cursor, and calls `openSession`. With no usable cache it opens without a
-cursor and receives a full replace. A failed open clears the session state and
-writes the Project route, because the address no longer resolves or an
-unflushed Session disappeared with the daemon.
+`sessionBoot.ts` is the two halves of boot. The local half,
+`restoreLocalSession`, runs at mount before the wire: it looks up the route's
+remembered `sessionId`, loads the cache records and status hint, and seeds
+the store document — quiescing the volatile status flags, because a cached
+mid-flight turn (streaming, compaction, pending steer) can never progress
+without the daemon — behind a race guard that never lets stale cache
+overwrite wire data. With no remembered id, no records, or a failed read it
+is a no-op and the address stays unclaimed, so the Launcher's down states
+show while connecting. The wire half, `openSessionAddress`, runs at initial
+connection and reconnect: it seeds the BridgeClient mirror — from the
+already-restored store document when present, else from the cache — derives a
+valid prefix cursor, and calls `openSession`. With no usable cache it opens
+without a cursor and receives a full replace. A failed open clears the
+session state and writes the Project route, because the address no longer
+resolves or an unflushed Session disappeared with the daemon.
 
 `devConsole.ts` hooks browser `console.log`, `console.warn`, and
 `console.error` only when daemon information reports development mode. It
@@ -449,6 +465,15 @@ around reconnect is handled by the same move-key migration as a live patch, so
 manual expansion, frozen behavior, and keyboard focus survive the identity
 change. A deliberate detach, Project switch, or failed open does clear those
 session-scoped values through `clearCurrentSession`.
+
+Offline rendering is that invariant seen from boot: the document is always
+last-known-state and always renderable, and a cold boot of a remembered
+address is exactly a reconnect that still holds its document — the cache
+supplies what memory would have. The scope is session-content recovery on a
+direct open. The launcher, session listing, alias resolution (`/@latest`
+needs the daemon), and switching to a different session all require the wire
+and show their down states without it; lazy fields of cached entries render
+unloaded until a reconnect's initial sync re-registers them.
 
 The correctness order is therefore: the route selects an address; the local
 address index selects a possible cache identity; the cache supplies an

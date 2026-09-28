@@ -56,8 +56,8 @@ export interface ProtocolSlice {
 	// the change signal for all selectors.
 	document: Document;
 	/** Durable session id of `document` (ADR 09) — the cache key, set from
-	 * initial-sync frames; live patches do not repeat it. Null when not
-	 * attached or the session has no id yet. */
+	 * initial-sync frames or the boot-time local restore; live patches do not
+	 * repeat it. Null when not attached or the session has no id yet. */
 	activeSessionId: string | null;
 	connection: ConnectionState;
 
