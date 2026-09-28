@@ -996,9 +996,10 @@ export class Daemon {
 				"Content-Type": MIME_TYPES[extname(path)] ?? "application/octet-stream",
 			};
 			// Vite content-hashes everything under `assets/`; `index.html` must
-			// revalidate so a redeploy isn't masked by a stale shell.
+			// revalidate so a redeploy isn't masked by a stale shell, and `sw.js`
+			// must revalidate so worker update checks see a new version promptly.
 			if (path.startsWith("/assets/")) headers["Cache-Control"] = "public, max-age=31536000, immutable";
-			else if (path === "/index.html") headers["Cache-Control"] = "no-cache";
+			else if (path === "/index.html" || path === "/sw.js") headers["Cache-Control"] = "no-cache";
 			res.writeHead(200, headers);
 			res.end(read.content);
 		});
