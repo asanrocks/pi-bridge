@@ -384,6 +384,24 @@ adapter falls back to an in-memory cache when IndexedDB is unavailable or
 fails. Cache absence, corruption, a failed read, or a failed write changes
 performance only; the server Document remains authoritative.
 
+`public/sw.js` is the service worker: the notification vehicle (OS-channel
+`showNotification`, which displays while the browser is backgrounded on
+mobile) and the offline app shell. Its fetch handler serves navigations
+network-first — so a redeploy is picked up immediately, the shell being
+`no-cache` — falling back to the last cached shell when the daemon is down,
+and serves `/assets/*` cache-first (content-hashed, immutable). Everything
+else passes through untouched; the WebSocket RPC is not a fetch at all.
+Requests are discriminated by mode and URL, never by re-implementing the
+server's resource-vs-address path rule — the daemon stays the single
+authority for what a path means. `sw.js` itself is served `no-cache` so
+worker update checks see a new version promptly. The vite dev server is
+unaffected: it serves no `/assets/*` paths, and network-first navigations
+pass through while it is up. Registration (`app/main.tsx`) is
+secure-context-only and failure is non-fatal. The worker only helps from the
+second visit onward — a first visit with the daemon down has no installed
+worker and no cached shell. The fetch policy is unit-tested by executing the
+shipped `sw.js` with stubbed `caches`/`fetch` (`test/suite/sw-fetch-policy.test.ts`).
+
 `prepareSwitch` loads a target Session's records and status hint, derives a
 contiguous prefix cursor, and seeds the candidate mirror only when that cursor
 is valid. Otherwise the switch uses a full replace path.
@@ -469,11 +487,14 @@ session-scoped values through `clearCurrentSession`.
 Offline rendering is that invariant seen from boot: the document is always
 last-known-state and always renderable, and a cold boot of a remembered
 address is exactly a reconnect that still holds its document — the cache
-supplies what memory would have. The scope is session-content recovery on a
-direct open. The launcher, session listing, alias resolution (`/@latest`
-needs the daemon), and switching to a different session all require the wire
-and show their down states without it; lazy fields of cached entries render
-unloaded until a reconnect's initial sync re-registers them.
+supplies what memory would have. The service worker completes the picture at
+the delivery layer: a reload while the daemon is down loads the cached app
+shell, and the local restore renders the session from the IndexedDB cache.
+The scope is session-content recovery on a direct open. The launcher,
+session listing, alias resolution (`/@latest` needs the daemon), and
+switching to a different session all require the wire and show their down
+states without it; lazy fields of cached entries render unloaded until a
+reconnect's initial sync re-registers them.
 
 The correctness order is therefore: the route selects an address; the local
 address index selects a possible cache identity; the cache supplies an

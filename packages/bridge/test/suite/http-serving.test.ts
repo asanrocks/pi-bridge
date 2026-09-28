@@ -87,6 +87,7 @@ describe("HTTP serving", () => {
 		const webRoot = makeTempDir("disk-web");
 		writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>DISK-SHELL</title>");
 		writeFileSync(join(webRoot, "app.js"), "console.log(1)");
+		writeFileSync(join(webRoot, "sw.js"), "// sw");
 		mkdirSync(join(webRoot, "assets"));
 		writeFileSync(join(webRoot, "assets", "index-abc.js"), "console.log(2)");
 		const port = await startDaemon({ agentDir: makeTempDir("disk-agent"), allow: [project], webRoot });
@@ -113,6 +114,11 @@ describe("HTTP serving", () => {
 		expect(hashed.body).toBe("console.log(2)");
 		expect(hashed.cacheControl).toContain("immutable");
 
+		// The service worker must revalidate so update checks see a new worker.
+		const sw = await request(port, "/sw.js");
+		expect(sw.status).toBe(200);
+		expect(sw.cacheControl).toBe("no-cache");
+
 		expect((await request(port, "/assets/missing.js")).status).toBe(404);
 	});
 
@@ -123,6 +129,7 @@ describe("HTTP serving", () => {
 		const embeddedAssets = {
 			"index.html": Buffer.from("<!doctype html><title>EMBEDDED-SHELL</title>").toString("base64"),
 			"assets/index-abc.js": Buffer.from("console.log(3)").toString("base64"),
+			"sw.js": Buffer.from("// sw").toString("base64"),
 		};
 		const port = await startDaemon({
 			agentDir: makeTempDir("emb-agent"),
@@ -144,6 +151,10 @@ describe("HTTP serving", () => {
 		expect(hashed.status).toBe(200);
 		expect(hashed.body).toBe("console.log(3)");
 		expect(hashed.cacheControl).toContain("immutable");
+
+		const sw = await request(port, "/sw.js");
+		expect(sw.status).toBe(200);
+		expect(sw.cacheControl).toBe("no-cache");
 
 		expect((await request(port, "/assets/missing.js")).status).toBe(404);
 	});
