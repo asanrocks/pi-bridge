@@ -26,7 +26,7 @@ import { hookConsole } from "./devConsole.ts";
 import { resolveLatestSession } from "./latestSession.ts";
 import { flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
-import { openSessionAddress } from "./sessionBoot.ts";
+import { openSessionAddress, restoreLocalSession } from "./sessionBoot.ts";
 
 // After this many failed reconnect attempts, state shifts to "unreachable".
 const UNREACHABLE_THRESHOLD = 5;
@@ -245,6 +245,13 @@ export function useConnection(): { retry: () => void } {
 		setDrainer(() => {
 			void flushPullQueue();
 		});
+		// Cache-first boot: restore the route's session from the local cache
+		// in parallel with the first connect, so the conversation paints before
+		// the wire answers. The restore's race guard keeps the wire
+		// authoritative; with no local truth the address stays unclaimed and
+		// the Launcher's down states show while connecting.
+		const route = parseRoute(window.location.pathname);
+		if (route.kind === "session") void restoreLocalSession(route.projectId, route.stem);
 		connect();
 		return () => {
 			disposedRef.current = true;
