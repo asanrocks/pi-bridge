@@ -255,13 +255,47 @@ highlighting, tables, and copy controls supplied by the shared Markdown
 renderer.
 
 The viewport follows structural and streaming text growth while the reader is
-at the bottom. Scrolling upward pauses follow. New readable text below the
-viewport adds a dot to the floating jump button; tool and thinking churn alone
-does not. The jump button returns to the live end. While peeking, auto-follow
-pauses and the jump button is always visible as the return-to-live gesture:
-clicking it unpins the rendering leaf and anchors at the live end, catching up
-with everything that landed while peeking. History anchors and
-keyboard focus scrolls account for the fixed TopBar and composer.
+at the bottom. Scrolling upward pauses follow.
+
+A sent message is different: the sent user turn top-anchors — the whole turn
+container, header metadata included, not the text — and auto-scroll freezes
+for the turn, so the reader's own message stays the reading position while
+the reply streams in below. The freeze is unconditional for the turn and
+lifts only when the reader reaches the live end after content has grown below
+the parked viewport, presses the jump button, or switches sessions: reaching
+the live end before anything streamed below is circumstance, not intent, and
+must not lift it. The anchor scroll itself is animated (instant under
+prefers-reduced-motion), and the frozen viewport's park position — not the
+transient mid-animation position — is what the content-below check measures
+against. Top-pinning the tail needs scroll range below it, which the
+sent message never has — while the freeze holds, the conversation column
+carries manufactured slack beyond the composer footprint, but only the
+minimum that keeps the parked position reachable, trimmed down as the reply
+streams in: while any slack remains the document's maximum scroll IS the
+parked position — overscrolling into blank is structurally impossible — and
+once the reply fills the reading area the slack is zero and the range below
+the live end is exactly the content. The slack is removed when the freeze
+lifts, and live-end computations (at-bottom detection, follow targets)
+subtract it, so nothing ever targets the padded end. A clamp at the other end
+(not enough content above the anchor to pin it at the top) is benign — the
+anchored turn is then necessarily within the first viewport. Sends from
+another client (steers) do not anchor; only the local composer's sends do.
+
+Reading up outside a frozen turn, new readable text below the viewport adds a
+dot to the floating jump button; tool and thinking churn alone does not. The
+button floats horizontally centered on the conversation column (inset to the
+sidebar and history gutters), above the composer. With
+the dot showing, the button top-anchors the latest reply turn — the latest
+assistant turn, tool-only turns included, falling back to the last turn when
+no reply exists yet — the same target as the G key, so every "go to the end"
+gesture lands in one place. Without the dot it returns to the live end and
+re-arms follow; while a turn is frozen it means "follow live" for the rest
+of the stream. While peeking, auto-follow pauses and the jump button is
+always visible as the return-to-live gesture: clicking it unpins the
+rendering leaf and anchors at the live end, catching up with everything that
+landed while peeking. History anchors, send anchors, and keyboard focus
+scrolls pin the turn container clear of the fixed TopBar and composer via
+scroll-margin.
 
 The first paint of a session's content (open, launcher switch, cold URL load,
 re-attach after reconnect) lands by rule, never at the previous session's
