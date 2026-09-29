@@ -21,11 +21,11 @@
 	margin-bottom: 6px;
 }
 
-/* Scroll-margin so scrollIntoView (keyboard j/k/g/G) keeps the focused turn
-   clear of the fixed TopBar above and the fixed Composer below. Set on both
-   turn surfaces; the value tracks --composer-h at runtime. */
-.userMsg,
-.asstMsg {
+/* Scroll-margin so scrollIntoView (keyboard j/k/g/G, history anchors, send
+   anchors, the jump button's latest-reply anchor) keeps the target turn clear
+   of the fixed TopBar above and the fixed Composer below. Set on every turn
+   surface that carries a turn key; the value tracks --composer-h at runtime. */
+[data-turn-key] {
 	scroll-margin-top: calc(var(--topbar-h) + 12px);
 	scroll-margin-bottom: calc(var(--composer-h, 64px) + 16px);
 }
