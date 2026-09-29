@@ -13,7 +13,13 @@
 
 import { useCallback } from "react";
 import type { TurnVM, ViewModel } from "../../../src/viewmodel/index.ts";
-import { newestLeafInSubtree, nextFocusedTurnKey, segmentBlocks, turnKeyOf } from "../../../src/viewmodel/index.ts";
+import {
+	latestReplyTurnKey,
+	newestLeafInSubtree,
+	nextFocusedTurnKey,
+	segmentBlocks,
+	turnKeyOf,
+} from "../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../features/conversation/clipboard.ts";
 import { getStore } from "../infra/state/store.tsx";
 import type { AppKeyHandlers } from "./keybindings.ts";
@@ -74,8 +80,11 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 			// Skip system dividers — they aren't content to read or act on.
 			const nav = vm.turns.filter((t) => t.kind === "user" || t.kind === "assistant");
 			if (nav.length === 0) return;
-			const target = edge === "first" ? nav[0] : nav[nav.length - 1];
-			getStore().getState().setFocusedTurnId(turnKeyOf(target));
+			// "last" targets the latest reply (latest assistant turn, tool-only
+			// included) — the shared target of every "go to the end" gesture, so
+			// G and the jump button's new-content anchor land in one place.
+			const target = edge === "first" ? turnKeyOf(nav[0]) : latestReplyTurnKey(vm.turns);
+			if (target !== null) getStore().getState().setFocusedTurnId(target);
 		},
 		[vm],
 	);
