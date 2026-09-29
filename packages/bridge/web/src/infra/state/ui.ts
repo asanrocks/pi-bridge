@@ -129,6 +129,20 @@ export function resolveRenderLeafTarget(
 	return undefined;
 }
 
+/** The last user message entry id on the live root→leaf path, or "" when the
+ * path has none. The send-anchor baseline (armSendAnchor) and the viewport's
+ * consume-time walk share this — both must read the same synchronous store
+ * document, never a projected ViewModel that lags a render. */
+export function lastUserEntryIdOnPath(entries: Record<string, Entry>, leafId: string | null): string {
+	let cursor = leafId;
+	while (cursor) {
+		const e = entries[cursor];
+		if (e && e.kind === "message" && e.role === "user") return cursor;
+		cursor = e?.parentId ?? null;
+	}
+	return "";
+}
+
 // ---------------------------------------------------------------------------
 // Repository browser target (ADR 14)
 // ---------------------------------------------------------------------------
@@ -214,6 +228,25 @@ export interface UiSlice {
 	scrollToEntryId: string | null;
 	setScrollToEntryId: (id: string | null) => void;
 
+	/** Armed by the composer commit paths (send, edit-fork, first prompt)
+	 *  just before the send RPC leaves, cleared on RPC failure. The value is
+	 *  the baseline: the last user message entry id on the live path at arm
+	 *  time ("" when the path has none). The viewport consumes it when the
+	 *  path's last user turn differs from the baseline — the sent turn has
+	 *  landed — and top-anchors it, freezing auto-scroll for the turn: the
+	 *  reader keeps her own message as the reading position while the reply
+	 *  streams in below. The baseline lives here (not in a render-side ref)
+	 *  because the store's document is applied synchronously with the wire
+	 *  frame, while component state lags a render: the edit-fork path arms
+	 *  after its fork-point navigate resolves, and only a store-captured
+	 *  baseline reliably reflects the post-navigate path. Not cleared on
+	 *  session switch: the first-prompt path (newSession) sets it before the
+	 *  session switch lands, and the new session's first user turn is the
+	 *  target. */
+	sendAnchorPending: string | null;
+	armSendAnchor: () => void;
+	clearSendAnchor: () => void;
+
 	// Repository browser (ADR 14)
 	/** The open browser target, or null when closed. One target for every
 	 * entry point: a file link or tool card opens `presentation: "file"`, a
@@ -288,6 +321,8 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 
 	scrollToEntryId: null,
 
+	sendAnchorPending: null,
+
 	renderLeafId: null,
 
 	browser: null,
@@ -311,6 +346,10 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 		})),
 
 	setScrollToEntryId: (scrollToEntryId) => set({ scrollToEntryId }),
+
+	armSendAnchor: () =>
+		set((s) => ({ sendAnchorPending: lastUserEntryIdOnPath(s.document.entries, s.document.status.leafId) })),
+	clearSendAnchor: () => set({ sendAnchorPending: null }),
 
 	setRenderLeaf: (id) =>
 		set((s) => {

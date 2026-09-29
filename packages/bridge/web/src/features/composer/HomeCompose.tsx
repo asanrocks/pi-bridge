@@ -17,7 +17,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
-import { useStore } from "../../infra/state/store.tsx";
+import { getStore, useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./HomeCompose.module.css";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
@@ -197,6 +197,11 @@ export const HomeCompose = memo(function HomeCompose({
 		// draft re-persists into the same slot.
 		const savedDraft = draft;
 		clearDraft();
+		// Arm before the create RPC leaves — same reasoning as useComposerCommit:
+		// the flag is synchronous, so the new session's first user turn (admitted
+		// server-side before attach) can never render before the viewport sees it.
+		// It must survive the session switch that the initial sync triggers.
+		getStore().getState().armSendAnchor();
 		let ok = false;
 		try {
 			ok = await onNewSession(
@@ -210,6 +215,7 @@ export const HomeCompose = memo(function HomeCompose({
 			setSending(false);
 		}
 		if (!ok) {
+			getStore().getState().clearSendAnchor();
 			// Failed create: restore the draft for retry and put the caret back —
 			// the textarea stays enabled through the send.
 			setDraft(savedDraft);

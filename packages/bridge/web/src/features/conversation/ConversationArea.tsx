@@ -46,7 +46,7 @@ export const ConversationArea = memo(function ConversationArea({
 	// Column element observed by the geometry anchor (§1 in the hook): its
 	// width is the rewrap driver — a width change is what needs a restore.
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
-	const { awayFromBottom, newContentBelow, jumpToBottom, goLive } = useViewportTracking(
+	const { awayFromBottom, newContentBelow, isFrozen, jumpToBottom, anchorLatestReply, goLive } = useViewportTracking(
 		vm,
 		isStreaming,
 		isDiverged,
@@ -131,18 +131,32 @@ export const ConversationArea = memo(function ConversationArea({
 			<button
 				type="button"
 				className={styles.jumpToBottom}
-				onClick={isDiverged ? goLive : jumpToBottom}
+				// While frozen (a sent turn anchored), the button is the "follow
+				// live" gesture for the rest of the turn. With the dot showing it
+				// anchors the latest reply (a reading position); otherwise it jumps
+				// to the live end and re-arms follow.
+				onClick={isDiverged ? goLive : newContentBelow ? anchorLatestReply : jumpToBottom}
 				data-visible={awayFromBottom || isDiverged ? "true" : "false"}
 				data-new={newContentBelow ? "true" : "false"}
 				tabIndex={awayFromBottom || isDiverged ? 0 : -1}
 				aria-hidden={!awayFromBottom && !isDiverged}
-				aria-label={isDiverged ? "Back to live" : newContentBelow ? "Jump to new messages" : "Jump to bottom"}
+				aria-label={
+					isDiverged
+						? "Back to live"
+						: isFrozen && isStreaming
+							? "Follow live"
+							: newContentBelow
+								? "Jump to new messages"
+								: "Jump to bottom"
+				}
 				title={
 					isDiverged
 						? "Back to live (following the current branch again)"
-						: newContentBelow
-							? "Jump to new messages"
-							: "Jump to bottom"
+						: isFrozen && isStreaming
+							? "Follow live (resume tracking the streaming reply)"
+							: newContentBelow
+								? "Jump to new messages"
+								: "Jump to bottom"
 				}
 			>
 				<ChevronDownIcon size={16} />

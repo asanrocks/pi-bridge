@@ -29,7 +29,13 @@
    component sets tabIndex=-1 + aria-hidden so it stays out of the tab order. */
 .jumpToBottom {
 	position: fixed;
-	right: calc(var(--history-w, 0px) + 20px);
+	/* Horizontally centered on the conversation column (the reading
+	   position), not pinned to an edge: left/right inset to the body's content
+	   box (sidebar + history gutters) with auto margins centering the fixed
+	   36px box between them — scrollbar-correct, no 100vw math. */
+	left: var(--sidebar-w, 0px);
+	right: var(--history-w, 0px);
+	margin-inline: auto;
 	bottom: calc(var(--composer-h, 64px) + 16px);
 	z-index: var(--z-float);
 	width: 36px;
@@ -65,12 +71,15 @@
 }
 
 /* Hover scoped to hover-capable inputs so the tint doesn't stick after a
-   tap on touch. */
+   tap on touch. Opaque muted surface (the app's hover idiom — see
+   .toolbarBtn) plus an elevation step: a floating control over arbitrary
+   content must never go translucent, or the text beneath shows through. */
 @media (hover: hover) {
 	.jumpToBottom:hover {
 		color: var(--color-foreground);
 		border-color: var(--color-secondary);
-		background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+		background: var(--color-muted);
+		box-shadow: var(--shadow-2);
 	}
 }
 

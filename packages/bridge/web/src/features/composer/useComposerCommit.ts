@@ -73,8 +73,15 @@ export function useComposerCommit(rpc: RpcForCommit) {
 				getStore().getState().setDraft(savedDraft); // navigate failed; edit intact
 				return;
 			}
+			// Arm after the fork-point navigate has landed (patches precede the
+			// reply on the wire, so the store is already post-navigate here) —
+			// the store-side baseline then reflects the pre-fork path, and the
+			// flag consumes on the forked message, not on the navigate's own
+			// path change.
+			getStore().getState().armSendAnchor();
 			const promptReply = await rpc.prompt(text, entryImages);
 			if (!isOk(promptReply)) {
+				getStore().getState().clearSendAnchor();
 				// Leaf moved to the parent (the intended fork point); restore as
 				// a compose draft so retrying forks at the same place.
 				getStore().getState().setDraft({ kind: "compose", text });
@@ -86,8 +93,12 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			requestNotificationPermission();
 			const savedDraft = draft;
 			getStore().getState().clearDraft();
+			// Arm before the RPC leaves: the flag is set synchronously, so the
+			// appended user entry can never render before the viewport sees it.
+			getStore().getState().armSendAnchor();
 			const reply = await rpc.prompt(text, draftImages);
 			if (!isOk(reply)) {
+				getStore().getState().clearSendAnchor();
 				getStore().getState().setDraft(savedDraft);
 			}
 		}
