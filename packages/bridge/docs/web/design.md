@@ -267,19 +267,26 @@ the live end before anything streamed below is circumstance, not intent, and
 must not lift it. The anchor scroll itself is animated (instant under
 prefers-reduced-motion), and the frozen viewport's park position — not the
 transient mid-animation position — is what the content-below check measures
-against. Top-pinning the tail needs scroll range below it, which the
-sent message never has — while the freeze holds, the conversation column
-carries manufactured slack beyond the composer footprint, but only the
-minimum that keeps the parked position reachable, trimmed down as the reply
-streams in: while any slack remains the document's maximum scroll IS the
-parked position — overscrolling into blank is structurally impossible — and
-once the reply fills the reading area the slack is zero and the range below
-the live end is exactly the content. The slack is removed when the freeze
-lifts, and live-end computations (at-bottom detection, follow targets)
-subtract it, so nothing ever targets the padded end. A clamp at the other end
-(not enough content above the anchor to pin it at the top) is benign — the
-anchored turn is then necessarily within the first viewport. Sends from
-another client (steers) do not anchor; only the local composer's sends do.
+against. Top-pinning the tail needs scroll range below it, which the tail
+rarely has on its own, so the conversation column always carries tail slack:
+the minimum manufactured scroll range that keeps the live path's last user
+turn pinnable at the viewport top — exactly the just-sent reading position,
+available at any time (an idle session landing, or a plain scroll down), not
+only while a turn is frozen. It is trimmed down as content streams in below
+the pin and grown back when content above the pin shrinks (a collapsed card),
+so while any slack remains the document's maximum scroll IS the pin position
+— scrolling past it into blank is structurally impossible — and once the tail
+fills the viewport the slack is zero and the range below the live end is
+exactly the content. The slack is written as a `--tail-slack` custom property
+that the composer-footprint padding adds, so the composer's own growth stays
+live in the cascade, and every live-end computation (at-bottom detection,
+follow targets, the jump button, go-live) subtracts it, so nothing ever
+targets the padded end. While peeking a committed branch the slack is not
+recomputed (the viewport belongs to the reader); returning to live refreshes
+it. A clamp at the other end (not enough content above the anchor to pin it
+at the top) is benign — the anchored turn is then necessarily within the
+first viewport. Sends from another client (steers) do not anchor; only the
+local composer's sends do.
 
 Reading up outside a frozen turn, new readable text below the viewport adds a
 dot to the floating jump button; tool and thinking churn alone does not. The
@@ -301,7 +308,8 @@ The first paint of a session's content (open, launcher switch, cold URL load,
 re-attach after reconnect) lands by rule, never at the previous session's
 viewport position: a streaming session lands at the live end with follow
 armed; an idle session lands top-anchored on the last user turn of the active
-path (falling back to the live end when the session has no user turns).
+path — exactly, via the tail slack — falling back to the live end when the
+session has no user turns.
 
 Opening or resizing a docked pane narrows the measure-capped column and
 re-wraps text; the browser keeps the raw scroll offset through the reflow
