@@ -8,8 +8,12 @@
 	position: relative;
 	/* Reserve the fixed composer's footprint + a small gap so the last
 	   message isn't hidden behind the floating card. --composer-h is
-	   published by the Composer's ResizeObserver. */
-	padding-bottom: calc(var(--composer-h, 64px) + 8px);
+	   published by the Composer's ResizeObserver. --tail-slack is the
+	   viewport hook's manufactured scroll range (useViewportTracking §3c):
+	   the minimum that keeps the live path's last user turn pinnable at the
+	   viewport top. Written as a custom property — not an inline padding
+	   override — so the composer footprint term stays live in the cascade. */
+	padding-bottom: calc(var(--composer-h, 64px) + 8px + var(--tail-slack, 0px));
 	width: 100%;
 	max-width: 48rem;
 	margin-inline: auto;
