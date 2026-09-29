@@ -17,6 +17,9 @@
 //      live end + follow, idle → anchor on the last user turn)
 //   3b. the send anchor (a sent user turn top-anchors and freezes auto-scroll
 //      for the turn — the reader's own message is the reading position)
+//   3c. the tail slack (persistent manufactured scroll range so the live
+//      path's last user turn can always be pinned at the viewport top —
+//      the send anchor's parked reading position, available at any time)
 //   4. auto-scroll on structural change / streaming growth (skipped while
 //      frozen — see 3b — or while the user reads up)
 //   5. the history-pane anchor scroll (scrollToEntryId, set on navigation)
@@ -89,70 +92,87 @@ export function useViewportTracking(
 	// check — see §3b for why the check is anchored to the park, not to the
 	// transient scroll position (mid-animation positions would trip it early).
 	const frozenParkYRef = useRef(0);
-	// Manufactured scroll range below the tail while frozen, in px — MINIMAL:
-	// just enough that the park position stays reachable (see engageFreeze).
-	// Trimmed down as content streams in (trimFrozenSlack), so the blank below
-	// the live end never lingers: while any slack remains, the document's max
-	// scroll IS the park position — overscrolling into the blank is structurally
-	// impossible — and once the reply fills the reading area the slack is zero
-	// and the scroll range below the live end is exactly the content.
-	const frozenSlackPxRef = useRef(0);
-	// The container's stylesheet bottom padding (the composer footprint) at
-	// engage time — the inline slack override adds on top of it.
-	const frozenBasePaddingRef = useRef(0);
 
 	const releaseFreeze = useCallback(() => {
 		if (!frozenRef.current) return;
 		frozenRef.current = false;
 		setFrozen(false);
-		frozenSlackPxRef.current = 0;
+		// The tail slack (§3c) persists — only the freeze's scroll-pause
+		// semantics end here.
+	}, []);
+
+	// Engage the freeze: record the park and pause auto-scroll for the turn.
+	// The scroll range the park needs is NOT manufactured here — the persistent
+	// tail slack (§3c) already guarantees it (the sent turn is the live path's
+	// last user turn).
+	const engageFreeze = useCallback((parkY: number) => {
+		frozenRef.current = true;
+		setFrozen(true);
+		frozenParkYRef.current = parkY;
+	}, []);
+
+	// ---------------------------------------------------------------------------
+	// 3c. Tail slack — persistent manufactured scroll range
+	// ---------------------------------------------------------------------------
+	// The just-sent reading position (the reader's own message pinned at the
+	// viewport top, the reply filling in below) is available at ANY time, not
+	// only while a turn is frozen: the column always carries the minimum scroll
+	// range that keeps the live path's last user turn pinnable at the viewport
+	// top. Invariant: max scroll = max(parkY, contentEnd − viewport) — while
+	// slack remains, the document's max scroll IS the pin position (scrolling
+	// past it into blank is structurally impossible), and once the tail fills
+	// the viewport the slack is zero and the range below the live end is
+	// exactly the content. Written as the --tail-slack custom property
+	// (conversation.module.css adds it to the composer-footprint padding) so
+	// the composer's own growth stays live, and the element — not a ref — is
+	// the source of truth (a remount cannot desync it). Every "live end"
+	// computation subtracts it (§2 at-bottom, §4/§7/§8 targets): scrollHeight −
+	// slack is the content end by construction, so a stale slack never mis-aims
+	// a scroll — it only leaves the pin briefly unreachable until the next
+	// recompute. Triggers: content-height changes (the §1 ResizeObserver —
+	// streamed-in growth below the pin trims the slack; shrinkage above it
+	// grows the slack back), the send anchor and the §5 anchor scroll
+	// (synchronous, so the scroll cannot clamp ahead of the observer tick),
+	// go-live, and window resize (a viewport-height change moves the
+	// reachability line with no content or width change for the observer to
+	// catch). Skipped while peeking — the viewport belongs to the reader; the
+	// go-live handler refreshes.
+	const tailSlack = useCallback((): number => {
 		const el = scrollContainerRef.current;
-		if (el) el.style.paddingBottom = ""; // restores the stylesheet composer footprint
+		if (!el) return 0;
+		return Number.parseFloat(el.style.getPropertyValue("--tail-slack")) || 0;
 	}, [scrollContainerRef]);
 
-	// Engage the freeze with minimal slack: top-pinning the sent turn needs
-	// scroll range BELOW it, but the sent message is the live tail — nothing is
-	// below it yet, so the browser's max scroll clamps the anchor right back to
-	// the bottom (the exact failure this compensates). The slack is the deficit
-	// — park + viewport − document — never a fixed reading area, so nothing
-	// beyond the minimum is ever manufactured. Plain px (styling-token rule:
-	// no var() refs in inline styles).
-	const engageFreeze = useCallback(
-		(parkY: number) => {
-			const el = scrollContainerRef.current;
-			if (!el) return;
-			// Clear any previous freeze's slack first (a re-anchor on a steer
-			// engages while the prior turn's slack may still be set): the base
-			// padding and the pre-slack document height must be read without it.
-			el.style.paddingBottom = "";
-			const base = Number.parseFloat(getComputedStyle(el).paddingBottom) || 0;
-			const docH = document.documentElement.scrollHeight;
-			const slack = Math.max(0, parkY + window.innerHeight - docH);
-			frozenRef.current = true;
-			setFrozen(true);
-			frozenParkYRef.current = parkY;
-			frozenBasePaddingRef.current = base;
-			frozenSlackPxRef.current = slack;
-			if (slack > 0) el.style.paddingBottom = `${base + slack}px`;
-		},
-		[scrollContainerRef],
-	);
-
-	// Re-derive the minimal slack from live geometry: everything the reply has
-	// streamed in below the park replaces slack. Called on every content height
-	// change (the §1 ResizeObserver) and at §4's frozen check; idempotent, with
-	// a 1px hysteresis so sub-pixel growth doesn't churn the style write. Also
-	// grows the slack when content above shrinks (a collapsed card), keeping
-	// the park position reachable.
-	const trimFrozenSlack = useCallback(() => {
+	const updateTailSlack = useCallback(() => {
 		const el = scrollContainerRef.current;
-		if (!el || !frozenRef.current) return;
-		const contentH = document.documentElement.scrollHeight - frozenSlackPxRef.current;
-		const slack = Math.max(0, frozenParkYRef.current + window.innerHeight - contentH);
-		if (Math.abs(slack - frozenSlackPxRef.current) < 1) return;
-		frozenSlackPxRef.current = slack;
-		el.style.paddingBottom = slack > 0 ? `${frozenBasePaddingRef.current + slack}px` : "";
-	}, [scrollContainerRef]);
+		if (!el) return;
+		const s = getStore().getState();
+		if (selectRenderDiverged(s)) return;
+		const lastUserId = lastUserEntryIdOnPath(s.document.entries, s.document.status.leafId);
+		// The pin target — the live path's last user turn, top-anchored clear of
+		// the TopBar via its scroll-margin. No user turn → nothing to pin, no
+		// slack. Not painted yet → keep the current slack; the next recompute
+		// trigger retries.
+		let parkY = 0;
+		if (lastUserId) {
+			const turnEl = document.querySelector(`[data-entry-id="${CSS.escape(lastUserId)}"]`);
+			if (!(turnEl instanceof HTMLElement)) return;
+			const margin = Number.parseFloat(getComputedStyle(turnEl).scrollMarginTop) || 0;
+			parkY = Math.max(0, turnEl.getBoundingClientRect().top + window.scrollY - margin);
+		}
+		// The deficit against the content end (scrollHeight minus the slack
+		// currently applied — the padding's composer-footprint base is inside
+		// scrollHeight and thus inside contentH, matching max-scroll math).
+		// Never a fixed reading area: nothing beyond the minimum is ever
+		// manufactured. 1px hysteresis so sub-pixel growth doesn't churn the
+		// style write.
+		const current = tailSlack();
+		const contentH = document.documentElement.scrollHeight - current;
+		const slack = Math.max(0, parkY + window.innerHeight - contentH);
+		if (Math.abs(slack - current) < 1) return;
+		if (slack > 0) el.style.setProperty("--tail-slack", `${slack}px`);
+		else el.style.removeProperty("--tail-slack");
+	}, [scrollContainerRef, tailSlack]);
 	// True while the jump button's smooth scroll is animating. The auto-scroll
 	// effect must not fire its instant scrollTo during the animation (that
 	// cancels it); it re-issues a smooth scroll toward the moved live end
@@ -276,11 +296,11 @@ export function useViewportTracking(
 			const width = entries[entries.length - 1]?.contentRect.width ?? 0;
 			if (width <= 0) return; // display:none or unmounted
 			// Every content height change — streaming growth, expand toggles,
-			// image loads, rewrap — lets a frozen viewport get by with less slack;
-			// trimming keeps the blank below the live end from lingering. Padding
-			// changes don't touch the content box, so the trim's own writes never
-			// re-fire this observer.
-			trimFrozenSlack();
+			// image loads, rewrap — re-derives the tail slack (§3c): streamed-in
+			// growth below the pin replaces slack; shrinkage above the pin grows
+			// it back. The write is a custom property (not the content box), so it
+			// never re-fires this observer.
+			updateTailSlack();
 			const prev = columnWidthRef.current;
 			columnWidthRef.current = width;
 			if (prev === 0 || Math.abs(width - prev) < 1) return;
@@ -288,7 +308,16 @@ export function useViewportTracking(
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, [hasTurns, captureAnchor, restoreAnchor, scrollContainerRef, trimFrozenSlack]);
+	}, [hasTurns, captureAnchor, restoreAnchor, scrollContainerRef, updateTailSlack]);
+
+	// A viewport-height change moves the tail-slack reachability line with no
+	// content or width change for the §1 observer to catch — recompute on
+	// window resize directly.
+	useEffect(() => {
+		const onResize = () => updateTailSlack();
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, [updateTailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 2. Scroll listener — intent detection
@@ -325,10 +354,10 @@ export function useViewportTracking(
 			// ≤2px jitter events updating it is harmless.
 			const threshold = 30;
 			// At-bottom is measured against the live end — the content end — not
-			// the padded end: while frozen, the manufactured slack (§3b) extends
-			// the scroll range below the tail, and "reaching the live end" must
-			// not require scrolling through the blank slack.
-			const slack = frozenRef.current ? frozenSlackPxRef.current : 0;
+			// the padded end: the tail slack (§3c) extends the scroll range below
+			// the tail, and "reaching the live end" must not require scrolling
+			// through the blank slack.
+			const slack = tailSlack();
 			const isAtBottom = sh - slack - st - window.innerHeight <= threshold;
 			setAwayFromBottom(!isAtBottom);
 			if (isAtBottom) {
@@ -354,7 +383,7 @@ export function useViewportTracking(
 
 		window.addEventListener("scroll", handleScroll, { passive: true });
 		return () => window.removeEventListener("scroll", handleScroll);
-	}, [captureAnchor, releaseFreeze]);
+	}, [captureAnchor, releaseFreeze, tailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 3. Session landing — the first paint of a session's content
@@ -395,10 +424,10 @@ export function useViewportTracking(
 			getStore().getState().setScrollToEntryId(lastUserId);
 			return;
 		}
-		window.scrollTo(0, document.documentElement.scrollHeight);
+		window.scrollTo(0, document.documentElement.scrollHeight - tailSlack());
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [activeSessionId, vm, isStreaming, releaseFreeze]);
+	}, [activeSessionId, vm, isStreaming, releaseFreeze, tailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 3b. Send anchor — top-anchor the sent user turn, freeze auto-scroll
@@ -411,11 +440,11 @@ export function useViewportTracking(
 	// The freeze is unconditional for the turn — no visibility gating — and is
 	// lifted only by the reader reaching the live end after content grew below
 	// the parked viewport (§2), the jump button, or a session switch (§3).
-	// Because the sent message is the live tail, top-pinning it needs
-	// manufactured scroll range below it (engageFreeze's slack) — without
-	// it the anchor clamps back to the bottom. A clamp at the other end (not
-	// enough content above to pin at the top) is benign: the anchor element is
-	// then necessarily within the first viewport.
+	// Because the sent message is the live tail, top-pinning it needs scroll
+	// range below it — the persistent tail slack (§3c), refreshed synchronously
+	// at consume time so the anchor scroll cannot clamp one observer tick late.
+	// A clamp at the other end (not enough content above to pin at the top) is
+	// benign: the anchor element is then necessarily within the first viewport.
 	//
 	// Consumption compares two STORE-side walks: the baseline captured at arm
 	// time (armSendAnchor) against the live path's last user message now. Both
@@ -444,16 +473,16 @@ export function useViewportTracking(
 		// Where the viewport will park: the element top minus its scroll-margin,
 		// floor-clamped (a top clamp — not enough content above — parks at 0;
 		// §4's content-below check must use the actual parked position). No
-		// max-scroll clamp: engageFreeze manufactures exactly the slack that
-		// makes parkY reachable.
+		// max-scroll clamp: the tail slack makes parkY reachable.
 		const margin = Number.parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
 		const desired = el.getBoundingClientRect().top + window.scrollY - margin;
 		const parkY = Math.max(0, desired);
-		// Engage the freeze (with its minimal scroll slack) BEFORE the anchor
-		// scroll: the slack is what makes the pin possible — without it the
-		// browser's max scroll clamps the anchor right back to the bottom,
-		// because the sent message is the tail and nothing is below it yet.
 		engageFreeze(parkY);
+		// Refresh the tail slack BEFORE the anchor scroll: it is what makes the
+		// pin reachable — without it the browser's max scroll clamps the anchor
+		// right back to the bottom, because the sent message is the tail and
+		// nothing is below it yet.
+		updateTailSlack();
 		const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 		if (reduced) {
 			el.scrollIntoView({ block: "start" });
@@ -466,7 +495,7 @@ export function useViewportTracking(
 		userScrolledUpRef.current = false;
 		smoothJumpRef.current = false;
 		setNewContentBelow(false);
-	}, [vm, sendAnchorPending, engageFreeze]);
+	}, [vm, sendAnchorPending, engageFreeze, updateTailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 4. Auto-scroll — follow the live end on growth, never on reading actions
@@ -525,14 +554,15 @@ export function useViewportTracking(
 		// record that content has grown below — the §2 unfreeze condition.
 		if (userScrolledUpRef.current || frozenRef.current) {
 			if (frozenRef.current) {
-				// Trim first: the streamed-in growth below the park replaces slack,
-				// so the check below measures against a minimal-blank geometry.
-				trimFrozenSlack();
+				// Re-derive the slack first: the streamed-in growth below the park
+				// replaces slack, so the check below measures against a
+				// minimal-blank geometry.
+				updateTailSlack();
 				// Content-below is measured from the PARKED position, not from the
 				// transient scroll position, and against the live end (content end,
 				// slack subtracted) — a smooth anchor still animating must not trip
 				// this, and neither may the slack itself.
-				const contentEnd = document.documentElement.scrollHeight - frozenSlackPxRef.current;
+				const contentEnd = document.documentElement.scrollHeight - tailSlack();
 				if (contentEnd - (frozenParkYRef.current + window.innerHeight) > 30) {
 					frozenSawBelowRef.current = true;
 					setAwayFromBottom(true);
@@ -547,10 +577,14 @@ export function useViewportTracking(
 		// smoothly. Arrival at the live end clears smoothJumpRef (scroll
 		// handler), after which normal instant-follow resumes.
 		if (smoothJumpRef.current) {
-			window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+			window.scrollTo({ top: document.documentElement.scrollHeight - tailSlack(), behavior: "smooth" });
 			return;
 		}
-		const target = document.documentElement.scrollHeight;
+		// The target is the content end, never the padded end: the tail slack
+		// (§3c) extends the scroll range below the live end, and following must
+		// not scroll into the blank. scrollHeight − slack is the content end by
+		// construction, stale or fresh.
+		const target = document.documentElement.scrollHeight - tailSlack();
 		window.scrollTo(0, target);
 		// scrollTo is synchronous; read back the clamped position so the
 		// async scroll event sees no net change and doesn't re-trip the
@@ -559,7 +593,7 @@ export function useViewportTracking(
 		// leave lastScrollHeightRef stale for the next handler invocation.
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged, trimFrozenSlack]);
+	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged, updateTailSlack, tailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 5. Anchor scroll — history-pane selection after a navigation
@@ -585,6 +619,11 @@ export function useViewportTracking(
 		if (!onPath) return;
 		const el = document.querySelector(`[data-entry-id="${CSS.escape(scrollToEntryId)}"]`);
 		if (el instanceof HTMLElement) {
+			// Refresh the tail slack first: the idle-session landing anchors the
+			// live path's last user turn, and the pin must be reachable at scroll
+			// time, not one observer tick later (a branch navigation also
+			// repoints the slack at the new path's tail).
+			updateTailSlack();
 			// scrollIntoView inherits the turn surfaces' scroll-margin-top (TopBar
 			// clearance + 12px, turns.module.css) — the previous hand-rolled `- 12`
 			// offset ignored the fixed TopBar and hid the anchored turn's header
@@ -600,7 +639,7 @@ export function useViewportTracking(
 			userScrolledUpRef.current = isStreaming;
 		}
 		getStore().getState().setScrollToEntryId(null);
-	}, [scrollToEntryId, vm, isStreaming]);
+	}, [scrollToEntryId, vm, isStreaming, updateTailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 6. Keyboard focus scroll (j/k/g/G)
@@ -645,22 +684,22 @@ export function useViewportTracking(
 	// prefers-reduced-motion falls back to the instant path with the original
 	// synchronous bookkeeping.
 	const jumpToBottom = useCallback(() => {
-		// Unfreeze first: removing the slack padding shrinks the document to the
-		// content end, so the scroll target read below is the live end, never
-		// the padded end. (Layout flushes synchronously on the scrollHeight read.)
 		releaseFreeze();
+		// Target the content end — the tail slack (§3c) extends the range below
+		// the live end, and the jump must not land in the blank.
+		const target = document.documentElement.scrollHeight - tailSlack();
 		const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 		smoothJumpRef.current = !reduced;
 		if (reduced) {
-			window.scrollTo(0, document.documentElement.scrollHeight);
+			window.scrollTo(0, target);
 			lastScrollTopRef.current = window.scrollY;
 			lastScrollHeightRef.current = document.documentElement.scrollHeight;
 		} else {
-			window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+			window.scrollTo({ top: target, behavior: "smooth" });
 		}
 		userScrolledUpRef.current = false; // explicit gesture: re-arm follow for the rest of the turn
 		setNewContentBelow(false);
-	}, [releaseFreeze]);
+	}, [releaseFreeze, tailSlack]);
 
 	// ---------------------------------------------------------------------------
 	// 7b. Anchor latest reply (the jump button's dot meaning)
@@ -713,13 +752,16 @@ export function useViewportTracking(
 	useEffect(() => {
 		if (!goLivePendingRef.current || isDiverged) return;
 		goLivePendingRef.current = false;
-		window.scrollTo(0, document.documentElement.scrollHeight);
+		// The slack went stale through the peek (updates are skipped while
+		// diverged) — refresh before reading the content end.
+		updateTailSlack();
+		window.scrollTo(0, document.documentElement.scrollHeight - tailSlack());
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
 		// The isDiverged flip IS the projection-change signal: setRenderLeaf(null)
 		// flips it, the store subscribers re-render, and this effect runs after
 		// that same commit — the live content's height is final here.
-	}, [isDiverged]);
+	}, [isDiverged, updateTailSlack, tailSlack]);
 
 	return { awayFromBottom, newContentBelow, isFrozen, jumpToBottom, anchorLatestReply, goLive };
 }
