@@ -178,6 +178,7 @@ export {
 	isModelSelected,
 	kindForTool,
 	kindHue,
+	latestReplyTurnKey,
 	leafPathKey,
 	leafStreamingKey,
 	liveActivityPhase,

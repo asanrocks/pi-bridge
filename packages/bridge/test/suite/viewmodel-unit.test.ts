@@ -12,6 +12,7 @@ import {
 	assignGroupGitChanges,
 	beautifyShellCommand,
 	computeViewModel,
+	latestReplyTurnKey,
 	makeActionHeader,
 	makeActionSummary,
 	newestLeafInSubtree,
@@ -2818,5 +2819,77 @@ describe("computeViewModel — unrecognized entries", () => {
 		if (a?.kind !== "assistant") throw new Error("assistant turn not found");
 		expect(a.blocks).toHaveLength(1);
 		expect(a.blocks[0]?.blockType).toBe("text");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// latestReplyTurnKey — the shared target of every "go to the end" gesture
+// (jump button's new-content anchor, G key): the latest assistant turn
+// container, tool-only turns included; falls back to the last user/assistant
+// turn when the path has no assistant turn yet.
+// ---------------------------------------------------------------------------
+
+describe("latestReplyTurnKey", () => {
+	it("returns null for empty turns", () => {
+		expect(latestReplyTurnKey([])).toBeNull();
+	});
+
+	it("falls back to the last user turn when the path has no assistant turn (just sent)", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(latestReplyTurnKey(vm.turns)).toBe("u1");
+	});
+
+	it("targets the latest assistant turn, skipping trailing system turns", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "first" }],
+			}),
+		);
+		appendEntry(doc, makeEntry("u2", "a1", "2024-01-01T00:01:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a2", "u2", "2024-01-01T00:01:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "second" }],
+			}),
+		);
+		appendEntry(doc, makeEntry("e5", "a2", "2024-01-01T00:01:02Z", "model_change", { provider: "x", modelId: "m" }));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		// The trailing model_change projects as a system turn — not a reply.
+		expect(latestReplyTurnKey(vm.turns)).toBe("a2");
+	});
+
+	it("includes tool-only assistant turns (tool results are part of the reply)", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "words" }],
+			}),
+		);
+		appendEntry(doc, makeEntry("u2", "a1", "2024-01-01T00:01:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a2", "u2", "2024-01-01T00:01:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", toolCallId: "tc1", tool: "bash", arguments: {} }],
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const last = vm.turns[vm.turns.length - 1];
+		if (last?.kind !== "assistant") throw new Error("tool-only assistant turn not projected");
+		expect(last.blocks.length).toBeGreaterThan(0);
+		expect(last.blocks.every((b) => b.blockType !== "text")).toBe(true);
+		expect(latestReplyTurnKey(vm.turns)).toBe("a2");
 	});
 });

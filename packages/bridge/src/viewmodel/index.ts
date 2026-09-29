@@ -2155,6 +2155,25 @@ export function turnKeyOf(t: TurnVM): string {
 }
 
 // ============================================================================
+// Latest reply — the shared target of every "go to the end" gesture (the
+// jump button's new-content click and the G key). The latest assistant turn
+// container, tool-only turns included (tool results are part of what the
+// reader came back to read); falls back to the last user/assistant turn when
+// the path has no assistant turn yet (e.g. right after a send).
+// ============================================================================
+
+export function latestReplyTurnKey(turns: TurnVM[]): string | null {
+	let fallback: TurnVM | null = null;
+	for (const t of turns) {
+		if (t.kind === "user" || t.kind === "assistant") fallback = t;
+	}
+	for (let i = turns.length - 1; i >= 0; i--) {
+		if (turns[i].kind === "assistant") return turnKeyOf(turns[i]);
+	}
+	return fallback === null ? null : turnKeyOf(fallback);
+}
+
+// ============================================================================
 // Newest-leaf walk — for variant pager navigation targets
 // ============================================================================
 
