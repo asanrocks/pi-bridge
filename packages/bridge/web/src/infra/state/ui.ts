@@ -143,6 +143,51 @@ export function lastUserEntryIdOnPath(entries: Record<string, Entry>, leafId: st
 	return "";
 }
 
+/** Pull-stable identity of a message's content: the text blocks inline, every
+ * other block as its type marker. Lazy-field pulls and the seal's lazy
+ * backfill change field values (image data), never this — and the
+ * provisional→committed re-key rewrites id/parentId/ord/timestamp but never
+ * content. */
+export function messageFingerprint(entries: Record<string, Entry>, id: string): string {
+	const e = entries[id];
+	if (!e || e.kind !== "message") return "";
+	let fp = "";
+	for (const c of e.content) {
+		if (fp) fp += "\n";
+		fp += c.type === "text" ? c.text : c.type;
+	}
+	return fp;
+}
+
+/** The send-anchor baseline: which user message was the path's tail at arm
+ * time. The id alone is insufficient — while a turn is in flight the tail is
+ * a `pending:user:` provisional, and the seal re-keys it to its real
+ * persisted id, so the walk's id changes with no new message. The
+ * fingerprint makes the baseline re-key-stable (see {@link messageFingerprint}). */
+export interface SendAnchorBaseline {
+	id: string;
+	fingerprint: string;
+}
+
+/** The send-anchor consumption test: the live path's last user message id
+ * when a genuinely NEW message occupies the tail, null otherwise. Pure — the
+ * viewport effect and the regression test share it. An id-only comparison
+ * consumes on the baseline's own re-key (a steer armed mid-turn pins the
+ * PREVIOUS message and eats the flag, leaving the sent message unanchored);
+ * the fingerprint gates that. The accepted cost: identical consecutive
+ * messages (same text, same block shape) miss the anchor — plain
+ * bottom-follow, never a wrong pin. */
+export function consumeSendAnchor(
+	entries: Record<string, Entry>,
+	leafId: string | null,
+	anchor: SendAnchorBaseline,
+): string | null {
+	const lastUserId = lastUserEntryIdOnPath(entries, leafId);
+	if (!lastUserId || lastUserId === anchor.id) return null;
+	if (messageFingerprint(entries, lastUserId) === anchor.fingerprint) return null;
+	return lastUserId;
+}
+
 // ---------------------------------------------------------------------------
 // Repository browser target (ADR 14)
 // ---------------------------------------------------------------------------
@@ -230,20 +275,22 @@ export interface UiSlice {
 
 	/** Armed by the composer commit paths (send, edit-fork, first prompt)
 	 *  just before the send RPC leaves, cleared on RPC failure. The value is
-	 *  the baseline: the last user message entry id on the live path at arm
-	 *  time ("" when the path has none). The viewport consumes it when the
-	 *  path's last user turn differs from the baseline — the sent turn has
-	 *  landed — and top-anchors it, freezing auto-scroll for the turn: the
-	 *  reader keeps her own message as the reading position while the reply
-	 *  streams in below. The baseline lives here (not in a render-side ref)
-	 *  because the store's document is applied synchronously with the wire
-	 *  frame, while component state lags a render: the edit-fork path arms
-	 *  after its fork-point navigate resolves, and only a store-captured
-	 *  baseline reliably reflects the post-navigate path. Not cleared on
-	 *  session switch: the first-prompt path (newSession) sets it before the
-	 *  session switch lands, and the new session's first user turn is the
-	 *  target. */
-	sendAnchorPending: string | null;
+	 *  the baseline: the path's last user message at arm time, as
+	 *  {@link SendAnchorBaseline} (id + content fingerprint — the id is
+	 *  unstable across the provisional→committed re-key, so an id-only
+	 *  baseline would consume on the PREVIOUS message's re-key when a steer
+	 *  is armed mid-turn). The viewport consumes it when a genuinely new
+	 *  user turn occupies the path's tail (`consumeSendAnchor`) and
+	 *  top-anchors it, freezing auto-scroll for the turn: the reader keeps
+	 *  her own message as the reading position while the reply streams in
+	 *  below. The baseline lives here (not in a render-side ref) because the
+	 *  store's document is applied synchronously with the wire frame, while
+	 *  component state lags a render: the edit-fork path arms after its
+	 *  fork-point navigate resolves, and only a store-captured baseline
+	 *  reliably reflects the post-navigate path. Not cleared on session
+	 *  switch: the first-prompt path (newSession) sets it before the session
+	 *  switch lands, and the new session's first user turn is the target. */
+	sendAnchorPending: SendAnchorBaseline | null;
 	armSendAnchor: () => void;
 	clearSendAnchor: () => void;
 
@@ -348,7 +395,10 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 	setScrollToEntryId: (scrollToEntryId) => set({ scrollToEntryId }),
 
 	armSendAnchor: () =>
-		set((s) => ({ sendAnchorPending: lastUserEntryIdOnPath(s.document.entries, s.document.status.leafId) })),
+		set((s) => {
+			const id = lastUserEntryIdOnPath(s.document.entries, s.document.status.leafId);
+			return { sendAnchorPending: { id, fingerprint: messageFingerprint(s.document.entries, id) } };
+		}),
 	clearSendAnchor: () => set({ sendAnchorPending: null }),
 
 	setRenderLeaf: (id) =>

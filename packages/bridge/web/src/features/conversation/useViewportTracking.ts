@@ -37,7 +37,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
 import { latestReplyTurnKey } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
-import { lastUserEntryIdOnPath, selectRenderDiverged } from "../../infra/state/ui.ts";
+import { consumeSendAnchor, lastUserEntryIdOnPath, selectRenderDiverged } from "../../infra/state/ui.ts";
 
 interface ViewportTracking {
 	/** Pure geometry: viewport not at the live end. Drives the floating jump
@@ -453,6 +453,13 @@ export function useViewportTracking(
 	// landed after the fork-point navigate's patch but before React re-rendered,
 	// so a stale ref made the navigate's own path change consume the flag on
 	// the message BEFORE the fork, leaving nothing for the forked message.
+	// The comparison is fingerprint-gated, not id-only: while a turn is in
+	// flight the tail user message is a `pending:user:` provisional, and the
+	// seal re-keys it to its real persisted id — an id-only comparison then
+	// consumes the flag on the PREVIOUS message (a steer armed mid-turn pins
+	// it, and the sent message never anchors). consumeSendAnchor skips the
+	// re-keyed baseline; identical consecutive messages miss the anchor
+	// (plain bottom-follow, never a wrong pin).
 	// The DOM query doubles as the paint guard: not found → not consumed, the
 	// vm dep retries. Smooth scroll (instant under prefers-reduced-motion); the
 	// parked position is recorded for §4's content-below check, which must be
@@ -463,8 +470,8 @@ export function useViewportTracking(
 	useEffect(() => {
 		const s = getStore().getState();
 		if (sendAnchorPending === null || s.scrollToEntryId !== null || selectRenderDiverged(s)) return;
-		const lastUserId = lastUserEntryIdOnPath(s.document.entries, s.document.status.leafId);
-		if (!lastUserId || lastUserId === sendAnchorPending) return;
+		const lastUserId = consumeSendAnchor(s.document.entries, s.document.status.leafId, sendAnchorPending);
+		if (!lastUserId) return;
 		// The turn container (data-entry-id on the turn root — header metadata
 		// included), top-anchored with TopBar clearance via scroll-margin-top.
 		const el = document.querySelector(`[data-entry-id="${CSS.escape(lastUserId)}"]`);

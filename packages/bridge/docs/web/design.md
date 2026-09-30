@@ -286,7 +286,14 @@ recomputed (the viewport belongs to the reader); returning to live refreshes
 it. A clamp at the other end (not enough content above the anchor to pin it
 at the top) is benign — the anchored turn is then necessarily within the
 first viewport. Sends from another client (steers) do not anchor; only the
-local composer's sends do.
+local composer's sends do. The armed baseline carries the tail user
+message's content fingerprint alongside its id: while a turn is in flight
+the tail is a `pending:user:` provisional that the seal re-keys to its real
+persisted id, so an id-only baseline would consume the anchor on the
+previous message's re-key — a steer armed mid-turn would pin the previous
+message instead of the sent one. The fingerprint gate skips the re-key;
+identical consecutive messages (same text and block shape) miss the anchor
+and fall back to plain bottom-follow — never a wrong pin.
 
 Reading up outside a frozen turn, new readable text below the viewport adds a
 dot to the floating jump button; tool and thinking churn alone does not. The
