@@ -190,6 +190,14 @@ The renderer, previous-ViewModel reuse map, keyboard focus, and navigation use
 this key. Unchanged TurnVM and block references are reused, allowing memoized
 children to skip work when an unrelated part of the projection changes.
 
+A streaming block's reference still changes on every delta, so a block view
+that must stay quiet takes stable scalar props — entry id, block index, flags —
+and reads its live text from the store rather than receiving it in props;
+`TextBlockView` and `ThinkActionView` follow that rule. A collapsed think row
+selects only the thinking's first line, so once that line is complete its slice
+is stable and neither later deltas nor unrelated pull completions re-render it
+(the pull tick is subscribed only while the field is still null).
+
 User turns compute sibling user messages with the same `parentId`, ordered by
 timestamp. `newestLeafInSubtree` chooses the newest leaf when a sibling is
 selected, so branch navigation enters the sibling's latest descendant rather

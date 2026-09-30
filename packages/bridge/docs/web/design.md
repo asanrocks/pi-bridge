@@ -630,8 +630,10 @@ results can arrive while a call is streaming, so a card renders available
 content without waiting for a path or command annotation.
 
 Thinking is prose rather than an operation card. A non-empty block collapses
-to a one-line first-line preview and expands inline as Markdown beside its
-triangle. Redacted or empty thinking is a static muted label. Git-change cards
+to its first line rendered as Markdown and clamped to a single line — the
+triangle precedes it, and the clamp keeps the row one line tall even when line
+1 renders as a heading, list, or fence — and expands inline as Markdown beside
+its triangle. Redacted or empty thinking is a static muted label. Git-change cards
 can appear inside an action group after the action that observed the change;
 the group summary and legend include the git hue.
 
