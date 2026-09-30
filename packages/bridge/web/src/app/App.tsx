@@ -18,6 +18,7 @@
 // launcher/conversation fork.
 // ============================================================================
 
+import { useCallback } from "react";
 import { liveActivityPhase } from "../../../src/viewmodel/index.ts";
 import { ComposeDock } from "../features/composer/ComposeDock.tsx";
 import { useComposerCommit } from "../features/composer/useComposerCommit.ts";
@@ -102,6 +103,15 @@ function AppInner() {
 
 	const hasOpenSession = currentStem !== null;
 
+	// Stable callbacks for memo'd chrome (TopBar): a fresh arrow per render
+	// would defeat its memo on every streaming patch.
+	const handleRename = useCallback(
+		async (name: string) => {
+			await rpc.renameSession(name);
+		},
+		[rpc],
+	);
+
 	return (
 		<div className={styles.root}>
 			<ToastBar />
@@ -115,9 +125,7 @@ function AppInner() {
 				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
 				onHistory={history.toggle}
 				onHistoryHover={history.setHistoryHover}
-				onRename={async (name) => {
-					await rpc.renameSession(name);
-				}}
+				onRename={handleRename}
 				onRetry={retry}
 			/>
 

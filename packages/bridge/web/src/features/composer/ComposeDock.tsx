@@ -20,9 +20,10 @@
 // created once there and passed down rather than re-derived here.
 // ============================================================================
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
+import type { ClientStore } from "../../infra/state/store.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
@@ -37,6 +38,13 @@ import { useModelCycling } from "./useModelCycling.ts";
 interface ComposeDockProps {
 	onCommit: () => void | Promise<void>;
 }
+
+/** Ledger cost — sampled through a primitive-valued selector so the dock
+ * re-renders only when the label changes (a usage-bearing entry changes only
+ * when a message seals), never per streaming patch. The scan itself runs per
+ * store write, the same O(entries) class as the projection's
+ * buildToolResultMap; the per-model breakdown is computed inside the popover. */
+const selectCostLabel = (s: ClientStore) => formatCost(sessionAccounting(s.document.entries, s.models).cost);
 
 export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockProps) {
 	const rpc = useRpc();
@@ -67,10 +75,12 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// sessionAccounting) over the full entry map. Unlike the server's
 	// thread-scoped /status/stats, this is the whole-session total: every
 	// branch, including pre-compaction messages — monotonic and
-	// navigation-invariant, matching pi-tui's footer.
-	const entries = useStore((s) => s.document.entries);
+	// navigation-invariant, matching pi-tui's footer. The cost label itself is
+	// selected through a string selector (selectCostLabel below) — subscribing
+	// the entries object (its identity changes per delta) re-rendered the whole
+	// dock per token; the per-model breakdown lives in the popover.
 	const models = useStore((s) => s.models);
-	const accounting = useMemo(() => sessionAccounting(entries, models), [entries, models]);
+	const costLabel = useStore(selectCostLabel);
 	const contextUsage = useStore((s) => s.document.status.contextUsage);
 	// Pending steers queued mid-stream (AgentSession queue_update →
 	// /status/pendingSteer). Rendered as read-only draft chips above the
@@ -295,7 +305,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 				}}
 				aria-label="Token usage breakdown"
 			>
-				{formatCost(accounting.cost)}
+				{costLabel}
 				<span className={cardStyles.composerCostChevron} aria-hidden="true">
 					▾
 				</span>
@@ -345,14 +355,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 			)}
 
 			{/* Cost breakdown popover */}
-			{costOpen && (
-				<CostPopover
-					accounting={accounting}
-					models={models}
-					anchorRect={costAnchor}
-					onClose={() => setCostOpen(false)}
-				/>
-			)}
+			{costOpen && <CostPopover anchorRect={costAnchor} onClose={() => setCostOpen(false)} />}
 		</div>
 	);
 });
