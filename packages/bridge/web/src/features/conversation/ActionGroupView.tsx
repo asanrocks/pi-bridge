@@ -171,7 +171,13 @@ export const ActionGroupView = memo(function ActionGroupView({
 					{actions.map((h) => (
 						<div key={`${h.entryId}:${h.blockIndex}`}>
 							{h.blockType === "thinking" ? (
-								<ThinkActionView action={h} onToggleAction={onToggleAction} />
+								<ThinkActionView
+									entryId={h.entryId}
+									blockIndex={h.blockIndex}
+									isProvisional={h.isProvisional}
+									redacted={h.redacted}
+									onToggleAction={onToggleAction}
+								/>
 							) : (
 								<ToolActionView action={h} onToggleAction={onToggleAction} />
 							)}
