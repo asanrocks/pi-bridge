@@ -12,13 +12,19 @@
 // stillness = failed; click retries; text lives in tooltip/aria-label only.
 // ============================================================================
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import type { ConnectionState } from "../../infra/state/store.ts";
 import { ChangesBadge } from "./ChangesBadge.tsx";
 import styles from "./TopBar.module.css";
 
-export function TopBar({
+// Memoized: App re-renders on every streaming patch (it hosts the ViewModel
+// projection), so the TopBar must bail on identical props — which requires
+// every prop to be stable, including the rename callback App passes
+// (useCallback there). That is what keeps the ChangesBadge from re-rendering
+// per delta: its own subscriptions are primitive slices (leafId, isStreaming)
+// that hold steady while a turn streams.
+export const TopBar = memo(function TopBar({
 	name,
 	connection,
 	showSidebarToggle,
@@ -175,7 +181,7 @@ export function TopBar({
 			)}
 		</div>
 	);
-}
+});
 
 /** Tone → icon color class; the Launcher maps phases to its own classes. */
 const CONN_TONE = {

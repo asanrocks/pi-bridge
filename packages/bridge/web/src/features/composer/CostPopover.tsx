@@ -8,23 +8,19 @@
 // ============================================================================
 
 import { useEffect } from "react";
-import type { ModelInfo } from "../../../../src/core/index.ts";
-import type { SessionAccounting } from "../../../../src/viewmodel/index.ts";
+import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
+import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 import { formatCost, formatTokens } from "./formatters.ts";
 
-export function CostPopover({
-	accounting,
-	models,
-	anchorRect,
-	onClose,
-}: {
-	accounting: SessionAccounting;
-	models: readonly ModelInfo[];
-	anchorRect: DOMRect | null;
-	onClose: () => void;
-}) {
+// Self-subscribes its accounting: the dock samples only the cost label (a
+// string selector) so it stays quiet while a turn streams; the full per-model
+// breakdown lives here, computed only while the popover is open (it then
+// re-renders per patch — a transient surface, and live-updating is a feature).
+export function CostPopover({ anchorRect, onClose }: { anchorRect: DOMRect | null; onClose: () => void }) {
+	const models = useStore((s) => s.models);
+	const accounting = useStore((s) => sessionAccounting(s.document.entries, s.models));
 	// Escape closes (overlay handles pointer-away close).
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {

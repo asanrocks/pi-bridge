@@ -198,6 +198,18 @@ selects only the thinking's first line, so once that line is complete its slice
 is stable and neither later deltas nor unrelated pull completions re-render it
 (the pull tick is subscribed only while the field is still null).
 
+The same discipline applies to chrome around the transcript, which is at risk
+for a different reason: App hosts the projection and re-renders on every
+document write, so anything it renders must bail on identical props — the
+TopBar is memoized with stable callbacks (an inline arrow would defeat it),
+and the shared icons are memoized over primitive props. The composer samples
+its ledger through a primitive-valued selector (the cost label string) rather
+than subscribing the entries object — whose identity changes per delta — with
+the per-model breakdown computed only inside the transient popover that shows
+it. The streaming turn's own shell (turn view, group headers) does re-render
+per delta by design: the projection rebuilds that turn's blocks, and the leaf
+views bail.
+
 User turns compute sibling user messages with the same `parentId`, ordered by
 timestamp. `newestLeafInSubtree` chooses the newest leaf when a sibling is
 selected, so branch navigation enters the sibling's latest descendant rather
