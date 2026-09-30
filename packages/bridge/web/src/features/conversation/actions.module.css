@@ -221,13 +221,11 @@
 	font-style: italic;
 }
 
-/* Think preview is plain escaped text (not Markdown) so nowrap holds and a
-   long single line stays clipped — Streamdown's root wrapper applies
-   whitespace-normal, which defeated .actionSummary's nowrap when the preview
-   was a Markdown render and let the action grow vertically. Tool summaries
-   are plain strings too. Think actions reuse .actionSummary for their collapsed
-   first-line preview (see .actionCollapsed in ThinkActionView); the rule is
-   kept for the tool-action summary. */
+/* Tool summaries are plain escaped strings, so .actionSummary's nowrap holds
+   and a long single line stays clipped with an ellipsis. The think preview is
+   NOT plain text: it renders Markdown through Streamdown's root, whose
+   whitespace-normal defeats nowrap — so it carries its own one-line clamp
+   (.thinkPreview in the Think section below) instead of this rule. */
 
 /* Inline code inside the think body shares the warm code-bg chip; sizing
    is the global inline-code rule (index.css) so the chip is identical in
@@ -276,9 +274,11 @@
 
 /* ── Think — a collapsible inline document on the think tint. ──────── */
 /* Thinking is prose. Collapsed, it renders as a full-width collapsed row — the
-   same .actionCollapsed triangle + one-line plain-text summary a tool action
-   header uses — so it is uniform with tool actions, fully clickable, and
-   streaming-optimized (the selector subscribes to the first line only).
+   same .actionCollapsed triangle + summary row a tool action header uses, with
+   the summary the thinking's first line rendered as Markdown and clamped to
+   one line (.thinkPreview) — so it is uniform with tool actions, fully
+   clickable, and streaming-optimized (the selector subscribes to the first
+   line only, so later deltas never re-render the row).
    Expanded, the full Markdown prose flows inline (a document, not a
    details card-with-heading); the triangle rides the first line, so the
    first line is never repeated in a header. */
@@ -329,6 +329,57 @@
 	flex: 1;
 	min-width: 0;
 	padding: 0;
+}
+
+/* ── Collapsed preview — one line of Markdown on the action row. ──────── */
+/* This class is passed straight into Streamdown's root element (Markdown's
+   className prop), so the clamp sits where the children are: -webkit-line-clamp
+   only counts line boxes, and Streamdown's block children (p, headings, lists)
+   would escape it. display:contents folds those children — and their margins
+   and heading sizes — into the root's own line boxes, so a heading or list on
+   line 1 renders at the preview's scale. A code fence or table stays a block
+   and escapes the clamp, so max-height is the hard one-line backstop for those
+   (clipped rather than ellipsized, but the row never grows — the failure the
+   plain-text preview was introduced to avoid).
+   pointer-events: the whole row is the expand target, so a link or a copy
+   button inside the preview must not swallow the click. */
+.thinkPreview {
+	flex: 1;
+	min-width: 0;
+	font-size: var(--fs-sm);
+	line-height: 1.5;
+	max-height: 1.5em;
+	overflow: hidden;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 1;
+	pointer-events: none;
+}
+.thinkPreview :is(p, ul, ol, li, h1, h2, h3, h4, h5, h6, blockquote, section) {
+	display: contents;
+}
+/* Headings carry Streamdown's rem-pinned text-* sizes (and a rem line-height)
+   — both are wrong for a 12px preview, and the line-height would set a taller
+   line box for the promoted inline content. */
+.thinkPreview :is(h1, h2, h3, h4, h5, h6) {
+	font-size: 1em;
+	line-height: 1.5;
+}
+/* The header's copy/download controls are not part of a collapsed preview. */
+.thinkPreview [data-streamdown="code-block-header"] {
+	display: none;
+}
+/* Block children that escape display:contents (code fences, tables,
+   mermaid, hr) carry Streamdown's my-4/my-6 margin utilities, which would
+   spend the 1.5em window on whitespace — zero them so the clipped line
+   shows content. */
+.thinkPreview :is(
+	[data-streamdown="code-block"],
+	[data-streamdown="table-wrapper"],
+	[data-streamdown="mermaid-block"],
+	[data-streamdown="horizontal-rule"]
+) {
+	margin: 0;
 }
 
 /* Redacted / empty — a static muted one-liner; no collapse, no triangle. */
