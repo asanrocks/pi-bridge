@@ -6,14 +6,20 @@
 // Copy button (rendered by streamdown) read as one icon set. This is the
 // "copy affordance" role from ADR 07 §Styling invariants #3: one icon across
 // containers, different container chrome per hue.
+//
+// Every icon is memoized: props are two primitives, so a memo'd icon never
+// re-renders for a parent's streaming churn (the conversation shell and the
+// tool cards re-render on every delta while their leaf views bail).
 // ============================================================================
+
+import { memo } from "react";
 
 interface IconProps {
 	size?: number;
 	className?: string;
 }
 
-export function CopyIcon({ size = 16, className }: IconProps) {
+export const CopyIcon = memo(function CopyIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg
 			width={size}
@@ -32,9 +38,9 @@ export function CopyIcon({ size = 16, className }: IconProps) {
 			/>
 		</svg>
 	);
-}
+});
 
-export function ChevronDownIcon({ size = 16, className }: IconProps) {
+export const ChevronDownIcon = memo(function ChevronDownIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg
 			width={size}
@@ -51,9 +57,9 @@ export function ChevronDownIcon({ size = 16, className }: IconProps) {
 			<path d="M3.5 6L8 10.5L12.5 6" />
 		</svg>
 	);
-}
+});
 
-export function CheckIcon({ size = 16, className }: IconProps) {
+export const CheckIcon = memo(function CheckIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg
 			width={size}
@@ -72,12 +78,10 @@ export function CheckIcon({ size = 16, className }: IconProps) {
 			/>
 		</svg>
 	);
-}
+});
 
-/** Eye — "view" affordance: open the referenced file in the in-app viewer. */ export function EyeIcon({
-	size = 16,
-	className,
-}: IconProps) {
+/** Eye — "view" affordance: open the referenced file in the in-app viewer. */
+export const EyeIcon = memo(function EyeIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg width={size} height={size} viewBox="0 0 16 16" color="currentColor" className={className} aria-hidden="true">
 			<path
@@ -88,11 +92,11 @@ export function CheckIcon({ size = 16, className }: IconProps) {
 			/>
 		</svg>
 	);
-}
+});
 
 /** Word-wrap — text lines with a wrap arrow bending down to the next line;
  * "wrap" affordance for code/output content. */
-export function WrapIcon({ size = 16, className }: IconProps) {
+export const WrapIcon = memo(function WrapIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg width={size} height={size} viewBox="0 0 16 16" color="currentColor" className={className} aria-hidden="true">
 			<path
@@ -103,11 +107,11 @@ export function WrapIcon({ size = 16, className }: IconProps) {
 			/>
 		</svg>
 	);
-}
+});
 
 /** Markdown — the markdown mark (framed M and down arrow); "render as
  * markdown" affordance for .md content. */
-export function MarkdownIcon({ size = 16, className }: IconProps) {
+export const MarkdownIcon = memo(function MarkdownIcon({ size = 16, className }: IconProps) {
 	return (
 		<svg width={size} height={size} viewBox="0 0 16 16" color="currentColor" className={className} aria-hidden="true">
 			<path
@@ -118,4 +122,4 @@ export function MarkdownIcon({ size = 16, className }: IconProps) {
 			/>
 		</svg>
 	);
-}
+});
