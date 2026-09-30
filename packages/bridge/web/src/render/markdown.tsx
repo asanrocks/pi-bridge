@@ -9,7 +9,7 @@
 //   "static"     — for sealed, committed blocks
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CodeHighlighterPlugin, Components, ControlsConfig, ThemeInput } from "streamdown";
 import { parseMarkdownIntoBlocks, Streamdown } from "streamdown";
 import { createShikiPlugin } from "./shiki.ts";
@@ -56,13 +56,19 @@ interface MarkdownProps {
 	/** Element renderers merged over Streamdown's defaults (tag → component).
 	 * Used by the app layer to swap the link renderer (file-viewer links). */
 	components?: Components;
+	/** Merged into Streamdown's root element, for hosts that style the root
+	 * itself (the collapsed think preview clamps that root to one line). */
+	className?: string;
 }
 
-export function Markdown({ text, mode = "static", components }: MarkdownProps) {
+export function Markdown({ text, mode = "static", components, className }: MarkdownProps) {
 	// Track highlighter readiness so we pass `plugins` only after the async
 	// highlighter has loaded. Until then, Streamdown renders plain-text code
 	// blocks (no flicker — they upgrade in-place when the plugin arrives).
 	const [ready, setReady] = useState(!!shikiPlugin?.getSupportedLanguages);
+	// One object for the plugin's lifetime: a fresh literal per render would
+	// defeat Streamdown's memo, which compares `plugins` by reference.
+	const plugins = useMemo(() => (ready ? { code: shikiPlugin! } : undefined), [ready]);
 
 	useEffect(() => {
 		if (ready) return;
@@ -75,9 +81,10 @@ export function Markdown({ text, mode = "static", components }: MarkdownProps) {
 			shikiTheme={SHIKI_THEME}
 			controls={CONTROLS}
 			components={components}
+			className={className}
 			parseIncompleteMarkdown={true}
 			parseMarkdownIntoBlocksFn={parseMarkdownIntoBlocks}
-			plugins={ready ? { code: shikiPlugin! } : undefined}
+			plugins={plugins}
 		>
 			{text}
 		</Streamdown>

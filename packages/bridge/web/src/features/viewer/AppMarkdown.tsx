@@ -12,6 +12,14 @@ import { MarkdownLink } from "./MarkdownLink.tsx";
 
 const components = { a: MarkdownLink };
 
-export function AppMarkdown({ text, mode }: { text: string; mode?: "streaming" | "static" }) {
-	return <Markdown text={text} mode={mode} components={components} />;
+export function AppMarkdown({
+	text,
+	mode,
+	className,
+}: {
+	text: string;
+	mode?: "streaming" | "static";
+	className?: string;
+}) {
+	return <Markdown text={text} mode={mode} components={components} className={className} />;
 }
