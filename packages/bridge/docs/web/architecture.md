@@ -289,7 +289,11 @@ receives BridgeClient pushes and is the write boundary for store, route, and
 cache updates:
 
 - live patch operations are coalesced into one store flush per animation frame
-  while visible and approximately one second while hidden;
+  while visible and approximately one second while hidden — except that a
+  patch touching `/status` flushes synchronously: backgrounded tabs suspend
+  their timers, so a coalesced status write would only land at the resume
+  flush, with a stale `document.hidden` read, losing the turn-completion
+  notification that observes the streaming→idle transition at store level;
 - a replace is an immediate flush barrier;
 - live deltas use `planCacheWrites` against a per-session `cacheBase`, writing
   committed, ordered cache records through the IndexedDB adapter;
