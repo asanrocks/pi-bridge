@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import type { Document, Entry } from "../../src/core/types.ts";
 import {
-	collapseDrafts,
+	collapseSuperseded,
 	computeActiveUserPath,
 	computeHistoryTree,
 	computeLaneLayout,
@@ -325,9 +325,10 @@ describe("computeLaneLayout", () => {
 		expect(onPath).toEqual(["u1", "u3"]);
 	});
 
-	it("off-path branch point uses oldest child as primary (inherits lane)", () => {
+	it("off-path branch point uses newest child as primary (inherits lane)", () => {
 		// u1 -> {u2(active→leaf), u3(side, branch point, off path)}.
-		// u3 -> {u4, u5} both off path. u4 (oldest) inherits u3's lane.
+		// u3 -> {u4, u5} both off path. u5 (newest — where the conversation
+		// continued) inherits u3's lane; u4 (the superseded original) forks.
 		const doc = setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z"),
 			userEntry("u2", "u1", "2024-01-01T00:01:00Z"),
@@ -341,12 +342,33 @@ describe("computeLaneLayout", () => {
 
 		const lane = lanes(layout);
 		expect(lane.get("u3")).toBe(1); // forked off u1
-		expect(lane.get("u4")).toBe(1); // oldest, inherits u3's lane
-		expect(lane.get("u5")).toBe(2); // secondary → forks further right
-		// Two short forks: u1→u3 (row 0, lane 0→1) and u3→u5 (row 2, lane 1→2).
+		expect(lane.get("u4")).toBe(2); // superseded original → forks right
+		expect(lane.get("u5")).toBe(1); // newest, inherits u3's lane
+		// Two short forks: u1→u3 (row 0, lane 0→1) and u3→u4 (row 2, lane 1→2).
 		expect(layout.forks).toHaveLength(2);
 		expect(layout.forks[0]).toEqual({ fromRow: 0, fromLane: 0, toRow: 0.5, toLane: 1 });
 		expect(layout.forks[1]).toEqual({ fromRow: 2, fromLane: 1, toRow: 2.5, toLane: 2 });
+	});
+
+	it("secondary siblings are assigned lanes newest-nearest (reverse chronological)", () => {
+		// u1 -> {u2(active), u3, u4}: the newest secondary (u4) takes the lane
+		// nearest the parent; the oldest (u3) is pushed furthest right. This is
+		// what lets a re-edit continuation start on the lane next to the spine
+		// instead of one lane out per earlier dead sibling.
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z"),
+			userEntry("u2", "u1", "2024-01-01T00:01:00Z"),
+			userEntry("u3", "u1", "2024-01-01T00:02:00Z"),
+			userEntry("u4", "u1", "2024-01-01T00:03:00Z"),
+		]);
+		const tree = computeHistoryTree(doc);
+		const path = computeActiveUserPath(doc, "u2");
+		const layout = computeLaneLayout(tree, path);
+
+		const lane = lanes(layout);
+		expect(lane.get("u2")).toBe(0); // active → inherits
+		expect(lane.get("u4")).toBe(1); // newest secondary → nearest lane
+		expect(lane.get("u3")).toBe(2); // oldest secondary → furthest lane
 	});
 
 	it("multiple roots each start a lineage", () => {
@@ -411,15 +433,95 @@ describe("computeLaneLayout", () => {
 		expect(layout.forks[0]).toEqual({ fromRow: 0, fromLane: 0, toRow: 0.5, toLane: 1 });
 		expect(layout.forks[1]).toEqual({ fromRow: 3, fromLane: 0, toRow: 3.5, toLane: 1 });
 	});
+
+	it("revisit-edit keeps the chronological spine on one lane (edit → continue pattern)", () => {
+		// The re-edit pattern with a history revisit: A; B (edited to B1);
+		// C on B1 (edited to C1); D on C1; then B is revisited and edited to
+		// B2. Edits fork at the edited message's parent, so B, B1, B2 are all
+		// children of A, and C, C1 are both children of B1. Leaf = B2, so the
+		// active path is shallow (A→B2) while the chronological spine
+		// (B1→C1→D) is deep. Newest-primary + reverse sibling order keep the
+		// spine on lane 1 and the superseded originals (B, C) as one-dot
+		// stubs reusing lane 2 — instead of each edit cycle forking one lane
+		// further right (the pre-fix layout had 4 lanes: B=1, B1=2, C1=3).
+		const doc = setEntries(emptyDoc(), [
+			userEntry("A", null, "2024-01-01T00:00:00Z", "A"),
+			userEntry("B", "A", "2024-01-01T00:01:00Z", "B"),
+			userEntry("B1", "A", "2024-01-01T00:02:00Z", "B1"),
+			userEntry("C", "B1", "2024-01-01T00:03:00Z", "C"),
+			userEntry("C1", "B1", "2024-01-01T00:04:00Z", "C1"),
+			userEntry("D", "C1", "2024-01-01T00:05:00Z", "D"),
+			userEntry("B2", "A", "2024-01-01T00:06:00Z", "B2"),
+		]);
+		const tree = computeHistoryTree(doc);
+		const path = computeActiveUserPath(doc, "B2");
+		const layout = computeLaneLayout(tree, path);
+
+		expect(ids(layout)).toEqual(["A", "B", "B1", "C", "C1", "D", "B2"]);
+		const lane = lanes(layout);
+		expect(lane.get("A")).toBe(0);
+		expect(lane.get("B2")).toBe(0); // active branch → the main lane
+		expect(lane.get("B1")).toBe(1); // spine start: newest secondary of A
+		expect(lane.get("C1")).toBe(1); // newest child of B1 → inherits the spine lane
+		expect(lane.get("D")).toBe(1); // only child of C1 → inherits
+		expect(lane.get("B")).toBe(2); // superseded original: one-dot stub
+		expect(lane.get("C")).toBe(2); // superseded original: one-dot stub (reusing B's lane)
+		expect(layout.laneCount).toBe(3); // constant — not one lane per edit cycle
+		// Three short forks: A→B1 (lane 1), A→B (lane 2), B1→C (lane 2, reused).
+		expect(layout.forks).toHaveLength(3);
+		expect(layout.forks[0]).toEqual({ fromRow: 0, fromLane: 0, toRow: 0.5, toLane: 1 });
+		expect(layout.forks[1]).toEqual({ fromRow: 0, fromLane: 0, toRow: 0.5, toLane: 2 });
+		expect(layout.forks[2]).toEqual({ fromRow: 2, fromLane: 1, toRow: 2.5, toLane: 2 });
+		// Lane 1's vertical spans the whole spine (fork landing 0.5 → D, row 5).
+		const lane1 = layout.lineages.filter((l) => l.lane === 1);
+		expect(lane1).toHaveLength(1);
+		expect(lane1[0]).toEqual({ lane: 1, startRow: 0.5, endRow: 5 });
+		// Lane 2 hosts two disjoint stub lineages: B (0.5→1) and C (2.5→3).
+		const lane2 = layout.lineages.filter((l) => l.lane === 2);
+		expect(lane2).toHaveLength(2);
+		expect(lane2[0]).toEqual({ lane: 2, startRow: 0.5, endRow: 1 });
+		expect(lane2[1]).toEqual({ lane: 2, startRow: 2.5, endRow: 3 });
+	});
+
+	it("revisit-edit lane count is constant across edit cycles", () => {
+		// Three edit cycles (B→B1, C→C1, D→D1) before the revisit-edit of B.
+		// Pre-fix this grew one lane per cycle (5 lanes); the spine now
+		// inherits one lane and every superseded original reuses the stub
+		// lane, so the width is 3 regardless of the number of cycles.
+		const doc = setEntries(emptyDoc(), [
+			userEntry("A", null, "2024-01-01T00:00:00Z", "A"),
+			userEntry("B", "A", "2024-01-01T00:01:00Z", "B"),
+			userEntry("B1", "A", "2024-01-01T00:02:00Z", "B1"),
+			userEntry("C", "B1", "2024-01-01T00:03:00Z", "C"),
+			userEntry("C1", "B1", "2024-01-01T00:04:00Z", "C1"),
+			userEntry("D", "C1", "2024-01-01T00:05:00Z", "D"),
+			userEntry("D1", "C1", "2024-01-01T00:06:00Z", "D1"),
+			userEntry("B2", "A", "2024-01-01T00:07:00Z", "B2"),
+		]);
+		const tree = computeHistoryTree(doc);
+		const path = computeActiveUserPath(doc, "B2");
+		const layout = computeLaneLayout(tree, path);
+
+		const lane = lanes(layout);
+		// The chronological spine stays on lane 1 end to end.
+		expect(lane.get("B1")).toBe(1);
+		expect(lane.get("C1")).toBe(1);
+		expect(lane.get("D1")).toBe(1);
+		// Every superseded original is a one-dot stub reusing lane 2.
+		expect(lane.get("B")).toBe(2);
+		expect(lane.get("C")).toBe(2);
+		expect(lane.get("D")).toBe(2);
+		expect(layout.laneCount).toBe(3);
+	});
 });
 
 // ---------------------------------------------------------------------------
 // Draft collapse — collapseDrafts (Pass 1.5)
 // ---------------------------------------------------------------------------
 
-describe("collapseDrafts", () => {
-	// Draft-fan fixture: u1(root, completed) → siblings u2(draft), u3(draft),
-	// u4(completed), all under effective parent a1.
+describe("collapseSuperseded", () => {
+	// Dead-end fan fixture: u1(root, completed) → siblings u2(draft, aborted),
+	// u3(draft, aborted), u4(completed leaf), all under effective parent a1.
 	function fanDoc(): Document {
 		return setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z", "root"),
@@ -433,17 +535,17 @@ describe("collapseDrafts", () => {
 		]);
 	}
 
-	it("flags aborted+dead-end user messages as drafts", () => {
+	it("flags every user-message leaf as a dead end (structural, abort-agnostic)", () => {
 		const tree = computeHistoryTree(fanDoc());
 		const u1 = tree.roots[0];
-		expect(u1.abortedDraft).toBe(false); // completed assistant
+		expect(u1.deadEnd).toBe(false); // has user children
 		const byId = (id: string) => u1.children.find((c) => c.id === id)!;
-		expect(byId("u2").abortedDraft).toBe(true);
-		expect(byId("u3").abortedDraft).toBe(true);
-		expect(byId("u4").abortedDraft).toBe(false); // completed → not an aborted draft
+		expect(byId("u2").deadEnd).toBe(true); // aborted draft
+		expect(byId("u3").deadEnd).toBe(true); // aborted draft
+		expect(byId("u4").deadEnd).toBe(true); // completed but a leaf — still a structural dead end
 	});
 
-	it("abort + continue (user follow-up under the aborted assistant) is NOT a draft", () => {
+	it("a user follow-up below a message clears its dead-end flag", () => {
 		// u2's assistant a2 aborts, but the user continues from a2 (u3 child of a2)
 		const doc = setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z"),
@@ -455,20 +557,57 @@ describe("collapseDrafts", () => {
 		]);
 		const tree = computeHistoryTree(doc);
 		const u2 = tree.roots[0].children.find((c) => c.id === "u2")!;
-		expect(u2.abortedDraft).toBe(false); // not dead-ended
+		expect(u2.deadEnd).toBe(false); // not dead-ended
 	});
 
-	it("collapses a draft run into the following node", () => {
+	it("collapses a dead-end run into the following node", () => {
 		const tree = computeHistoryTree(fanDoc());
 		const path = computeActiveUserPath(fanDoc(), "a4");
-		const collapsed = collapseDrafts(tree, path);
+		const collapsed = collapseSuperseded(tree, path);
 		const u1 = collapsed.roots[0];
-		expect(u1.children.map((c) => c.id)).toEqual(["u4"]); // drafts removed
-		expect(u1.children[0].discardedDrafts.map((d) => d.id)).toEqual(["u2", "u3"]);
+		expect(u1.children.map((c) => c.id)).toEqual(["u4"]); // dead ends removed
+		expect(u1.children[0].supersededTurns.map((t) => t.id)).toEqual(["u2", "u3"]);
 	});
 
-	it("trailing all-aborted fan promotes the last draft as the following node", () => {
-		// u2, u3 both abort+dead-end; no following node after. u3 promoted, u2 collapses into it.
+	it("folds a COMPLETED turn that was edited away (thorough fold)", () => {
+		// u2 got a full assistant reply, then the user re-edited it into u3 —
+		// not aborted, but the branch dead-ended and a later sibling from the
+		// same branch point superseded it, so it folds.
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z", "root"),
+			asstEntry("a1", "u1", "2024-01-01T00:00:30Z"),
+			userEntry("u2", "a1", "2024-01-01T00:01:00Z", "original"),
+			asstEntry("a2", "u2", "2024-01-01T00:01:30Z"), // completed reply
+			userEntry("u3", "a1", "2024-01-01T00:02:00Z", "re-edit"),
+			asstEntry("a3", "u3", "2024-01-01T00:02:30Z"),
+		]);
+		const tree = computeHistoryTree(doc);
+		const path = computeActiveUserPath(doc, "a3");
+		const collapsed = collapseSuperseded(tree, path);
+		const u1 = collapsed.roots[0];
+		expect(u1.children.map((c) => c.id)).toEqual(["u3"]);
+		expect(u1.children[0].supersededTurns.map((t) => t.id)).toEqual(["u2"]);
+	});
+
+	it("a single trailing dead end stays visible (nothing superseded it)", () => {
+		// u2 completed and dead-ended; the user navigated back to u1 (leaf a1)
+		// and sent nothing after — no following sibling, so the trailing run
+		// promotes its last (only) member and u2 stays a row.
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z", "root"),
+			asstEntry("a1", "u1", "2024-01-01T00:00:30Z"),
+			userEntry("u2", "a1", "2024-01-01T00:01:00Z", "explored"),
+			asstEntry("a2", "u2", "2024-01-01T00:01:30Z"),
+		]);
+		const tree = computeHistoryTree(doc);
+		const path = computeActiveUserPath(doc, "a1");
+		const collapsed = collapseSuperseded(tree, path);
+		expect(collapsed.roots[0].children.map((c) => c.id)).toEqual(["u2"]);
+		expect(collapsed.roots[0].children[0].supersededTurns).toEqual([]);
+	});
+
+	it("trailing all-dead-end fan promotes the last member as the following node", () => {
+		// u2, u3 both dead-end; no following node after. u3 promoted, u2 folds into it.
 		const doc = setEntries(emptyDoc(), [
 			userEntry("u1", null, "2024-01-01T00:00:00Z"),
 			asstEntry("a1", "u1", "2024-01-01T00:00:30Z"),
@@ -479,31 +618,44 @@ describe("collapseDrafts", () => {
 		]);
 		const tree = computeHistoryTree(doc);
 		const path = computeActiveUserPath(doc, "a1"); // leaf elsewhere
-		const collapsed = collapseDrafts(tree, path);
+		const collapsed = collapseSuperseded(tree, path);
 		const u1 = collapsed.roots[0];
 		expect(u1.children.map((c) => c.id)).toEqual(["u3"]); // u3 promoted
-		expect(u1.children[0].discardedDrafts.map((d) => d.id)).toEqual(["u2"]);
+		expect(u1.children[0].supersededTurns.map((t) => t.id)).toEqual(["u2"]);
 	});
 
-	it("on-path draft stays visible (not collapsed)", () => {
-		// Navigate to draft u2 (leafId a2): u2 is on the active path → not collapsed.
-		// u3 (off-path draft after u2) collapses into the following node u4.
+	it("on-path dead end stays visible (not collapsed)", () => {
+		// Navigate to dead end u2 (leafId a2): u2 is on the active path → not collapsed.
+		// u3 (off-path dead end after u2) folds into the following node u4.
 		const tree = computeHistoryTree(fanDoc());
 		const path = computeActiveUserPath(fanDoc(), "a2");
-		const collapsed = collapseDrafts(tree, path);
+		const collapsed = collapseSuperseded(tree, path);
 		const u1 = collapsed.roots[0];
 		expect(u1.children.map((c) => c.id)).toEqual(["u2", "u4"]);
-		expect(u1.children.find((c) => c.id === "u2")!.discardedDrafts).toEqual([]);
-		expect(u1.children.find((c) => c.id === "u4")!.discardedDrafts.map((d) => d.id)).toEqual(["u3"]);
+		expect(u1.children.find((c) => c.id === "u2")!.supersededTurns).toEqual([]);
+		expect(u1.children.find((c) => c.id === "u4")!.supersededTurns.map((t) => t.id)).toEqual(["u3"]);
 	});
 
-	it("collapsed drafts get no lanes in computeLaneLayout", () => {
+	it("a keep-visible id outside the active path stays visible (peek exclusion)", () => {
+		// The renderer passes the active path ∪ the rendered (peeked) path, so
+		// a dead end pinned by a peek keeps its row and click target.
+		const tree = computeHistoryTree(fanDoc());
+		const path = computeActiveUserPath(fanDoc(), "a4");
+		const keepVisible = new Set([...path, "u2"]);
+		const collapsed = collapseSuperseded(tree, keepVisible);
+		const u1 = collapsed.roots[0];
+		expect(u1.children.map((c) => c.id)).toEqual(["u2", "u4"]);
+		expect(u1.children.find((c) => c.id === "u2")!.supersededTurns).toEqual([]);
+		expect(u1.children.find((c) => c.id === "u4")!.supersededTurns.map((t) => t.id)).toEqual(["u3"]);
+	});
+
+	it("folded turns get no lanes in computeLaneLayout", () => {
 		const doc = fanDoc();
 		const tree = computeHistoryTree(doc);
 		const path = computeActiveUserPath(doc, "a4");
-		const collapsed = collapseDrafts(tree, path);
+		const collapsed = collapseSuperseded(tree, path);
 		const layout = computeLaneLayout(collapsed, path);
-		// Drafts u2, u3 are absent — only u1 and the following node u4 get lanes. u4 is
+		// Dead ends u2, u3 are absent — only u1 and the following node u4 get lanes. u4 is
 		// u1's only kept child → primary → inherits lane 0, no fork.
 		expect(ids(layout)).toEqual(["u1", "u4"]);
 		expect(layout.laneCount).toBe(1);
@@ -515,7 +667,7 @@ describe("collapseDrafts", () => {
 		const tree = computeHistoryTree(doc);
 		const path = computeActiveUserPath(doc, "a4");
 		const before = JSON.stringify(tree);
-		collapseDrafts(tree, path);
+		collapseSuperseded(tree, path);
 		expect(JSON.stringify(tree)).toBe(before);
 	});
 });
