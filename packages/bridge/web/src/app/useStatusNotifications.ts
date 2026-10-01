@@ -11,6 +11,18 @@
 // assistant entry — see UnreadMessageCounter), survives turn transitions,
 // counts completions in hidden tabs too (a browser notification fires as
 // well), and resets to 0 when the window regains focus.
+//
+// The completion notification is decided in the store subscription below,
+// not in a render effect: backgrounded tabs suspend their timers (and
+// rAF), so anything decided after render — or deferred via setTimeout,
+// such as a grace window — cannot run while hidden. The pipeline flushes
+// status-op patches synchronously (see connectionPipeline), so the
+// subscription observes the streaming→idle transition at frame-arrival
+// time, when document.hidden is still trustworthy. The remaining race —
+// a completion frame arriving in the narrow resume window, before the
+// visibilitychange task — is covered by re-checking document.hidden inside
+// showNotification after its async registration hop; focus-close cleans
+// up any near-miss by tag.
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
@@ -70,44 +82,46 @@ export function useStatusNotifications({
 	const turnStartRef = useRef<number | null>(null);
 	const wasStreamingRef = useRef(isStreaming);
 
-	// Per-message unread counting. Subscribe at store level (not useStore)
-	// so counting never re-renders; gated on document identity so draft
-	// typing and UI toggles don't trigger entry scans.
+	// Per-message unread counting + turn tracking. Subscribe at store level
+	// (not useStore) so neither ever re-renders; gated on document identity
+	// so draft typing and UI toggles don't trigger entry scans.
 	useEffect(() => {
 		const counter = new UnreadMessageCounter();
 		return getStore().subscribe((s, prev) => {
 			if (counter.switchedSession(s.activeSessionId)) {
 				// Attach/session switch: baseline the existing history —
-				// pre-existing messages never count as unread.
+				// pre-existing messages never count as unread — and re-baseline
+				// the turn tracker so a mid-turn state from the previous
+				// session cannot leak across.
 				counter.rebase(s.document.entries);
 				setUnreadCount(0);
+				wasStreamingRef.current = s.document.status.isStreaming;
+				turnStartRef.current = null;
 			} else if (s.document !== prev.document) {
 				const fresh = counter.sync(s.document.entries);
 				// Unfocused covers hidden (a hidden tab cannot hold focus).
 				// Focused: the user is watching — absorb silently.
 				if (fresh > 0 && !document.hasFocus()) setUnreadCount((c) => c + fresh);
+
+				// Turn transition. Status-op patches flush synchronously in
+				// the pipeline, so this runs at frame-arrival time — the
+				// timer/rAF suspension of a backgrounded tab cannot delay it
+				// past the point where document.hidden is still accurate.
+				const was = wasStreamingRef.current;
+				const now = s.document.status.isStreaming;
+				wasStreamingRef.current = now;
+				if (!was && now) {
+					turnStartRef.current = Date.now();
+				} else if (was && !now && turnStartRef.current !== null) {
+					const durationMs = Date.now() - turnStartRef.current;
+					turnStartRef.current = null;
+					if (document.hidden) {
+						fireNotification(s.document.status.name || "pi-bridge", durationMs);
+					}
+				}
 			}
 		});
 	}, []);
-
-	// Turn duration tracking + browser notification on hidden completion.
-	// The count itself is NOT touched here — it accumulates per message via
-	// the store subscription above and clears only on focus.
-	useEffect(() => {
-		const was = wasStreamingRef.current;
-		wasStreamingRef.current = isStreaming;
-
-		if (!was && isStreaming) {
-			turnStartRef.current = Date.now();
-		} else if (was && !isStreaming && turnStartRef.current !== null) {
-			const durationMs = Date.now() - turnStartRef.current;
-			turnStartRef.current = null;
-
-			if (document.hidden) {
-				fireNotification(statusName || "pi-bridge", durationMs);
-			}
-		}
-	}, [isStreaming, statusName]);
 
 	// Reset count + close notification on focus
 	useEffect(() => {
@@ -115,18 +129,9 @@ export function useStatusNotifications({
 			setUnreadCount(0);
 			closeNotification();
 		};
-		// Cancel a pending fire when the tab becomes visible. A page resumed
-		// from background freeze processes its queued WebSocket frames *before*
-		// the visibilitychange (visible) task, so document.hidden is stale-true
-		// during that burst — the grace timer alone can still lose that race.
-		const onVisibility = () => {
-			if (document.visibilityState === "visible") cancelPendingFire();
-		};
 		window.addEventListener("focus", onFocus);
-		document.addEventListener("visibilitychange", onVisibility);
 		return () => {
 			window.removeEventListener("focus", onFocus);
-			document.removeEventListener("visibilitychange", onVisibility);
 		};
 	}, []);
 
@@ -148,38 +153,13 @@ export function useStatusNotifications({
 // Fire browser notification
 // ---------------------------------------------------------------------------
 
-// Grace window before actually posting a Notification. A tab resumed from
-// background freeze flushes queued WebSocket frames before its
-// visibilitychange (visible) task, so a completion seen "while hidden" may
-// really be a foregrounding user. Deferring the fire gives the visibility
-// task time to cancel it; a genuinely hidden tab just fires ~1s late
-// (background timer clamping is >= 1s anyway).
-const NOTIFY_GRACE_MS = 1000;
-
-let fireTimer: ReturnType<typeof setTimeout> | null = null;
-
-function cancelPendingFire(): void {
-	if (fireTimer !== null) {
-		clearTimeout(fireTimer);
-		fireTimer = null;
-	}
-}
-
 function fireNotification(sessionName: string, durationMs: number): void {
 	if (!notificationPermissionGranted()) return;
 	if (typeof Notification === "undefined") return;
 
 	const seconds = Math.round(durationMs / 1000);
-	cancelPendingFire();
-	fireTimer = setTimeout(() => {
-		fireTimer = null;
-		// Foregrounded during the grace window: the user is looking at the
-		// completed turn; a notification now would be noise.
-		if (!document.hidden) return;
-
-		closeNotification();
-		void showNotification(`${sessionName} · Completed (${seconds}s)`);
-	}, NOTIFY_GRACE_MS);
+	closeNotification();
+	void showNotification(`${sessionName} · Completed (${seconds}s)`);
 }
 
 /**
@@ -195,6 +175,11 @@ async function showNotification(body: string): Promise<void> {
 	// Only use the SW if one already controls the page — getRegistration()
 	// can wait on a registration that never finishes installing.
 	const swReg = navigator.serviceWorker?.controller ? await navigator.serviceWorker.getRegistration() : null;
+	// Re-check after the async hop: a completion frame that arrived in the
+	// resume window (before the visibilitychange task) saw a stale
+	// hidden=true. The user is back and looking at the completed turn; a
+	// notification now would be noise.
+	if (!document.hidden) return;
 	if (swReg) {
 		try {
 			await swReg.showNotification("pi-bridge", options);
