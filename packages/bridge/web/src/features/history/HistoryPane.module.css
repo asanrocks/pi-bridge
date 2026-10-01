@@ -231,19 +231,19 @@
 	text-overflow: ellipsis;
 }
 
-/* Drafts badge — compact "+N" icon-button in its own flex slot before the
-   text. Present only on keepers with collapsed drafts; absent drafts leave
-   no gutter so text reclaims the space. Fixed width keeps the text column's
-   left edge stable across draft/non-draft rows that share a branch point.
+/* Superseded badge — compact "+N" icon-button in its own flex slot before
+   the text. Present only on keepers with folded turns; an absent badge
+   leaves no gutter so text reclaims the space. Fixed width keeps the text
+   column's left edge stable across rows that share a branch point.
    The badge is the only interactive child of the row (the row itself is a
    div role=button); re-enable pointer events here so clicks toggle the
    popover instead of navigating. */
-.draftsBadge {
+.supersededBadge {
 	flex: 0 0 auto;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: var(--drafts-badge-w, 28px);
+	width: var(--superseded-badge-w, 28px);
 	height: 18px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
@@ -258,25 +258,25 @@
 	font-variant-numeric: tabular-nums;
 }
 
-.draftsBadge:hover {
+.supersededBadge:hover {
 	color: var(--color-foreground);
 	background: var(--color-border);
 }
 
-.draftsBadgeOpen {
+.supersededBadgeOpen {
 	color: var(--color-foreground);
 	background: color-mix(in srgb, var(--color-accent) 25%, transparent);
 }
 
-.draftsBadgeOpen:hover {
+.supersededBadgeOpen:hover {
 	background: color-mix(in srgb, var(--color-accent) 35%, transparent);
 }
 
-/* Drafts popover — overlay below the keeper row, above subsequent rows.
+/* Superseded popover — overlay below the keeper row, above subsequent rows.
    Anchors at the gutter end + time column (under the +N chip) and extends
    rightward into the text area where the visual mass is, capped so it can't
    run off the pane's right edge on early rows. */
-.draftsPopover {
+.supersededPopover {
 	position: absolute;
 	z-index: 10;
 	background: var(--color-background);
@@ -288,7 +288,7 @@
 	max-width: min(320px, calc(100% - 16px));
 }
 
-.draftRow {
+.supersededRow {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -304,16 +304,16 @@
 	user-select: none;
 }
 
-.draftRow:hover {
+.supersededRow:hover {
 	background: var(--color-muted);
 }
 
-.draftRow:disabled {
+.supersededRow:disabled {
 	opacity: 0.6;
 	cursor: default;
 }
 
-.draftDot {
+.supersededDot {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
@@ -322,7 +322,7 @@
 	flex-shrink: 0;
 }
 
-.draftText {
+.supersededText {
 	flex: 1;
 	min-width: 0;
 	white-space: nowrap;
@@ -330,7 +330,7 @@
 	text-overflow: ellipsis;
 }
 
-.draftTime {
+.supersededTime {
 	color: var(--color-muted-foreground);
 	font-variant-numeric: tabular-nums;
 	flex-shrink: 0;

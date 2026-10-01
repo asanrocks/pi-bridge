@@ -168,7 +168,7 @@ export {
 	actionPulls,
 	applyPatchInput,
 	beautifyShellCommand,
-	collapseDrafts,
+	collapseSuperseded,
 	computeActiveUserPath,
 	computeHistoryTree,
 	computeLaneLayout,

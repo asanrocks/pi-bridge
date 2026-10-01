@@ -2385,7 +2385,7 @@ export type {
 	PlacedNode,
 } from "./tree.ts";
 export {
-	collapseDrafts,
+	collapseSuperseded,
 	computeActiveUserPath,
 	computeHistoryTree,
 	computeLaneLayout,

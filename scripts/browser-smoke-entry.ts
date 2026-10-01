@@ -50,7 +50,7 @@ import {
 	buildInitialSync,
 	computeHistoryTree,
 	computeActiveUserPath,
-	collapseDrafts,
+	collapseSuperseded,
 	computeLaneLayout,
 	extractApplyPatchPaths,
 	parseApplyPatch,
@@ -132,6 +132,6 @@ console.log(
 	typeof sessionAccounting,
 	typeof computeHistoryTree,
 	typeof computeActiveUserPath,
-	typeof collapseDrafts,
+	typeof collapseSuperseded,
 	typeof computeLaneLayout,
 );

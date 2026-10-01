@@ -10,7 +10,12 @@
 //   Pass 2 (computeLaneLayout):  user-message tree → lane topology (visual
 //          structure). Lane-based, not depth-based — linear follow-ups
 //          inherit the parent's lane (a straight vertical line); only
-//          branch points (nodes with >1 child) fork to new lanes.
+//          branch points (nodes with >1 child) fork to new lanes. Off-path
+//          branch points pick the NEWEST child as primary (where the
+//          conversation continued), and secondary lanes are assigned in
+//          reverse chronological order — together these keep the re-edit
+//          pattern (edit, continue, edit, continue …) on one lane instead
+//          of forking one lane further right per cycle.
 //
 // The renderer (web/HistoryPane) consumes LaneLayout and draws SVG verticals
 // + Bezier fork curves + positioned DOM dots/labels. No topology reasoning
@@ -33,23 +38,24 @@ export interface HistoryNode {
 	text: string;
 	timestamp: string;
 	/**
-	 * True if this user message's assistant turn aborted and dead-ended — the
-	 * assistant child committed with `stopReason: "aborted"` and produced no
-	 * user-message follow-up down that branch. This is the structural
-	 * "discarded draft" signal; the active-path exclusion (a draft you
-	 * navigated back to stays visible) is applied in `collapseDrafts`, not here.
+	 * True when no user message exists anywhere in this message's subtree —
+	 * the conversation never continued below it: an aborted draft, or a
+	 * completed turn abandoned for (or edited into) a later sibling from the
+	 * same branch point. Structural signal only; the keep-visible exclusion
+	 * (a dead end you navigated back to stays expanded) is applied in
+	 * `collapseSuperseded`, not here.
 	 */
-	abortedDraft: boolean;
+	deadEnd: boolean;
 	/** Effective children (user messages whose nearest user ancestor is this node). */
 	children: HistoryNode[];
 	/**
-	 * Drafts collapsed into this node: consecutive aborted-dead-end
+	 * Superseded turns folded into this node: consecutive off-path dead-end
 	 * siblings that preceded this node chronologically and were hidden from
-	 * the lane graph to keep sibling drafts from fanning into separate lanes.
-	 * Empty for nodes that receive no drafts and nodes with no preceding drafts. The
-	 * renderer shows a "+N drafts" affordance when non-empty.
+	 * the lane graph to keep sibling dead ends from fanning into separate
+	 * lanes. Empty for nodes that receive none and nodes with no preceding
+	 * dead ends. The renderer shows a "+N" affordance when non-empty.
 	 */
-	discardedDrafts: HistoryNode[];
+	supersededTurns: HistoryNode[];
 }
 
 export interface HistoryTree {
@@ -103,32 +109,6 @@ export function computeHistoryTree(doc: Document): HistoryTree {
 		if (e.kind === "message" && e.role === "user") userEntries.push(e);
 	}
 
-	// Direct-children map (all entry kinds). Used to detect aborted-dead-end
-	// drafts: a user message whose assistant child aborted and produced no
-	// user-message follow-up down that branch.
-	const childrenOf = new Map<string, Entry[]>();
-	for (const e of Object.values(doc.entries)) {
-		if (e.parentId !== null) {
-			const arr = childrenOf.get(e.parentId);
-			if (arr) arr.push(e);
-			else childrenOf.set(e.parentId, [e]);
-		}
-	}
-
-	// A user message is a structural "discarded draft" candidate if its
-	// assistant turn aborted and dead-ended — the assistant child committed
-	// with stopReason "aborted" and has no user-message child (the user
-	// re-edited into a sibling rather than continuing from the abort). The
-	// active-path exclusion (a draft you navigated back to stays visible) is
-	// applied later in `collapseDrafts`, not here.
-	const isAbortedDraft = (ue: MessageEntry): boolean => {
-		const kids = childrenOf.get(ue.id) ?? [];
-		const asst = kids.find((k) => k.kind === "message" && k.role === "assistant") as MessageEntry | undefined;
-		if (!asst || asst.stopReason !== "aborted") return false;
-		const asstKids = childrenOf.get(asst.id) ?? [];
-		return !asstKids.some((k) => k.kind === "message" && k.role === "user");
-	};
-
 	const nodes = new Map<string, HistoryNode>();
 	const effectiveParent = new Map<string, string | null>();
 	for (const ue of userEntries) {
@@ -136,12 +116,22 @@ export function computeHistoryTree(doc: Document): HistoryTree {
 			id: ue.id,
 			text: previewText(ue),
 			timestamp: ue.timestamp,
-			abortedDraft: isAbortedDraft(ue),
+			deadEnd: false,
 			children: [],
-			discardedDrafts: [],
+			supersededTurns: [],
 		});
 		effectiveParent.set(ue.id, nearestUserAncestor(ue.id, doc.entries));
 	}
+
+	// A user message is a structural dead end when no other user message has
+	// it as its nearest user ancestor: any user message in its subtree would
+	// surface through the ancestor walk, so "no user-tree children" is
+	// exactly "the conversation never continued below this message". Whether
+	// a dead end actually folds is decided later in `collapseSuperseded` (the
+	// keep-visible exclusion — a dead end you navigated back to stays a row).
+	const hasUserTreeChild = new Set<string>();
+	for (const p of effectiveParent.values()) if (p !== null) hasUserTreeChild.add(p);
+	for (const ue of userEntries) nodes.get(ue.id)!.deadEnd = !hasUserTreeChild.has(ue.id);
 
 	const roots: HistoryNode[] = [];
 	for (const ue of userEntries) {
@@ -188,54 +178,57 @@ export function computeActiveUserPath(doc: Document, leafId: string | null): Set
 }
 
 // ---------------------------------------------------------------------------
-// Draft collapse — hide aborted sibling drafts in the following node
+// Superseded-turn collapse — fold dead-end siblings into the following node
 // ---------------------------------------------------------------------------
 
 /**
- * Collapse aborted-dead-end sibling runs into the following node.
+ * Collapse superseded dead-end sibling runs into the following node.
  *
- * A "discarded draft" is a sibling user message whose assistant turn aborted
- * and dead-ended (`abortedDraft: true`) AND which is not on the active path
- * (a draft you navigated back to stays visible). Maximal runs of consecutive
- * drafts are removed from the parent's children and attached to the following
- * following node's `discardedDrafts`. A trailing run with no following node
- * promotes its chronologically-last draft to be the node (the most recent attempt
- * stays visible) and attaches the rest to it.
+ * A "superseded turn" is a sibling user message that dead-ended
+ * (`deadEnd: true` — no user message anywhere in its subtree: an aborted
+ * draft, or a completed turn abandoned for / edited into a later sibling)
+ * AND whose id is not in `keepVisible` (the active path, plus any branch the
+ * caller is pinning — a dead end you navigated back to, or are peeking,
+ * stays a row). Maximal runs of consecutive dead ends are removed from the
+ * parent's children and attached to the following node's `supersededTurns`.
+ * A trailing run with no following node promotes its chronologically-last
+ * member to be the node (the most recent attempt stays visible) and attaches
+ * the rest to it.
  *
  * This runs after `computeHistoryTree` and before `computeLaneLayout`: Pass 2
- * iterates `children`, so removing drafts from children keeps them out of the
- * lane graph (no lane per draft, no fan). The renderer surfaces them via the
- * following node's `discardedDrafts` as an expandable "+N drafts" affordance — a UI
- * overlay, not a graph relayout.
+ * iterates `children`, so removing folded turns from children keeps them out
+ * of the lane graph (no lane per dead end, no fan). The renderer surfaces
+ * them via the following node's `supersededTurns` as an expandable "+N"
+ * affordance — a UI overlay, not a graph relayout.
  *
  * Pure: returns a new tree; does not mutate the input.
  */
-export function collapseDrafts(tree: HistoryTree, activePath: Set<string>): HistoryTree {
+export function collapseSuperseded(tree: HistoryTree, keepVisible: Set<string>): HistoryTree {
 	const collapseNode = (n: HistoryNode): HistoryNode => ({
 		...n,
-		children: collapseSiblings(n.children.map(collapseNode), activePath),
+		children: collapseSiblings(n.children.map(collapseNode), keepVisible),
 	});
-	return { roots: collapseSiblings(tree.roots.map(collapseNode), activePath) };
+	return { roots: collapseSiblings(tree.roots.map(collapseNode), keepVisible) };
 }
 
 /**
- * Collapse one sibling list. Drafts (aborted + off-path) are pulled out and
- * attached to the following node's `discardedDrafts`; a trailing run
- * promotes its last draft. `siblings` must be sorted chronologically (Pass 1
- * sorts roots and children).
+ * Collapse one sibling list. Dead ends (structural dead end + not kept
+ * visible) are pulled out and attached to the following node's
+ * `supersededTurns`; a trailing run promotes its last member. `siblings`
+ * must be sorted chronologically (Pass 1 sorts roots and children).
  */
-function collapseSiblings(siblings: HistoryNode[], activePath: Set<string>): HistoryNode[] {
+function collapseSiblings(siblings: HistoryNode[], keepVisible: Set<string>): HistoryNode[] {
 	const result: HistoryNode[] = [];
-	let run: HistoryNode[] = []; // consecutive drafts awaiting a node to attach to
+	let run: HistoryNode[] = []; // consecutive dead ends awaiting a node to attach to
 
 	for (const s of siblings) {
-		if (s.abortedDraft && !activePath.has(s.id)) {
+		if (s.deadEnd && !keepVisible.has(s.id)) {
 			run.push(s);
 			continue;
 		}
-		// s is a completed sibling. Attach the pending run to it.
+		// s is a continued sibling. Attach the pending run to it.
 		if (run.length > 0) {
-			result.push({ ...s, discardedDrafts: [...s.discardedDrafts, ...run] });
+			result.push({ ...s, supersededTurns: [...s.supersededTurns, ...run] });
 			run = [];
 		} else {
 			result.push(s);
@@ -243,11 +236,11 @@ function collapseSiblings(siblings: HistoryNode[], activePath: Set<string>): His
 	}
 
 	// Trailing run with no following node: promote the chronologically-last
-	// draft (siblings are sorted) as the node, attach the rest to it.
+	// member (siblings are sorted) as the node, attach the rest to it.
 	if (run.length > 0) {
 		const last = run[run.length - 1];
 		const rest = run.slice(0, -1);
-		result.push({ ...last, discardedDrafts: [...last.discardedDrafts, ...rest] });
+		result.push({ ...last, supersededTurns: [...last.supersededTurns, ...rest] });
 	}
 
 	return result;
@@ -334,12 +327,21 @@ export interface LaneLayout {
  * history):
  *
  * 1. **Root** → leftmost free lane (typically lane 0 for a single-root tree).
- * 2. **Primary child** (the child on the active path, or the oldest child
+ * 2. **Primary child** (the child on the active path, or the NEWEST child
  *    when the branch point is off the active path) → inherits the parent's
  *    lane. No fork is drawn. This is what keeps linear follow-ups on one
- *    vertical line.
+ *    vertical line. Newest, not oldest: in the re-edit pattern the
+ *    conversation continues on the last edit, so the newest sibling is
+ *    where history went. If the oldest (the superseded original) inherited
+ *    the lane, the continuation chain would be a chain of secondaries, each
+ *    forking one lane further right per edit cycle — unbounded lane growth
+ *    whenever the active leaf is shallower than the chronological spine
+ *    (i.e. after a revisit-edit of a history node).
  * 3. **Secondary child** → a lane reserved for it when its branch point is
- *    placed (not when the child itself is placed). The reservation emits a
+ *    placed (not when the child itself is placed), assigned in REVERSE
+ *    chronological order (the newest secondary takes the lane nearest the
+ *    parent) so the continuation sibling is not pushed one lane out per
+ *    earlier dead sibling. The reservation emits a
  *    short fork arc (landing half a row below the branch dot) and creates
  *    the child's lineage (vertical from the fork landing down to the
  *    child's primary-chain end). Reserving at the branch point's row keeps
@@ -385,8 +387,11 @@ export function computeLaneLayout(tree: HistoryTree, activePath: Set<string>): L
 	};
 	for (const r of tree.roots) dfsParent(r, null);
 
-	// Primary child per node: the child on the active path, or the oldest
-	// (children are sorted by timestamp in Pass 1).
+	// Primary child per node: the child on the active path, or the newest
+	// child (children are sorted by timestamp in Pass 1). Newest, not oldest:
+	// the newest sibling is where the conversation chronologically continued;
+	// making it inherit keeps the continuation chain on one lane instead of
+	// cascading one lane further right per re-edit cycle (see the rules above).
 	const primaryChildOf = new Map<string, string | null>();
 	for (const n of all) {
 		if (n.children.length === 0) {
@@ -394,7 +399,7 @@ export function computeLaneLayout(tree: HistoryTree, activePath: Set<string>): L
 			continue;
 		}
 		const onPath = n.children.find((c) => activePath.has(c.id));
-		primaryChildOf.set(n.id, onPath ? onPath.id : n.children[0].id);
+		primaryChildOf.set(n.id, onPath ? onPath.id : n.children[n.children.length - 1].id);
 	}
 
 	// Last primary descendant's row: walk the primary chain (following
@@ -465,12 +470,16 @@ export function computeLaneLayout(tree: HistoryTree, activePath: Set<string>): L
 		// lineage (vertical from the fork landing down to the child's primary-
 		// chain end). Reserving here — at the branch point's row — keeps the
 		// lane occupied through the rows where the new lane's vertical must
-		// run, so a later fork can't grab it before the child arrives. Sibling
-		// secondary children of the same branch point get separate lanes (no
-		// intra-branch-point reuse); freed lanes are reused only by later
-		// branch points' secondary children.
+		// run, so a later fork can't grab it before the child arrives. Children
+		// are visited in REVERSE chronological order so the newest secondary
+		// takes the lane nearest the parent — the re-edit continuation starts
+		// as close to the spine as possible instead of being pushed one lane
+		// out per earlier dead sibling. Sibling secondary children of the same
+		// branch point get separate lanes (no intra-branch-point reuse); freed
+		// lanes are reused only by later branch points' secondary children.
 		const primary = primaryChildOf.get(n.id);
-		for (const child of n.children) {
+		for (let i = n.children.length - 1; i >= 0; i--) {
+			const child = n.children[i];
 			if (child.id === primary) continue;
 			const childLaneVal = leftmostFreeLaneAbove(lane);
 			childLane.set(child.id, childLaneVal);
