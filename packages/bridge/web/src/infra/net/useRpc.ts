@@ -104,6 +104,11 @@ export function useRpc() {
 		await rpc(() => getGlobalClient()?.renameSession(name), "rename session failed");
 	}, []);
 
+	const setLabel = useCallback(
+		(entryId: string, label: string) => rpc(() => getGlobalClient()?.setLabel(entryId, label), "set label failed"),
+		[],
+	);
+
 	const navigate = useCallback(
 		(entryId: string | null) => rpc(() => getGlobalClient()?.navigate(entryId), "navigate failed"),
 		[],
@@ -318,6 +323,7 @@ export function useRpc() {
 			setModelPinned,
 			setThinkingLevel,
 			renameSession,
+			setLabel,
 			navigate,
 			openSession,
 			openProject,
@@ -338,6 +344,7 @@ export function useRpc() {
 			setModelPinned,
 			setThinkingLevel,
 			renameSession,
+			setLabel,
 			navigate,
 			openSession,
 			openProject,

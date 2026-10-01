@@ -429,6 +429,15 @@ export interface RenameSessionRequest {
 	name: string;
 }
 
+/** Set or clear a user-defined label on one entry (pi `LabelEntry`). An empty
+ * string clears. The append is metadata-only — it never enters LLM context —
+ * and reaches every attached connection through the reconcile patch. */
+export interface SetLabelRequest {
+	verb: "setLabel";
+	entryId: string;
+	label: string;
+}
+
 export interface NavigateRequest {
 	verb: "navigate";
 	entryId: string | null;
@@ -722,6 +731,7 @@ export type RpcRequestBody =
 	| SetModelPinnedRequest
 	| SetThinkingLevelRequest
 	| RenameSessionRequest
+	| SetLabelRequest
 	| NavigateRequest
 	| OpenSessionRequest
 	| NewSessionRequest
