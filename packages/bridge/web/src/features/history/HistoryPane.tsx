@@ -9,7 +9,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Entry, TextContent } from "../../../../src/core/types.ts";
 import {
-	collapseDrafts,
+	collapseSuperseded,
 	computeActiveUserPath,
 	computeHistoryTree,
 	computeLaneLayout,
@@ -42,7 +42,7 @@ const GRAPH_PAD_RIGHT = 12;
 const GUTTER_GAP = 12;
 const TIME_COL_W = 44;
 const COL_GAP = 8;
-const DRAFTS_BADGE_W = 28;
+const SUPERSEDED_BADGE_W = 28;
 const ROW_RIGHT_PAD = 12;
 
 /** Minimum width the message text column keeps even when the lane graph is
@@ -171,9 +171,14 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	const layout: LaneLayout = useMemo(() => {
 		const tree = computeHistoryTree(document);
 		const activePath = computeActiveUserPath(document, leafId);
-		const collapsed = collapseDrafts(tree, activePath);
+		// The collapse exclusion is the active path ∪ the rendered (peeked)
+		// path: a dead end pinned by a peek stays a row, so the target the
+		// reader is looking at never hides behind a "+N" badge. Lane
+		// assignment still uses the active path alone.
+		const keepVisible = renderedPathIds ? new Set([...activePath, ...renderedPathIds]) : activePath;
+		const collapsed = collapseSuperseded(tree, keepVisible);
 		return computeLaneLayout(collapsed, activePath);
-	}, [document, leafId]);
+	}, [document, leafId, renderedPathIds]);
 
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	// The deepest on-path node — the user message closest to the active leaf.
@@ -205,11 +210,11 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 		el.scrollTop = Math.max(0, target - el.clientHeight / 2);
 	}, [open, currentRow]);
 
-	// Draft-expand state is local to this pane instance (not the store) —
-	// it resets on close, so re-opening starts with all drafts collapsed.
-	const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set());
-	const toggleDrafts = useCallback((keeperId: string) => {
-		setExpandedDrafts((s) => {
+	// Superseded-expand state is local to this pane instance (not the store) —
+	// it resets on close, so re-opening starts with all folded turns collapsed.
+	const [expandedSuperseded, setExpandedSuperseded] = useState<Set<string>>(new Set());
+	const toggleSuperseded = useCallback((keeperId: string) => {
+		setExpandedSuperseded((s) => {
 			const next = new Set(s);
 			if (next.has(keeperId)) next.delete(keeperId);
 			else next.add(keeperId);
@@ -286,7 +291,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						["--gutter-width" as string]: `${gutterWidth}px`,
 						["--time-col-w" as string]: `${TIME_COL_W}px`,
 						["--col-gap" as string]: `${COL_GAP}px`,
-						["--drafts-badge-w" as string]: `${DRAFTS_BADGE_W}px`,
+						["--superseded-badge-w" as string]: `${SUPERSEDED_BADGE_W}px`,
 						["--row-right-pad" as string]: `${ROW_RIGHT_PAD}px`,
 					} as React.CSSProperties
 				}
@@ -322,8 +327,8 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						isCurrentLeaf={n.node.id === currentNodeId}
 						isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
 						onSelectEntry={selectEntry}
-						onToggleDrafts={toggleDrafts}
-						expandedDrafts={expandedDrafts}
+						onToggleSuperseded={toggleSuperseded}
+						expandedSuperseded={expandedSuperseded}
 						entries={entries}
 					/>
 				))}
@@ -381,7 +386,7 @@ const HistoryHeader = memo(function HistoryHeader({
 });
 
 // ---------------------------------------------------------------------------
-// NodeRow — one row: dot (in the graph gutter) + time + drafts chip + text.
+// NodeRow — one row: dot (in the graph gutter) + time + superseded chip + text.
 //
 // The row is a flex container (graph gutter spacer + meta + text). The dot
 // stays absolutely positioned in the gutter at the node's lane so it aligns
@@ -400,8 +405,8 @@ const NodeRow = memo(function NodeRow({
 	isCurrentLeaf,
 	isOnRenderedPath,
 	onSelectEntry,
-	onToggleDrafts,
-	expandedDrafts,
+	onToggleSuperseded,
+	expandedSuperseded,
 	entries,
 }: {
 	node: PlacedNode;
@@ -409,17 +414,17 @@ const NodeRow = memo(function NodeRow({
 	isCurrentLeaf: boolean;
 	isOnRenderedPath: boolean;
 	onSelectEntry: (entryId: string, isOnPath: boolean) => void;
-	onToggleDrafts: (keeperId: string) => void;
-	expandedDrafts: Set<string>;
+	onToggleSuperseded: (keeperId: string) => void;
+	expandedSuperseded: Set<string>;
 	entries: Record<string, Entry>;
 }) {
 	const top = node.row * ROW_HEIGHT;
 	const dotLeft = laneX(node.lane) - DOT_RADIUS;
 	const text = node.node.text || "(empty)";
 	const time = formatTimestamp(node.node.timestamp);
-	const drafts = node.node.discardedDrafts;
-	const hasDrafts = drafts.length > 0;
-	const isExpanded = expandedDrafts.has(node.node.id);
+	const superseded = node.node.supersededTurns;
+	const hasSuperseded = superseded.length > 0;
+	const isExpanded = expandedSuperseded.has(node.node.id);
 	const rowCls = [
 		styles.row,
 		node.isOnActivePath ? styles.rowOnPath : "",
@@ -429,13 +434,13 @@ const NodeRow = memo(function NodeRow({
 		.filter(Boolean)
 		.join(" ");
 
-	// The row is a div role=button (not a <button>) so the drafts badge and
-	// the popover's draft buttons don't nest interactive content inside a
+	// The row is a div role=button (not a <button>) so the superseded badge and
+	// the popover's folded-turn buttons don't nest interactive content inside a
 	// button — invalid interactive-content nesting, same constraint the
 	// backdrop works around; a div role=button is the semantic compromise.
 	return (
 		<>
-			{/* biome-ignore lint/a11y/useSemanticElements: a real <button> can't contain the drafts badge <button> — invalid interactive-content nesting, same constraint backdropBtn works around; a div role=button is the semantic compromise */}
+			{/* biome-ignore lint/a11y/useSemanticElements: a real <button> can't contain the superseded badge <button> — invalid interactive-content nesting, same constraint backdropBtn works around; a div role=button is the semantic compromise */}
 			<div
 				role="button"
 				tabIndex={0}
@@ -460,44 +465,44 @@ const NodeRow = memo(function NodeRow({
 				<span className={styles.timeCol}>
 					<span className={styles.timeText}>{time}</span>
 				</span>
-				{hasDrafts && (
+				{hasSuperseded && (
 					<button
 						type="button"
-						className={`${styles.draftsBadge} ${isExpanded ? styles.draftsBadgeOpen : ""}`}
+						className={`${styles.supersededBadge} ${isExpanded ? styles.supersededBadgeOpen : ""}`}
 						onClick={(e) => {
 							e.stopPropagation();
-							onToggleDrafts(node.node.id);
+							onToggleSuperseded(node.node.id);
 						}}
 						aria-expanded={isExpanded}
-						aria-label={`${drafts.length} discarded draft${drafts.length > 1 ? "s" : ""}`}
-						title={`${drafts.length} aborted re-edit${drafts.length > 1 ? "s" : ""}`}
+						aria-label={`${superseded.length} superseded turn${superseded.length > 1 ? "s" : ""}`}
+						title={`${superseded.length} superseded turn${superseded.length > 1 ? "s" : ""} (aborted or edited away)`}
 					>
-						+{drafts.length}
+						+{superseded.length}
 					</button>
 				)}
 				<span className={styles.textCol}>
 					<span className={styles.textInner}>{text}</span>
 				</span>
 			</div>
-			{hasDrafts && isExpanded && (
+			{hasSuperseded && isExpanded && (
 				// Popover anchors at the gutter's right edge (under the +N chip's
 				// column) and extends rightward into the text area where the
 				// visual mass is, capped so it can't run off the right edge.
 				<div
-					className={styles.draftsPopover}
+					className={styles.supersededPopover}
 					style={{ top: top + ROW_HEIGHT, left: gutterWidth + TIME_COL_W + COL_GAP }}
 				>
-					{drafts.map((d: HistoryNode) => (
+					{superseded.map((d: HistoryNode) => (
 						<button
 							key={d.id}
 							type="button"
-							className={styles.draftRow}
+							className={styles.supersededRow}
 							onClick={() => onSelectEntry(d.id, false)}
 							title={fullMessageText(entries, d.id) || d.text}
 						>
-							<span className={styles.draftDot} />
-							<span className={styles.draftText}>{d.text || "(empty)"}</span>
-							<span className={styles.draftTime}>{formatTimestamp(d.timestamp)}</span>
+							<span className={styles.supersededDot} />
+							<span className={styles.supersededText}>{d.text || "(empty)"}</span>
+							<span className={styles.supersededTime}>{formatTimestamp(d.timestamp)}</span>
 						</button>
 					))}
 				</div>
