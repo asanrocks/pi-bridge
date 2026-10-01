@@ -231,6 +231,27 @@
 	text-overflow: ellipsis;
 }
 
+/* Label tag — a user-defined bookmark (pi label entry) resolved onto the
+   row's user message, at the beginning of the message preview. Accent-tinted
+   (text, fill, border) so it reads as a marker rather than more muted
+   metadata; bounded and ellipsized, the full label is the hover tooltip. */
+.labelTag {
+	flex: 0 0 auto;
+	max-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--fs-xs);
+	font-weight: 500;
+	color: var(--color-accent);
+	background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+	border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+	border-radius: var(--radius-xs);
+	padding: 0 6px;
+	line-height: 16px;
+	margin-right: 6px;
+}
+
 /* Superseded badge — compact "+N" icon-button in its own flex slot before
    the text. Present only on keepers with folded turns; an absent badge
    leaves no gutter so text reclaims the space. Fixed width keeps the text
