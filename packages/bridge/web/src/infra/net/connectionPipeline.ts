@@ -54,7 +54,8 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	// frame (visible) or ~1s (hidden), capping the urgent render rate at
 	// the flush cadence rather than the token cadence. A `replace` push
 	// flushes immediately (load-bearing: reconnect/session switch resets
-	// state wholesale).
+	// state wholesale), as does any patch touching `/status` (see the
+	// live-patch handler).
 	let pendingOps: PatchOp[] | null = null;
 	let rafId: number | null = null;
 	let hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -226,11 +227,20 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			return;
 		}
 
-		// Live patch without an address: buffer ops, schedule a flush.
+		// Live patch without an address: buffer ops, then flush or schedule.
+		// A patch touching /status is urgent — it flushes synchronously,
+		// bypassing the coalescing timer: that timer (rAF visible, 1s hidden)
+		// never fires in a backgrounded tab, so a coalesced status write
+		// would defer the streaming→idle transition to the resume flush,
+		// where document.hidden reads stale — losing the store-level
+		// turn-completion notification (useStatusNotifications). Status
+		// patches are rare (turn boundaries, status renames), so this costs
+		// nothing against the token-append coalescing.
 		if (push.kind === "patch") {
 			if (pendingOps === null) pendingOps = [];
 			for (const op of push.ops) pendingOps.push(op);
-			scheduleFlush();
+			if (push.ops.some((op) => op.path.startsWith("/status"))) flush();
+			else scheduleFlush();
 		}
 	};
 
