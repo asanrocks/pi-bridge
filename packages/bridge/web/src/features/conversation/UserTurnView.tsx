@@ -16,6 +16,7 @@ import { ResultImages } from "../../render/ResultImages.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { formatDuration, formatGitIdentity } from "./format.ts";
+import { LabelSlot } from "./LabelSlot.tsx";
 import styles from "./turns.module.css";
 
 /** Abbreviated commit id for a menu detail line. */
@@ -140,6 +141,7 @@ export const UserTurnView = memo(function UserTurnView({
 								{gitStamp}
 							</span>
 						))}
+					<LabelSlot entryId={turn.entryId} label={turn.label} />
 					{isEditing && <span className={styles.editingBadge}>Editing</span>}
 				</span>
 				<div className={styles.turnToolbar}>
