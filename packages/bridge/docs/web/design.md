@@ -384,7 +384,9 @@ treatment; the current deepest user message is filled. A `+N` badge groups
 consecutive off-path superseded turns — dead ends, whether aborted drafts
 or completed turns later edited away or abandoned for a sibling from the
 same branch point; opening it reveals the individual turns. A dead end on
-the active path, or pinned by a peek, stays a row. The pane scrolls to the
+the active path, or pinned by a peek, stays a row. A user message carrying
+a label (pi tree-selector bookmark) shows a tag at the beginning of its
+preview. The pane scrolls to the
 active row when opened but does not keep repositioning the reader on every
 new leaf.
 
@@ -559,7 +561,15 @@ keyboard focus and scroll anchors remain stable.
 ### Turn types
 
 - **User turns** show local time, `You`, an optional thought duration, an
-  optional git-state chip, and the message's Markdown and images. The header
+  optional git-state chip, and the message's Markdown and images. A user-
+  defined label (a bookmark set from pi's tree selector or in-app) renders
+  as a `#`-prefixed tag chip in the header, left-aligned after the git-state
+  chip — and is editable in place: clicking the chip swaps it for an inline
+  input (Enter commits, Escape/blur cancels, empty + Enter clears); an
+  unlabeled message reveals a dashed ghost chip on hover as the add
+  affordance (always visible on touch). Labeling is blocked while peeking
+  another branch or a turn is in flight.
+  The header
   toolbar contains copy, the sibling pager, and Edit. The toolbar is revealed
   on hover/focus-capable inputs and always visible on touch.
 - **Assistant turns** show local time, the display model, live or sealed

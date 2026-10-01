@@ -114,6 +114,7 @@ export type {
 	SessionInfoEntry,
 	SessionListCursor,
 	SessionRef,
+	SetLabelRequest,
 	SetModelPinnedRequest,
 	SetModelRequest,
 	SetThinkingLevelRequest,

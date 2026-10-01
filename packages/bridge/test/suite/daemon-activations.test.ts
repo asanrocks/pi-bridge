@@ -151,6 +151,7 @@ function makeStubManager(opts: {
 			setThinkingLevelCalls.push(level);
 		},
 		async renameSession() {},
+		async setLabel() {},
 		async navigate() {},
 		async dispose() {
 			wasDisposed = true;

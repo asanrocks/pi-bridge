@@ -113,6 +113,75 @@
 	margin: 0 2px;
 }
 
+/* User-defined label (pi tree-selector bookmark) resolved onto the turn —
+   a `#`-prefixed tag chip in the turn header, left-aligned after the
+   git-state chip (LabelSlot: the chip is the edit trigger; the ghost is the
+   add affordance; the input is the inline editor). */
+.msgLabel,
+.msgLabelGhost {
+	display: inline-block;
+	max-width: 280px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-xs);
+	padding: 0 6px;
+	line-height: 16px;
+	background: none;
+	font-family: inherit;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.msgLabel:hover {
+	color: var(--color-foreground);
+	border-color: var(--color-muted-foreground);
+}
+
+/* Ghost — the add affordance for an unlabeled message. Opacity (not
+   display) so the slot's layout stays stable; revealed on message hover
+   and focus-within like the turn toolbar, always visible on touch. */
+.msgLabelGhost {
+	opacity: 0;
+	border-style: dashed;
+	transition: opacity var(--dur-fast) ease;
+}
+
+.userMsg:hover .msgLabelGhost,
+.userMsg:focus-within .msgLabelGhost {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.msgLabelGhost {
+		opacity: 1;
+	}
+}
+
+/* Inline swap-in editor (the TopBar-rename pattern): chip geometry, but
+   editable — foreground text, solid border, accent while focused. */
+.labelInput {
+	display: inline-block;
+	width: 160px;
+	font-size: var(--fs-xs);
+	color: var(--color-foreground);
+	background: var(--color-background);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-xs);
+	padding: 0 6px;
+	line-height: 16px;
+	font-family: inherit;
+	flex-shrink: 0;
+}
+
+.labelInput:focus {
+	outline: none;
+	border-color: var(--color-accent);
+}
+
 /* The clickable promotion of the chip (turn has a review window): a reset
    button that renders identically to the static chip, plus a hover accent
    so the affordance is discoverable without shouting. */

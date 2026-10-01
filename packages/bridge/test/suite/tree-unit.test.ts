@@ -13,6 +13,7 @@ import {
 	computeHistoryTree,
 	computeLaneLayout,
 	type LaneLayout,
+	resolveLabels,
 } from "../../src/viewmodel/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +68,23 @@ function abortedAsst(id: string, parentId: string | null, ts: string): Entry {
 		role: "assistant",
 		content: [{ type: "text", text: "..." }],
 		stopReason: "aborted",
+	} as unknown as Entry;
+}
+
+function labelEntry(
+	id: string,
+	parentId: string | null,
+	ts: string,
+	targetId: string,
+	label: string | undefined,
+): Entry {
+	return {
+		kind: "label",
+		id,
+		parentId,
+		timestamp: ts,
+		targetId,
+		label,
 	} as unknown as Entry;
 }
 
@@ -176,6 +194,20 @@ describe("computeHistoryTree", () => {
 		const tree = computeHistoryTree(doc);
 		expect(tree.roots.map((r) => r.id)).toEqual(["u2", "u1"]);
 	});
+
+	it("resolves labels onto user-message nodes; non-user targets are ignored", () => {
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z", "root"),
+			asstEntry("a1", "u1", "2024-01-01T00:00:30Z"),
+			userEntry("u2", "a1", "2024-01-01T00:01:00Z", "labeled"),
+			asstEntry("a2", "u2", "2024-01-01T00:01:30Z"),
+			labelEntry("l1", "a2", "2024-01-01T00:02:00Z", "u2", "checkpoint"),
+			labelEntry("l2", "l1", "2024-01-01T00:03:00Z", "a2", "reply-mark"),
+		]);
+		const tree = computeHistoryTree(doc);
+		expect(tree.roots[0].label).toBeUndefined(); // unlabeled
+		expect(tree.roots[0].children[0].label).toBe("checkpoint");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -210,6 +242,33 @@ describe("computeActiveUserPath", () => {
 		]);
 		const path = computeActiveUserPath(doc, "u2");
 		expect([...path]).toEqual(["u2", "u1"]);
+	});
+});
+
+describe("resolveLabels", () => {
+	it("no label entries yields an empty map", () => {
+		const doc = setEntries(emptyDoc(), [userEntry("u1", null, "2024-01-01T00:00:00Z")]);
+		expect(resolveLabels(doc.entries).size).toBe(0);
+	});
+
+	it("last write wins by timestamp, not insertion order", () => {
+		// l1 ("first") is inserted before l2 ("second") but stamped later —
+		// chronological order decides, so "first" wins.
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z"),
+			labelEntry("l1", "u1", "2024-01-01T00:02:00Z", "u1", "first"),
+			labelEntry("l2", "l1", "2024-01-01T00:01:00Z", "u1", "second"),
+		]);
+		expect(resolveLabels(doc.entries).get("u1")).toBe("first");
+	});
+
+	it("an undefined label clears the target", () => {
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, "2024-01-01T00:00:00Z"),
+			labelEntry("l1", "u1", "2024-01-01T00:01:00Z", "u1", "first"),
+			labelEntry("l2", "l1", "2024-01-01T00:02:00Z", "u1", undefined),
+		]);
+		expect(resolveLabels(doc.entries).has("u1")).toBe(false);
 	});
 });
 

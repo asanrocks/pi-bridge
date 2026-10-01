@@ -480,6 +480,11 @@ const NodeRow = memo(function NodeRow({
 						+{superseded.length}
 					</button>
 				)}
+				{node.node.label && (
+					<span className={styles.labelTag} title={node.node.label}>
+						{node.node.label}
+					</span>
+				)}
 				<span className={styles.textCol}>
 					<span className={styles.textInner}>{text}</span>
 				</span>
