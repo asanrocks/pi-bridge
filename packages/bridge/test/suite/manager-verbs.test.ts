@@ -6,6 +6,7 @@ import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-a
 import { AuthStorage, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Patch, PatchOp } from "../../src/core/index.ts";
+import type { LabelEntry } from "../../src/core/types.ts";
 import { createManager, type Manager } from "../../src/host/index.ts";
 
 const FIXTURE_URL = new URL("../../../coding-agent/test/fixtures/before-compaction.jsonl", import.meta.url);
@@ -163,6 +164,69 @@ describe("Manager verbs", () => {
 
 		// Patches emitted (at minimum: status.name update)
 		expect(h.patches.length).toBeGreaterThan(0);
+	});
+
+	// ── setLabel ─────────────────────────────────────────────────────────
+
+	it("setLabel appends a label entry, publishes it via reconcile, and clears with empty string", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const entryIds = Object.keys(h.manager.document.entries).filter((id) => !id.startsWith("pending:"));
+		const target = entryIds[0]!;
+
+		h.patches.length = 0;
+		await h.manager.setLabel(target, "checkpoint");
+
+		// The label entry is in the Document (appendLabelChange appends
+		// silently; the verb's reconcile is what publishes it).
+		const labelEntries = Object.values(h.manager.document.entries).filter(
+			(e): e is LabelEntry => e.kind === "label" && e.targetId === target,
+		);
+		expect(labelEntries).toHaveLength(1);
+		expect(labelEntries[0]!.label).toBe("checkpoint");
+		expect(h.patches.length).toBeGreaterThan(0);
+
+		// Clearing: an empty string maps to appendLabelChange(undefined).
+		await h.manager.setLabel(target, "");
+		const after = Object.values(h.manager.document.entries).filter(
+			(e): e is LabelEntry => e.kind === "label" && e.targetId === target,
+		);
+		expect(after.at(-1)!.label).toBeUndefined();
+	});
+
+	it("setLabel rejects an unknown target", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		await expect(h.manager.setLabel("nonexistent-id", "x")).rejects.toThrow();
+	});
+
+	it("setLabel rejects while a turn is in flight (server-side mutation lock)", async () => {
+		const h = await createVerbHarness(false);
+		harnesses.push(h);
+
+		let releaseTurn: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		h.faux.setResponses([() => gate.then(() => fauxAssistantMessage("done"))]);
+
+		const promptPromise = h.manager.prompt("hello");
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (h.manager.document.status.isStreaming) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+
+		const entryIds = Object.keys(h.manager.document.entries);
+		await expect(h.manager.setLabel(entryIds[0]!, "x")).rejects.toThrow();
+
+		releaseTurn!();
+		await promptPromise;
 	});
 
 	// ── navigate ─────────────────────────────────────────────────────────

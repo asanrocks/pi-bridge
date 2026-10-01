@@ -26,7 +26,7 @@
 // exercised by scripts/browser-smoke-entry.ts.
 // ============================================================================
 
-import type { Document, Entry, MessageEntry } from "../core/types.ts";
+import type { Document, Entry, LabelEntry, MessageEntry } from "../core/types.ts";
 
 // ---------------------------------------------------------------------------
 // Pass 1 — History tree (logical structure)
@@ -56,6 +56,12 @@ export interface HistoryNode {
 	 * dead ends. The renderer shows a "+N" affordance when non-empty.
 	 */
 	supersededTurns: HistoryNode[];
+	/**
+	 * User-defined label resolved onto this message (see `resolveLabels`);
+	 * undefined when unlabeled. Labels target user messages only here —
+	 * labels on other entry kinds are never looked up.
+	 */
+	label?: string;
 }
 
 export interface HistoryTree {
@@ -64,6 +70,36 @@ export interface HistoryTree {
 
 /** Truncate a user message to a one-line preview for the graph label. */
 const PREVIEW_MAX = 80;
+
+// ---------------------------------------------------------------------------
+// Entry labels — user-defined bookmarks (pi LabelEntry), resolved for display
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve label entries into a targetId → label map.
+ *
+ * A label is a user-defined bookmark set from pi's TUI tree selector
+ * (`SessionManager.appendLabelChange`); it never enters LLM context. The
+ * fold is chronological last-write-wins — the same rule as pi's
+ * SessionManager — and an empty/undefined label clears the target's label.
+ * The map holds every target; callers decide which targets they render
+ * (both surfaces here render user messages only — labels on other entry
+ * kinds are resolved but never looked up, best-effort by construction).
+ */
+export function resolveLabels(entries: Record<string, Entry>): Map<string, string> {
+	const labelEntries: LabelEntry[] = [];
+	for (const e of Object.values(entries)) {
+		if (e.kind === "label") labelEntries.push(e);
+	}
+	if (labelEntries.length === 0) return new Map();
+	labelEntries.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
+	const labels = new Map<string, string>();
+	for (const e of labelEntries) {
+		if (e.label) labels.set(e.targetId, e.label);
+		else labels.delete(e.targetId);
+	}
+	return labels;
+}
 
 function previewText(entry: MessageEntry): string {
 	const text = entry.content
@@ -132,6 +168,15 @@ export function computeHistoryTree(doc: Document): HistoryTree {
 	const hasUserTreeChild = new Set<string>();
 	for (const p of effectiveParent.values()) if (p !== null) hasUserTreeChild.add(p);
 	for (const ue of userEntries) nodes.get(ue.id)!.deadEnd = !hasUserTreeChild.has(ue.id);
+
+	// Best-effort label resolution: user messages are the only labeled
+	// surface here, so labels targeting other entry kinds resolve in the map
+	// but are never looked up.
+	const labels = resolveLabels(doc.entries);
+	for (const ue of userEntries) {
+		const label = labels.get(ue.id);
+		if (label !== undefined) nodes.get(ue.id)!.label = label;
+	}
 
 	const roots: HistoryNode[] = [];
 	for (const ue of userEntries) {

@@ -139,6 +139,39 @@ describe("computeViewModel", () => {
 		if (u.kind === "user") expect(u.text).toBe("Hello\nWorld");
 	});
 
+	it("user turns carry the resolved label; non-user targets are ignored", () => {
+		const doc = emptyDoc();
+		appendEntry(
+			doc,
+			makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", {
+				role: "user",
+				content: [{ type: "text", text: "Hello" }],
+			}),
+		);
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:30Z", "message", {
+				role: "assistant",
+				content: [{ type: "text", text: "Hi" }],
+			}),
+		);
+		// Label on the user message resolves onto the turn; the label on the
+		// assistant reply (and the one that clears an unlabeled target) is
+		// ignored — user messages are the only labeled surface.
+		appendEntry(doc, makeEntry("l1", "e2", "2024-01-01T00:01:00Z", "label", { targetId: "e2", label: "reply-mark" }));
+		appendEntry(doc, makeEntry("l2", "l1", "2024-01-01T00:02:00Z", "label", { targetId: "e1", label: "checkpoint" }));
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const u = vm.turns[0];
+		expect(u.kind).toBe("user");
+		if (u.kind === "user") {
+			expect(u.label).toBe("checkpoint");
+			const a = vm.turns[1];
+			expect(a.kind).toBe("assistant");
+			expect((a as { label?: string }).label).toBeUndefined();
+		}
+	});
+
 	it("user turns extract image attachments and keep text separate", () => {
 		const doc = emptyDoc();
 		appendEntry(

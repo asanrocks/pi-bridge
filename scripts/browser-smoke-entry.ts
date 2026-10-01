@@ -52,6 +52,7 @@ import {
 	computeActiveUserPath,
 	collapseSuperseded,
 	computeLaneLayout,
+	resolveLabels,
 	extractApplyPatchPaths,
 	parseApplyPatch,
 } from "@earendil-works/pi-bridge";
@@ -134,4 +135,5 @@ console.log(
 	typeof computeActiveUserPath,
 	typeof collapseSuperseded,
 	typeof computeLaneLayout,
+	typeof resolveLabels,
 );

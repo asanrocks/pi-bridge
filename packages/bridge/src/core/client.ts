@@ -196,6 +196,10 @@ export class BridgeClient {
 		return this.call({ verb: "renameSession", name });
 	}
 
+	setLabel(entryId: string, label: string): Promise<RpcReply> {
+		return this.call({ verb: "setLabel", entryId, label });
+	}
+
 	navigate(entryId: string | null): Promise<RpcReply> {
 		return this.call({ verb: "navigate", entryId });
 	}

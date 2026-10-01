@@ -28,6 +28,7 @@ import type {
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
+	SetLabelRequest,
 	SetModelPinnedRequest,
 	SetModelRequest,
 	SetThinkingLevelRequest,
@@ -303,6 +304,15 @@ export class Connection {
 					await this._attachedManager.renameSession(m.name);
 					this.sendReply(id, true);
 					this.daemonVerbs.sessionsChanged(this._attachedSession.projectId);
+					break;
+				}
+				case "setLabel": {
+					if (!this._attachedManager) throw new Error("no session attached");
+					const m = msg as unknown as SetLabelRequest;
+					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
+					if (typeof m.label !== "string") throw new Error("Missing `label`");
+					await this._attachedManager.setLabel(m.entryId, m.label);
+					this.sendReply(id, true);
 					break;
 				}
 				case "navigate": {

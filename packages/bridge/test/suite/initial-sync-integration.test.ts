@@ -294,6 +294,7 @@ describe("initial sync: subscription reset", () => {
 			setModel: async () => {},
 			setThinkingLevel: async () => {},
 			renameSession: async () => {},
+			setLabel: async () => {},
 			navigate: async () => {},
 			dispose: async () => {},
 		};

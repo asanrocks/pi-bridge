@@ -161,6 +161,11 @@ export interface Manager {
 	setModel(provider: string, modelId: string): Promise<void>;
 	setThinkingLevel(level: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
+	/** Set or clear a user-defined label on one entry (pi `LabelEntry`, a
+	 * metadata-only append that never enters LLM context). An empty string
+	 * clears. Rejected while a turn is in flight (the append lands at the
+	 * session leaf). */
+	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
@@ -410,9 +415,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 					.prompt(text, {
 						source: "rpc",
 						streamingBehavior: "steer",
-						preflightResult: (success) => {
-							admitted = success;
-							if (success) resolve();
+						preflightResult: () => {
+							admitted = true;
+							resolve();
 						},
 						...(images && images.length > 0 ? { images } : {}),
 					})
@@ -469,6 +474,21 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 
 		async renameSession(name: string) {
 			await session.setSessionName(name);
+		},
+
+		async setLabel(entryId: string, label: string) {
+			// Mutation lock, same rationale as navigate: the append lands at the
+			// session leaf, and interleaving a metadata entry with a pending turn
+			// buys nothing — labels are never urgent. The client guards too, but
+			// the daemon is the enforcement point for second tabs and raw RPC.
+			if (document.status.isStreaming || document.status.isCompacting) {
+				throw new Error("Cannot set a label while a turn is in flight");
+			}
+			sessionManager.appendLabelChange(entryId, label === "" ? undefined : label);
+			// appendLabelChange appends to the session file without an
+			// AgentSessionEvent, so reconcile from the file is what publishes the
+			// entry to the Document — and through the patch, to every connection.
+			tryReconcile({});
 		},
 
 		async navigate(entryId: string | null) {

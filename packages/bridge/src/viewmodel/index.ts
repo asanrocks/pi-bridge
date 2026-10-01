@@ -33,6 +33,7 @@ import type {
 	Usage,
 } from "../core/types.ts";
 import { applyPatchInput, extractApplyPatchPaths } from "./apply-patch.ts";
+import { resolveLabels } from "./tree.ts";
 
 // ---------------------------------------------------------------------------
 // ViewModel types (ADR 07 §ViewModel types)
@@ -147,6 +148,11 @@ export interface UserTurn {
 	 * anchors, in path order). Empty when the turn committed nothing. The
 	 * chip's review menu lists these; the union window is first.old → last.new. */
 	gitTransitions: GitTransition[];
+	/** User-defined label resolved onto this message (pi label entries,
+	 * last-write-wins — see `resolveLabels`); undefined when unlabeled.
+	 * User messages are the only labeled surface; labels on other entry
+	 * kinds are ignored. */
+	label?: string;
 }
 
 export interface UserBashTurn {
@@ -422,6 +428,10 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	const path = projectLeafPath(doc, viewLeaf);
 	const toolResultMap = buildToolResultMap(doc.entries);
 	const turnTransitions = computeTurnTransitions(path);
+	// User-defined labels (pi label entries), resolved once for the whole
+	// document — labels are global metadata keyed by entry id, so a label
+	// entry appended on any branch still labels its target on the path.
+	const userLabels = resolveLabels(doc.entries);
 
 	const prevTurns = new Map<string, TurnVM>();
 	const prevBlocks = new Map<string, AssistantBlockVM>();
@@ -580,6 +590,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						carriedGit?.identity,
 						carriedGit?.subject,
 						turnTransitions.get(entry.id) ?? [],
+						userLabels.get(entry.id),
 					);
 					turns.push(t);
 					// (prevSealTs is updated uniformly at the end of the loop body.)
@@ -934,6 +945,7 @@ function buildUserTurn(
 	gitIdentity?: GitIdentity,
 	gitCommitSubject?: string | null,
 	gitTransitions: GitTransition[] = [],
+	label?: string,
 ): UserTurn {
 	const text = entry.content
 		.filter((c) => c.type === "text")
@@ -970,6 +982,7 @@ function buildUserTurn(
 		gitIdentity,
 		gitCommitSubject,
 		gitTransitions,
+		label,
 	};
 
 	const prev = prevTurns.get(`user:${entry.id}`);
@@ -986,6 +999,7 @@ function buildUserTurn(
 		prev.timestamp === turn.timestamp &&
 		prev.currentSiblingIndex === turn.currentSiblingIndex &&
 		prev.thoughtForMs === turn.thoughtForMs &&
+		prev.label === turn.label &&
 		sameStringArray(prev.siblings, turn.siblings) &&
 		prev.gitCommitSubject === turn.gitCommitSubject &&
 		sameGitTransitions(prev.gitTransitions, turn.gitTransitions) &&
@@ -2389,6 +2403,7 @@ export {
 	computeActiveUserPath,
 	computeHistoryTree,
 	computeLaneLayout,
+	resolveLabels,
 } from "./tree.ts";
 
 /**
