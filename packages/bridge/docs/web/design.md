@@ -381,9 +381,12 @@ The graph renders a git-log-style graph of user-message branches. SVG
 vertical lineage and cubic fork curves sit beneath fixed-height DOM rows
 containing a dot, time, and message preview. The active path uses the accent
 treatment; the current deepest user message is filled. A `+N` badge groups
-consecutive off-path aborted re-edit drafts; opening it reveals the
-individual drafts. The pane scrolls to the active row when opened but does
-not keep repositioning the reader on every new leaf.
+consecutive off-path superseded turns — dead ends, whether aborted drafts
+or completed turns later edited away or abandoned for a sibling from the
+same branch point; opening it reveals the individual turns. A dead end on
+the active path, or pinned by a peek, stays a row. The pane scrolls to the
+active row when opened but does not keep repositioning the reader on every
+new leaf.
 
 Selection is state-dependent, and every row is clickable in every state:
 
