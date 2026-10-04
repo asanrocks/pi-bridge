@@ -7,7 +7,7 @@
 // total cost, per-model breakdown, and the billed token ledger.
 // ============================================================================
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
@@ -20,7 +20,11 @@ import { formatCost, formatTokens } from "./formatters.ts";
 // re-renders per patch — a transient surface, and live-updating is a feature).
 export function CostPopover({ anchorRect, onClose }: { anchorRect: DOMRect | null; onClose: () => void }) {
 	const models = useStore((s) => s.models);
-	const accounting = useStore((s) => sessionAccounting(s.document.entries, s.models));
+	const entries = useStore((s) => s.document.entries);
+	// sessionAccounting returns a fresh object, so it cannot be a useStore
+	// selector: an unstable getSnapshot makes useSyncExternalStore re-render
+	// forever (React error #185). Subscribe to the stable inputs and derive.
+	const accounting = useMemo(() => sessionAccounting(entries, models), [entries, models]);
 	// Escape closes (overlay handles pointer-away close).
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
