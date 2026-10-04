@@ -9,12 +9,15 @@
 //      bundling.
 //   4. Bundle the CLI entrypoint with esbuild — npm deps are inlined so
 //      the .mjs is self-contained: chmod +x and run anywhere node is.
+//   5. Embed the Photon wasm so image reads keep working in the bundle (see
+//      the banner comment in step 4).
 
 import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import * as esbuild from "esbuild";
+import { buildBundleBanner, readPhotonWasmBase64 } from "./bundle-banner.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -91,8 +94,9 @@ writeFileSync(
 );
 
 // 4. Bundle the CLI entrypoint with esbuild — inline all npm deps so the
-//    .mjs is self-contained. The banner sets up a global `require` for
-//    packages that use dynamic require() of node builtins (cross-spawn).
+//    .mjs is self-contained. The banner (see bundle-banner.mjs) sets up a
+//    global `require` for packages that use dynamic require() of node builtins
+//    (cross-spawn) and installs the in-memory Photon wasm read.
 await esbuild.build({
 	entryPoints: [join(root, "dist", "cli.js")],
 	bundle: true,
@@ -102,11 +106,7 @@ await esbuild.build({
 	external: ["node:*"],
 	minify: true,
 	banner: {
-		js: [
-			"#!/usr/bin/env node",
-			'import * as __module from "node:module";',
-			"globalThis.require = __module.createRequire(import.meta.url);",
-		].join("\n"),
+		js: buildBundleBanner(readPhotonWasmBase64()),
 	},
 	logOverride: {
 		"ignored-bare-import": "silent",
