@@ -275,37 +275,14 @@
 }
 
 /* ── Think — a collapsible inline document on the think tint. ──────── */
-/* Thinking is prose. Collapsed, it renders as a full-width collapsed row — the
-   same .actionCollapsed triangle + one-line plain-text summary a tool action
-   header uses — so it is uniform with tool actions, fully clickable, and
-   streaming-optimized (the selector subscribes to the first line only).
-   Expanded, the full Markdown prose flows inline (a document, not a
-   details card-with-heading); the triangle rides the first line, so the
-   first line is never repeated in a header. */
-.thinkRow {
-	display: flex;
-	align-items: flex-start;
-	gap: 6px;
-	padding: 5px 10px 5px 5px;
-	min-width: 0;
-}
-/* The expanded collapse control — a real button holding the same triangle
-   glyph as the tool action headers, docked at the start of the first line. */
-.thinkCollapsed {
-	display: flex;
-	align-items: center;
-	background: none;
-	border: none;
-	padding: 2px 8px 2px 0;
-	margin: 0;
-	font: inherit;
-	cursor: pointer;
-	flex-shrink: 0;
-}
-.thinkCollapsed:hover .collapseTri {
-	color: var(--color-secondary);
-}
+/* Thinking is prose. The header row is the tool-action header itself —
+   the .actionCollapsed triangle + one-line plain-text summary — kept visible
+   in both states so the whole row stays the collapse target (the first line
+   is repeated: header summary plus the expanded document below). The
+   streaming optimization (collapsed subscribes to the first line only)
+   still holds. */
 .thinkBody {
+	padding: 5px 10px 5px 5px;
 	font-size: var(--fs-sm);
 	line-height: 1.5;
 	color: var(--color-secondary);
@@ -322,13 +299,6 @@
 	padding: 0;
 	border-radius: 0;
 	font-size: inherit;
-}
-
-/* Expanded prose fills the row beside the collapse button. */
-.thinkRow .thinkBody {
-	flex: 1;
-	min-width: 0;
-	padding: 0;
 }
 
 /* Redacted / empty — a static muted one-liner; no collapse, no triangle. */
