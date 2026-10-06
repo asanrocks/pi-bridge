@@ -10,9 +10,6 @@ import { existsSync, mkdirSync, realpathSync, renameSync, statSync } from "node:
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDefaultSessionDir } from "@earendil-works/pi-coding-agent";
 
-/** Validated project id shape (ADR 11). */
-export const PROJECT_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
 /**
  * Reserved first path component of a Project's session namespace: an archived
  * Session's file lives under `<sessionDir>/.archive/`. Neither pi's resume
@@ -54,24 +51,33 @@ export function canonicalizeCwd(path: string): string {
 }
 
 /**
- * Slugified basename of a canonical cwd: lowercase, every run of characters
- * outside `[a-z0-9]` collapsed to a single `-`, leading/trailing `-` trimmed.
- * A raw basename would fail `PROJECT_ID_RE` for common directories
- * (`my_repo`, `v1.2`), so the derived id must be normalized; empty for a
- * filesystem root or an all-symbol basename.
+ * Canonical Project id: the canonical cwd's basename in NFC form. The id is a
+ * URL path segment and the daemon's address key, never a filesystem path, so
+ * it keeps the directory's own name; the URL layer's restrictions are the only
+ * ones that remain, and `validateProjectId` enforces them.
  */
 export function deriveProjectId(cwd: string): string {
-	return basename(cwd)
-		.normalize("NFKD")
-		.replace(/[\u0300-\u036f]/g, "") // strip combining accents from Latin diacritics
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
+	return basename(cwd).normalize("NFC");
+}
+
+/**
+ * Reject the id shapes the URL layer cannot carry and return the NFC form. An
+ * empty id (a filesystem root) and the relative segments `.`/`..` are resolved
+ * away before the client ever reads the address; an `@` prefix names the alias
+ * namespace (ADR 13). Uniqueness, root-asset collisions, and shared session
+ * storage are enforced by `buildProjects`.
+ */
+export function validateProjectId(id: string): string {
+	const canonical = id.normalize("NFC");
+	if (canonical === "") throw new Error(`Invalid project id "${id}": empty (use --allow <id>=<path>)`);
+	if (canonical === "." || canonical === "..") throw new Error(`Invalid project id "${id}": relative path segment`);
+	if (canonical.startsWith("@")) throw new Error(`Invalid project id "${id}": "@" is the alias namespace`);
+	return canonical;
 }
 
 /**
  * Materialize the daemon's Project list from `--allow` entries. Rejects
- * invalid or empty derived ids, invalid explicit ids, duplicate ids, ids
+ * unaddressable ids (empty, `.`/`..`, `@`-prefixed), duplicate ids, ids
  * colliding with reserved web-asset path segments, and two Projects
  * resolving to the same pi session storage namespace.
  */
@@ -84,14 +90,8 @@ export function buildProjects(entries: string[], agentDir: string, reservedIds?:
 	for (const entry of entries) {
 		const { id: explicitId, path } = parseAllowEntry(entry);
 		const cwd = canonicalizeCwd(path);
-		const id = explicitId ?? deriveProjectId(cwd);
+		const id = validateProjectId(explicitId ?? deriveProjectId(cwd));
 
-		if (id === "") {
-			throw new Error(`--allow ${path}: empty project id; use --allow <id>=<path>`);
-		}
-		if (!PROJECT_ID_RE.test(id)) {
-			throw new Error(`Invalid project id "${id}": must match ${PROJECT_ID_RE} (use --allow <id>=<path>)`);
-		}
 		if (ids.has(id)) throw new Error(`Duplicate project id: ${id}`);
 		ids.add(id);
 		// A Project id is also the first URL path segment, and real files win

@@ -626,14 +626,17 @@ describe("daemon: projects", () => {
 	it("rejects invalid and missing allow entries at startup", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		await expect(new Daemon().start({ agentDir, allow: [join(a, "nope")] })).rejects.toThrow(/does not exist/);
-		await expect(new Daemon().start({ agentDir, allow: [`Bad_Id=${a}`] })).rejects.toThrow(/Invalid project id/);
+		await expect(new Daemon().start({ agentDir, allow: [`@latest=${a}`] })).rejects.toThrow(/Invalid project id/);
+		await expect(new Daemon().start({ agentDir, allow: [`..=${a}`] })).rejects.toThrow(/Invalid project id/);
 	});
 
-	it("slugifies a derived id from a basename with invalid characters", async () => {
+	it("derives a Project id from the directory basename verbatim", async () => {
 		const { root, agentDir } = makeProjectRoots();
-		const dir = join(root, "43_Multimodal.Detection");
-		mkdirSync(dir, { recursive: true });
-		const { port } = await startDaemon({ agentDir, allow: [dir] });
+		const ascii = join(root, "43_Multimodal.Detection");
+		const unicode = join(root, "项目");
+		mkdirSync(ascii, { recursive: true });
+		mkdirSync(unicode, { recursive: true });
+		const { port } = await startDaemon({ agentDir, allow: [ascii, unicode] });
 		const ws = await openClient(port);
 		const frames = collectFrames(ws);
 
@@ -643,7 +646,7 @@ describe("daemon: projects", () => {
 			projects: Array<{ id: string }>;
 		};
 		expect(reply.ok).toBe(true);
-		expect(reply.projects.map((p) => p.id)).toEqual(["43-multimodal-detection"]);
+		expect(reply.projects.map((p) => p.id).sort()).toEqual(["43_Multimodal.Detection", "项目"].sort());
 
 		ws.close();
 	});
