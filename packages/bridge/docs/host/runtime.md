@@ -18,16 +18,19 @@ A Project is static daemon configuration: one canonical, allowlisted directory
 and pi's cwd-derived Session storage namespace. The daemon materializes
 Projects from `--allow` entries:
 
-- `<path>` derives the id from the canonical real path's basename, lowercased
-  and slugified into the id shape (non-alphanumeric runs collapse to `-`, with
-  leading/trailing `-` trimmed).
+- `<path>` derives the id from the canonical real path's basename, in NFC form
+  and otherwise verbatim — a Project id is the directory's own name, not a
+  slug.
 - `<id>=<path>` supplies the id explicitly; the first `=` separates the id
   from the path, so the path may contain `=`.
 - The path must exist, resolve to a directory, and be canonicalized with the
   filesystem.
-- An id must match `[a-z0-9]+(?:-[a-z0-9]+)*`, must be unique, and must not
-  collide with a root web-asset path. Projects that resolve to the same pi
-  Session storage directory are rejected.
+- An id must be non-empty, must not be `.` or `..` (the URL layer resolves
+  those away), and must not begin with `@` (the alias namespace, ADR 13). It
+  must also be unique, must not collide with a root web-asset path, and two
+  Projects must not resolve to the same pi Session storage directory. The id
+  is a URL path segment and an address key, never a filesystem path, so no
+  further character restrictions apply.
 
 Project configuration is not persisted or discovered from Session files. The
 Project id selects the address space and the Project cwd supplies the runtime
