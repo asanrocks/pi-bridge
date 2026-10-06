@@ -457,8 +457,8 @@ Project home is unattached and provides the Project-scoped first-prompt
 surface. A successful address-bearing initial sync commits the open Session
 address and its cache identity; a failed open lands on the Project home.
 
-Aliases (ADR 13) are single-segment routes beginning with `@` — a character
-outside the Project-id charset, so the namespaces cannot collide. Boot
+Aliases (ADR 13) are single-segment routes beginning with `@` — a prefix no
+Project id may carry, so the namespaces cannot collide. Boot
 resolves `@latest` to the most recently active live Session from the global
 active snapshot already fetched by initialization; when none is live it
 falls back to the most recent durable Session across Projects (each Project's

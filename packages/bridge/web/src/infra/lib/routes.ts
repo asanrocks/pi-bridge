@@ -14,16 +14,16 @@
 // `%252F`. The URL is read at boot and written with replaceState — never a
 // second live navigation state machine.
 //
-// Aliases are single-segment and begin with `@`, a character outside the
-// Project-id charset (`PROJECT_ID_RE`), so the alias namespace is structurally
-// disjoint from Project ids: no reservation, no shadowing. An alias resolves
+// Aliases are single-segment and begin with `@`, a prefix no Project id may
+// carry, so the alias namespace is structurally disjoint from Project ids: no
+// reservation, no shadowing. An alias resolves
 // to a session address once per boot/reconnect; the URL keeps the alias form
 // while the store holds the resolved address until an explicit navigation
 // writes a real one. Unknown or malformed aliases fall back to `/`.
 // ============================================================================
 
-/** Alias charset — same shape as PROJECT_ID_RE, minus the `@` sigil that
- * keeps the namespace disjoint from Project ids. */
+/** Alias charset — a narrower shape than Project ids, which may be any
+ * non-empty, non-relative segment that does not begin with `@`. */
 const ALIAS_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export type Route =
