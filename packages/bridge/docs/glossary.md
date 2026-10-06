@@ -84,8 +84,8 @@ What exists, how it is named, how long it lives. Owned by
    timers, ADR 12 proposes event boundaries.) A Session with no Activation
    is dormant.
 7. An **alias** *(bound)* is a first URL segment beginning with `@` — a
-   character outside the Project-id charset, so the two namespaces cannot
-   collide and no id is reserved — that names a cross-Project target
+   prefix no Project id may carry, so the two namespaces cannot collide and
+   no id is reserved — that names a cross-Project target
    resolved once per boot: `/@latest` resolves to the most recently active
    live Session (the global active snapshot); with none live it falls back
    to the most recent durable Session across Projects and opens it
