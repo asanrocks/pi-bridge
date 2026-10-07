@@ -21,6 +21,7 @@ import {
 	type PlacedNode,
 } from "../../../../src/viewmodel/index.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
+import { useZoomScale } from "../../infra/lib/zoom.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { resolveRenderLeafTarget, selectRenderDiverged } from "../../infra/state/ui.ts";
@@ -62,17 +63,17 @@ function laneX(lane: number): number {
 	return GRAPH_PAD_LEFT + lane * LANE_WIDTH;
 }
 
-function rowY(row: number): number {
-	return row * ROW_HEIGHT + ROW_HEIGHT / 2;
+function rowY(row: number, rowHeight: number): number {
+	return row * rowHeight + rowHeight / 2;
 }
 
 /** Smooth cubic-Bezier fork arc with vertical tangents at both ends. See the
  *  former TreeDialog for the geometry rationale (git/VScode local fork). */
-function forkPath(f: Fork): string {
+function forkPath(f: Fork, rowHeight: number): string {
 	const x0 = laneX(f.fromLane);
-	const y0 = rowY(f.fromRow);
+	const y0 = rowY(f.fromRow, rowHeight);
 	const x1 = laneX(f.toLane);
-	const y1 = rowY(f.toRow);
+	const y1 = rowY(f.toRow, rowHeight);
 	const dy = y1 - y0;
 	if (dy <= 0) return `M ${x0} ${y0} L ${x1} ${y1}`;
 	const cp = dy / 2;
@@ -154,6 +155,12 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	const renderLeafId = useStore((s) => s.renderLeafId);
 	const rpc = useRpc();
 
+	// The graph's row pitch is px (SVG coordinates are computed upfront from a
+	// fixed geometry), but the row text follows --fs-* and therefore the display
+	// scale. Rescale the pitch with it so larger text never overflows its row.
+	const zoomScale = useZoomScale();
+	const rowHeight = Math.round(ROW_HEIGHT * zoomScale);
+
 	// The rendered (peeked) user-path set, for the second row highlight. Only
 	// user-message rows exist in the graph, so membership of the rendered
 	// entry-id chain is the whole check.
@@ -206,9 +213,9 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 		if (!open || currentRow < 0) return;
 		const el = containerRef.current;
 		if (!el) return;
-		const target = currentRow * ROW_HEIGHT + ROW_HEIGHT / 2;
+		const target = currentRow * rowHeight + rowHeight / 2;
 		el.scrollTop = Math.max(0, target - el.clientHeight / 2);
-	}, [open, currentRow]);
+	}, [open, currentRow, rowHeight]);
 
 	// Superseded-expand state is local to this pane instance (not the store) —
 	// it resets on close, so re-opening starts with all folded turns collapsed.
@@ -278,7 +285,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	// exceeds the pane, .content grows to it and .scroll scrolls horizontally
 	// (the "slider") — text stays readable instead of clipping off-canvas.
 	const canvasWidth = gutterWidth + TIME_COL_W + COL_GAP + MIN_TEXT_W + ROW_RIGHT_PAD;
-	const totalHeight = layout.rowCount * ROW_HEIGHT;
+	const totalHeight = layout.rowCount * rowHeight;
 
 	return (
 		<div className={styles.scroll} ref={containerRef}>
@@ -302,9 +309,9 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						<line
 							key={`line-${l.lane}:${l.startRow}-${l.endRow}`}
 							x1={laneX(l.lane)}
-							y1={rowY(l.startRow)}
+							y1={rowY(l.startRow, rowHeight)}
 							x2={laneX(l.lane)}
-							y2={rowY(l.endRow)}
+							y2={rowY(l.endRow, rowHeight)}
 							className={styles.lineageLine}
 						/>
 					))}
@@ -312,7 +319,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 					{layout.forks.map((f: Fork) => (
 						<path
 							key={`fork-${f.fromLane}:${f.fromRow}-${f.toLane}:${f.toRow}`}
-							d={forkPath(f)}
+							d={forkPath(f, rowHeight)}
 							className={styles.forkCurve}
 							fill="none"
 						/>
@@ -324,6 +331,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						key={n.node.id}
 						node={n}
 						gutterWidth={gutterWidth}
+						rowHeight={rowHeight}
 						isCurrentLeaf={n.node.id === currentNodeId}
 						isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
 						onSelectEntry={selectEntry}
@@ -402,6 +410,7 @@ const HistoryHeader = memo(function HistoryHeader({
 const NodeRow = memo(function NodeRow({
 	node,
 	gutterWidth,
+	rowHeight,
 	isCurrentLeaf,
 	isOnRenderedPath,
 	onSelectEntry,
@@ -411,6 +420,8 @@ const NodeRow = memo(function NodeRow({
 }: {
 	node: PlacedNode;
 	gutterWidth: number;
+	/** Row pitch in px — the display scale applied to ROW_HEIGHT. */
+	rowHeight: number;
 	isCurrentLeaf: boolean;
 	isOnRenderedPath: boolean;
 	onSelectEntry: (entryId: string, isOnPath: boolean) => void;
@@ -418,7 +429,7 @@ const NodeRow = memo(function NodeRow({
 	expandedSuperseded: Set<string>;
 	entries: Record<string, Entry>;
 }) {
-	const top = node.row * ROW_HEIGHT;
+	const top = node.row * rowHeight;
 	const dotLeft = laneX(node.lane) - DOT_RADIUS;
 	const text = node.node.text || "(empty)";
 	const time = formatTimestamp(node.node.timestamp);
@@ -446,7 +457,7 @@ const NodeRow = memo(function NodeRow({
 				tabIndex={0}
 				aria-label={text === "(empty)" ? "Empty message" : text}
 				className={rowCls}
-				style={{ top, height: ROW_HEIGHT }}
+				style={{ top, height: rowHeight }}
 				onClick={() => onSelectEntry(node.node.id, node.isOnActivePath)}
 				onKeyDown={(e) => {
 					if (e.key === "Enter" || e.key === " ") {
@@ -495,7 +506,7 @@ const NodeRow = memo(function NodeRow({
 				// visual mass is, capped so it can't run off the right edge.
 				<div
 					className={styles.supersededPopover}
-					style={{ top: top + ROW_HEIGHT, left: gutterWidth + TIME_COL_W + COL_GAP }}
+					style={{ top: top + rowHeight, left: gutterWidth + TIME_COL_W + COL_GAP }}
 				>
 					{superseded.map((d: HistoryNode) => (
 						<button

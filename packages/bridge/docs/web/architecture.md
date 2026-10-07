@@ -485,6 +485,12 @@ Other `infra/lib` modules have narrow boundaries:
 - `imageResize.ts` validates supported image types, preserves small files,
   and uses browser bitmap/canvas APIs to resize oversized attachments before
   they enter the composer draft.
+- `zoom.ts` owns the display scale: the step ladder, the `--ui-scale`
+  publication on the document element (consumed by the `--fs-*` tokens in
+  `app/index.css`), the `localStorage` device preference, and the touch
+  pinch/double-tap handlers installed from `main.tsx`. Geometry that is
+  px-measured and text-coupled (the History row pitch) reads it through
+  `useZoomScale`.
 
 ## Reconnect Invariants
 
