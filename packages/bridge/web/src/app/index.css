@@ -156,12 +156,15 @@
   --z-portal: 100;       /* portals (viewer, pickers); panel = +1 over overlay */
 
   /* ── Font-size scale (separate from Tailwind --text-* to avoid
-        overriding Tailwind's default text utilities) ─────────────────── */
-  --fs-xs: 0.6875rem;  /* 11px — meta, group headers, toggles */
-  --fs-sm: 0.75rem;     /* 12px — action summaries, sidebar items */
-  --fs-md: 0.8125rem;  /* 13px — small body, code, card content */
-  --fs-lg: 0.875rem;    /* 14px — empty state, completion dropdown */
-  --fs-xl: 1rem;        /* 16px — body, composer textarea (reading baseline) */
+        overriding Tailwind's default text utilities). Every step is
+        multiplied by --ui-scale, the display scale the pinch/font zoom
+        drives (infra/lib/zoom.ts) — the rem basis keeps the OS/browser
+        text-size preference composable underneath. ─────────────────────── */
+  --fs-xs: calc(0.6875rem * var(--ui-scale, 1));  /* 11px — meta, group headers, toggles */
+  --fs-sm: calc(0.75rem * var(--ui-scale, 1));     /* 12px — action summaries, sidebar items */
+  --fs-md: calc(0.8125rem * var(--ui-scale, 1));  /* 13px — small body, code, card content */
+  --fs-lg: calc(0.875rem * var(--ui-scale, 1));    /* 14px — empty state, completion dropdown */
+  --fs-xl: calc(1rem * var(--ui-scale, 1));        /* 16px — body, composer textarea (reading baseline) */
 }
 
 /* Scan streamdown's bundled JS for Tailwind utility class names so they
@@ -270,9 +273,11 @@ html, body {
 	padding: 0;
 }
 
-/* Pan-only touch input: a two-finger gesture during scroll must pan, not
-   pinch-zoom. touch-action only constrains touch pointers — mouse, keyboard,
-   and trackpad zoom on desktop are unaffected. */
+/* Pan-only touch input: the native pinch-zoom is removed here so the app's
+   own display-scale gesture (infra/lib/zoom.ts) can own a two-finger pinch
+   and still keep the whole document viewport-width. touch-action only
+   constrains touch pointers — mouse, keyboard, and trackpad zoom on desktop
+   are unaffected. */
 html, body {
 	touch-action: pan-x pan-y;
 }
@@ -314,6 +319,10 @@ body {
 	--history-w: 0px;
 	--composer-h: 64px;
 	--vv-keyboard: 0px;
+	/* Display scale for the reading surface, driven at runtime by the pinch /
+	   double-tap handlers (infra/lib/zoom.ts). Every --fs-* token multiplies
+	   by it; shell geometry stays in px so the app never overflows. */
+	--ui-scale: 1;
 }
 
 * {
@@ -370,7 +379,7 @@ input, textarea {
    the @theme-layered token (see index.css top comment). */
 @media (max-width: 48rem) {
 	:root {
-		--fs-xl: 0.875rem;  /* 14px */
+		--fs-xl: calc(0.875rem * var(--ui-scale, 1));  /* 14px */
 	}
 }
 
