@@ -113,6 +113,24 @@ composition is a left Sidebar, a middle conversation column, and an optional
 right History pane. The conversation column clears the side-surface gutters
 and reserves the live composer footprint at its bottom.
 
+### Display scale
+
+The client is a document reader, so a pinch never magnifies a region (the
+browser's visual zoom) but steps the app's type scale — the same reflow a
+browser's Ctrl + / - performs. The scale is one device preference
+(`localStorage`, default 100%), never session state, and it multiplies the
+`--fs-*` type tokens only: shell geometry stays in px, so the conversation
+column can never overflow the viewport. A pinch advances one rung per 15%
+finger-travel crossing; a double-tap resets to 100%; a tap on a control or a
+text field is neither. The ladder is deliberately asymmetric — fine-grained
+0.1 steps down to 60% so a reader can pull back and skim, but only two steps
+up, to 125%, because enlarging further trades away the whole-width column.
+Keeping the lever on the rem-based tokens (rather than
+the root font-size) lets the OS/browser text-size preference compose
+underneath. The History graph, whose row pitch is a fixed px, rescales with
+it. Desktop trackpad pinch stays suppressed, so keyboard shortcuts and the
+browser zoom menu remain the desktop paths.
+
 ### Launcher and Project home
 
 The global launcher at `/` lists configured Projects with their working
