@@ -1,6 +1,7 @@
-// ThinkActionView — the collapsed row renders the thinking's first line as
-// Markdown (streamdown) on the preview class, the expanded row renders the
-// full text, and redacted/empty/lazy states are the static label. The lazy
+// ThinkActionView — the header row renders the thinking's first line as
+// Markdown (streamdown) on the preview class and stays visible in both states,
+// so the full-width row is always the collapse target; the expanded body adds
+// the full text below. redacted/empty/lazy states are the static label. The lazy
 // state is also what decides whether a thinking pull is registered: a settled
 // row must not enqueue (nor, in the component, subscribe to pullTick).
 //
@@ -14,7 +15,7 @@ import styles from "./actions.module.css";
 
 const harness = vi.hoisted(() => ({
 	state: undefined as unknown,
-	preview: undefined as undefined | { text: string; className?: string },
+	previews: [] as { text: string; className?: string }[],
 }));
 
 vi.mock("../../infra/state/store.tsx", () => ({
@@ -23,7 +24,7 @@ vi.mock("../../infra/state/store.tsx", () => ({
 
 vi.mock("../viewer/AppMarkdown.tsx", () => ({
 	AppMarkdown: ({ text, className }: { text: string; className?: string }) => {
-		harness.preview = { text, className };
+		harness.previews.push({ text, className });
 		return createElement("span", { className, "data-preview": "1" }, text);
 	},
 }));
@@ -42,7 +43,7 @@ function setState(thinking: string | null, opts: { expanded?: boolean } = {}): v
 }
 
 function render(opts: { redacted?: boolean } = {}): string {
-	harness.preview = undefined;
+	harness.previews = [];
 	return renderToStaticMarkup(
 		createElement(ThinkActionView, {
 			entryId: "a1",
@@ -63,7 +64,7 @@ describe("ThinkActionView — collapsed preview", () => {
 		setState("first line **bold**\nsecond line\nthird line");
 		const html = render();
 
-		expect(harness.preview).toEqual({ text: "first line **bold**", className: styles.thinkPreview });
+		expect(harness.previews).toEqual([{ text: "first line **bold**", className: styles.thinkPreview }]);
 		expect(html).toContain(`class="${styles.thinkPreview}"`);
 		expect(html).toContain("Expand thinking");
 		// The preview is capped at line 1 — lines 2..n do not reach the DOM,
@@ -71,23 +72,28 @@ describe("ThinkActionView — collapsed preview", () => {
 		expect(html).not.toContain("second line");
 	});
 
-	test("expanded renders the full text without the preview clamp", () => {
+	test("expanded keeps the first-line header preview and adds the unclamped full text", () => {
 		setState("first line\nsecond line", { expanded: true });
 		const html = render();
 
-		expect(harness.preview).toEqual({ text: "first line\nsecond line", className: undefined });
-		expect(html).not.toContain(styles.thinkPreview);
+		// Header preview first, then the full document: the header row stays
+		// the full-width collapse target.
+		expect(harness.previews).toEqual([
+			{ text: "first line", className: styles.thinkPreview },
+			{ text: "first line\nsecond line", className: undefined },
+		]);
+		expect(html).toContain(styles.thinkPreview);
 		expect(html).toContain("Collapse thinking");
 	});
 
 	test("redacted and empty thinking are static labels with no preview", () => {
 		setState(null, { expanded: true });
 		expect(render({ redacted: true })).toContain("(redacted)");
-		expect(harness.preview).toBeUndefined();
+		expect(harness.previews).toEqual([]);
 
 		setState("", { expanded: true });
 		expect(render()).toContain("think");
-		expect(harness.preview).toBeUndefined();
+		expect(harness.previews).toEqual([]);
 	});
 
 	test("registers the thinking pull only while the lazy field is null", () => {
