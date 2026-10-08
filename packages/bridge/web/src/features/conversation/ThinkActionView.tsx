@@ -1,10 +1,11 @@
 // ThinkActionView — one thinking block rendered on the think tint
-// (hue = think). Collapsed, it is a full-width collapsed row identical to a tool
-// action header — triangle + the thinking's first line rendered as Markdown and
-// clamped to one line (.thinkPreview) — so it is uniform with tool actions and
-// fully clickable. Expanding replaces it with the full Markdown prose flowing
-// inline (a document, not a details card-with-heading); the triangle rides the
-// first line, so the first line is never repeated in a header.
+// (hue = think). The header row is the tool-action header itself —
+// triangle + the thinking's first line rendered as Markdown and clamped to
+// one line (.thinkPreview) — full-width and fully clickable in both states, so
+// collapsing never depends on a small corner badge. Expanding keeps the header
+// and adds the full Markdown prose below it (the first line therefore appears
+// twice — header preview plus document — accepted for a stable, large collapse
+// target).
 //
 // Re-render discipline — why the props are scalars, not the ThinkActionVM: a
 // streaming block's VM reference changes on every delta, so passing it would
@@ -59,6 +60,10 @@ export const ThinkActionView = memo(function ThinkActionView({
 	);
 	const state = slice[0];
 	const shown = useDeferredValue(slice.slice(2));
+	// Header preview: the first line in both states. Collapsed, `shown` IS the
+	// first line; expanded, it is the full text and the first line is
+	// re-extracted so the header preview can stay visible above the prose.
+	const firstLine = isExpanded ? shown.split("\n")[0] : shown;
 
 	// pullTick is subscribed only while the text is still missing: a settled row
 	// must not re-render when unrelated pulls complete, while a pending pull
@@ -97,40 +102,28 @@ export const ThinkActionView = memo(function ThinkActionView({
 		);
 	}
 
-	// Collapsed: the tool action header itself (.actionCollapsed) — full-width button,
-	// triangle + the first line as Markdown clamped to one line (.thinkPreview),
-	// so the whole row is the click target. Expanded: the triangle rides the
-	// first line of the full Markdown prose (no separate preview, so no
-	// first-line repeat).
-	return isExpanded ? (
+	// The header row (triangle + first-line Markdown preview) renders in both
+	// states — same anatomy as a tool action, so the whole row is the collapse
+	// target; the unclamped full prose renders below it when expanded.
+	return (
 		<div className={styles.action} data-kind="think">
-			<div className={styles.thinkRow}>
+			<div className={styles.actionHead}>
 				<button
 					type="button"
-					className={styles.thinkCollapsed}
+					className={styles.actionCollapsed}
 					onClick={handleToggle}
-					aria-expanded={true}
-					aria-label="Collapse thinking"
+					aria-expanded={isExpanded}
+					aria-label={`${isExpanded ? "Collapse" : "Expand"} thinking`}
 				>
-					<span className={styles.collapseTri}>{"\u25BE"}</span>
+					<span className={styles.collapseTri}>{isExpanded ? "\u25BE" : "\u25B8"}</span>
+					<AppMarkdown text={firstLine} mode={mode} className={styles.thinkPreview} />
 				</button>
+			</div>
+			{isExpanded && (
 				<div className={styles.thinkBody}>
 					<AppMarkdown text={shown} mode={mode} />
 				</div>
-			</div>
-		</div>
-	) : (
-		<div className={styles.action} data-kind="think">
-			<button
-				type="button"
-				className={styles.actionCollapsed}
-				onClick={handleToggle}
-				aria-expanded={false}
-				aria-label="Expand thinking"
-			>
-				<span className={styles.collapseTri}>{"\u25B8"}</span>
-				<AppMarkdown text={shown} mode={mode} className={styles.thinkPreview} />
-			</button>
+			)}
 		</div>
 	);
 });
