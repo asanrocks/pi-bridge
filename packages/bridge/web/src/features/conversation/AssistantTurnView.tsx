@@ -16,11 +16,9 @@ import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
-import { formatDuration } from "./format.ts";
 import { GitChangeView } from "./GitChangeView.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
 import styles from "./turns.module.css";
-import { useNow } from "./useNow.ts";
 
 export const AssistantTurnView = memo(function AssistantTurnView({
 	turn,
@@ -36,12 +34,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const isDimmed = useStore(useCallback((s) => s.draft.kind === "edit" && turn.index >= s.draft.index, [turn.index]));
 	const isFocused = useStore(useCallback((s) => s.focusedTurnId === turn.turnKey, [turn.turnKey]));
 
-	// Live ticking total for the in-flight turn. The viewmodel resolves the
-	// authoritative server-based totalMs/toolMs only at seal (provisional
-	// entries carry no timestamp); while streaming, the renderer shows a
-	// Date.now()-anchored delta that swaps to the server value on seal.
-	const now = useNow(isStreaming);
-
 	const segments = useMemo(() => segmentBlocks(turn.blocks), [turn.blocks]);
 	// ADR 10 v2: mid-turn inline git stamps fold into the groups they render in —
 	// summary segment + in-group card. Inline git stamps with no group (a text-only turn)
@@ -51,25 +43,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const ts = formatTimestamp(turn.timestamp);
 	const models = useStore(useCallback((s) => s.models, []));
 	const modelLabel = turn.model ? displayModelLabel(turn.provider ?? "", turn.model, models) : "";
-
-	// Timing fragment: sealed turns show total/tool split (post-hoc); the live
-	// turn shows a ticking total plus a running-tool count (the only in-flight
-	// signal available — tool durations need seals that don't exist yet).
-	let timing: string;
-	if (isStreaming && turn.turnStartedAt) {
-		const startMs = new Date(turn.turnStartedAt).getTime();
-		const live = formatDuration(Number.isNaN(startMs) ? undefined : now - startMs);
-		const running = turn.blocks.filter(
-			(b) => b.blockType === "tool" && (b.status === "pending" || b.status === "running"),
-		).length;
-		timing = live ? (running > 0 ? `${live} · ${running} running` : live) : "";
-	} else if (turn.totalMs !== undefined) {
-		const tot = formatDuration(turn.totalMs);
-		const tools = turn.toolMs !== undefined && turn.toolMs >= 1000 ? formatDuration(turn.toolMs) : "";
-		timing = tools ? `${tot} · tools ${tools}` : tot;
-	} else {
-		timing = "";
-	}
 
 	// Context occupancy for this turn: "26%" absolute, "(+1%)" the change
 	// vs. the previous valid reading (omitted below the 1pp threshold;
@@ -99,7 +72,6 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 				<span className={styles.msgHeaderLeft}>
 					{ts && <span className={styles.msgTime}>{ts}</span>}
 					{modelLabel && <span className={styles.msgRole}>{modelLabel}</span>}
-					{timing && <span className={styles.msgTiming}>{timing}</span>}
 					{contextFrag && <span className={styles.msgTiming}>{contextFrag}</span>}
 				</span>
 			</div>

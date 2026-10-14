@@ -11,39 +11,36 @@ import { CheckIcon, ChevronDownIcon, CopyIcon, EyeIcon, MarkdownIcon, WrapIcon }
 import styles from "../actions.module.css";
 import { copyToClipboard } from "../clipboard.ts";
 
-export interface ToolTiming {
-	startedAt: number;
-	endedAt: number | null;
-}
-
 /**
  * Status line — light + duration + timeout annotation + status chips
  * (exit code, timeout, abort). Sits on the row tint above the header
  * line: it is metadata about the call, not content. The light renders once
- * execution has started (status is derivable on reload); the duration
- * renders only for live-witnessed runs (exec-start isn't on the wire). The
- * timeout is a call argument, so it survives reload — it docks here as a
- * muted annotation, not inside the command.
+ * execution has started. A settled call shows pi's recorded execution time
+ * (`ToolResultMessage.durationMs`, live and on reload alike); a running call
+ * shows the host-anchored live elapsed (`status.inFlightTools`), or just the
+ * light when no anchor is known. The timeout is a call argument, so it
+ * survives reload — it docks here as a muted annotation, not inside the
+ * command.
  */
 export const CardStatusLine = memo(function CardStatusLine({
 	status,
-	timing,
+	durationMs,
+	elapsedMs,
 	timeout,
 	chips,
 }: {
 	status: ToolActionVM["status"];
-	timing: ToolTiming | null;
+	durationMs: number | null;
+	elapsedMs: number | null;
 	timeout: number | null;
 	chips?: ReadonlyArray<{ text: string; tone: "error" | "warning" }>;
 }) {
 	if (status === "pending") return null;
+	// pi's measured duration wins once the result exists (it can precede the
+	// seal, so status may still read "running"); otherwise the live anchor.
 	let text: string | null = null;
-	if (timing) {
-		const end = timing.endedAt ?? Date.now();
-		const elapsed = `${((end - timing.startedAt) / 1000).toFixed(1)}s`;
-		const label = status === "running" ? "Elapsed" : "Took";
-		text = `${label} ${elapsed}`;
-	}
+	if (durationMs !== null) text = `Took ${(durationMs / 1000).toFixed(1)}s`;
+	else if (elapsedMs !== null) text = `Elapsed ${(elapsedMs / 1000).toFixed(1)}s`;
 	return (
 		<div className={styles.cardMeta}>
 			<span className={styles.cardStatusLight} data-status={status} />

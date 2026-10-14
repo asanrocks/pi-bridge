@@ -48,7 +48,7 @@ export const UserBashView = memo(function UserBashView({ turn }: { turn: UserBas
 				</div>
 				<div className={styles.detailsCard}>
 					<div className={styles.cardBar}>
-						<CardStatusLine status={status} timing={null} timeout={null} chips={chips} />
+						<CardStatusLine status={status} durationMs={null} elapsedMs={null} timeout={null} chips={chips} />
 						<CardControls
 							copyText={output || null}
 							showWrap

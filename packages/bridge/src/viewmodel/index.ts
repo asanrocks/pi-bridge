@@ -129,14 +129,6 @@ export interface UserTurn {
 	siblings?: string[];
 	currentSiblingIndex?: number;
 	timestamp: string;
-	/** Wall-clock ms from the most recent assistant completion (across ALL
-	 * branches, not just the leaf path) to this send — the user's "thought
-	 * for" interval. Anchoring on the previous assistant message, not the
-	 * leaf-path predecessor, fixes re-edits: editing history message A into
-	 * A0 forks a branch with no on-path predecessor, yet the deliberation
-	 * interval runs from the old branch's leaf assistant. Omitted when no
-	 * assistant has completed before this send (the first turn). */
-	thoughtForMs?: number;
 	/** ADR 10 git identity stamps: the effective identity at this send — the
 	 * last valid stamp on the path at or before this user message, carried
 	 * forward. Undefined when the path has no stamps (unknown). */
@@ -199,19 +191,6 @@ export interface AssistantTurn {
 	 * metadata). */
 	parsedError?: ParsedProviderError;
 	timestamp: string;
-	/** ISO seal anchoring this turn's timing: the seal of the path entry
-	 * preceding the turn's first block (usually the user message that opened
-	 * the turn). The renderer uses it for the live "working for Xs" tick while
-	 * the turn streams; the viewmodel also uses it as the total-duration base. */
-	turnStartedAt?: string;
-	/** Total wall-clock ms from turnStartedAt to the turn's window end (the
-	 * last seal, extended past the closing entry to the latest tool result
-	 * the turn's tool calls issued). Undefined while the turn is streaming. */
-	totalMs?: number;
-	/** Time in tool execution (total minus Σ assistant-generation windows).
-	 * Parallel tools are handled via a per-batch max (the wall-clock span to
-	 * the last parallel result), not a per-tool sum. Undefined while streaming. */
-	toolMs?: number;
 	/** Context-window occupancy when the turn's last entry was generated,
 	 * as a percentage of the model's contextWindow. Fed-context basis
 	 * (input + cacheRead + cacheWrite — what the model saw), matching pi's
@@ -323,6 +302,9 @@ export interface ToolResultSnapshot {
 	/** ToolResultEntry id (for lazy pull paths). */
 	entryId: string;
 	isError: boolean;
+	/** pi-recorded execution time (`ToolResultMessage.durationMs`); null when
+	 * pi didn't record it. Rendered as the card's "Took" duration. */
+	durationMs: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,13 +440,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 		turns.push(buildSwitchTurn(switchTurn, turns.length, prevTurns));
 		switchTurn = null;
 	};
-	// Timing anchor: the seal of the last timestamped path entry seen before
-	// the turn's first block (usually the user message that opened the turn).
-	// User turns anchor on the wall-clock previous ASSISTANT completion
-	// across all branches (see buildUserTurn), so they need no leaf-path
-	// predecessor.
-	let prevSealTs = "";
-	let pendingAnchor = "";
 
 	// Context-usage tracking along the leaf path. Each assistant entry's
 	// usage measures the context the model saw at that generation (fed
@@ -492,18 +467,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 		const m = modelList.find((x) => x.id === model && (provider ? x.provider === provider : true));
 		return m?.contextWindow && m.contextWindow > 0 ? m.contextWindow : undefined;
 	};
-
-	// Sorted ascending seal timestamps of assistant messages across ALL
-	// branches (not just the leaf path). A user turn's "thought for" anchors
-	// on the most recent assistant completion in wall-clock — so re-editing
-	// history message A into A0 (a fork whose leaf-path predecessor is
-	// absent) still anchors on the old branch's leaf assistant, not nothing.
-	const asstSeals: string[] = [];
-	for (const id in doc.entries) {
-		const e = doc.entries[id];
-		if (e.kind === "message" && e.role === "assistant" && e.timestamp) asstSeals.push(e.timestamp);
-	}
-	asstSeals.sort();
 
 	const flushPending = () => {
 		if (pending.length === 0) return;
@@ -539,7 +502,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 			toolResultMap,
 			prevTurns,
 			prevBlocks,
-			pendingAnchor,
 			{
 				contextPercent,
 				contextDeltaPercent,
@@ -563,9 +525,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					// ride the turn-closing turn (its last ref is the entry's last
 					// block), so an error line renders once per turn.
 					for (let i = 0; i < entry.content.length; i++) {
-						if (pending.length === 0) {
-							pendingAnchor = i > 0 ? entry.timestamp : prevSealTs;
-						}
 						pending.push({ entry, blockIndex: i });
 					}
 					// Entry with no content blocks but an error/abort stop reason:
@@ -575,7 +534,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					// system turn, or turn end) emits it.
 					if (entry.content.length === 0 && (entry.stopReason === "error" || entry.stopReason === "aborted")) {
 						const synthetic: MessageEntry = { ...entry, content: [{ type: "text", text: "" }] };
-						if (pending.length === 0) pendingAnchor = prevSealTs;
 						pending.push({ entry: synthetic, blockIndex: 0 });
 					}
 				} else if (entry.role === "user") {
@@ -586,14 +544,12 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 						turns.length,
 						doc.entries,
 						prevTurns,
-						asstSeals,
 						carriedGit?.identity,
 						carriedGit?.subject,
 						turnTransitions.get(entry.id) ?? [],
 						userLabels.get(entry.id),
 					);
 					turns.push(t);
-					// (prevSealTs is updated uniformly at the end of the loop body.)
 				} else if (entry.role === "system") {
 					// The system prompt diff: the named sections this boundary sets,
 					// replaces, or removes. It is not a conversation turn, but it is a
@@ -735,7 +691,6 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				break;
 			}
 		}
-		if (entry.timestamp) prevSealTs = entry.timestamp;
 	}
 	flushPending();
 	flushSwitchTurn();
@@ -941,7 +896,6 @@ function buildUserTurn(
 	index: number,
 	entries: Record<string, Entry>,
 	prevTurns: Map<string, TurnVM>,
-	asstSeals: string[],
 	gitIdentity?: GitIdentity,
 	gitCommitSubject?: string | null,
 	gitTransitions: GitTransition[] = [],
@@ -954,21 +908,6 @@ function buildUserTurn(
 	const images = entry.content.filter((c): c is ImageContent => c.type === "image");
 	const siblings = computeSiblings(entry, entries);
 
-	// "Thought for" = wall-clock from the most recent ASSISTANT completion
-	// (across all branches) to this send. Anchoring on the previous assistant
-	// message — not the leaf-path predecessor — fixes re-edits: editing
-	// history message A into A0 forks a branch whose leaf-path predecessor
-	// is absent, yet the user's deliberation interval runs from the last
-	// assistant reply they saw (the old branch's leaf, e.g. D), so the anchor
-	// is A0 − D, not "nothing". Omitted when no assistant has completed
-	// before this send (the first turn).
-	let thoughtForMs: number | undefined;
-	const i = lowerBound(asstSeals, entry.timestamp);
-	if (i > 0) {
-		const d = diffMs(entry.timestamp, asstSeals[i - 1]);
-		if (d >= 0) thoughtForMs = d;
-	}
-
 	const turn: UserTurn = {
 		kind: "user",
 		entryId: entry.id,
@@ -978,7 +917,6 @@ function buildUserTurn(
 		siblings: siblings.ids,
 		currentSiblingIndex: siblings.currentIndex,
 		timestamp: entry.timestamp,
-		thoughtForMs,
 		gitIdentity,
 		gitCommitSubject,
 		gitTransitions,
@@ -998,7 +936,6 @@ function buildUserTurn(
 		prev.images === turn.images &&
 		prev.timestamp === turn.timestamp &&
 		prev.currentSiblingIndex === turn.currentSiblingIndex &&
-		prev.thoughtForMs === turn.thoughtForMs &&
 		prev.label === turn.label &&
 		sameStringArray(prev.siblings, turn.siblings) &&
 		prev.gitCommitSubject === turn.gitCommitSubject &&
@@ -1117,7 +1054,6 @@ function buildAssistantTurn(
 	toolResultMap: Map<string, ToolResultEntry>,
 	prevTurns: Map<string, TurnVM>,
 	prevBlocks: Map<string, AssistantBlockVM>,
-	turnStartedAt: string,
 	context: { contextPercent?: number; contextDeltaPercent?: number },
 	gitChanges: InlineGitStamp[] = [],
 ): AssistantTurn {
@@ -1141,35 +1077,6 @@ function buildAssistantTurn(
 			displayTimestamp = refs[i].entry.timestamp;
 			break;
 		}
-	}
-	// The turn is sealed iff its last ref's entry carries a real seal
-	// timestamp — entries seal in order, so a provisional last entry means
-	// the turn is still streaming. Until then the renderer shows a live
-	// Date.now()-based total; totalMs/toolMs resolve only at seal.
-	const sealed = !!last.timestamp;
-	// Turn window end: a turn's tool calls execute AFTER their entry seals, so
-	// the window extends to the latest sealed tool result — the per-turn
-	// windows then partition the whole turn (the next turn anchors on this
-	// turn's last tool seal, so tool time is counted once, in the turn that
-	// issued the calls). A tool call with no sealed result yet (running, or
-	// arguments still streaming) keeps the totals undefined.
-	let endTs = last.timestamp;
-	let toolsPending = false;
-	for (const { entry, blockIndex } of refs) {
-		const block = entry.content[blockIndex];
-		if (block.type === "toolCall") {
-			const tr = toolResultMap.get(block.id);
-			if (!tr || !tr.timestamp) toolsPending = true;
-			else if (tr.timestamp > endTs) endTs = tr.timestamp;
-		}
-	}
-	const resolved = sealed && !toolsPending;
-	let totalMs: number | undefined;
-	let toolMs: number | undefined;
-	if (resolved && turnStartedAt) {
-		const t = diffMs(endTs, turnStartedAt);
-		if (t >= 0) totalMs = t;
-		toolMs = computeToolMs(refs, toolResultMap, turnStartedAt, endTs);
 	}
 
 	const first = refs[0];
@@ -1195,9 +1102,6 @@ function buildAssistantTurn(
 				? parseProviderError(last.errorMessage)
 				: undefined,
 		timestamp: displayTimestamp,
-		turnStartedAt: turnStartedAt || undefined,
-		totalMs,
-		toolMs,
 		contextPercent: context.contextPercent,
 		contextDeltaPercent: context.contextDeltaPercent,
 		gitChanges: gitChanges.length > 0 ? gitChanges : undefined,
@@ -1214,9 +1118,6 @@ function buildAssistantTurn(
 		prev.stopReason === turn.stopReason &&
 		prev.errorMessage === turn.errorMessage &&
 		prev.timestamp === turn.timestamp &&
-		prev.turnStartedAt === turn.turnStartedAt &&
-		prev.totalMs === turn.totalMs &&
-		prev.toolMs === turn.toolMs &&
 		prev.contextPercent === turn.contextPercent &&
 		prev.contextDeltaPercent === turn.contextDeltaPercent &&
 		sameGitStamps(prev.gitChanges, turn.gitChanges) &&
@@ -1396,7 +1297,7 @@ function buildBlockVM(
 		case "toolCall": {
 			const resultEntry = toolResultMap.get(block.id) ?? null;
 			const result: ToolResultSnapshot | null = resultEntry
-				? { entryId: resultEntry.id, isError: resultEntry.isError }
+				? { entryId: resultEntry.id, isError: resultEntry.isError, durationMs: resultEntry.durationMs ?? null }
 				: null;
 			let status: ToolActionVM["status"];
 			if (resultEntry) {
@@ -1466,7 +1367,8 @@ function reuseBlock(prevBlocks: Map<string, AssistantBlockVM>, vm: AssistantBloc
 				(p.result !== null &&
 					vm.result !== null &&
 					p.result.entryId === vm.result.entryId &&
-					p.result.isError === vm.result.isError);
+					p.result.isError === vm.result.isError &&
+					p.result.durationMs === vm.result.durationMs);
 			return p.toolName === vm.toolName &&
 				p.toolCallId === vm.toolCallId &&
 				p.arguments === vm.arguments &&
@@ -2071,90 +1973,6 @@ function sameStringArray(a: string[] | undefined, b: string[] | undefined): bool
 	if (a === b) return true;
 	if (!a || !b || a.length !== b.length) return false;
 	return a.every((v, i) => v === b[i]);
-}
-
-// ============================================================================
-// Turn timing — pure helpers
-// ============================================================================
-
-/** Wall-clock ms between two ISO timestamps (end − start). NaN if either is
- * empty/invalid; the callers gate on that to omit the field. */
-function diffMs(endIso: string, startIso: string): number {
-	if (!endIso || !startIso) return Number.NaN;
-	const end = new Date(endIso).getTime();
-	const start = new Date(startIso).getTime();
-	if (Number.isNaN(end) || Number.isNaN(start)) return Number.NaN;
-	return end - start;
-}
-
-/** Index of the first element >= `x` in a sorted-ascending array (a standard
- * lower_bound). Returns `arr.length` if all elements are < x. ISO strings
- * with the fixed `…Z` toISOString format sort lexicographically =
- * chronologically, so this yields the wall-clock ordering. Used to find the
- * most recent assistant seal strictly before a user send: `arr[i-1]`. */
-function lowerBound(arr: string[], x: string): number {
-	let lo = 0;
-	let hi = arr.length;
-	while (lo < hi) {
-		const mid = (lo + hi) >>> 1;
-		if (arr[mid] < x) lo = mid + 1;
-		else hi = mid;
-	}
-	return lo;
-}
-
-/** Time in tool execution across a sealed assistant turn.
- *
- * Computed as total − Σ(assistant-generation windows), so parallel tools are
- * handled correctly: each batch's tool window is the wall-clock span from the
- * calling assistant message's seal to the LAST parallel result's seal (the
- * max), not a per-tool sum. The generation windows telescope into the total
- * minus the inter-batch gaps, which are exactly the tool-execution spans.
- *
- * `trigger_1 = turnStartedAt` (the user send); `trigger_{k>1} = max toolResult
- * seal of batch k-1`. `gen_k = asst_k_seal − trigger_k`. A provisional entry
- * (no seal) aborts the walk and returns undefined — the turn is still
- * streaming, so the split can't resolve. */
-function computeToolMs(
-	refs: BlockRef[],
-	toolResultMap: Map<string, ToolResultEntry>,
-	turnStartedAt: string,
-	endTs: string,
-): number | undefined {
-	if (!endTs) return undefined;
-	const total = diffMs(endTs, turnStartedAt);
-	if (Number.isNaN(total)) return undefined;
-
-	// Group refs by entry (consecutive refs share an entry) and walk the
-	// generation/tool chain: each entry's generation runs from the previous
-	// chain point to its seal; the next chain point is the latest parallel
-	// tool-result seal of that entry's tool calls in this turn.
-	let triggerTs = turnStartedAt;
-	let totalGen = 0;
-	let i = 0;
-	while (i < refs.length) {
-		const entry = refs[i].entry;
-		if (!entry.timestamp) return undefined; // provisional — can't resolve
-		// Collect this entry's contiguous refs (may be a mid-entry slice).
-		let j = i;
-		let maxTool = "";
-		while (j < refs.length && refs[j].entry === entry) {
-			const block = entry.content[refs[j].blockIndex];
-			if (block.type === "toolCall") {
-				const tr = toolResultMap.get(block.id);
-				if (tr?.timestamp && tr.timestamp > maxTool) maxTool = tr.timestamp;
-			}
-			j++;
-		}
-		const gen = diffMs(entry.timestamp, triggerTs);
-		if (!Number.isNaN(gen) && gen > 0) totalGen += gen;
-		// Next batch's trigger = the latest parallel result in THIS batch.
-		// No tools → generation chains directly to the next entry's seal.
-		triggerTs = maxTool || entry.timestamp;
-		i = j;
-	}
-	const toolMs = total - totalGen;
-	return toolMs >= 0 ? toolMs : undefined;
 }
 
 // ============================================================================
