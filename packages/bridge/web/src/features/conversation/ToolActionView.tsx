@@ -26,6 +26,7 @@ import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";
 import { BashHeader } from "./tools/BashHeader.tsx";
 import { CardControls, CardError, CardHeader, CardStatusLine } from "./tools/CardSkeleton.tsx";
+import { useInFlightElapsed } from "./tools/inFlight.ts";
 import { RowPreview } from "./tools/RowPreview.tsx";
 import {
 	BASH_TAIL_LINES,
@@ -34,7 +35,6 @@ import {
 	parseReadNotice,
 	type StatusChip,
 } from "./tools/resultText.ts";
-import { useToolTiming } from "./tools/timing.ts";
 import { useDetailsCap } from "./tools/useDetailsCap.ts";
 
 /** Shell tools sharing the bash card (same executor, same result
@@ -96,7 +96,11 @@ const ToolActionView = memo(function ToolActionView({
 	const isShell = SHELL_TOOLS.has(action.toolName);
 	const liveCmd = isShell && typeof recArgs?.command === "string" ? (recArgs.command as string) : null;
 	const timeout = isShell && typeof recArgs?.timeout === "number" ? (recArgs.timeout as number) : null;
-	const timing = useToolTiming(action.toolCallId, action.status);
+	const sessionId = useStore(useCallback((s) => s.activeSessionId, []));
+	const serverElapsedMs = useStore(
+		useCallback((s) => s.document.status.inFlightTools?.[action.toolCallId], [action.toolCallId]),
+	);
+	const elapsedMs = useInFlightElapsed(sessionId, action.toolCallId, action.status, serverElapsedMs);
 
 	// Result text — sanitized (ANSI/binary/\r) and trimmed; feeds the error
 	// strip, the bash chips/copy parsing, and the copy payload.
@@ -193,7 +197,13 @@ const ToolActionView = memo(function ToolActionView({
 			{isExpanded && (
 				<div className={styles.detailsCard}>
 					<div className={styles.cardBar}>
-						<CardStatusLine status={action.status} timing={timing} timeout={timeout} chips={chips} />
+						<CardStatusLine
+							status={action.status}
+							durationMs={action.result?.durationMs ?? null}
+							elapsedMs={elapsedMs}
+							timeout={timeout}
+							chips={chips}
+						/>
 						<CardControls
 							copyText={copyText}
 							showWrap={showWrap}

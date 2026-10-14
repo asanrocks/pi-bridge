@@ -138,6 +138,7 @@ function toMessageEntry(entry: SessionMessageEntry): Entry {
 			usage: am.usage as JsonValue,
 			stopReason: am.stopReason as string,
 			errorMessage: (am.errorMessage as string | undefined) ?? null,
+			durationMs: typeof am.durationMs === "number" ? am.durationMs : null,
 		} as unknown as Entry;
 	}
 	if (role === "system") {
@@ -169,6 +170,7 @@ function toToolResultEntry(msg: unknown, entry: SessionMessageEntry): ToolResult
 		// means "not pulled").
 		details: jsonValue(m.details) ?? {},
 		isError: (m.isError as boolean) ?? false,
+		durationMs: typeof m.durationMs === "number" ? m.durationMs : null,
 	};
 }
 
@@ -389,6 +391,8 @@ export function deriveStatus(
 		contextUsage: overrides?.contextUsage ?? null,
 		/* pendingSteer is event-driven (queue_update) — never derived from entries */
 		pendingSteer: [],
+		/* inFlightTools is host-owned in-flight timing — never derived from entries */
+		inFlightTools: {},
 	};
 }
 
@@ -1137,6 +1141,8 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 				if (am.errorMessage)
 					ops.push({ op: "replace", path: `${prefix}/errorMessage`, value: am.errorMessage as string });
 				if (am.usage) ops.push({ op: "replace", path: `${prefix}/usage`, value: am.usage as JsonValue });
+				if (typeof am.durationMs === "number")
+					ops.push({ op: "replace", path: `${prefix}/durationMs`, value: am.durationMs });
 				ops.push({ op: "replace", path: "/status/leafId", value: PROVISIONAL_MESSAGE });
 			} else if (msg.role === "toolResult") {
 				const toolCallId = (msg as unknown as AnyRecord).toolCallId as string;
@@ -1184,6 +1190,8 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 				ops.push({ op: "replace", path: `${prefix}/details`, value: jsonValue(event.result.details) });
 			}
 			ops.push({ op: "replace", path: `${prefix}/isError`, value: event.isError });
+			if (typeof event.durationMs === "number")
+				ops.push({ op: "replace", path: `${prefix}/durationMs`, value: event.durationMs });
 			break;
 		}
 
@@ -1446,6 +1454,7 @@ function assistantMessageSkeleton(parentId: string | null, msg: AnyRecord): Json
 		usage: null,
 		stopReason: null,
 		errorMessage: null,
+		durationMs: null,
 	} as unknown as JsonValue;
 }
 
@@ -1568,6 +1577,7 @@ function toolResultSkeleton(id: string, parentId: string | null, toolCallId: str
 		content: null,
 		details: null,
 		isError: false,
+		durationMs: null,
 	} as unknown as JsonValue;
 }
 
