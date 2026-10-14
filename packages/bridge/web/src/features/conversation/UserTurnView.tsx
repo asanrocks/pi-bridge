@@ -15,7 +15,7 @@ import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { copyToClipboard } from "./clipboard.ts";
-import { formatDuration, formatGitIdentity } from "./format.ts";
+import { formatGitIdentity } from "./format.ts";
 import { LabelSlot } from "./LabelSlot.tsx";
 import styles from "./turns.module.css";
 
@@ -50,7 +50,6 @@ export const UserTurnView = memo(function UserTurnView({
 
 	const hasSiblings = turn.siblings && turn.siblings.length > 1;
 	const ts = formatTimestamp(turn.timestamp);
-	const thoughtFor = formatDuration(turn.thoughtForMs);
 	const gitStamp = turn.gitIdentity ? formatGitIdentity(turn.gitIdentity) : "";
 	const baseline = turn.gitIdentity?.commit ?? null;
 	const transitions = turn.gitTransitions;
@@ -111,7 +110,6 @@ export const UserTurnView = memo(function UserTurnView({
 				<span className={styles.msgHeaderLeft}>
 					{ts && <span className={styles.msgTime}>{ts}</span>}
 					<span className={styles.msgRole}>You</span>
-					{thoughtFor && <span className={styles.msgTiming}>{thoughtFor}</span>}
 					{gitStamp &&
 						(canReviewGit ? (
 							<>

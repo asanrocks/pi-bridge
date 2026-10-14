@@ -205,6 +205,20 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// factory sets its target) or when stamps are disabled.
 	let gitStampTrigger: GitStampTrigger | null = null;
 
+	// In-flight tool anchors: toolCallId → host monotonic ms at
+	// tool_execution_start. A monotonic clock (not Date.now) keeps a wall-clock
+	// adjustment mid-run from skewing the elapsed. Bridge-only, in-memory, never
+	// persisted; projected into `status.inFlightTools` as the elapsed at emission
+	// time. The client rebases it onto its own clock, so a skewed browser clock
+	// stays correct.
+	const inFlightStart = new Map<string, number>();
+	const inFlightElapsed = (): Record<string, number> => {
+		const now = performance.now();
+		const out: Record<string, number> = {};
+		for (const [id, startedAt] of inFlightStart) out[id] = Math.max(0, now - startedAt);
+		return out;
+	};
+
 	// ── Event processing (captured in closure) ──
 
 	let unsubscribe: (() => void) | null = null;
@@ -227,12 +241,24 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		// bash entries and their user_bash_end stamps) still apply live.
 		const orphaned = event.type === "entry_appended" && hasUnknownAncestor(document, event.entry.parentId);
 
-		if (!orphaned) {
-			const patch = applyEvent(document, event);
-			if (patch) {
-				document = applyPatch(document, patch.ops);
-				patches.push(patch);
-			}
+		// Ephemeral in-flight anchor — bridge-only, never persisted. A whole-object
+		// replace avoids toolCallId path escaping (ids are opaque). The client
+		// rebases the value onto its own clock, so only "how long ago" matters.
+		// Merged into the event's own patch so one tool event is one patch (the
+		// mirror-sync invariant holds per emitted patch).
+		const inFlightOps: PatchOp[] = [];
+		if (event.type === "tool_execution_start") {
+			inFlightStart.set(event.toolCallId, performance.now());
+			inFlightOps.push({ op: "replace", path: "/status/inFlightTools", value: inFlightElapsed() });
+		} else if (event.type === "tool_execution_end" && inFlightStart.delete(event.toolCallId)) {
+			inFlightOps.push({ op: "replace", path: "/status/inFlightTools", value: inFlightElapsed() });
+		}
+
+		const eventPatch = orphaned ? null : applyEvent(document, event);
+		const ops = [...(eventPatch?.ops ?? []), ...inFlightOps];
+		if (ops.length > 0) {
+			document = applyPatch(document, ops);
+			patches.push({ ops });
 		}
 
 		if (event.type === "turn_end" || event.type === "agent_settled") {
@@ -382,6 +408,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		},
 		addConnection(handle, sessionRef, cursor = null) {
 			connectionHandles.add(handle);
+			// Refresh the in-flight anchors so a (re)connecting client recovers the
+			// elapsed of tools already running. Not emitted as a patch: live clients
+			// tick from their own local anchor, and only the fresh snapshot needs it.
+			if (inFlightStart.size > 0) {
+				document = applyPatch(document, [
+					{ op: "replace", path: "/status/inFlightTools", value: inFlightElapsed() },
+				]);
+			}
 			// Initial sync is emitted synchronously at attach, before any later
 			// live patch on this Connection (ADR 09 invariant 7).
 			handle.onInitialSync(buildInitialSync(document, sessionManager.getEntries(), sessionRef, cursor));

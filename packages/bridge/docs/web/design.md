@@ -578,7 +578,7 @@ keyboard focus and scroll anchors remain stable.
 
 ### Turn types
 
-- **User turns** show local time, `You`, an optional thought duration, an
+- **User turns** show local time, `You`, an
   optional git-state chip, and the message's Markdown and images. A user-
   defined label (a bookmark set from pi's tree selector or in-app) renders
   as a `#`-prefixed tag chip in the header, left-aligned after the git-state
@@ -590,8 +590,8 @@ keyboard focus and scroll anchors remain stable.
   The header
   toolbar contains copy, the sibling pager, and Edit. The toolbar is revealed
   on hover/focus-capable inputs and always visible on touch.
-- **Assistant turns** show local time, the display model, live or sealed
-  timing, and context occupancy when known. Each text block has its own copy
+- **Assistant turns** show local time, the display model, and context
+  occupancy when known. Each text block has its own copy
   action because one assistant turn may contain several messages. Streaming
   text uses the streaming Markdown mode and a cursor; provider errors, aborts,
   and output-length stops render beneath the content.
@@ -643,11 +643,17 @@ mutate hue,
 bash uses the streaming hue, thinking uses the neutral think hue, and read
 uses the dimmed read hue. Each row has the same uniform tinted background and
 3px left strip. The group legend and row strip use the same hue tokens. There
-is no per-action status dot; status is carried by timing and the card status
+is no per-action status dot; status is carried by the card status
 line.
 
 Expanded tool cards have a status line, full path or command header, error or
-truncation notices, and a content region on the page surface. Read shows
+truncation notices, and a content region on the page surface. A settled
+call's duration is pi's own recorded execution time
+(`ToolResultMessage.durationMs`), rendered verbatim; a running call shows the
+host-anchored live elapsed (`status.inFlightTools`, rebased onto the client
+clock), or only its status light when no anchor is known. The bridge derives
+no timing of its own: pi supplies the settled duration, the host supplies the
+in-flight anchor. Read shows
 highlighted file content; write shows written content; edit shows a unified
 diff; apply_patch (the Codex-style patch tool) renders one diff section per
 file — `Add`/`Update`/`Delete` labels above each section (clickable: each

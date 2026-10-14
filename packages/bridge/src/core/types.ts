@@ -101,6 +101,10 @@ export interface MessageEntry extends EntryBase {
 	usage?: Usage;
 	stopReason?: string;
 	errorMessage?: string | null;
+	/** Milliseconds the generation took (pi `AssistantMessage.durationMs`),
+	 * persisted with the message. `null` when pi didn't record it (legacy or
+	 * deferred results). Not part of LLM context. */
+	durationMs?: number | null;
 }
 
 export interface ToolResultEntry extends EntryBase {
@@ -112,6 +116,10 @@ export interface ToolResultEntry extends EntryBase {
 	/** null when lazy (not pulled). Projected to JsonValue. */
 	details: JsonValue | null;
 	isError: boolean;
+	/** Milliseconds the tool's execution took (pi `ToolResultMessage.durationMs`),
+	 * persisted with the message. `null` when pi didn't record it (legacy
+	 * results, or a tool that never ran). Not part of LLM context. */
+	durationMs?: number | null;
 }
 
 export interface CompactionEntry extends EntryBase {
@@ -250,6 +258,13 @@ export interface Status {
 	contextUsage: ContextUsage | null;
 	/** Pending steer messages queued during streaming (AgentSession queue_update). FIFO; drained as subsequent user turns. Wire-eager — not a lazy field. */
 	pendingSteer: string[];
+	/** In-flight tool elapsed anchors, keyed by toolCallId: milliseconds the tool
+	 * had already run when this status value was produced (host monotonic clock).
+	 * Ephemeral, host-owned, never persisted or cached; absent means no tool is
+	 * in flight. The client rebases it onto its own clock on receipt, so a
+	 * browser whose clock differs from the daemon's still shows the right
+	 * elapsed; a reconnecting client recovers the anchor from the initial sync. */
+	inFlightTools?: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------

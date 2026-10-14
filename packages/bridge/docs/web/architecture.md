@@ -171,6 +171,8 @@ when it resolves to a known entry, `status.leafId` otherwise — through
 becomes the conversation ViewModel. It joins tool-result entries to their tool
 calls, keeps lazy values nullable until pulled, and returns display
 descriptors for user, assistant, system, user-bash, and git-change turns.
+The joined tool-result descriptor carries pi's `durationMs` verbatim for the
+card status line; the projection derives no timing of its own.
 An upstream entry type the projection cannot classify becomes an unrecognized
 system turn naming the source type and carrying the raw source entry; an
 extension-owned custom entry becomes an extension turn; a named
