@@ -364,6 +364,7 @@ function emptyMirror(): Document {
 			},
 			contextUsage: null,
 			pendingSteer: [],
+			inFlightTools: {},
 		},
 		entries: {},
 	};

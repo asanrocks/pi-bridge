@@ -219,24 +219,32 @@ describe("tool card streaming — mid-stream frames", () => {
 
 // Card skeleton — the status line is presentational (props only), so the
 // reload/timing rules test under SSR without a store. Light renders once
-// execution has started (running/done/error), but the duration text
-// renders only when the turn was live-witnessed (a start stamp exists). A
-// reloaded/resumed run has status done/error on the wire but no start
-// stamp (exec-start isn't on the wire), so it renders the light without a
-// "Took" duration. The timeout is a call argument (knowable on reload)
-// and docks beside the light — not on the command line.
+// execution has started (running/done/error). A settled call's duration is
+// pi's recorded execution time (`ToolResultMessage.durationMs`), so it renders
+// for every call pi recorded — live and on reload alike; a legacy/unrecorded
+// result renders the light without one. A running call falls back to the
+// host-anchored live elapsed (`status.inFlightTools`, passed as `elapsedMs`)
+// and otherwise shows only the light. The timeout is a call argument
+// (knowable on reload) and docks beside the light — not on the command line.
 describe("card skeleton status line", () => {
 	function renderStatus(
 		status: "pending" | "running" | "done" | "error",
-		timing: { startedAt: number; endedAt: number | null } | null,
+		durationMs: number | null,
 		timeout: number | null = null,
 		chips: ReadonlyArray<{ text: string; tone: "error" | "warning" }> = [],
+		elapsedMs: number | null = null,
 	): string {
-		return renderToStaticMarkup(createElement(CardStatusLine, { status, timing, timeout, chips }));
+		return renderToStaticMarkup(createElement(CardStatusLine, { status, durationMs, elapsedMs, timeout, chips }));
 	}
 
-	test("reloaded done run renders light without duration", () => {
-		// status done on the wire (isError=false), but no live-witnessed start.
+	test("reloaded done run renders the pi-recorded duration", () => {
+		// status done on the wire (isError=false); pi persisted the duration.
+		const html = renderStatus("done", 2500);
+		expect(html).toContain("cardStatusLight");
+		expect(html).toContain("Took 2.5s");
+	});
+
+	test("legacy done run renders light without duration", () => {
 		const html = renderStatus("done", null);
 		expect(html).toContain("cardStatusLight");
 		expect(html).not.toContain("Took");
@@ -251,21 +259,37 @@ describe("card skeleton status line", () => {
 
 	test("reloaded run shows timeout beside the light, not on the command line", () => {
 		// timeout is a call annotation (args), knowable on reload; duration is
-		// not (exec-start absent from the wire).
+		// renderable only when pi recorded it.
 		const html = renderStatus("done", null, 10);
 		expect(html).toContain("timeout 10s");
 		expect(html).not.toContain("Took");
 	});
 
-	test("running run renders light with live elapsed", () => {
-		const html = renderStatus("running", { startedAt: Date.now() - 1000, endedAt: null }, 10);
+	test("running run renders the host-anchored live elapsed", () => {
+		const html = renderStatus("running", null, 10, [], 4200);
 		expect(html).toContain('data-status="running"');
-		expect(html).toContain("Elapsed");
+		expect(html).toContain("Elapsed 4.2s");
 		expect(html).toContain("timeout 10s");
 	});
 
-	test("settled run shows Took with the witnessed duration", () => {
-		const html = renderStatus("done", { startedAt: 1000, endedAt: 2500 });
+	test("running run without an anchor renders a bare light", () => {
+		const html = renderStatus("running", null, 10, [], null);
+		expect(html).toContain('data-status="running"');
+		expect(html).not.toContain("Took");
+		expect(html).not.toContain("Elapsed");
+		expect(html).toContain("timeout 10s");
+	});
+
+	test("pi's measured duration wins once the result exists, even pre-seal", () => {
+		// tool_execution_end sets durationMs while the entry is still pending; the
+		// status still reads running until the seal.
+		const html = renderStatus("running", 1500, null, [], 900);
+		expect(html).toContain("Took 1.5s");
+		expect(html).not.toContain("Elapsed");
+	});
+
+	test("settled run shows Took with pi's duration", () => {
+		const html = renderStatus("done", 1500);
 		expect(html).toContain("Took 1.5s");
 	});
 
@@ -275,7 +299,7 @@ describe("card skeleton status line", () => {
 	});
 
 	test("status chips render after the duration text", () => {
-		const html = renderStatus("error", { startedAt: 1000, endedAt: 2500 }, 10, [{ text: "exit 1", tone: "error" }]);
+		const html = renderStatus("error", 1500, 10, [{ text: "exit 1", tone: "error" }]);
 		expect(html).toContain('data-tone="error"');
 		expect(html).toContain("exit 1");
 		expect(html).toContain("Took 1.5s");

@@ -27,8 +27,12 @@ patch have been applied.
 
 `status` is the current session projection. It contains `leafId`, `name`,
 `model` (`ModelRef` with `provider` and `modelId`), `thinkingLevel`,
-`isStreaming`, `isCompacting`, `stats`, `contextUsage`, and `pendingSteer`.
-Pinned models is not Document state: it is one daemon-global list resolved
+`isStreaming`, `isCompacting`, `stats`, `contextUsage`, `pendingSteer`, and
+`inFlightTools`. `inFlightTools` is the one host-owned live field that is not
+part of pi's model and is never persisted: a `toolCallId → elapsedMs` map,
+produced by the host from an in-memory start stamp, so a client attaching
+mid-run recovers how long a running tool has already run. Absent means no tool
+is in flight. Pinned models is not Document state: it is one daemon-global list resolved
 from pi's global `enabledModels` and delivered by `getDaemonInfo` and the
 `pinned_models_changed` push (ADR 15). Status fields derived from entries are
 recomputed by the pure document functions; live model and context state can
@@ -63,12 +67,16 @@ The union has exactly these thirteen variants:
 
 - `MessageEntry`, `kind: "message"`: `role` is `"user"`, `"assistant"`, or
   `"system"`, with `content: Content[]`. Assistant entries can carry
-  provider/model, response metadata, usage, stop reason, and an error
-  message. A `system` entry is pi's prompt-section diff, not a conversation
+  provider/model, response metadata, usage, stop reason, an error message,
+  and pi's recorded generation time (`durationMs`, nullable when pi did not
+  record it). A `system` entry is pi's prompt-section diff, not a conversation
   turn: it carries eager `sectionNames`/`removedSectionNames` (for the
   collapsed summary) and the section text in `sections`, which is lazy.
 - `ToolResultEntry`, `kind: "tool_result"`: `toolCallId`, `toolName`,
-  `content: Content[] | null`, `details: JsonValue | null`, and `isError`.
+  `content: Content[] | null`, `details: JsonValue | null`, `isError`, and
+  pi's recorded execution time (`durationMs`, nullable when pi did not record
+  it). The bridge carries these durations verbatim from pi's messages; it
+  performs no timing of its own.
 - `BashExecutionEntry`, `kind: "bash_execution"`: the user command, eager
   output, nullable `exitCode`, `cancelled`, `truncated`, nullable
   `fullOutputPath`, and `excludeFromContext`.

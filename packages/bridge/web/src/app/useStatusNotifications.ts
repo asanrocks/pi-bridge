@@ -79,7 +79,6 @@ export function useStatusNotifications({
 	activity: ActivitySignal;
 }) {
 	const [unreadCount, setUnreadCount] = useState(0);
-	const turnStartRef = useRef<number | null>(null);
 	const wasStreamingRef = useRef(isStreaming);
 
 	// Per-message unread counting + turn tracking. Subscribe at store level
@@ -96,7 +95,6 @@ export function useStatusNotifications({
 				counter.rebase(s.document.entries);
 				setUnreadCount(0);
 				wasStreamingRef.current = s.document.status.isStreaming;
-				turnStartRef.current = null;
 			} else if (s.document !== prev.document) {
 				const fresh = counter.sync(s.document.entries);
 				// Unfocused covers hidden (a hidden tab cannot hold focus).
@@ -110,14 +108,8 @@ export function useStatusNotifications({
 				const was = wasStreamingRef.current;
 				const now = s.document.status.isStreaming;
 				wasStreamingRef.current = now;
-				if (!was && now) {
-					turnStartRef.current = Date.now();
-				} else if (was && !now && turnStartRef.current !== null) {
-					const durationMs = Date.now() - turnStartRef.current;
-					turnStartRef.current = null;
-					if (document.hidden) {
-						fireNotification(s.document.status.name || "pi-bridge", durationMs);
-					}
+				if (was && !now && document.hidden) {
+					fireNotification(s.document.status.name || "pi-bridge");
 				}
 			}
 		});
@@ -153,13 +145,12 @@ export function useStatusNotifications({
 // Fire browser notification
 // ---------------------------------------------------------------------------
 
-function fireNotification(sessionName: string, durationMs: number): void {
+function fireNotification(sessionName: string): void {
 	if (!notificationPermissionGranted()) return;
 	if (typeof Notification === "undefined") return;
 
-	const seconds = Math.round(durationMs / 1000);
 	closeNotification();
-	void showNotification(`${sessionName} · Completed (${seconds}s)`);
+	void showNotification(`${sessionName} · Completed`);
 }
 
 /**

@@ -179,6 +179,38 @@ describe("initFromEntries", () => {
 		expect(doc.status.leafId).toBe("a1");
 	});
 
+	it("projects pi-recorded durations onto assistant and tool-result entries", () => {
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "a1",
+				parentId: null,
+				timestamp: "t",
+				message: { role: "assistant", content: "hi", timestamp: 0, durationMs: 1234 },
+			} as unknown as SessionEntry,
+			{
+				type: "message",
+				id: "tr1",
+				parentId: "a1",
+				timestamp: "t",
+				message: {
+					role: "toolResult",
+					toolCallId: "tc1",
+					toolName: "read",
+					content: [],
+					isError: false,
+					timestamp: 0,
+					durationMs: 2500,
+				},
+			} as unknown as SessionEntry,
+		];
+		const doc = initFromEntries(entries);
+		const a1 = lo(doc.entries.a1);
+		if (a1.kind === "message") expect(a1.durationMs).toBe(1234);
+		const tr1 = lo(doc.entries.tr1);
+		if (tr1.kind === "tool_result") expect(tr1.durationMs).toBe(2500);
+	});
+
 	it("projects all session entry types", () => {
 		const entries: SessionEntry[] = [
 			{
@@ -1028,6 +1060,34 @@ describe("applyEvent", () => {
 
 			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
 			expect(e.isError).toBe(true);
+		});
+
+		it("tool_execution_end carries pi's durationMs onto the entry", () => {
+			let doc = emptyDoc();
+			doc = applyPatch(
+				doc,
+				applyEvent(doc, {
+					type: "tool_execution_start",
+					toolCallId: "tc1",
+					toolName: "read",
+					args: {},
+				} as AgentSessionEvent)!.ops,
+			);
+
+			doc = applyPatch(
+				doc,
+				applyEvent(doc, {
+					type: "tool_execution_end",
+					toolCallId: "tc1",
+					toolName: "read",
+					result: { content: [], details: {} },
+					isError: false,
+					durationMs: 1500,
+				} as AgentSessionEvent)!.ops,
+			);
+
+			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
+			expect(e.durationMs).toBe(1500);
 		});
 	});
 

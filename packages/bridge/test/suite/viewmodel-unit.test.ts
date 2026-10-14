@@ -352,9 +352,6 @@ describe("turn separation by text", () => {
 			expect(assistantTurn.turnKey).toBe("a1");
 			expect(assistantTurn.entryId).toBe("a1");
 			expect(assistantTurn.blocks.map((b) => b.blockType)).toEqual(["thinking", "text", "tool"]);
-			// Run timing: anchored on the user seal, window extends past the
-			// entry's seal to its tool results.
-			expect(assistantTurn.turnStartedAt).toBe("2024-01-01T00:00:00Z");
 		}
 	});
 
@@ -466,36 +463,6 @@ describe("turn separation by text", () => {
 			expect(parseProviderError(raw)).toEqual({ message: raw, attrs: {} });
 		});
 	});
-
-	it("merged turn anchors on the user seal and spans to the last entry's seal", () => {
-		// a1 and a2 are both text-final entries — they merge into ONE turn,
-		// so the turn's timing spans the user seal to the last entry's seal
-		// (per-response anchors exist only for mid-entry splits).
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("a1", "u1", "2024-01-01T00:00:10Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "first" }],
-			}),
-		);
-		appendEntry(
-			doc,
-			makeEntry("a2", "a1", "2024-01-01T00:00:25Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "second" }],
-			}),
-		);
-
-		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + merged assistant turn
-		const t = vm.turns[1];
-		if (t.kind === "assistant") {
-			expect(t.turnStartedAt).toBe("2024-01-01T00:00:00Z"); // user seal
-			expect(t.totalMs).toBe(25_000); // u1 seal → a2 seal
-		}
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -573,8 +540,6 @@ describe("cross-entry merge", () => {
 			// Display timestamp stays on the last SEALED entry (a1) while the
 			// provisional a2 streams — no flicker.
 			expect(a.timestamp).toBe("2024-01-01T00:01:00Z");
-			expect(a.totalMs).toBeUndefined(); // still streaming
-			expect(a.turnStartedAt).toBe("2024-01-01T00:00:00Z"); // user seal
 		}
 	});
 
@@ -811,6 +776,7 @@ describe("tool result join", () => {
 			content: [{ type: "text", text: "file contents" }],
 			details: null,
 			isError: false,
+			durationMs: 1234,
 		} as unknown as Document["entries"][string];
 		doc.status.leafId = "tr1";
 
@@ -823,6 +789,7 @@ describe("tool result join", () => {
 			if (h.blockType === "tool") {
 				expect(h.result).not.toBeNull();
 				expect(h.result!.entryId).toBe("tr1");
+				expect(h.result!.durationMs).toBe(1234);
 				expect(h.status).toBe("done");
 			}
 		}
@@ -1497,221 +1464,6 @@ describe("turn context usage", () => {
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Turn timing — thought-for / worked-for / tool split
-// ---------------------------------------------------------------------------
-
-describe("turn timing", () => {
-	it("omits thoughtForMs on the first user turn (no previous turn)", () => {
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		const vm = computeViewModel({ document: doc, models: [] });
-		const u = vm.turns[0];
-		if (u.kind === "user") expect(u.thoughtForMs).toBeUndefined();
-	});
-
-	it("computes thoughtForMs from the previous turn's seal to this send", () => {
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("a1", "u1", "2024-01-01T00:00:30Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "hi" }],
-			}),
-		);
-		appendEntry(doc, makeEntry("u2", "a1", "2024-01-01T00:01:15Z", "message", { role: "user", content: [] }));
-		const vm = computeViewModel({ document: doc, models: [] });
-		const u2 = vm.turns[2];
-		expect(u2.kind).toBe("user");
-		if (u2.kind === "user") expect(u2.thoughtForMs).toBe(45_000);
-	});
-
-	it("anchors thoughtForMs on the wall-clock previous assistant across branches (re-edit)", () => {
-		// A→B→C→D, then user re-edits A into A0 (a sibling of A, parentId
-		// null). A0's leaf path is just [A0] — no on-path predecessor — yet
-		// the user's deliberation runs from the last assistant they saw (D,
-		// the old branch's leaf), so thought-for = A0 − D.
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("a", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("b", "a", "2024-01-01T00:00:30Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "B" }],
-			}),
-		);
-		appendEntry(doc, makeEntry("c", "b", "2024-01-01T00:01:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("d", "c", "2024-01-01T00:01:20Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "D" }],
-			}),
-		);
-		// The re-edit: A0 is a sibling of A (same parentId null), sent at 00:02:10.
-		appendEntry(doc, makeEntry("a0", null, "2024-01-01T00:02:10Z", "message", { role: "user", content: [] }));
-		doc.status.leafId = "a0";
-		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(1); // only A0 is on the leaf path
-		const a0 = vm.turns[0];
-		expect(a0.kind).toBe("user");
-		// D sealed at 00:01:20; A0 sent at 00:02:10 → 50s.
-		if (a0.kind === "user") expect(a0.thoughtForMs).toBe(50_000);
-	});
-
-	it("omits thoughtForMs when no assistant has completed before this send (first turn)", () => {
-		// A provisional assistant with no sealed predecessor: nothing to anchor on.
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		doc.entries["pending:message"] = {
-			kind: "message",
-			id: "pending:message",
-			parentId: "u1",
-			timestamp: "",
-			role: "assistant",
-			content: [{ type: "text", text: "" }],
-		} as unknown as Document["entries"][string];
-		doc.status.leafId = "pending:message";
-		// A second user turn whose only predecessor is the unsealed provisional.
-		appendEntry(
-			doc,
-			makeEntry("u2", "pending:message", "2024-01-01T00:00:20Z", "message", { role: "user", content: [] }),
-		);
-		const vm = computeViewModel({ document: doc, models: [] });
-		const u2 = vm.turns[2];
-		if (u2.kind === "user") expect(u2.thoughtForMs).toBeUndefined();
-	});
-
-	it("assistant totalMs spans user-send to last seal; toolMs=0 with no tools", () => {
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("a1", "u1", "2024-01-01T00:00:12Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "hi" }],
-			}),
-		);
-		const vm = computeViewModel({ document: doc, models: [] });
-		const a = vm.turns[1];
-		expect(a.kind).toBe("assistant");
-		if (a.kind === "assistant") {
-			expect(a.turnStartedAt).toBe("2024-01-01T00:00:00Z");
-			expect(a.totalMs).toBe(12_000);
-			expect(a.toolMs).toBe(0);
-		}
-	});
-
-	it("turn timing across a multi-batch turn (parallel-safe)", () => {
-		// Timeline (all sealed):
-		//   00:00  user send (t_user)
-		//   00:10  asst gen1 seals (toolUse)            → gen1 = 10s
-		//   00:16  tool A seals (ran 6s, parallel with B)
-		//   00:14  tool B seals (ran 4s, parallel with A)  ← max batch1 = 00:16
-		//   00:20  asst gen2 seals (end_turn)           → gen2 = 20-16 = 4s
-		// One merged turn [text, toolA, toolB, text]: window 00:00–00:20 →
-		// total 20s; toolMs = 20 − (10+4) = 6s (the parallel span, not
-		// 6+4=10 — per-batch max, not per-tool sum).
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("a1", "u1", "2024-01-01T00:00:10Z", "message", {
-				role: "assistant",
-				content: [
-					{ type: "text", text: "working" },
-					{ type: "toolCall", id: "tcA", name: "read", arguments: { path: "a" } },
-					{ type: "toolCall", id: "tcB", name: "bash", arguments: { command: "x" } },
-				],
-			}),
-		);
-		appendEntry(
-			doc,
-			makeEntry("trB", "a1", "2024-01-01T00:00:14Z", "tool_result", {
-				toolCallId: "tcB",
-				toolName: "bash",
-				content: [],
-				details: null,
-				isError: false,
-			}),
-		);
-		appendEntry(
-			doc,
-			makeEntry("trA", "trB", "2024-01-01T00:00:16Z", "tool_result", {
-				toolCallId: "tcA",
-				toolName: "read",
-				content: [],
-				details: null,
-				isError: false,
-			}),
-		);
-		appendEntry(
-			doc,
-			makeEntry("a2", "trA", "2024-01-01T00:00:20Z", "message", {
-				role: "assistant",
-				content: [{ type: "text", text: "done" }],
-			}),
-		);
-		const vm = computeViewModel({ document: doc, models: [] });
-		expect(vm.turns).toHaveLength(2); // user + one merged turn turn
-		const t1 = vm.turns[1];
-		expect(t1.kind).toBe("assistant");
-		if (t1.kind === "assistant") {
-			expect(t1.turnKey).toBe("a1");
-			expect(t1.turnStartedAt).toBe("2024-01-01T00:00:00Z"); // user seal
-			expect(t1.totalMs).toBe(20_000); // 00:00 → 00:20
-			expect(t1.toolMs).toBe(6_000); // parallel batch max, not the 10s sum
-		}
-	});
-
-	it("provisional trailing entry leaves totalMs/toolMs undefined (streaming)", () => {
-		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
-		appendEntry(
-			doc,
-			makeEntry("a1", "u1", "2024-01-01T00:00:10Z", "message", {
-				role: "assistant",
-				content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "a" } }],
-			}),
-		);
-		appendEntry(
-			doc,
-			makeEntry("tr1", "a1", "2024-01-01T00:00:16Z", "tool_result", {
-				toolCallId: "tc1",
-				toolName: "read",
-				content: [],
-				details: null,
-				isError: false,
-			}),
-		);
-		// Second assistant gen still streaming (provisional, no timestamp).
-		doc.entries["pending:message"] = {
-			kind: "message",
-			id: "pending:message",
-			parentId: "tr1",
-			timestamp: "",
-			role: "assistant",
-			content: [{ type: "text", text: "" }],
-		} as unknown as Document["entries"][string];
-		doc.status.leafId = "pending:message";
-		const vm = computeViewModel({ document: doc, models: [] });
-		// One turn: gen1's tool call accumulated and joined the streaming
-		// message's turn. The provisional entry keeps the turn unsealed —
-		// totals stay undefined until it seals.
-		const streaming = vm.turns[1];
-		expect(streaming.kind).toBe("assistant");
-		if (streaming.kind === "assistant") {
-			expect(streaming.turnKey).toBe("a1");
-			expect(streaming.blocks.map((b) => b.blockType)).toEqual(["tool", "text"]);
-			expect(streaming.turnStartedAt).toBe("2024-01-01T00:00:00Z");
-			expect(streaming.totalMs).toBeUndefined();
-			expect(streaming.toolMs).toBeUndefined();
-		}
-	});
-});
-
 // ---------------------------------------------------------------------------
 // newestLeafInSubtree
 // ---------------------------------------------------------------------------

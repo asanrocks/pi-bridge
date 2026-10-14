@@ -80,6 +80,15 @@ entry positions. Idle model, thinking-level, and rename operations reconcile
 when necessary; navigation updates the Document leaf directly so it preserves
 the selected branch.
 
+For in-flight timing the Manager keeps one bridge-only, in-memory
+`toolCallId → start` map. On `tool_execution_start` it stamps the start and
+projects `status.inFlightTools[toolCallId]` as the elapsed at emission time;
+on `tool_execution_end` it clears the entry. Nothing is persisted or written
+back into pi's model — the map exists so a client attaching mid-run, or
+reconnecting after the browser closed, recovers the running tool's elapsed
+from the initial sync. The client rebases the value onto its own clock, so
+host/client clock skew does not leak into the displayed elapsed.
+
 An `entry_appended` whose parent chain does not resolve in the Document is
 not applied live. Mid-turn, the streaming assistant is a `pending:message`
 provisional while pi has already persisted it under its real id, so an

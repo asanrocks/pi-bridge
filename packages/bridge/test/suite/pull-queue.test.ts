@@ -147,7 +147,7 @@ describe("actionPulls", () => {
 	});
 
 	it("tool action needs arguments always, result only when expanded", () => {
-		const h = toolAction({ result: { entryId: "tr1", isError: false } });
+		const h = toolAction({ result: { entryId: "tr1", isError: false, durationMs: null } });
 		const collapsed = actionPulls(h, false);
 		expect(collapsed).toHaveLength(1);
 		expect(collapsed[0].fieldPath).toBe("/entries/a1/content/1/arguments");
