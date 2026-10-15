@@ -16,13 +16,17 @@
 // dual gutter. Card bodies leave them off and render every line as before.
 //
 // Callers rebuild the sections array each render, so everything inside keys
-// on a content signature: the diff computation memoizes on it, and the async
-// highlight results carry the signature they belong to (a mismatch — stale
-// results from the previous content — falls back to plain text until the
-// new results land).
+// on content signatures — per section, not per card: a section whose content
+// did not change reuses its parsed lines and cached highlight result, so its
+// rendered output is identical and React leaves its DOM untouched. A changed
+// section (the one streaming) keeps showing its previous highlight while the
+// fresh one is in flight — the stale-keep that removes the
+// colored→plain→colored flash per streamed chunk — with a per-line alignment
+// check (a restructured diff can shift line indexes) falling back to plain
+// text only for the mismatched lines until the fresh result lands.
 
 import { diffLines, diffWords } from "diff";
-import { memo, type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { HighlightedToken, HighlightResult } from "../../../render/shiki.ts";
 import { highlightTokens } from "../../../render/shiki.ts";
 import styles from "../actions.module.css";
@@ -174,11 +178,54 @@ function computeWordInlineDiff(
 	return { oldParts, newParts };
 }
 
+interface ParsedSection {
+	title: string | null;
+	viewPath: string | null;
+	notes: string[];
+	lang: string;
+	lines: DiffLine[];
+}
+
+/** A section's content signature — the identity of everything the diff
+ * computation and the highlight pipeline depend on, independent of the
+ * array's identity. */
+function sectionSig(s: DiffSectionSpec): string {
+	return `${s.title ?? ""}\u0000${s.viewPath ?? ""}\u0000${(s.notes ?? []).join("\n")}\u0000${s.lang}\u0000${s.oldText}\u0001${s.newText}`;
+}
+
+/** What a section renders with this pass: the cached highlight for unchanged
+ * content, else the stale result from the previous render — kept visible
+ * instead of flashing to plain while the fresh highlight is in flight (the
+ * same rule as CodeSnippet). `stale` marks results that may no longer be
+ * aligned with the current diff lines. Exported for tests. */
+export function resolveSectionHighlights(
+	sigs: ReadonlyArray<string>,
+	highlightCache: ReadonlyMap<string, HighlightResult | null>,
+	stale: ReadonlyArray<HighlightResult | null>,
+): Array<{ result: HighlightResult | null; stale: boolean }> {
+	return sigs.map((sig, si) => {
+		const cached = highlightCache.get(sig);
+		if (cached !== undefined) return { result: cached, stale: false };
+		return { result: stale[si] ?? null, stale: true };
+	});
+}
+
+/** Stale results can be misaligned with restructured diff lines (a streamed
+ * chunk can re-split runs or collapse a remove+add pair into a word diff):
+ * a line may only reuse stale tokens when they still concatenate to the
+ * line's text. */
+export function tokensMatchLine(tokens: ReadonlyArray<HighlightedToken>, text: string): boolean {
+	let joined = "";
+	for (const t of tokens) joined += t.content;
+	return joined === text;
+}
+
 function renderSectionLines(
 	lines: RenderLine[],
 	highlightResult: HighlightResult | null,
 	noHighlight: boolean,
 	lineNumbers: boolean,
+	verifyTokens: boolean,
 ): ReactNode[] {
 	const elements: ReactNode[] = [];
 	let lineIdx = 0; // index into highlightResult.lines
@@ -223,8 +270,12 @@ function renderSectionLines(
 			}
 		}
 
-		// Normal line — use syntax highlighted tokens if available
+		// Normal line — use syntax highlighted tokens if available. A stale
+		// result (content changed, fresh highlight in flight) must prove the
+		// line still matches before reusing its tokens.
 		const hlLine = highlightResult?.lines[lineIdx];
+		const usable =
+			hlLine !== undefined && !noHighlight && (!verifyTokens || tokensMatchLine(hlLine.tokens, line.text));
 		const lineClass =
 			line.kind === "context"
 				? styles.editDiffContext
@@ -237,7 +288,7 @@ function renderSectionLines(
 				{lineNumbers && <span className={styles.editDiffGutter}>{line.oldLine ?? ""}</span>}
 				{lineNumbers && <span className={styles.editDiffGutter}>{line.newLine ?? ""}</span>}
 				<span className={styles.editDiffText}>
-					{hlLine && !noHighlight ? (
+					{usable ? (
 						// `.codeTokens` is the shared per-token color scope (app/index.css):
 						// it resolves each token's light/dark custom properties through the
 						// OS preference without touching this row's own semantic color,
@@ -302,45 +353,83 @@ export const DiffSections = memo(function DiffSections({
 	/** Wrap long lines (default) instead of scrolling horizontally. */
 	wrap?: boolean;
 }) {
-	// Content signature — the identity of everything the diff computation and
-	// highlight pipeline depend on, independent of the array's identity.
-	const signature = useMemo(
-		() =>
-			sections
-				.map(
-					(s) =>
-						`${s.title ?? ""}\u0000${s.viewPath ?? ""}\u0000${(s.notes ?? []).join("\n")}\u0000${s.lang}\u0000${s.oldText}\u0001${s.newText}`,
-				)
-				.join("\u0002"),
-		[sections],
-	);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: recompute only on content change — callers rebuild the sections array each render
-	const parsed = useMemo(
-		() =>
-			sections.map((s) => ({
-				title: s.title,
-				viewPath: s.viewPath ?? null,
-				notes: s.notes ?? [],
-				lang: s.lang,
-				lines: tagInlineWordPairs(computeDiffLines(s.oldText, s.newText)),
-			})),
-		[signature],
-	);
+	// Per-section content signatures (see sectionSig). Keying on the section —
+	// not the whole card — is what keeps streaming local: one growing section
+	// no longer re-renders its siblings' output.
+	const sectionSigs = useMemo(() => sections.map(sectionSig), [sections]);
+	const signature = useMemo(() => sectionSigs.join("\u0002"), [sectionSigs]);
 
-	const [highlighted, setHighlighted] = useState<{ signature: string; results: Array<HighlightResult | null> } | null>(
-		null,
-	);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: parsed is derived from signature (memoized above), so the effect fires only on content change
+	// Content-keyed memo caches (refs — a cache hit must not schedule work).
+	// The highlight effect prunes entries whose signature is no longer
+	// rendered, so streaming's per-chunk re-keying cannot grow them unboundedly.
+	const parsedCache = useRef(new Map<string, ParsedSection>());
+	const highlightCache = useRef(new Map<string, HighlightResult | null>());
+	// What the last committed render showed per section index — the stale
+	// baseline a changed section keeps showing until its fresh highlight lands.
+	const staleByIndex = useRef<ReadonlyArray<HighlightResult | null>>([]);
+	// Bumped when a fresh highlight result lands.
+	const [, setHighlightTick] = useState(0);
+
+	const parsed = sectionSigs.map((sig, si) => {
+		const section = sections[si]!;
+		let entry = parsedCache.current.get(sig);
+		if (entry === undefined) {
+			entry = {
+				title: section.title,
+				viewPath: section.viewPath ?? null,
+				notes: section.notes ?? [],
+				lang: section.lang,
+				lines: tagInlineWordPairs(computeDiffLines(section.oldText, section.newText)),
+			};
+			parsedCache.current.set(sig, entry);
+		}
+		return entry;
+	});
+
+	const active = resolveSectionHighlights(sectionSigs, highlightCache.current, staleByIndex.current);
+
+	// Publish this render's results as the next stale baseline. Effect (not
+	// layout): SSR renders no effects, and the baseline is only read by the
+	// next render — a render racing ahead of this publish simply sees an
+	// older, still-valid stale result.
+	useEffect(() => {
+		staleByIndex.current = active.map((a) => a.result);
+	});
+
+	// Highlight sections missing from the cache — only changed signatures
+	// miss, so streaming re-highlights exactly the growing section, not the
+	// card. Unreferenced cache entries (the previous chunk's signature) are
+	// pruned here, which keeps both caches bounded to the rendered sections.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the content signature; parsed/sectionSigs are derived from it
 	useEffect(() => {
 		let cancelled = false;
-		Promise.all(
-			parsed.map((s) =>
-				s.lang === "" || s.lines.length === 0
-					? Promise.resolve(null)
-					: highlightTokens(s.lines.map((l) => l.text).join("\n"), s.lang),
-			),
-		).then((results) => {
-			if (!cancelled) setHighlighted({ signature, results });
+		const referenced = new Set(sectionSigs);
+		for (const cache of [parsedCache.current, highlightCache.current]) {
+			for (const key of cache.keys()) {
+				if (!referenced.has(key)) cache.delete(key);
+			}
+		}
+		const pending: Array<Promise<void>> = [];
+		for (let si = 0; si < parsed.length; si++) {
+			const sig = sectionSigs[si]!;
+			if (highlightCache.current.has(sig)) continue;
+			const section = parsed[si]!;
+			if (section.lang === "" || section.lines.length === 0) {
+				highlightCache.current.set(sig, null);
+				continue;
+			}
+			pending.push(
+				highlightTokens(section.lines.map((l) => l.text).join("\n"), section.lang).then((result) => {
+					highlightCache.current.set(sig, result);
+				}),
+			);
+		}
+		if (pending.length === 0) return;
+		Promise.all(pending).then(() => {
+			// Results always land in the cache even when this tick is cancelled:
+			// the next chunk's effect re-renders when its own result lands, and
+			// the settled stream's final result is never cancelled.
+			if (!cancelled) setHighlightTick((t) => t + 1);
 		});
 		return () => {
 			cancelled = true;
@@ -348,7 +437,6 @@ export const DiffSections = memo(function DiffSections({
 	}, [signature]);
 
 	if (parsed.length === 0) return null;
-	const active = highlighted?.signature === signature ? highlighted.results : null;
 
 	return (
 		<div
@@ -379,9 +467,10 @@ export const DiffSections = memo(function DiffSections({
 					))}
 					{renderSectionLines(
 						contextLines === undefined ? section.lines : elideContext(section.lines, contextLines),
-						active?.[si] ?? null,
+						active[si]?.result ?? null,
 						section.lang === "",
 						lineNumbers === true,
+						active[si]?.stale === true,
 					)}
 				</div>
 			))}

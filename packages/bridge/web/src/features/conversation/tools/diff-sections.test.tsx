@@ -13,12 +13,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
+import type { HighlightResult } from "../../../render/shiki.ts";
 
 vi.mock("../../../render/shiki.ts", () => ({
 	highlightTokens: () => Promise.resolve({ bg: "transparent", fg: "inherit", lines: [] }),
 }));
 
-const { DiffSections } = await import("./DiffSections.tsx");
+const { DiffSections, resolveSectionHighlights, tokensMatchLine } = await import("./DiffSections.tsx");
 
 const OLD_TEXT = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
 const NEW_TEXT = OLD_TEXT.replace("line 10", "line ten");
@@ -69,5 +70,49 @@ describe("DiffSections whole-file review options", () => {
 	test("wrap defaults on; wrap: false adds the no-wrap class", () => {
 		expect(render({})).not.toContain("editDiffNoWrap");
 		expect(render({ wrap: false })).toContain("editDiffNoWrap");
+	});
+
+	describe("streaming highlight resolution — per-section stale-keep", () => {
+		// The streaming flicker fix: a section whose content changed keeps the
+		// previous render's highlight while the fresh one is in flight, instead
+		// of the whole card dropping to plain text per chunk.
+		const result = (lines: string[]): HighlightResult => ({
+			fg: "inherit",
+			darkFg: "inherit",
+			lines: lines.map((t) => ({ tokens: [{ content: t }] })),
+		});
+
+		test("cached signature resolves fresh (not stale)", () => {
+			const cache = new Map([["a", result(["x"] as string[])]]);
+			expect(resolveSectionHighlights(["a"], cache, [null])).toEqual([{ result: cache.get("a"), stale: false }]);
+		});
+
+		test("changed section keeps the stale result at its index", () => {
+			const stale = result(["old tail"]);
+			const resolved = resolveSectionHighlights(["b"], new Map(), [stale]);
+			expect(resolved).toEqual([{ result: stale, stale: true }]);
+		});
+
+		test("no stale baseline (first render) resolves plain-null stale", () => {
+			expect(resolveSectionHighlights(["a"], new Map(), [])).toEqual([{ result: null, stale: true }]);
+		});
+
+		test("sibling sections are independent: cache hit next to a stale miss", () => {
+			const cached = result(["stable file"]);
+			const growing = result(["partial tail"]);
+			const cache = new Map([["stable", cached]]);
+			const resolved = resolveSectionHighlights(["stable", "growing-v2"], cache, [cached, growing]);
+			expect(resolved[0]).toEqual({ result: cached, stale: false });
+			expect(resolved[1]).toEqual({ result: growing, stale: true });
+		});
+
+		test("tokensMatchLine gates stale reuse on text alignment", () => {
+			// Aligned: tokens concatenate back to the line's text.
+			expect(tokensMatchLine([{ content: "print(" }, { content: ")" }], "print()")).toBe(true);
+			// Misaligned (diff restructured, line indexes shifted): plain fallback.
+			expect(tokensMatchLine([{ content: "print(" }], "print()")).toBe(false);
+			// Empty line: no tokens, matching empty text.
+			expect(tokensMatchLine([], "")).toBe(true);
+		});
 	});
 });

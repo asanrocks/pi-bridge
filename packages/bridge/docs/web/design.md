@@ -671,7 +671,13 @@ per-section clickable labels instead) are card-local
 icon controls with tooltips; apply_patch copies the raw patch envelope. Tool
 arguments and
 results can arrive while a call is streaming, so a card renders available
-content without waiting for a path or command annotation.
+content without waiting for a path or command annotation. Diff sections are
+streaming-stable: highlighting is cached per section content, so a chunk
+that grows one section keeps that section's previous highlighting visible
+(only genuinely new lines render plain until their result lands, and a
+restructured line falls back to plain until its tokens realign) while
+unchanged sibling sections render byte-identical output — a streamed chunk
+never drops a card to plain text.
 
 Thinking is prose rather than an operation card. A non-empty block collapses
 to its first line rendered as Markdown and clamped to a single line — the
