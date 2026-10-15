@@ -7,3 +7,5 @@
 export const version = "0.0.0";
 export const commit = "dev";
 export const date = "1970-01-01";
+// The pi runtime (@earendil-works/pi-coding-agent) version this build embeds.
+export const piCore = "0.0.0";
