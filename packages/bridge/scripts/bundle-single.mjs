@@ -41,6 +41,31 @@ function getGitCommit() {
 const commitHash = getGitCommit();
 const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 
+// The pi runtime the bridge embeds. Resolve the installed package (what esbuild
+// actually inlines) rather than trusting the declared range; fall back to the
+// dependency pin if resolution fails (e.g. an unbuilt checkout).
+function resolveBundledVersion(name) {
+	try {
+		let dir = dirname(fileURLToPath(import.meta.resolve(name)));
+		while (true) {
+			const candidate = join(dir, "package.json");
+			if (existsSync(candidate)) {
+				const pkg = JSON.parse(readFileSync(candidate, "utf8"));
+				if (pkg.name === name) return pkg.version ?? "unknown";
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		// fall through to the declared dependency pin
+	}
+	const declared = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).dependencies?.[name];
+	return typeof declared === "string" ? declared : "unknown";
+}
+
+const piCoreVersion = resolveBundledVersion("@earendil-works/pi-coding-agent");
+
 function getCommitDate() {
 	const result = spawnSync("git", ["log", "-1", "--format=%cd", "--date=short"], {
 		cwd: root,
@@ -51,7 +76,7 @@ function getCommitDate() {
 }
 
 const commitDate = getCommitDate();
-console.log(`version: ${packageVersion}, commit: ${commitHash}, date: ${commitDate}`);
+console.log(`version: ${packageVersion}, commit: ${commitHash}, date: ${commitDate}, pi-core: ${piCoreVersion}`);
 
 // 1. Write the version module with the real build metadata
 writeFileSync(
@@ -60,6 +85,7 @@ writeFileSync(
 		`export const version = ${JSON.stringify(packageVersion)};`,
 		`export const commit = ${JSON.stringify(commitHash)};`,
 		`export const date = ${JSON.stringify(commitDate)};`,
+		`export const piCore = ${JSON.stringify(piCoreVersion)};`,
 	].join("\n") + "\n",
 	"utf8",
 );

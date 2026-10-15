@@ -2,7 +2,7 @@
 // Usage: pi-bridge [--port <port>] [--log <path>] [--dev] [--allow <[id=]dir>]... [--web-root <dir>]
 
 import { Daemon, type DaemonOptions } from "./host/index.ts";
-import { commit, date, version } from "./version.ts";
+import { commit, date, piCore, version } from "./version.ts";
 
 async function main() {
 	process.title = "pi-bridge";
@@ -30,6 +30,7 @@ async function main() {
 			case "--version":
 			case "-v":
 				console.log(`pi-bridge ${version} (${commit}, ${date})`);
+				console.log(`pi-core ${piCore}`);
 				process.exit(0);
 				break;
 			case "--help":
