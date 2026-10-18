@@ -1079,8 +1079,14 @@ export class AgentSession {
 		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
 		this._isEmittingAgentSettled = true;
+		// The abort request is consumed by this settle: the flag is per-run
+		// state ("abort the current run"), and a continuation can start
+		// outside _runAgentPrompt's wrapper — e.g. an SDK-driven
+		// Agent.continue() — where _startRun's reset never runs. Left set,
+		// the agent_start handler would instantly abort that continuation.
+		const aborted = this._agentRunAbortRequested;
+		this._agentRunAbortRequested = false;
 		try {
-			const aborted = this._agentRunAbortRequested;
 			await this._extensionRunner.emit({ type: "agent_settled", aborted });
 			this._emit({ type: "agent_settled", aborted });
 		} finally {

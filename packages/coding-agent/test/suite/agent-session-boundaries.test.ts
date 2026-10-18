@@ -735,6 +735,46 @@ describe("AgentSession actionable boundaries", () => {
 		// #10607: settlement reports the abort although the last response succeeded.
 		expect(harness.eventsOfType("agent_settled")).toEqual([{ type: "agent_settled", aborted: true }]);
 	});
+
+	// A settle consumes the abort request. A continuation may start outside
+	// prompt()'s wrapper — an SDK-driven agent.continue() never reaches
+	// _startRun's reset — so a stale flag made the agent_start handler abort
+	// the fresh run before its first request.
+	it("does not abort a continuation started directly after an abort settles", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("x".repeat(20_000)), fauxAssistantMessage("recovered")]);
+
+		const sawMessageUpdate = new Promise<void>((resolve) => {
+			const unsubscribe = harness.session.subscribe((event) => {
+				if (event.type === "message_update") {
+					unsubscribe();
+					resolve();
+				}
+			});
+		});
+
+		const prompt = harness.session.prompt("hi");
+		await sawMessageUpdate;
+		await harness.session.abort();
+		await prompt;
+		expect(harness.eventsOfType("agent_settled")).toEqual([{ type: "agent_settled", aborted: true }]);
+
+		// The Stop leaves an aborted assistant as the tail; an SDK continuation
+		// rewinds to the user message before calling agent.continue().
+		const messages = harness.session.agent.state.messages;
+		const userIndex = messages.findLastIndex((message) => message.role === "user");
+		harness.session.agent.state.messages = messages.slice(0, userIndex + 1);
+
+		await harness.session.agent.continue();
+
+		const last = harness.session.messages[harness.session.messages.length - 1];
+		expect(last?.role).toBe("assistant");
+		if (last?.role === "assistant") {
+			expect(getMessageText(last)).toBe("recovered");
+			expect(last.stopReason).toBe("stop");
+		}
+	});
 });
 
 describe("durable length recovery", () => {
