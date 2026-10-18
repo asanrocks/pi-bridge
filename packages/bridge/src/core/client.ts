@@ -204,6 +204,15 @@ export class BridgeClient {
 		return this.call({ verb: "navigate", entryId });
 	}
 
+	/** Recover the broken tail turn (ADR 16). The reply's `action` carries
+	 * what ran: "retry" (silent re-request from a clean boundary — a failed
+	 * turn is branched past, an unfinished run is bare-continued) or
+	 * "continue" (branch past the dead turn and send a visible "Continue."
+	 * message — dangling or mid-run-terminated tools). */
+	recoverTurn(): Promise<RpcReply> {
+		return this.call({ verb: "recoverTurn" });
+	}
+
 	/** Resolve-or-activate a session by address (ADR 11). */
 	openSession(projectId: string, stem: string, cursor?: PrefixCursor): Promise<RpcReply> {
 		return this.call(

@@ -2678,3 +2678,171 @@ describe("latestReplyTurnKey", () => {
 		expect(latestReplyTurnKey(vm.turns)).toBe("a2");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Recovery projection (ADR 16) — the tail-run recovery attaches to the turn
+// containing the dead entry; the renderer's error row (real or synthetic
+// line) is the only recovery surface.
+// ---------------------------------------------------------------------------
+
+describe("recovery projection (ADR 16)", () => {
+	function userMsg(id: string, parentId: string | null, text: string): Document["entries"][string] {
+		return {
+			kind: "message",
+			id,
+			parentId,
+			timestamp: "2024-01-01T00:00:00Z",
+			role: "user",
+			content: [{ type: "text", text }],
+		} as unknown as Document["entries"][string];
+	}
+	function assistantMsg(
+		id: string,
+		parentId: string | null,
+		extra: Record<string, unknown> = {},
+	): Document["entries"][string] {
+		return {
+			kind: "message",
+			id,
+			parentId,
+			timestamp: "2024-01-01T00:01:00Z",
+			role: "assistant",
+			content: [],
+			...extra,
+		} as unknown as Document["entries"][string];
+	}
+	function toolResult(
+		id: string,
+		parentId: string | null,
+		toolCallId: string,
+		isError = false,
+	): Document["entries"][string] {
+		return {
+			kind: "tool_result",
+			id,
+			parentId,
+			timestamp: "2024-01-01T00:02:00Z",
+			toolCallId,
+			toolName: "bash",
+			content: [{ type: "text", text: "ok" }],
+			details: null,
+			isError,
+		} as unknown as Document["entries"][string];
+	}
+
+	it("projects failedTurn onto the dead turn with the run's user message as edit target", () => {
+		const doc = emptyDoc();
+		doc.entries["u1"] = userMsg("u1", null, "hello");
+		doc.entries["a1"] = assistantMsg("a1", "u1", { stopReason: "error", errorMessage: "persistent 529" });
+		doc.status.leafId = "a1";
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(2);
+		const a = vm.turns[1]!;
+		expect(a.kind).toBe("assistant");
+		if (a.kind !== "assistant") return;
+		expect(a.stopReason).toBe("error");
+		expect(a.recovery).toEqual({ kind: "failedTurn", editTarget: { entryId: "u1", index: 0, text: "hello" } });
+	});
+
+	it("projects nothing while the document is streaming — a provisional tail is not a failure", () => {
+		const doc = emptyDoc();
+		doc.entries["u1"] = userMsg("u1", null, "hello");
+		doc.entries["a1"] = assistantMsg("a1", "u1", {
+			content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: '{"command":"ls"}' }],
+			stopReason: "toolUse",
+		});
+		doc.status.leafId = "a1";
+		doc.status.isStreaming = true;
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const a = vm.turns[1]!;
+		if (a.kind !== "assistant") throw new Error("expected assistant turn");
+		expect(a.recovery).toBeUndefined();
+	});
+
+	it("attaches interruptedTools to the merged turn containing the dangling assistant", () => {
+		// Mid-batch abort: the dangling tool-bearing assistant (a1), its one
+		// answered result, and the abort marker (a2) merge into one turn —
+		// the recovery targets a1, the turn carries a2's aborted stopReason
+		// (the real line the buttons dock beside).
+		const doc = emptyDoc();
+		doc.entries["u1"] = userMsg("u1", null, "list and build");
+		doc.entries["a1"] = assistantMsg("a1", "u1", {
+			content: [
+				{ type: "toolCall", id: "tc-ls", name: "bash", arguments: '{"command":"ls"}' },
+				{ type: "toolCall", id: "tc-make", name: "bash", arguments: '{"command":"make"}' },
+			],
+			stopReason: "toolUse",
+		});
+		doc.entries["r1"] = toolResult("r1", "a1", "tc-ls");
+		doc.entries["a2"] = assistantMsg("a2", "r1", { stopReason: "aborted" });
+		doc.status.leafId = "a2";
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(2);
+		const a = vm.turns[1]!;
+		expect(a.kind).toBe("assistant");
+		if (a.kind !== "assistant") return;
+		expect(a.entryId).toBe("a1");
+		expect(a.stopReason).toBe("aborted");
+		expect(a.recovery?.kind).toBe("interruptedTools");
+		expect(a.recovery?.editTarget).toEqual({ entryId: "u1", index: 0, text: "list and build" });
+	});
+
+	it("attaches unfinishedTurn to the assistant turn even when a bash entry follows it", () => {
+		const doc = emptyDoc();
+		doc.entries["u1"] = userMsg("u1", null, "build");
+		doc.entries["a1"] = assistantMsg("a1", "u1", {
+			content: [{ type: "toolCall", id: "tc-build", name: "bash", arguments: '{"command":"make"}' }],
+			stopReason: "toolUse",
+		});
+		doc.entries["r1"] = toolResult("r1", "a1", "tc-build");
+		doc.entries["b1"] = {
+			kind: "bash_execution",
+			id: "b1",
+			parentId: "r1",
+			timestamp: "2024-01-01T00:03:00Z",
+			command: "git status",
+			output: "clean",
+			exitCode: 0,
+			cancelled: false,
+			truncated: false,
+			fullOutputPath: null,
+			excludeFromContext: false,
+		} as unknown as Document["entries"][string];
+		doc.status.leafId = "b1";
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns).toHaveLength(3);
+		const a = vm.turns[1]!;
+		expect(a.kind).toBe("assistant");
+		if (a.kind !== "assistant") return;
+		expect(a.stopReason).toBe("toolUse");
+		expect(a.recovery).toEqual({ kind: "unfinishedTurn", editTarget: { entryId: "u1", index: 0, text: "build" } });
+	});
+
+	it("projects nothing for a healthy tail or a failure the conversation moved past", () => {
+		const healthy = emptyDoc();
+		healthy.entries["u1"] = userMsg("u1", null, "hello");
+		healthy.entries["a1"] = assistantMsg("a1", "u1", {
+			content: [{ type: "text", text: "done" }],
+			stopReason: "stop",
+		});
+		healthy.status.leafId = "a1";
+		const healthyVm = computeViewModel({ document: healthy, models: [] });
+		const ha = healthyVm.turns[1]!;
+		if (ha.kind !== "assistant") throw new Error("expected assistant turn");
+		expect(ha.recovery).toBeUndefined();
+
+		const moved = emptyDoc();
+		moved.entries["u1"] = userMsg("u1", null, "hello");
+		moved.entries["a1"] = assistantMsg("a1", "u1", { stopReason: "error", errorMessage: "529" });
+		moved.entries["u2"] = userMsg("u2", "a1", "try again differently");
+		moved.status.leafId = "u2";
+		const movedVm = computeViewModel({ document: moved, models: [] });
+		for (const t of movedVm.turns) {
+			if (t.kind === "assistant") expect(t.recovery).toBeUndefined();
+		}
+	});
+});

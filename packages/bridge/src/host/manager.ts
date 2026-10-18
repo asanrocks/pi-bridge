@@ -19,6 +19,7 @@ import {
 	applyPatch,
 	buildInitialSync,
 	type ContextUsage,
+	computeRecoverableTurn,
 	type Document,
 	GIT_STAMP_CUSTOM_TYPE,
 	type ImageContent,
@@ -29,11 +30,13 @@ import {
 	type PatchOp,
 	type PrefixCursor,
 	type ReconcileOptions,
+	type RecoverableTurnKind,
 	type ReplaceMessage,
 	reconcile,
 	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
+import { buildInterruptedToolsRelay } from "../core/recovery.ts";
 import { createGitStampExtensionWithTrigger, type GitStampTrigger } from "./git-stamp-extension.ts";
 
 // ============================================================================
@@ -68,6 +71,15 @@ function hasUnknownAncestor(doc: Document, parentId: string | null | undefined):
 	}
 	return false;
 }
+
+/** The repair per recovery kind (ADR 16): whether recovery branches past
+ * the dead entry (the navigate machinery), and how the run restarts —
+ * silently (no transcript addition) or with a visible relay prompt. */
+const RECOVERY_REPAIRS: Record<RecoverableTurnKind, { branch: boolean; restart: "continue" | "prompt" }> = {
+	failedTurn: { branch: true, restart: "continue" },
+	unfinishedTurn: { branch: false, restart: "continue" },
+	interruptedTools: { branch: true, restart: "prompt" },
+};
 
 // ============================================================================
 // Types
@@ -167,6 +179,16 @@ export interface Manager {
 	 * session leaf). */
 	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
+	/** Recover the broken tail turn (ADR 16). Two actions (ADR 16
+	 * terminology): "retry" — silently re-request from a clean boundary
+	 * (`failedTurn`: branch past the dead assistant; `unfinishedTurn`: bare
+	 * continue of the already-valid tail); "continue" — branch past the dead
+	 * turn and send a visible "Continue." user message (`interruptedTools`:
+	 * dangling calls or a tool terminated mid-run). Refuses (throws) when the
+	 * tail is not recoverable or a turn is in flight. Returns which ran. The
+	 * silent continuation is tracked by the Manager: `abort` and `dispose`
+	 * await it, since pi's own idle-wait cannot see it. */
+	recoverTurn(): Promise<"retry" | "continue">;
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -262,16 +284,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		}
 
 		if (event.type === "turn_end" || event.type === "agent_settled") {
-			const recPatch = reconcile(document, sessionManager.getEntries(), {
-				model: session?.model ? { provider: session.model.provider, modelId: session.model.id } : undefined,
-				thinkingLevel: session?.thinkingLevel ?? "off",
-				// Sync context usage after turn end — pi's getContextUsage() is now
-				// authoritative (compaction gaps, trailing estimates, percentage).
-				// Bundled into the reconcile patch so atomic with the seal.
-				contextUsage: getContextUsageOption(session),
-			});
+			const recPatch = boundaryReconcile(event.type === "agent_settled");
 			if (recPatch) {
-				document = applyPatch(document, recPatch.ops);
 				patches.push(recPatch);
 			}
 			// Notify connections that the session has settled — the first turn
@@ -361,15 +375,71 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			document = setAtPath(document, "/status/contextUsage", cu as unknown as JsonValue);
 		}
 	}
+	// ADR 16: a resumed session can carry a broken tail (terminal error or
+	// dangling tool calls) — the first replace a client receives already
+	// carries the recovery kind, so the affordance is there on first paint.
+	document = setAtPath(document, "/status/recoverableTurn", computeRecoverableTurn(document)?.kind ?? null);
 
 	// Subscribe to pi events
 	unsubscribe = session.subscribe(processEvent);
+
+	// ADR 16: the recovery kind of the current leaf path's tail. Recomputed at
+	// every idle boundary (settle, tryReconcile), on navigate, and at boot.
+	const recoverableTurnKindOf = (doc: Document): RecoverableTurnKind | null =>
+		computeRecoverableTurn(doc)?.kind ?? null;
+
+	// Publish a leaf move (branch/reset) plus the re-derived recovery kind in
+	// one patch, so a client never renders a recovered turn parented onto the
+	// abandoned path (effects-via-push, §7.13).
+	const publishLeaf = (entryId: string | null): void => {
+		const ops: PatchOp[] = [];
+		if (document.status.leafId !== entryId) {
+			document = setAtPath(document, "/status/leafId", entryId);
+			ops.push({ op: "replace", path: "/status/leafId", value: (entryId ?? null) as unknown as JsonValue });
+		}
+		const kind = recoverableTurnKindOf(document);
+		if ((document.status.recoverableTurn ?? null) !== kind) {
+			document = setAtPath(document, "/status/recoverableTurn", kind);
+			ops.push({ op: "replace", path: "/status/recoverableTurn", value: kind as unknown as JsonValue });
+		}
+		if (ops.length > 0) emitPatch({ ops });
+	};
+
+	/** Turn-boundary reconcile shared by the event path and the recovery
+	 * continuation's compensation (ADR 16). Applies to the Document and
+	 * returns the patch for the caller to emit in event order. Syncs model,
+	 * thinking level, and context usage — pi's getContextUsage() is
+	 * authoritative after a turn (compaction gaps, trailing estimates,
+	 * percentage), bundled into one patch so it is atomic with the seal — and
+	 * at settle boundaries re-derives the recovery kind (mid-run turn_end
+	 * boundaries are unstable: results still arriving). */
+	const boundaryReconcile = (settle: boolean): Patch | null => {
+		const recPatch = reconcile(document, sessionManager.getEntries(), {
+			model: session?.model ? { provider: session.model.provider, modelId: session.model.id } : undefined,
+			thinkingLevel: session?.thinkingLevel ?? "off",
+			contextUsage: getContextUsageOption(session),
+			...(settle ? { recoverableTurn: recoverableTurnKindOf(document) } : {}),
+		});
+		if (recPatch) document = applyPatch(document, recPatch.ops);
+		return recPatch;
+	};
+
+	// ADR 16: an in-flight recovery continuation (agent.continue(), which runs
+	// outside pi's _runAgentPrompt wrapper). AgentSession.isStreaming stays
+	// false while it runs, so session.abort()'s idle-wait does not cover it —
+	// the Manager tracks the run itself, and abort/dispose await it before
+	// treating the session as settled.
+	let recoveryRun: Promise<void> | null = null;
+	const settleRecoveryRun = async (): Promise<void> => {
+		if (recoveryRun) await recoveryRun.catch(() => {});
+	};
 
 	function tryReconcile(opts: ReconcileOptions): void {
 		if (document.status.isStreaming || document.status.isCompacting) return;
 		const recPatch = reconcile(document, sessionManager.getEntries(), {
 			...opts,
 			contextUsage: getContextUsageOption(session),
+			recoverableTurn: recoverableTurnKindOf(document),
 		});
 		if (recPatch) {
 			document = applyPatch(document, recPatch.ops);
@@ -483,6 +553,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// and refills its input box before sending Stop.
 			session.clearQueue();
 			await session.abort();
+			// A recovery continuation is invisible to session.abort()'s idle-wait
+			// (ADR 16); await it so Stop's flush semantics hold — the aborted
+			// tail is persisted and derived before the reply.
+			await settleRecoveryRun();
 		},
 
 		async discardSteer() {
@@ -544,21 +618,91 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// retains the old full conversation path after branching; the
 			// next prompt would send stale history to the LLM.
 			session.agent.state.messages = sessionManager.buildSessionContext().messages;
-			if (document.status.leafId !== entryId) {
-				document = setAtPath(document, "/status/leafId", entryId ?? null);
-				const leafOp: PatchOp = {
-					op: "replace",
-					path: "/status/leafId",
-					value: (entryId ?? null) as unknown as JsonValue,
-				};
-				emitPatch({ ops: [leafOp] });
+			publishLeaf(entryId);
+		},
+
+		async recoverTurn(): Promise<"retry" | "continue"> {
+			// Same mutation lock as navigate: recovery branches (swapping the LLM
+			// context) and then starts a run.
+			if (document.status.isStreaming || document.status.isCompacting) {
+				throw new Error("Cannot recover while a turn is in flight");
 			}
+			const info = computeRecoverableTurn(document);
+			if (!info) {
+				throw new Error("No failed or interrupted turn to recover");
+			}
+			const repair = RECOVERY_REPAIRS[info.kind];
+			// The relay must be built from the pre-branch leaf path: the dangling
+			// assistant and its completed results leave the path when recovery
+			// branches past them, and the relay carries bounded copies of exactly
+			// those. ("Continue." is the interruptedTools fallback for the
+			// killed-mid-run shape, whose results stay on the path.)
+			const relay = repair.restart === "prompt" ? buildInterruptedToolsRelay(document, info) : "Continue.";
+
+			// Branch past the dead entry — the navigate verb's exact machinery —
+			// except unfinishedTurn, whose tail is already a valid continuation
+			// boundary (fully-answered tool results, no final assistant), so the
+			// run is simply continued from where it stopped.
+			if (repair.branch) {
+				const target = document.entries[info.entryId];
+				if (!target || target.parentId === null) {
+					throw new Error("Recovery target has no parent to branch to");
+				}
+				sessionManager.branch(target.parentId);
+				// Intentional coupling to pi internals (same as navigate): the
+				// abandoned tail must leave agent.state.messages before the
+				// continued run sends its context to the LLM.
+				session.agent.state.messages = sessionManager.buildSessionContext().messages;
+				publishLeaf(target.parentId);
+			}
+
+			// interruptedTools: a visible relay through AgentSession's normal
+			// machinery (retry, overflow recovery, steering, settle events). It
+			// preserves completed results and marks calls with unknown outcomes;
+			// records are bounded and treated as untrusted data.
+			if (repair.restart === "prompt") {
+				await session.prompt(relay, {
+					source: "rpc",
+					streamingBehavior: "steer",
+					preflightResult: () => {},
+				});
+				return "continue";
+			}
+
+			// failedTurn/unfinishedTurn: the silent re-request. agent.continue()
+			// runs outside pi's _runAgentPrompt wrapper (its only public
+			// continuation entry), so this run gets no auto-retry/overflow
+			// handling and fires no agent_settled — the event the Document's
+			// isStreaming reset and the settle reconcile key on. The run is
+			// tracked (abort/dispose await it via the Manager), and the finally
+			// compensates on every exit path (success, error, abort); the
+			// missing retry loop is an accepted limitation (ADR 16).
+			const run = session.agent.continue();
+			recoveryRun = run;
+			try {
+				await run;
+			} finally {
+				recoveryRun = null;
+				const ops: PatchOp[] = [];
+				if (document.status.isStreaming) {
+					document = setAtPath(document, "/status/isStreaming", false);
+					ops.push({ op: "replace", path: "/status/isStreaming", value: false });
+				}
+				if (ops.length > 0) emitPatch({ ops });
+				const recPatch = boundaryReconcile(true);
+				if (recPatch) emitPatch(recPatch);
+				for (const l of settledListeners) l();
+			}
+			return "retry";
 		},
 
 		async dispose() {
-			// 1. Save: finalize + flush the in-flight turn. Listeners are still
-			//    attached, so client tabs see the final patches before teardown.
+			// 1. Save: finalize + flush the in-flight turn — including a recovery
+			//    continuation, which session.abort()'s idle-wait cannot see
+			//    (ADR 16). Listeners are still attached, so client tabs see the
+			//    final patches before teardown.
 			await session.abort();
+			await settleRecoveryRun();
 			// 2. Unsubscribe from pi events.
 			if (unsubscribe) {
 				unsubscribe();

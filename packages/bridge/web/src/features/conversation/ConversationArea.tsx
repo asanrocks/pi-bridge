@@ -27,6 +27,8 @@ interface ConversationAreaProps {
 	 * and live, read-only rendering-leaf re-target while busy or peeking. */
 	onSelectBranch: (entryId: string) => void;
 	onEdit: (entryId: string, index: number, text: string) => void;
+	/** Broken-tail recovery (ADR 16): the recoverTurn RPC. */
+	onRecover: () => void;
 }
 
 export const ConversationArea = memo(function ConversationArea({
@@ -34,6 +36,7 @@ export const ConversationArea = memo(function ConversationArea({
 	isStreaming,
 	onSelectBranch,
 	onEdit,
+	onRecover,
 }: ConversationAreaProps) {
 	// Expand/collapse toggles are pure store actions — read here instead of
 	// threaded from the shell.
@@ -43,6 +46,15 @@ export const ConversationArea = memo(function ConversationArea({
 	// the viewport tracking pauses follow and the jump button becomes the
 	// return-to-live gesture.
 	const isDiverged = useStore(selectRenderDiverged);
+	// Broken-tail recovery (ADR 16): the buttons arm only when idle,
+	// connected, following the live leaf (the same divergence mutation lock
+	// as send), and not mid-edit — the edit composer already owns the
+	// fork-and-resend flow. The error row itself (real or synthetic line) is
+	// projected by the ViewModel onto the dead turn and renders regardless.
+	const isCompacting = useStore((s) => s.document.status.isCompacting);
+	const connected = useStore((s) => s.connection.kind === "connected");
+	const isEditing = useStore((s) => s.draft.kind === "edit");
+	const recoveryArmed = !isStreaming && !isCompacting && connected && !isDiverged && !isEditing;
 	// Column element observed by the geometry anchor (§1 in the hook): its
 	// width is the rewrap driver — a width change is what needs a restore.
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -98,7 +110,12 @@ export const ConversationArea = memo(function ConversationArea({
 								isLiveTail={isLive && turn.entryId === lastUserTurnId}
 							/>
 						);
-					case "assistant":
+					case "assistant": {
+						// Broken-tail recovery (ADR 16): the ViewModel projects the
+						// recovery onto the dead turn; only that turn receives the
+						// prop, so every other turn's memoization is unaffected.
+						const r = turn.recovery;
+						const editTarget = r?.editTarget;
 						return (
 							<AssistantTurnView
 								// turnKey — not entryId: a split entry produces two turns
@@ -108,8 +125,21 @@ export const ConversationArea = memo(function ConversationArea({
 								isStreaming={isStreaming && turn === lastTurn}
 								onToggleGroup={onToggleGroup}
 								onToggleAction={onToggleAction}
+								recovery={
+									r
+										? {
+												kind: r.kind,
+												armed: recoveryArmed,
+												onRecover: onRecover,
+												onEdit: editTarget
+													? () => onEdit(editTarget.entryId, editTarget.index, editTarget.text)
+													: undefined,
+											}
+										: undefined
+								}
 							/>
 						);
+					}
 					case "system":
 						return <SystemTurnView key={turn.entryId} turn={turn} />;
 					case "userBash":

@@ -36,6 +36,8 @@ export {
 	parseGitStampEntry,
 	sameGitIdentity,
 } from "./git-stamp.ts";
+export type { RecoverableTurnInfo } from "./recovery.ts";
+export { computeRecoverableTurn } from "./recovery.ts";
 export { buildInitialSync, validateCursor } from "./sync.ts";
 export type {
 	AbortRequest,
@@ -100,6 +102,8 @@ export type {
 	PullRequest,
 	ReadFileReply,
 	ReadFileRequest,
+	RecoverableTurnKind,
+	RecoverTurnRequest,
 	RemoveOp,
 	RenameSessionRequest,
 	ReplaceMessage,

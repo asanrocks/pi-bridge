@@ -429,6 +429,53 @@
 	line-height: 1.5;
 }
 
+/* ── Broken-tail recovery (ADR 16) ───────────────────────────────── */
+
+/* The error line and its aside action buttons share one row; the line keeps
+   its own spec, the actions dock right. */
+.errorRow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	flex-wrap: wrap;
+}
+
+.errorRow .errorLine {
+	margin-top: 0;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.recoveryActions {
+	display: inline-flex;
+	gap: 6px;
+	flex-shrink: 0;
+}
+
+/* Ghost in the error hue — same shape language as the composer's secondary
+   controls. */
+.recoveryBtn {
+	display: inline-flex;
+	align-items: center;
+	background: transparent;
+	color: var(--color-error);
+	border: 1px solid color-mix(in srgb, var(--color-error) 40%, transparent);
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	font-family: inherit;
+	padding: 3px 10px;
+	min-height: 28px;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.recoveryBtn:hover {
+	background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+
 .errorAttrKey {
 	font-weight: 600;
 }
