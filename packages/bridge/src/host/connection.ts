@@ -323,6 +323,14 @@ export class Connection {
 					this.sendReply(id, true);
 					break;
 				}
+				case "recoverTurn": {
+					if (!this._attachedManager) throw new Error("no session attached");
+					// The Manager re-derives the boundary and refuses when the tail
+					// is not recoverable; `action` reports which repair ran.
+					const action = await this._attachedManager.recoverTurn();
+					this.send({ id, ok: true, action: action as unknown as JsonValue });
+					break;
+				}
 
 				// ── Navigation verbs (Daemon, side-effectful) ──────────────
 				case "openSession": {

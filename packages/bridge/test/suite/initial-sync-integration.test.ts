@@ -296,6 +296,9 @@ describe("initial sync: subscription reset", () => {
 			renameSession: async () => {},
 			setLabel: async () => {},
 			navigate: async () => {},
+			async recoverTurn(): Promise<"retry" | "continue"> {
+				return "retry";
+			},
 			dispose: async () => {},
 		};
 

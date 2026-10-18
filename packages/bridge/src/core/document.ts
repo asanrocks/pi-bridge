@@ -27,6 +27,7 @@ import {
 	type ModelRef,
 	type Patch,
 	type PatchOp,
+	type RecoverableTurnKind,
 	type RpcReply,
 	type ServerPushMessage,
 	type Stats,
@@ -393,6 +394,9 @@ export function deriveStatus(
 		pendingSteer: [],
 		/* inFlightTools is host-owned in-flight timing — never derived from entries */
 		inFlightTools: {},
+		/* recoverableTurn is host-derived at idle boundaries (ADR 16) — never
+		 * derived from entries here */
+		recoverableTurn: null,
 	};
 }
 
@@ -1250,6 +1254,9 @@ export interface ReconcileOptions {
 	model?: ModelRef;
 	thinkingLevel?: string;
 	contextUsage?: ContextUsage | null;
+	/** Broken-tail recovery kind of the leaf path's tail (ADR 16). Stamped only
+	 * when present — the caller (Manager) derives it at idle boundaries. */
+	recoverableTurn?: RecoverableTurnKind | null;
 }
 
 export function reconcile(doc: Document, piEntries: SessionEntry[], options?: ReconcileOptions): Patch | null {
@@ -1317,6 +1324,14 @@ export function reconcile(doc: Document, piEntries: SessionEntry[], options?: Re
 		const newCU = (options as ReconcileOptions).contextUsage ?? null;
 		if (JSON.stringify(doc.status.contextUsage) !== JSON.stringify(newCU)) {
 			ops.push({ op: "replace" as const, path: "/status/contextUsage", value: newCU as unknown as JsonValue });
+		}
+	}
+
+	// ADR 16: stamp the host-derived recovery kind when the caller provided it.
+	if ("recoverableTurn" in (options ?? {})) {
+		const nextKind = (options as ReconcileOptions).recoverableTurn ?? null;
+		if ((doc.status.recoverableTurn ?? null) !== nextKind) {
+			ops.push({ op: "replace" as const, path: "/status/recoverableTurn", value: nextKind as unknown as JsonValue });
 		}
 	}
 
