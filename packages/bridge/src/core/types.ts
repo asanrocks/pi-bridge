@@ -245,6 +245,17 @@ export interface ContextUsage {
 	percent: number | null;
 }
 
+/** Broken-tail recovery kinds (ADR 16). `failedTurn`: the tail run ended in
+ * an error assistant message (failed on its own) or an aborted one (user
+ * Stop or the bridge's own dispose-abort — indistinguishable on disk).
+ * `interruptedTools`: the tail run's tool calls were left without results
+ * (process death mid-execution) — a transcript no provider accepts as-is.
+ * `unfinishedTurn`: the tail run's tool calls are all answered but the run
+ * never reached its final assistant message (death between tool results and
+ * the next completion — or a run a tool deliberately terminated; the two
+ * are indistinguishable on disk). */
+export type RecoverableTurnKind = "failedTurn" | "interruptedTools" | "unfinishedTurn";
+
 export interface Status {
 	leafId: string | null;
 	name: string;
@@ -265,6 +276,11 @@ export interface Status {
 	 * browser whose clock differs from the daemon's still shows the right
 	 * elapsed; a reconnecting client recovers the anchor from the initial sync. */
 	inFlightTools?: Record<string, number>;
+	/** Broken-tail recovery (ADR 16): the recovery kind of the leaf path's tail
+	 * run, or null when the tail is not recoverable (normal stop, user abort,
+	 * or work appended after the failure). Host-recomputed at every idle
+	 * boundary and on navigate; wire-eager. */
+	recoverableTurn?: RecoverableTurnKind | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +472,15 @@ export interface SetLabelRequest {
 export interface NavigateRequest {
 	verb: "navigate";
 	entryId: string | null;
+}
+
+/** Recover the broken tail turn (ADR 16). `failedTurn` branches past the
+ * terminal error and continues the run from the pre-error boundary;
+ * `interruptedTools` branches past the dangling tool-call turn and re-prompts
+ * with a relay of what completed. No payload: the host re-derives the
+ * boundary and refuses when the tail is not recoverable. */
+export interface RecoverTurnRequest {
+	verb: "recoverTurn";
 }
 
 /** Resolve-or-activate a session by its address (ADR 11). If a live activation
@@ -748,6 +773,7 @@ export type RpcRequestBody =
 	| RenameSessionRequest
 	| SetLabelRequest
 	| NavigateRequest
+	| RecoverTurnRequest
 	| OpenSessionRequest
 	| NewSessionRequest
 	| ListSessionsRequest

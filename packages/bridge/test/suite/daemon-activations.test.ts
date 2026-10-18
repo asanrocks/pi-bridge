@@ -153,6 +153,9 @@ function makeStubManager(opts: {
 		async renameSession() {},
 		async setLabel() {},
 		async navigate() {},
+		async recoverTurn(): Promise<"retry" | "continue"> {
+			return "retry";
+		},
 		async dispose() {
 			wasDisposed = true;
 		},

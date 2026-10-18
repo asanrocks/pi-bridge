@@ -11,12 +11,14 @@ import {
 	assignGroupGitChanges,
 	type ParsedProviderError,
 	segmentBlocks,
+	type TurnRecovery,
 } from "../../../../src/viewmodel/index.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
 import { GitChangeView } from "./GitChangeView.tsx";
+import { RecoveryActions, recoveryNotice } from "./RecoveryBar.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
 import styles from "./turns.module.css";
 
@@ -25,16 +27,41 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	isStreaming,
 	onToggleGroup,
 	onToggleAction,
+	recovery,
 }: {
 	turn: AssistantTurn;
 	isStreaming: boolean;
 	onToggleGroup: (key: string, cardKeys: string[]) => void;
 	onToggleAction: (key: string) => void;
+	/** Broken-tail recovery (ADR 16), present only on the dead turn. The
+	 * error row below is the recovery carrier: the turn's real error/abort
+	 * line, or a synthetic one (`recoveryNotice`) when pi persisted no
+	 * error — silent interruption. `armed` gates only the buttons (idle,
+	 * connected, live leaf, not editing — the send gates); the line renders
+	 * regardless. */
+	recovery?: {
+		kind: TurnRecovery["kind"];
+		armed: boolean;
+		onRecover: () => void;
+		onEdit?: () => void;
+	};
 }) {
 	const isDimmed = useStore(useCallback((s) => s.draft.kind === "edit" && turn.index >= s.draft.index, [turn.index]));
 	const isFocused = useStore(useCallback((s) => s.focusedTurnId === turn.turnKey, [turn.turnKey]));
 
 	const segments = useMemo(() => segmentBlocks(turn.blocks), [turn.blocks]);
+	// The recovery buttons dock beside the error row's line — the one
+	// recovery surface (ADR 16). Computed once for whichever branch below
+	// renders the row.
+	const recoveryActions = recovery?.armed ? (
+		<RecoveryActions
+			kind={recovery.kind}
+			stopReason={turn.stopReason}
+			hasToolWork={turn.blocks.some((b) => b.blockType === "tool")}
+			onRecover={recovery.onRecover}
+			onEdit={recovery.onEdit}
+		/>
+	) : undefined;
 	// ADR 10 v2: mid-turn inline git stamps fold into the groups they render in —
 	// summary segment + in-group card. Inline git stamps with no group (a text-only turn)
 	// fall back to standalone cards after the segments.
@@ -111,16 +138,32 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 					}}
 				/>
 			))}
-			{/* Abnormal stop reasons (error, aborted, length) render below the content. */}
+			{/* Abnormal stop reasons (error, aborted, length) render below the
+			    content. ADR 16: the error row is the recovery carrier — the dead
+			    turn's real error/abort line with the buttons beside it, or a
+			    synthetic line for the silent interruption shapes (no error entry
+			    was ever persisted). */}
 			{turn.stopReason === "error" && (
-				<ProviderErrorLine parsedError={turn.parsedError} errorMessage={turn.errorMessage} />
+				<div className={styles.errorRow}>
+					<ProviderErrorLine parsedError={turn.parsedError} errorMessage={turn.errorMessage} />
+					{recoveryActions}
+				</div>
 			)}
 			{turn.stopReason === "aborted" && (
-				<div className={styles.errorLine}>{turn.errorMessage || "Operation aborted"}</div>
+				<div className={styles.errorRow}>
+					<div className={styles.errorLine}>{turn.errorMessage || "Operation aborted"}</div>
+					{recoveryActions}
+				</div>
 			)}
 			{turn.stopReason === "length" && (
 				<div className={styles.errorLine}>
 					Error: Model stopped because it reached the maximum output token limit. The response may be incomplete.
+				</div>
+			)}
+			{recovery && turn.stopReason !== "error" && turn.stopReason !== "aborted" && (
+				<div className={styles.errorRow}>
+					<div className={styles.errorLine}>{recoveryNotice(recovery.kind)}</div>
+					{recoveryActions}
 				</div>
 			)}
 		</div>

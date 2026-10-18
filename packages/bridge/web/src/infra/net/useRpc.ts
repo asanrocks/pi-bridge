@@ -114,6 +114,11 @@ export function useRpc() {
 		[],
 	);
 
+	/** Recover the broken tail turn (ADR 16). The run's first event flips
+	 * streaming state, so — like a prompt — the reply arrives after the turn;
+	 * the client's in-flight treatment is the composer's own isBusy gate. */
+	const recoverTurn = useCallback(() => rpc(() => getGlobalClient()?.recoverTurn(), "recover turn failed"), []);
+
 	/** Resolve-or-activate a session by address and make it the current one. */
 	const openSession = useCallback(async (projectId: string, stem: string, sessionId?: string) => {
 		// Serial-switch rule (ADR 09): a second open while a candidate is
@@ -325,6 +330,7 @@ export function useRpc() {
 			renameSession,
 			setLabel,
 			navigate,
+			recoverTurn,
 			openSession,
 			openProject,
 			openLatest,
@@ -346,6 +352,7 @@ export function useRpc() {
 			renameSession,
 			setLabel,
 			navigate,
+			recoverTurn,
 			openSession,
 			openProject,
 			openLatest,

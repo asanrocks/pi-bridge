@@ -379,6 +379,36 @@ when disconnected, empty, compacting, or already committing, but is enabled
 during streaming to queue a steer. Model and thinking selection are separate
 from Send and can be changed while connected.
 
+When the tail turn is broken — it ended in an error after retries were
+exhausted, was stopped (a user Stop or a session close mid-run, which leave
+the same trace), had its tool work terminated mid-execution, or was cut off
+after its tool results but before its final message — the dead turn grows an
+error row carrying the recovery controls (ADR 16). The error row is the one
+failure presentation and the one recovery carrier: its line is the turn's
+real error or abort text, or — when pi persisted no error at all, the silent
+data-loss shapes — a synthetic line in the same error hue ("Interrupted
+while running tools", "Interrupted before the reply finished"), so a
+half-dead run is never visually quieter than a provider error. The
+ViewModel projects the recovery onto the turn containing the dead entry
+(`AssistantTurn.recovery`, derived by the same pure
+`computeRecoverableTurn` the host verb gates on, idle-only and from the live
+leaf), so placement needs no renderer heuristic. The labels predict the
+mechanism before the click: **Retry** silently re-requests from a clean
+boundary (no interrupted work is re-run or re-sent, nothing is added to the
+transcript) and is offered with **Edit** (the composer's edit mode on the
+run's user message, then resend); **Send "Continue."** is the one action
+that adds a message — a visible `"Continue."` user turn, after which the
+agent re-orients using a bounded relay of completed tool results and calls
+with unknown outcomes when a dangling assistant is removed — and is reserved
+for tails where a tool was terminated or left unanswered. The line names
+what happened; the tooltip names what the button does, per failure mode.
+The line renders whenever the tail is broken; the buttons arm only while
+idle, connected, and following the live leaf — the same gates as Send's
+divergence lock. Pressing one branches past the broken turn (the failed
+attempt stays visible in the history pane as a fork) and starts the
+recovered run; if that run fails too, the control re-arms on the new
+branch.
+
 ### History pane
 
 History is a persistent spatial reference, not a modal workflow. The TopBar

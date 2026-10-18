@@ -18,6 +18,7 @@ import {
 	parseGitStampEntry,
 	sameGitIdentity,
 } from "../core/git-stamp.ts";
+import { computeRecoverableTurn } from "../core/recovery.ts";
 import type {
 	BashExecutionEntry,
 	Content,
@@ -28,6 +29,7 @@ import type {
 	MessageEntry,
 	ModelInfo,
 	ModelRef,
+	RecoverableTurnKind,
 	ToolCallBlock,
 	ToolResultEntry,
 	Usage,
@@ -210,6 +212,22 @@ export interface AssistantTurn {
 	 * inline git stamp renders as its own card inside its action group, after the action
 	 * it follows, and the group summary gains a `git:` segment. */
 	gitChanges?: InlineGitStamp[];
+	/** Broken-tail recovery (ADR 16), present only on the turn containing
+	 * the dead entry. The renderer's error row — this turn's real error/abort
+	 * line, or a synthetic one for the silent interruption shapes — is the
+	 * only recovery surface; the action buttons dock beside it. */
+	recovery?: TurnRecovery;
+}
+
+/** Broken-tail recovery projected onto the dead turn (ADR 16). Derived in
+ * `computeViewModel` via the same pure `computeRecoverableTurn` the host
+ * verb gates on — idle-only, from the live leaf — so the client affordance
+ * and the server gate agree by construction. */
+export interface TurnRecovery {
+	kind: RecoverableTurnKind;
+	/** The tail run's user message — the fork-and-resend target for the Edit
+	 * action. Undefined when the rendered path holds no user message. */
+	editTarget?: { entryId: string; index: number; text: string };
 }
 
 /** One mid-turn git identity transition (ADR 10 v2). */
@@ -414,6 +432,14 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	// document — labels are global metadata keyed by entry id, so a label
 	// entry appended on any branch still labels its target on the path.
 	const userLabels = resolveLabels(doc.entries);
+	// ADR 16: the live tail's recovery, projected below onto the turn
+	// containing the dead entry. Derived from the live leaf — never the
+	// peeked rendering — and only while the document is idle: during a run
+	// the tail is provisional and streaming tool calls would misread as
+	// interruption. The recoverTurn verb re-derives host-side and refuses on
+	// mismatch, so the projected affordance and the server gate agree by
+	// construction.
+	const recovery = doc.status.isStreaming || doc.status.isCompacting ? null : computeRecoverableTurn(doc);
 
 	const prevTurns = new Map<string, TurnVM>();
 	const prevBlocks = new Map<string, AssistantBlockVM>();
@@ -496,6 +522,24 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				prevReading = null; // unknown window / invalid usage breaks the delta chain
 			}
 		}
+		// ADR 16: attach the tail-run recovery to the turn containing the dead
+		// entry. The Edit target is the run's user message — the last user
+		// turn emitted before this one.
+		let turnRecovery: TurnRecovery | undefined;
+		if (recovery !== null) {
+			const deadId = recovery.entryId;
+			if (pending.some((r) => r.entry.id === deadId)) {
+				let editTarget: TurnRecovery["editTarget"];
+				for (let i = turns.length - 1; i >= 0; i--) {
+					const t = turns[i]!;
+					if (t.kind === "user") {
+						editTarget = { entryId: t.entryId, index: t.index, text: t.text };
+						break;
+					}
+				}
+				turnRecovery = { kind: recovery.kind, editTarget };
+			}
+		}
 		const t = buildAssistantTurn(
 			pending,
 			turns.length,
@@ -507,6 +551,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				contextDeltaPercent,
 			},
 			pendingGitStamps,
+			turnRecovery,
 		);
 		turns.push(t);
 		pending = [];
@@ -1056,6 +1101,7 @@ function buildAssistantTurn(
 	prevBlocks: Map<string, AssistantBlockVM>,
 	context: { contextPercent?: number; contextDeltaPercent?: number },
 	gitChanges: InlineGitStamp[] = [],
+	recovery: TurnRecovery | undefined = undefined,
 ): AssistantTurn {
 	// Flatten pass: one descriptor per accumulated block ref, in order.
 	const blocks: AssistantBlockVM[] = [];
@@ -1105,6 +1151,7 @@ function buildAssistantTurn(
 		contextPercent: context.contextPercent,
 		contextDeltaPercent: context.contextDeltaPercent,
 		gitChanges: gitChanges.length > 0 ? gitChanges : undefined,
+		recovery,
 	};
 
 	const prev = prevTurns.get(`assistant:${turn.turnKey}`);
@@ -1121,12 +1168,23 @@ function buildAssistantTurn(
 		prev.contextPercent === turn.contextPercent &&
 		prev.contextDeltaPercent === turn.contextDeltaPercent &&
 		sameGitStamps(prev.gitChanges, turn.gitChanges) &&
+		sameRecovery(prev.recovery, turn.recovery) &&
 		prev.blocks.length === turn.blocks.length &&
 		prev.blocks.every((b, i) => b === turn.blocks[i])
 	) {
 		return prev;
 	}
 	return turn;
+}
+
+/** Value equality for the projected ADR 16 recovery (VM reuse). */
+function sameRecovery(a: TurnRecovery | undefined, b: TurnRecovery | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.kind !== b.kind) return false;
+	const ae = a.editTarget;
+	const be = b.editTarget;
+	if (!!ae !== !!be) return false;
+	return !ae || !be || (ae.entryId === be.entryId && ae.index === be.index && ae.text === be.text);
 }
 
 /** Element-wise comparison for AssistantTurn.gitChanges reuse. */

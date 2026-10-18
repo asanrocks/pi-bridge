@@ -142,6 +142,7 @@ function AppInner() {
 								isStreaming={isStreaming}
 								onSelectBranch={handleBranchSelect}
 								onEdit={beginEdit}
+								onRecover={rpc.recoverTurn}
 							/>
 							{/* The dock's one prop is the commit callback, shared with
 							    the keyboard ring — hence created here, not inside. */}
