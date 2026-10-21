@@ -326,7 +326,25 @@ advanced by a valid initial-sync patch must equal the server's full initial
 projection after lazy values are pulled. The same Document behavior is checked
 through direct callbacks, the wire protocol, and the browser store.
 
-## 9. Documentation map
+## 9. Scope and limitations
+
+The daemon starts pi runtimes; it does not attach to an already-running pi
+process by tailing its JSONL. It serves localhost; remote access uses SSH
+forwarding or a tunnel, with no bridge authentication layer.
+
+Steering is single-writer. There is no collaborative conflict resolution.
+The wire has no schema version or patch sequence number: WebSocket ordering
+and authoritative initial sync govern delivery, with a cursor delta or replace
+on reconnect. The browser-smoke gate checks the curated browser-safe exports;
+there is no corresponding Node-only import gate.
+
+Session changes are broadcast across tabs through `active_sessions_changed`
+and Project-scoped `sessions_changed`; static Project configuration has no
+project-list push. An Activation that dies while attached has no dedicated
+failure push, so its Connection can stall until reconnect resolves the address.
+The transcript supports variant paging on user messages only.
+
+## 10. Documentation map
 
 Read the documentation in this order: [glossary](glossary.md), this overview,
 [core data model](core/data-model.md), [host runtime](host/runtime.md), and
