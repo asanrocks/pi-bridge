@@ -154,6 +154,13 @@ export class Daemon {
 	private sessionMetaCache = new Map<string, { mtimeMs: number; meta: FileMeta }>();
 
 	async start(options: DaemonOptions = {}): Promise<void> {
+		// pi-core is always offline in the bridge: the daemon owns no background
+		// network work. pi reads these variables at call time (tool binary
+		// downloads, catalog and package refreshes), so writing them before the
+		// ModelRuntime and extensions are created covers the whole embedded runtime.
+		process.env.PI_OFFLINE = "1";
+		process.env.PI_SKIP_VERSION_CHECK = "1";
+
 		this.port = options.port;
 		this.webRoot = options.webRoot;
 		this.agentDir = options.agentDir ?? getAgentDir();

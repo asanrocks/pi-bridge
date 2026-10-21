@@ -12,6 +12,24 @@ The host's initial-sync and lazy-field behavior uses the wire contract in
 [core protocol](../core/protocol.md); this document covers the host ownership
 and routing around that contract.
 
+## Offline Mode
+
+The daemon always starts pi-core in offline mode. `Daemon.start` writes
+`PI_OFFLINE=1` and `PI_SKIP_VERSION_CHECK=1` into `process.env` before it
+creates the ModelRuntime or loads extensions, overwriting any inherited value.
+pi reads those variables at call time — tool binary downloads, catalog and
+package refreshes, and other automatic startup paths — so the embedded runtime
+observes one mode and bridge needs no second switch. There is deliberately no
+online flag: a caller that needs pi-core's automatic network work runs pi
+itself.
+
+Offline mode covers automatic network activity, not network access in general.
+The bridge performs no network I/O of its own: it restores model catalog data
+from pi's on-disk store and refreshes it only when a client or extension asks.
+Model requests, MCP servers, and extension code that ignores `PI_OFFLINE` still
+use the network. The environment write is process-wide, so every Manager in the
+daemon process inherits the mode.
+
 ## Projects and Session Addresses
 
 A Project is static daemon configuration: one canonical, allowlisted directory
