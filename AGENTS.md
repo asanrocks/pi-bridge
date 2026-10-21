@@ -2,13 +2,9 @@
 
 ## Conversational Style
 
-- Keep answers short and concise
-- No emojis in commits, issues, PR comments, or code
-- No fluff or cheerful filler text (e.g., "Thanks @user" not "Thanks so much @user!")
-- Technical prose only, be direct
-- Use concise, clear, simple language. Define unavoidable jargon before using it.
-- Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. State why the solution is necessary and distinguish it from optional complexity.
-- Prefer concrete behavior and small illustrations over abstract summaries, dense terminology, or unexplained lists of changes.
+- Use concise, direct technical prose, without cheerful filler. Define unavoidable jargon.
+- No emojis in commits, issues, PR comments, or code.
+- Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. Prefer concrete behavior to abstract summaries; distinguish necessary changes from optional complexity.
 - When the user asks a question, answer it first before making edits or running implementation commands.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
@@ -42,20 +38,25 @@ Binding for Chord v2 (`packages/chord/src/`) and its tests, when writing and whe
 - Deferred work: anything left to a later slice goes into the section "Carry-over" of `packages/chord/docs/slices.md` under that slice, in the same change; a slice's spec and build include every entry of its section.
 - Before reporting: re-read every changed file top to bottom as a stranger would; each file must be understandable without jumping around. Then `npm run check` and the layer's tests.
 
+## Instruction Files
+
+- Keep `AGENTS.md` focused on actionable constraints, task-specific reading, and verification commands. Put architecture, API inventories, status, and planned work in their owning docs, code, or issues.
+- Package guides add local requirements to this guide. Link to shared rules instead of repeating them; keep repository requirements independent of personal agent configuration.
+- Update the owning documentation when behavior or architecture changes. Add an instruction only when it prevents a concrete mistake.
+
 ## Commands
 
 - After code changes (not docs): `npm run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
 - `apps/p2` is outside the root check and the root tests. After p2 changes also run `cd apps/p2 && npm run check`; p2's suite is `cd apps/p2 && npm test` (TUI tests need Node 26, browser tests need `CHROMIUM_BIN`).
 - Run `npm run build` whenever something needs built output (`dist/`): tests or benchmarks that import built packages, Durable's workerd suite. The full suites of Chord and Durable need it: Chord's tests that start Node processes or bundle with esbuild load workspace packages from `dist/` (the rest run from source by its vitest config), and Durable imports pi-ai's `utils/*`, which have no source export. Never use it to type check or lint: that is `npm run check`, the preferred check.
 - Never run `npm test` unless requested by the user.
-- Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. It runs `packages/*` only. Otherwise run specific tests from the package root:
+- Never run the full repository Vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. It runs `packages/*` only. Package guides define local verification scope; the build and `npm test` authorization restriction above still applies. Run specific tests from the package root:
   - Vitest: `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/specific.test.ts`
   - `packages/tui` (`node:test`): `node --test test/specific.test.ts`
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
 - When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
-- Never commit unless the user asks.
 
 ## Dependency and Install Security
 
@@ -72,10 +73,11 @@ Multiple pi sessions may be running in this cwd at the same time, each modifying
 
 Committing:
 
+- Never commit unless the user asks. Run the required checks before committing.
 - Only commit files YOU changed in THIS session.
 - Stage explicit paths (`git add <path1> <path2>`); never `git add -A` / `git add .`.
 - Before committing, run `git status` and verify you are only staging your files.
-- `packages/ai/src/models.generated.ts` may always be included alongside your files.
+- The generated-model exception is described under Code Quality.
 - Message format: `{feat,fix,docs}[(ai,tui,agent,coding-agent)]: <commit message> (optionally multiple lines)`. Message is informative and concise.
 
 Never run (destroys other agents' work or bypasses checks):
