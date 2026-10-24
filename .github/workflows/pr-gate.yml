@@ -6,6 +6,8 @@ on:
 
 jobs:
   check-contributor:
+    # Gate disabled: PRs from unapproved contributors are no longer auto-closed.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
