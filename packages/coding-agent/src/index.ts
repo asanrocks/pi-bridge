@@ -49,6 +49,10 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./core/compaction/index.ts";
+// The fallback thinking level of the default resolution chain (per-model
+// override, else the settings default, else this) — exported so hosts that
+// mirror the chain (bridge's pre-session display) share one constant.
+export { DEFAULT_THINKING_LEVEL } from "./core/defaults.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
 export type {

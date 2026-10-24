@@ -265,8 +265,13 @@ The timer model and its reservation invariant govern this runtime.
 creates a fresh Manager, derives its allocated stem from the Manager's session
 file, and registers the Activation. Before attaching the Connection it applies
 an optional `model` and `thinkingLevel`, then calls `promptAdmitted` with the
-text and optional images. Events that arrive before attachment remain in the
-canonical Document and are covered by the synchronous initial sync.
+text and optional images. A `model` pick without a `thinkingLevel` gets one
+explicitly — the chain a fresh session on that model would resolve (per-model
+override, else the settings default, else pi's `DEFAULT_THINKING_LEVEL`),
+clamped to the model — so a pick never inherits the placeholder default
+model's clamped level from `setModel`'s re-derivation. Events that arrive
+before attachment remain in the canonical Document and are covered by the
+synchronous initial sync.
 
 If model selection is unknown or prompt admission fails, the fresh Activation
 is disposed and the RPC returns an error; no empty Session is left behind. On
@@ -328,7 +333,14 @@ normal-tier `visibleModels` keys resolved from the bridge settings file,
 supported thinking levels, and dev-mode state. Model defaults are resolved
 from each Project's settings and the shared model runtime; they are display
 data and do not pin a future `newSession` request when the client omits an
-override. Pinned models is one daemon-global concept (ADR 15): a project-level
+override. The thinking level is the pre-clamp resolution (per-model override
+for the default model, else the settings default, else pi's
+`DEFAULT_THINKING_LEVEL`); the client clamps it to the displayed model's
+supported levels, which is the level the session runs at. One known gap: a
+per-model thinking-level override (`modelThinkingLevels` in pi settings) for
+a model the Project home *picked* — rather than the default — is host-side
+state the reply does not carry, so the display ignores it while the session
+runs at the override. Pinned models is one daemon-global concept (ADR 15): a project-level
 `.pi/settings.json` `enabledModels` override is not reflected, and the
 `setModelPinned` verb writes the same global list (broadcasting
 `pinned_models_changed`).
