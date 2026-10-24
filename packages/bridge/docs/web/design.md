@@ -150,7 +150,12 @@ Project home is an unattached, compose-first surface. It shows the expanded
 first prompt is sent. The first prompt, images, and explicitly chosen
 pre-session model and thinking level are admitted together. The draft is
 scoped to the Project, and the model choice is persisted in one local Project
-slot. An unset choice leaves model resolution to the daemon. Its picker's
+slot. An unset choice leaves model resolution to the daemon. The displayed
+thinking level is the daemon's pre-clamp default resolution clamped to the
+effective model's supported levels (`clampToSupportedLevels`), which is the
+level a send runs at. Known gap: a per-model thinking-level override (pi
+settings `modelThinkingLevels`) for a picked model is not reported to the
+client, so the display cannot show it — the session runs at the override. Its picker's
 Pinned group is the daemon-global list: pinned models is one concept, backed by
 pi's global `enabledModels` and never a project override (ADR 15). The home has no
 collapsed compose bar, session ledger, Stop button, or attached-session

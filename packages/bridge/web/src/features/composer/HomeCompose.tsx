@@ -20,6 +20,7 @@ import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./HomeCompose.module.css";
+import { clampToSupportedLevels } from "./thinkingLevels.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
@@ -118,9 +119,21 @@ export const HomeCompose = memo(function HomeCompose({
 	// nothing is available). Only the explicit picks are sent with newSession.
 	// A level-only choice carries no model — the derivation must yield null so
 	// the daemon default (not a {undefined, undefined} object) shows through.
+	// The daemon reports `defaultThinkingLevel` pre-clamp (ProjectInfo); the
+	// session clamps it to the running model's supported levels, so the display
+	// clamps the fallback the same way — that is what a send runs at. Known gap:
+	// a per-model thinking-level override (pi settings `modelThinkingLevels`) for
+	// the picked model is host-side only and is not reflected here; the session
+	// runs at the override, not at this fallback.
 	const model = choice?.provider && choice?.modelId ? { provider: choice.provider, modelId: choice.modelId } : null;
 	const effectiveModel = model ?? defaultModel;
-	const effectiveLevel = choice?.thinkingLevel ?? defaultThinkingLevel ?? "";
+	const effectiveModelInfo = effectiveModel
+		? models.find((m) => m.provider === effectiveModel.provider && m.id === effectiveModel.modelId)
+		: undefined;
+	const fallbackLevel = defaultThinkingLevel
+		? clampToSupportedLevels(defaultThinkingLevel, effectiveModelInfo?.supportedThinkingLevels)
+		: "";
+	const effectiveLevel = choice?.thinkingLevel ?? fallbackLevel;
 
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 	// ADR 14 entry point: the Project home browses the worktree from the
