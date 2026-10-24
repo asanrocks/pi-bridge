@@ -8,6 +8,7 @@ import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
+	DEFAULT_THINKING_LEVEL,
 	DefaultResourceLoader,
 	findInitialModel,
 	getAgentDir,
@@ -774,7 +775,20 @@ export class Daemon {
 				// between admission and attach are covered by the initial sync (the
 				// Document is canonical).
 				try {
-					if (model) await manager.setModel(model.provider, model.modelId);
+					if (model) {
+						await manager.setModel(model.provider, model.modelId);
+						// A model pick without an explicit level must resolve like a fresh
+						// session on the picked model — the level the Project home
+						// displayed. `setModel` would otherwise re-derive the level as
+						// `perModel ?? settings default ?? current`, where `current` is the
+						// placeholder default model's already-clamped level (the session
+						// was created on it) — leaking that model's clamp (e.g. a default
+						// model that runs `medium` as `high`) into the picked model.
+						if (thinkingLevel === undefined) {
+							const level = this.requestedThinkingLevel(projectId, model.provider, model.modelId);
+							await manager.setThinkingLevel(level);
+						}
+					}
 					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
 					await manager.promptAdmitted(text, images);
 				} catch (err) {
@@ -921,9 +935,15 @@ export class Daemon {
 
 	/** The model and thinking level a fresh session in `projectId` resolves
 	 * to — the same `findInitialModel` call a fresh Manager's session performs
-	 * (scopedModels empty, not continuing, the Project's settings), so the
-	 * reported defaults match what `newSession` without `model`/
-	 * `thinkingLevel` actually runs on. */
+	 * (scopedModels empty, not continuing, the Project's settings). The level
+	 * is the pre-clamp resolution (per-model override for the default model,
+	 * else the settings default, else `DEFAULT_THINKING_LEVEL`); the client
+	 * clamps it to the displayed model's supported levels, which is what the
+	 * session runs at (`createAgentSession` clamps the same way at creation).
+	 * A `newSession` model pick resolves its own level through
+	 * `requestedThinkingLevel`, so a display for a picked model matches the run
+	 * except when the pick has a per-model override of its own — the one known
+	 * gap, documented on `ProjectInfo.defaultThinkingLevel`. */
 	private async projectDefaults(projectId: string): Promise<{ model: ModelRef | null; thinkingLevel: string | null }> {
 		const settings = this.projectSettings.get(projectId);
 		const result = await findInitialModel({
@@ -943,6 +963,22 @@ export class Daemon {
 			model: result.model ? { provider: result.model.provider, modelId: result.model.id } : null,
 			thinkingLevel: result.model ? result.thinkingLevel : null,
 		};
+	}
+
+	/** The thinking level a fresh session on `provider/modelId` resolves to
+	 * before clamping to the model's supported levels: the per-model override,
+	 * else the Project's settings default, else `DEFAULT_THINKING_LEVEL` — the
+	 * chain `createAgentSession` applies for a session created on that model.
+	 * `newSession` uses it for a model pick without an explicit level, so the
+	 * level the Project home displayed is the level the session runs at
+	 * (`manager.setThinkingLevel` clamps to the picked model). */
+	private requestedThinkingLevel(projectId: string, provider: string, modelId: string): string {
+		const settings = this.projectSettings.get(projectId);
+		return (
+			settings?.getModelThinkingLevel(provider, modelId) ??
+			settings?.getDefaultThinkingLevel() ??
+			DEFAULT_THINKING_LEVEL
+		);
 	}
 
 	// ── Server ────────────────────────────────────────────────────────────

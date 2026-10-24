@@ -702,8 +702,16 @@ export interface ProjectInfo {
 	 * model is available. The client still omits `model` on `newSession` when
 	 * unset, so this is display-only, not a pinned choice. */
 	defaultModel: ModelRef | null;
-	/** The thinking level that same resolution yields (settings default or
-	 * per-model override, else `medium`). Display-only like `defaultModel`. */
+	/** The thinking level that same resolution yields — the pre-clamp chain
+	 * (per-model override for the default model, else the settings default,
+	 * else `medium`). Display-only like `defaultModel`: the client clamps it to
+	 * the displayed model's supported levels, which is the level the session
+	 * runs at (`createAgentSession` clamps the same way at creation, and
+	 * `newSession` resolves a model pick through the same chain). Known gap:
+	 * pi's per-model thinking-level overrides (`modelThinkingLevels`) are not
+	 * reported here, so when the Project home picks a model that has one, the
+	 * display shows the un-overridden level while the session runs at the
+	 * override. */
 	defaultThinkingLevel: string | null;
 }
 
