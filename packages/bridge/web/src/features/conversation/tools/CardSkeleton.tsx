@@ -7,9 +7,9 @@
 
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
+import { copyToClipboard } from "../../../infra/lib/clipboard.ts";
 import { CheckIcon, ChevronDownIcon, CopyIcon, EyeIcon, MarkdownIcon, WrapIcon } from "../../../render/icons.tsx";
 import styles from "../actions.module.css";
-import { copyToClipboard } from "../clipboard.ts";
 
 /**
  * Status line — light + duration + timeout annotation + status chips

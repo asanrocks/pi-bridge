@@ -14,10 +14,10 @@
 // invisible. Copies this block's markdown source.
 
 import { memo, useCallback, useDeferredValue, useState } from "react";
+import { copyToClipboard } from "../../infra/lib/clipboard.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
-import { copyToClipboard } from "./clipboard.ts";
 import styles from "./turns.module.css";
 
 export const TextBlockView = memo(function TextBlockView({

@@ -323,6 +323,13 @@ export interface UiSlice {
 	pushToast: (id: string, message: string) => void;
 	dismissToast: (id: string) => void;
 
+	// Secure-context guidance
+	/** The environment dialog is open. Raised by `infra/lib/secureContext.ts`
+	 * after a capability was withheld on a plain-HTTP origin. */
+	secureContextHintOpen: boolean;
+	openSecureContextHint: () => void;
+	closeSecureContextHint: () => void;
+
 	// Actions
 	setFocusedTurnId: (id: string | null) => void;
 	/** Toggle a group and freeze it against streaming auto-expand.
@@ -375,6 +382,12 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 	browser: null,
 
 	notifications: [],
+
+	secureContextHintOpen: false,
+
+	openSecureContextHint: () => set({ secureContextHintOpen: true }),
+
+	closeSecureContextHint: () => set({ secureContextHintOpen: false }),
 
 	pushToast: (id, message) =>
 		set((s) => {

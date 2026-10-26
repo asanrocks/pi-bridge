@@ -9,11 +9,12 @@
 // of Streamdown's default modal chrome.
 // ============================================================================
 
-import { memo, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import type { ExtraProps } from "streamdown";
 import { useStore } from "../../infra/state/store.tsx";
+import dialogStyles from "../../render/Dialog.module.css";
+import { Dialog } from "../../render/Dialog.tsx";
 import { classifyHref } from "./links.ts";
-import styles from "./Viewer.module.css";
 
 /** Mirrors Streamdown's link classes (`wrap-anywhere font-medium text-primary
  * underline`) so overridden links render identically to default ones. The
@@ -85,34 +86,18 @@ export const MarkdownLink = memo(function MarkdownLink({
 // ---------------------------------------------------------------------------
 
 function UrlConfirmDialog({ url, onClose, onConfirm }: { url: string; onClose: () => void; onConfirm: () => void }) {
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [onClose]);
-
 	return (
-		<>
-			<button
-				type="button"
-				aria-label="Close link confirmation"
-				className={styles.dialogOverlay}
-				onClick={onClose}
-			/>
-			<div role="dialog" className={styles.dialogPanel}>
-				<div className={styles.dialogTitle}>Open external link?</div>
-				<div className={styles.dialogUrl}>{url}</div>
-				<div className={styles.dialogActions}>
-					<button type="button" className={styles.dialogCancel} onClick={onClose}>
-						Cancel
-					</button>
-					<button type="button" className={styles.dialogConfirm} onClick={onConfirm}>
-						Open link
-					</button>
-				</div>
+		<Dialog label="Open external link?" onClose={onClose}>
+			<div className={dialogStyles.title}>Open external link?</div>
+			<div className={dialogStyles.value}>{url}</div>
+			<div className={dialogStyles.actions}>
+				<button type="button" className={dialogStyles.secondary} onClick={onClose}>
+					Cancel
+				</button>
+				<button type="button" className={dialogStyles.primary} onClick={onConfirm}>
+					Open link
+				</button>
 			</div>
-		</>
+		</Dialog>
 	);
 }

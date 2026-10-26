@@ -6,6 +6,8 @@
 // request path writes.
 // ============================================================================
 
+import { noteSecureContextFailure } from "./secureContext.ts";
+
 type PermissionState = "granted" | "denied" | "unavailable";
 
 let permissionState: PermissionState = "unavailable";
@@ -36,15 +38,19 @@ export function requestNotificationPermission(): void {
 	if (permissionRequested) return;
 	permissionRequested = true;
 	if (typeof Notification === "undefined") {
+		noteSecureContextFailure();
 		permissionState = "unavailable";
 		return;
 	}
-	// Already decided on a previous visit (granted/denied)
+	// Already decided on a previous visit (granted/denied). Chrome reports a
+	// plain-HTTP origin as denied without ever prompting.
 	if (Notification.permission !== "default") {
 		permissionState = Notification.permission as PermissionState;
+		if (permissionState === "denied") noteSecureContextFailure();
 		return;
 	}
 	Notification.requestPermission().then((r) => {
 		permissionState = r as PermissionState;
+		if (permissionState === "denied") noteSecureContextFailure();
 	});
 }

@@ -1,13 +1,12 @@
 /* ============================================================================
-   Viewer — fullscreen portal shell (repository browser) + external-link confirm dialog.
-   The viewer covers the whole viewport; the small confirm dialog stays a
-   centered portal (--color-portal-bg/border, radius-md, fixed overlay —
-   ADR 07 styling invariants #1). Both dim the page (--color-overlay)
-   because they are document surfaces, not transient dropdowns.
+   Viewer — fullscreen portal shell (repository browser).
+   The viewer covers the whole viewport and dims the page (--color-overlay)
+   because it is a document surface, not a transient dropdown. Small dialogs
+   (the external-link confirm, secure-context guidance) use the shared
+   render/Dialog surface instead.
    ========================================================================== */
 
-.viewerOverlay,
-.dialogOverlay {
+.viewerOverlay {
 	position: fixed;
 	inset: 0;
 	z-index: var(--z-portal);
@@ -17,8 +16,7 @@
 	margin: 0;
 }
 
-.viewerPanel,
-.dialogPanel {
+.viewerPanel {
 	position: fixed;
 	z-index: calc(var(--z-portal) + 1);
 	top: 50%;
@@ -43,10 +41,6 @@
 	border-radius: 0;
 	box-shadow: none;
 	transform: none;
-}
-
-.dialogPanel {
-	width: min(420px, calc(100vw - 48px));
 }
 
 /* ── Viewer chrome ───────────────────────────────────────────────────── */
@@ -124,60 +118,3 @@
 	line-height: 1.6;
 }
 
-/* ── External-link confirm dialog ────────────────────────────────────── */
-
-.dialogTitle {
-	font-size: var(--fs-lg);
-	font-weight: 600;
-	padding: 14px 16px 0;
-}
-
-.dialogUrl {
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	font-size: var(--fs-sm);
-	color: var(--color-secondary);
-	background: var(--color-muted);
-	border-radius: var(--radius-sm);
-	padding: 6px 8px;
-	margin: 10px 16px;
-	overflow-wrap: anywhere;
-	max-height: 96px;
-	overflow-y: auto;
-}
-
-.dialogActions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	padding: 12px 16px 14px;
-}
-
-.dialogCancel,
-.dialogConfirm {
-	font-size: var(--fs-md);
-	font-weight: 500;
-	border-radius: var(--radius-sm);
-	padding: 5px 12px;
-}
-
-.dialogCancel {
-	background: none;
-	border: 1px solid var(--color-border);
-	color: var(--color-secondary);
-}
-
-.dialogCancel:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
-}
-
-.dialogConfirm {
-	background: var(--color-accent);
-	border: 1px solid var(--color-accent);
-	color: var(--color-on-accent);
-}
-
-.dialogConfirm:hover {
-	background: var(--color-accent-hover);
-	border-color: var(--color-accent-hover);
-}

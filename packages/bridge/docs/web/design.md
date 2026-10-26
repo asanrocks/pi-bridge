@@ -915,6 +915,24 @@ click-to-dismiss toasts. Toasts do not auto-dismiss, and the tray does not
 intercept clicks outside each toast. Connection down states remain full
 panels or a topbar chip rather than relying on a transient toast.
 
+Secure-context guidance is not a toast: it is a one-time dialog on the shared
+`render/Dialog` portal surface, raised the first time a capability is withheld
+because the page is not a secure context — a clipboard write that fails, or
+notification permission that is unavailable or denied on a plain-HTTP origin.
+It shows only the detected browser's escape hatch: Firefox's `about:config` →
+`dom.securecontext.allowlist` with this hostname, or a Chromium browser's own
+`<scheme>://flags/#unsafely-treat-insecure-origin-as-secure` with this origin.
+WebKit-based browsers (Safari, and the iOS builds whose user agents name Chrome
+or Firefox) have no per-origin allowlist and get only the localhost-tunnel
+alternative. Each of the page, the setting name, and the value has its own copy
+control. Those controls alone take the dialog-scoped legacy `execCommand`
+fallback, because the origin that needs the guidance is exactly the one without
+`navigator.clipboard`; ordinary app copy actions keep using the modern API
+exclusively. The dialog is raised at most once per browser session
+(`sessionStorage`), never stacks while open, and never appears on a secure
+origin, so an ordinary permission denial is not misreported as a deployment
+problem.
+
 ## Responsive Rules
 
 The principal breakpoint is 768px for docked panes. Below it:
