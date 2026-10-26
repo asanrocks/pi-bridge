@@ -36,6 +36,7 @@ import { StoreProvider, useStore } from "../infra/state/store.tsx";
 import { useViewModel } from "../infra/state/useViewModel.ts";
 import styles from "./App.module.css";
 import { useAppKeybindings } from "./keybindings.ts";
+import { SecureContextHint } from "./SecureContextHint.tsx";
 import { ToastBar } from "./ToastBar.tsx";
 import { useKeyboardRing } from "./useKeyboardRing.ts";
 import { useStatusNotifications } from "./useStatusNotifications.ts";
@@ -115,6 +116,7 @@ function AppInner() {
 	return (
 		<div className={styles.root}>
 			<ToastBar />
+			<SecureContextHint />
 			{/* TopBar */}
 			<TopBar
 				name={statusName}

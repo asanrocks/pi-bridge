@@ -27,10 +27,11 @@ The web source is divided by responsibility:
 - `infra/persist/` owns browser persistence adapters and address-to-cache
   identity lookup.
 - `infra/lib/` contains small browser or store-free utilities such as routes,
-  unread counting, media queries, notification permission, and image
-  preparation.
+  unread counting, media queries, notification permission, clipboard writes,
+  secure-context guidance, and image preparation.
 - `render/` contains shared rendering primitives, Markdown, code highlighting,
-  icons, shared resize/result helpers, and the side-pane shell (`PaneShell` +
+  icons, the centered `Dialog` portal surface, shared resize/result helpers,
+  and the side-pane shell (`PaneShell` +
   `usePaneMode`/`usePeekDrawer`/`useEdgeReveal`) that both docked panes
   (Sidebar, HistoryPane) render into.
 - `features/<area>/` owns an area and its wiring: launcher, topbar, sidebar,
@@ -483,7 +484,24 @@ Other `infra/lib` modules have narrow boundaries:
   feature behavior.
 - `notificationPermission.ts` caches browser notification permission and
   exposes the user-gesture request path separately from app notification
-  policy.
+  policy; an unavailable API or a denial on an insecure origin raises the
+  secure-context hint.
+- `clipboard.ts` is the one write path for app copy actions: it uses
+  `navigator.clipboard` only, and a failure raises the secure-context hint.
+  `copyWithExecCommandFallback` is scoped to the guidance dialog, whose copy
+  controls must work where `navigator.clipboard` is missing; a hidden-selection
+  `execCommand("copy")` carries the text there. Ordinary app copy actions never
+  take that path.
+- `secureContext.ts` detects a withheld secure context
+  (`window.isSecureContext === false`, i.e. a plain-HTTP intranet origin) and
+  builds the browser-detected fix steps: the Firefox pref and bare hostname,
+  a Chromium browser's own flags URL and the full origin, or no step for
+  WebKit-based/unknown browsers (iOS builds that name Chrome or Firefox are
+  normalized to WebKit). `noteSecureContextFailure` opens the shell dialog at
+  most once per browser session (`sessionStorage`), never stacks while open,
+  and no-ops on a secure origin. It is guidance only — nothing retries or
+  routes around the browser's decision, and service-worker registration
+  failure stays silent because it has no user gesture.
 - `imageResize.ts` validates supported image types, preserves small files,
   and uses browser bitmap/canvas APIs to resize oversized attachments before
   they enter the composer draft.
