@@ -261,10 +261,13 @@
 	margin-bottom: 0;
 }
 
+/* Lists inherit the shared indentation rule in index.css (the
+   [data-streamdown="*-list"] block): em-based marker clearance plus outside
+   markers, so every host indents by the same text-relative amount. Only the
+   block spacing is host-local here. */
 .markdownContent ul,
 .markdownContent ol {
 	margin: 0 0 4px 0;
-	padding-left: 22px;
 }
 
 .markdownContent li {

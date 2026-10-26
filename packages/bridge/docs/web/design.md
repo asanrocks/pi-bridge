@@ -798,6 +798,13 @@ dropdowns), `--fs-xl` (16px — body and composer, the reading baseline). The
 mobile breakpoint drops only `--fs-xl` to 14px; Markdown inline content scales
 relatively (see the inline-scale invariant below).
 
+Markdown list indentation is one of those relative sizes: per-level marker
+clearance in `em` (`--list-indent` 1.5em, `--list-indent-nested` 1.15em in
+`index.css`), applied by one rule on Streamdown's list markers with `outside`
+markers. So a level indents ~24px at the 16px desktop baseline and ~21px at
+the 14px mobile one, and a pinch (see Display scale) rescales it with the text
+rather than leaving a pixel indent behind.
+
 Weights use a narrow range and never lighter than the default: `400` default,
 `500` soft emphasis on launcher rows and headings, `600` for labels — section
 headers, chips, badges, composer buttons, `700` reserved for the TopBar session
@@ -848,7 +855,14 @@ for new buttons, chips, action rows, and Markdown hosts.
   table cells, superscripts, subscripts, and headings are restated as `em`
   ratios so they scale with their host. Block code stays at the shared code
   size. This keeps Markdown proportional in the 16px document, 14px mobile
-  body, and compact action/card hosts.
+  body, and compact action/card hosts. List indentation is part of this rule:
+  the two `em` tokens above are marker clearance, never a px literal, and one
+  unlayered `data-streamdown` rule sets `list-style-position: outside` on
+  every Markdown host. Streamdown's `list-inside` puts the marker in the
+  content box, which both drops the hanging indent (wrapped lines return to
+  the padding edge instead of the text) and makes the apparent margin
+  padding + marker. Padding is clearance, not taste: level 1 clears a
+  two-digit `ol` marker, nested levels only a disc or single digit.
 - **One spec per role.** A role has one visual specification wherever it
   appears. `ComposeCard` and `ComposeBar` share the card shell; toolbar and
   touch-target rules are shared across turn surfaces; action hue, strip, and
