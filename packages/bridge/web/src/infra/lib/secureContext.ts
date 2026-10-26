@@ -3,10 +3,11 @@
 //
 // Browsers grant a secure context only to HTTPS, localhost, and file://. An
 // intranet origin served over http:// therefore loses navigator.clipboard,
-// Notification permission, and service workers, while the rest of the app
-// (IndexedDB, WebSocket RPC, drafts) keeps working. The daemon has no TLS by
-// design — remote access is an SSH tunnel or a reverse proxy — so the fixes are
-// the browser's own origin allowlist or a localhost tunnel.
+// Notification permission, and service workers — which also costs app
+// installation, since an installable page needs a worker — while the rest of
+// the app (IndexedDB, WebSocket RPC, drafts) keeps working. The daemon has no
+// TLS by design — remote access is an SSH tunnel or a reverse proxy — so the
+// fixes are the browser's own origin allowlist or a localhost tunnel.
 //
 // The guidance is lazy: a plain-HTTP deployment is legitimate until the user
 // reaches for a withheld capability. It opens at most once per browser session

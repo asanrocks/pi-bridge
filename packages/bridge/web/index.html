@@ -8,6 +8,17 @@
          pre-stylesheet canvas — and native scrollbars and form controls — on
          the OS side instead of flashing white while the stylesheet loads. -->
     <meta name="color-scheme" content="light dark" />
+    <!-- Install metadata. The manifest is what makes the page installable as an
+         app (Chromium: name/icons/start_url/display, plus the service worker);
+         `/icons/*` and `/favicon.svg` are generated from the pi mark by
+         build-icons.ts at build time. The two apple-* tags cover iOS before
+         16.4, which ignores `display` in the manifest; everything newer takes
+         the icon and standalone mode from the manifest itself. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="pi-bridge" />
     <title>pi-bridge</title>
   </head>
   <body>

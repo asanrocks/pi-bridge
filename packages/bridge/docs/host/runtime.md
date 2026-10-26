@@ -482,8 +482,13 @@ source's containment check before any read. Every other path is a client
 address: the Daemon returns the shell and the web client resolves it, so an
 unknown Project or alias lands on the launcher rather than a 404. Project ids
 colliding with root asset names are rejected at startup so an asset cannot hide
-a Project route. The shell is served `Cache-Control: no-cache`; content-hashed
-`assets/` entries are immutable. The same process owns the WebSocket server
+a Project route. The shell, the install manifest, and `favicon.svg` are served
+`Cache-Control: no-cache` — each has to revalidate so a redeploy is not masked
+on an installed client; content-hashed `assets/` entries are immutable, and
+`icons/` (unhashed, written by the web build) gets a day of `max-age`. The
+manifest's own MIME type is `application/manifest+json`; served as
+`application/octet-stream` Chromium silently treats the app as non-installable.
+The same process owns the WebSocket server
 used by Connections.
 
 The web client turns these frames into URL-driven navigation and a Document

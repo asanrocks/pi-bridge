@@ -1,8 +1,8 @@
 // ============================================================================
 // SecureContextHint — one-time guidance for a plain-HTTP origin.
 //
-// The browser withholds the clipboard, notification permission, and service
-// workers there. Steps are browser-detected (Firefox pref, Chromium flag,
+// The browser withholds the clipboard, notification permission, service
+// workers, and therefore app installation there. Steps are browser-detected (Firefox pref, Chromium flag,
 // otherwise no allowlist) and every string is copyable through the
 // dialog-scoped execCommand fallback in `infra/lib/clipboard.ts`, because
 // navigator.clipboard is exactly what is missing. Raised lazily and at most
@@ -38,7 +38,7 @@ function SecureContextHintDialog({ onClose }: { onClose: () => void }) {
 			<div className={dialogStyles.title}>Clipboard needs a secure context</div>
 			<p className={styles.lead}>
 				This page is served over plain HTTP ({origin}), so the browser withholds the clipboard, notification
-				permission, and offline support.
+				permission, offline support, and the option to install this page as an app.
 			</p>
 			{guide.steps.length > 0 ? (
 				<section className={styles.section} aria-label={guide.title}>

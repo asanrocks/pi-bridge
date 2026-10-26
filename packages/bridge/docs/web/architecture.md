@@ -484,6 +484,29 @@ second visit onward — a first visit with the daemon down has no installed
 worker and no cached shell. The fetch policy is unit-tested by executing the
 shipped `sw.js` with stubbed `caches`/`fetch` (`test/suite/sw-fetch-policy.test.ts`).
 
+Installation metadata is part of the same asset surface. `public/manifest.webmanifest`
+is committed: `id` and `start_url` are `/` (the launch address is the launcher;
+routes are read at boot and written with `replaceState`, so an installed window
+has no browser history to lose), and `display` is `standalone`. The manifest
+and `/favicon.svg` are served `no-cache` — a renamed app or a changed icon has
+to land on an already-installed client — while `/icons/*` are unhashed build
+output served with a day of `max-age`. The icons themselves are not committed:
+`web/build-icons.ts` holds the pi mark as a 4×4 cell grid plus a `node:zlib`
+PNG encoder, and the vite plugin in `web/vite.config.ts` (`iconsPlugin`) emits
+`icons/*.png` and `favicon.svg` into the build root and serves them from the
+dev server. Brand geometry therefore stays reviewable in code and image
+libraries stay out of the dependency graph. The manifest, its icon paths, the
+maskable safe circle, and Chromium's required members are asserted in
+`test/suite/web-icons.test.ts`; the daemon's MIME and cache behavior for those
+paths is asserted in `test/suite/http-serving.test.ts`.
+
+Installability is a secure-context capability: with no TLS on the daemon, only
+`http://localhost` (a tunnel) or a reverse proxy yields one, so a plain-HTTP
+LAN origin cannot install at all — `SecureContextHint` names installation
+among the withheld capabilities. `icons/` is a reserved Project id, because
+every top-level name of the build root is an asset path; the daemon rejects a
+colliding id at startup.
+
 `prepareSwitch` loads a target Session's records and status hint, derives a
 contiguous prefix cursor, and seeds the candidate mirror only when that cursor
 is valid. Otherwise the switch uses a full replace path.
