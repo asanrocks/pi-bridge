@@ -323,6 +323,17 @@ body {
 	   double-tap handlers (infra/lib/zoom.ts). Every --fs-* token multiplies
 	   by it; shell geometry stays in px so the app never overflows. */
 	--ui-scale: 1;
+	/* Markdown list indents, in em so the indent is a text relationship: it
+	   tracks --fs-* (and therefore --ui-scale and the 14px mobile baseline)
+	   and shrinks with the 12px think / tool-card Markdown hosts. Each value
+	   is marker clearance, not a design ratio — the whole point of
+	   list-style-position: outside is that the marker hangs in this padding,
+	   so it must clear the widest marker: a two-digit `ol` is ~1.4em, a disc
+	   ~1em. Level 1 clears a two-digit number; nested levels only need to
+	   clear a disc or a single digit, and every level compounds, so their
+	   step stays smaller. */
+	--list-indent: 1.5em;
+	--list-indent-nested: 1.15em;
 }
 
 * {
@@ -551,6 +562,28 @@ input, textarea {
 }
 [data-streamdown="heading-6"] {
 	font-size: 0.875em; /* text-sm */
+}
+
+/* Markdown lists — one rule for every Markdown host (conversation prose,
+   thinking, tool-card bodies, the file viewer), because Streamdown's own
+   defaults are wrong in two ways. `list-inside` puts the marker in the
+   content box, so the first line's text starts at padding + marker width
+   while wrapped lines snap back to the padding edge: no hanging indent, and
+   the apparent left margin is ~2.5em. `[li_&]:pl-6` is a rem-pinned 24px
+   nested indent that ignores both --ui-scale and the 14px mobile baseline.
+   Override to outside markers so every line of an item starts at the same
+   padding edge, and size that padding per the tokens above (see :root).
+   Unlayered, so it outranks both Tailwind utilities without !important; the
+   padding is what keeps the outside markers from being clipped in hosts
+   that zero their list padding. */
+[data-streamdown="unordered-list"],
+[data-streamdown="ordered-list"] {
+	list-style-position: outside;
+	padding-inline-start: var(--list-indent);
+}
+[data-streamdown="list-item"] > [data-streamdown="unordered-list"],
+[data-streamdown="list-item"] > [data-streamdown="ordered-list"] {
+	padding-inline-start: var(--list-indent-nested);
 }
 
 /* Line-number gutter: 1px smaller than the code (fs-xs = 11px), preserving
