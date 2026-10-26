@@ -88,6 +88,13 @@ describe("HTTP serving", () => {
 		writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>DISK-SHELL</title>");
 		writeFileSync(join(webRoot, "app.js"), "console.log(1)");
 		writeFileSync(join(webRoot, "sw.js"), "// sw");
+		// Install metadata: the manifest must be a real resource (the shell is HTML,
+		// and a manifest that parses as HTML silently kills installability) served
+		// with a manifest MIME type and revalidated like the shell.
+		writeFileSync(join(webRoot, "manifest.webmanifest"), '{"name":"pi-bridge"}');
+		writeFileSync(join(webRoot, "favicon.svg"), "<svg/>");
+		mkdirSync(join(webRoot, "icons"));
+		writeFileSync(join(webRoot, "icons", "pi-192.png"), "png");
 		mkdirSync(join(webRoot, "assets"));
 		writeFileSync(join(webRoot, "assets", "index-abc.js"), "console.log(2)");
 		const port = await startDaemon({ agentDir: makeTempDir("disk-agent"), allow: [project], webRoot });
@@ -118,6 +125,23 @@ describe("HTTP serving", () => {
 		const sw = await request(port, "/sw.js");
 		expect(sw.status).toBe(200);
 		expect(sw.cacheControl).toBe("no-cache");
+
+		const manifest = await request(port, "/manifest.webmanifest");
+		expect(manifest.status).toBe(200);
+		expect(manifest.contentType).toBe("application/manifest+json");
+		expect(manifest.body).toContain("pi-bridge");
+		expect(manifest.cacheControl).toBe("no-cache");
+
+		const favicon = await request(port, "/favicon.svg");
+		expect(favicon.contentType).toBe("image/svg+xml");
+		expect(favicon.cacheControl).toBe("no-cache");
+
+		// Unhashed icon output: cacheable, but not immutable.
+		const icon = await request(port, "/icons/pi-192.png");
+		expect(icon.status).toBe(200);
+		expect(icon.contentType).toBe("image/png");
+		expect(icon.cacheControl).toContain("max-age=86400");
+		expect((await request(port, "/icons/missing.png")).status).toBe(404);
 
 		expect((await request(port, "/assets/missing.js")).status).toBe(404);
 	});
@@ -157,6 +181,23 @@ describe("HTTP serving", () => {
 		expect(sw.cacheControl).toBe("no-cache");
 
 		expect((await request(port, "/assets/missing.js")).status).toBe(404);
+	});
+
+	it("rejects a Project id that collides with the generated icon directory", async () => {
+		// `icons/` is build output, so it is a top-level asset surface entry and a
+		// reserved Project id (daemon.ts `staticRoots`). Reserving one name is the
+		// price of serving installing metadata from the web root.
+		const parent = makeTempDir("icon-parent");
+		const project = join(parent, "icons");
+		mkdirSync(project, { recursive: true });
+		const webRoot = makeTempDir("icon-web");
+		writeFileSync(join(webRoot, "index.html"), "<!doctype html>SHELL");
+		mkdirSync(join(webRoot, "icons"));
+		const daemon = new Daemon();
+		daemons.push(daemon);
+		await expect(daemon.start({ agentDir: makeTempDir("icon-agent"), allow: [project], webRoot })).rejects.toThrow(
+			/is reserved/,
+		);
 	});
 
 	it("rejects traversal under a resource root and 404s resource misses", async () => {

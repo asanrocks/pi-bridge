@@ -62,6 +62,10 @@ const MIME_TYPES: Record<string, string> = {
 	".png": "image/png",
 	".svg": "image/svg+xml",
 	".json": "application/json",
+	// The install manifest. Chromium rejects a manifest served as
+	// `application/octet-stream`, which is the fallthrough, and then silently
+	// reports the app as non-installable.
+	".webmanifest": "application/manifest+json",
 	".map": "application/json",
 };
 
@@ -1068,11 +1072,22 @@ export class Daemon {
 			const headers: Record<string, string> = {
 				"Content-Type": MIME_TYPES[extname(path)] ?? "application/octet-stream",
 			};
-			// Vite content-hashes everything under `assets/`; `index.html` must
-			// revalidate so a redeploy isn't masked by a stale shell, and `sw.js`
-			// must revalidate so worker update checks see a new version promptly.
+			// Vite content-hashes everything under `assets/`; the shell and the
+			// install metadata must revalidate — `index.html` so a redeploy isn't
+			// masked by a stale shell, `sw.js` so worker update checks see a new
+			// version promptly, and `manifest.webmanifest`/`favicon.svg` so a
+			// renamed app or a changed icon actually lands on an installed client.
+			// `/icons/*` are unhashed build output: a day of staleness is harmless
+			// and saves the refetch, and a real icon change ships under a new name.
 			if (path.startsWith("/assets/")) headers["Cache-Control"] = "public, max-age=31536000, immutable";
-			else if (path === "/index.html" || path === "/sw.js") headers["Cache-Control"] = "no-cache";
+			else if (path.startsWith("/icons/")) headers["Cache-Control"] = "public, max-age=86400";
+			else if (
+				path === "/index.html" ||
+				path === "/sw.js" ||
+				path === "/manifest.webmanifest" ||
+				path === "/favicon.svg"
+			)
+				headers["Cache-Control"] = "no-cache";
 			res.writeHead(200, headers);
 			res.end(read.content);
 		});

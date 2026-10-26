@@ -1,0 +1,16 @@
+{
+	"id": "/",
+	"name": "pi-bridge",
+	"short_name": "pi-bridge",
+	"description": "Monitor and steer pi Sessions from a browser.",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"background_color": "#faf9f6",
+	"theme_color": "#faf9f6",
+	"icons": [
+		{ "src": "/icons/pi-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+		{ "src": "/icons/pi-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+		{ "src": "/icons/pi-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+	]
+}

@@ -910,6 +910,16 @@ a dark counterpart, every dark declaration must exist in `@theme`, every
 `app/index.css` — a feature module branching on it could disagree with the rest
 of the app.
 
+The installed-app surface is the one place where the token boundary stops:
+there is no `theme-color` meta and no `<style>`-themed asset, because the OS
+chrome and the launcher tile are painted before any stylesheet or media query
+of ours runs and cannot follow the app's ladder. The manifest carries the light
+page tone (`background_color`, `theme_color`) and the icon generator carries
+the brand pigments (`web/build-icons.ts`, next to the mark's 4×4 cell grid);
+both are install metadata consumed outside the document, not renderable colors,
+so neither belongs in `@theme`. A `theme-color` pair would be the opposite — a
+second declaration site for `--color-background` — and is deliberately absent.
+
 Colors that come from JavaScript do not use inline `color`. The Shiki
 highlighter is theme-agnostic: it emits each token's light color as `--code-c`
 (and the root foreground as `--code-fg`) beside `--shiki-dark` /
