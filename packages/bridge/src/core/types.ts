@@ -526,6 +526,40 @@ export interface GetDaemonInfoRequest {
 	verb: "getDaemonInfo";
 }
 
+/** How the browser authenticates its ASR (dictation) session. The daemon owns
+ * any secret involved — a page can neither mint a SAMI token nor register a
+ * device — so this is the only credential shape that crosses the wire, and it
+ * is a bearer value or a shared identity, never a key. */
+export type AsrCredential =
+	| {
+			/** A shared, non-secret registered device (`docs/protocol.md` §1.4). */
+			kind: "device";
+			deviceId: string;
+	  }
+	| {
+			/** A minted SAMI token (§1.3) with its advisory expiry. */
+			kind: "token";
+			token: string;
+			expiresAt: number;
+	  };
+
+/** Ask the daemon for dictation credentials. Daemon-global and attachment-free:
+ * the ASR session itself runs from the browser straight to the endpoint, so
+ * nothing about a Session is involved. */
+export interface AsrCredentialsRequest {
+	verb: "asrCredentials";
+}
+
+/** Rewrite one composer draft. Daemon-global and attachment-free: the daemon
+ * speaks the upstream polish protocol because a page cannot, so the draft is the
+ * only thing that crosses this socket. Draft text does leave the machine here,
+ * which is why the composer only asks from a press that says so. */
+export interface TextPolishRequest {
+	verb: "textPolish";
+	/** The whole draft, as the field shows it. */
+	text: string;
+}
+
 export interface PullRequest {
 	verb: "pull";
 	requests: { entryId: string; fieldPath: string }[];
@@ -787,6 +821,8 @@ export type RpcRequestBody =
 	| ListSessionsRequest
 	| ListActiveSessionsRequest
 	| GetDaemonInfoRequest
+	| AsrCredentialsRequest
+	| TextPolishRequest
 	| PullRequest
 	| ListFilesRequest
 	| ReadFileRequest
@@ -894,6 +930,21 @@ export interface GetDaemonInfoReply {
 	visibleModels: string[];
 	thinkingLevels: string[];
 	devMode: boolean;
+}
+
+export interface AsrCredentialsReply {
+	id: string;
+	ok: true;
+	auth: AsrCredential;
+}
+
+/** The rewritten draft. `text` is what the field should show instead; when the
+ * service had nothing to arrange it equals the request's text, and the client
+ * records no undo entry for that. */
+export interface TextPolishReply {
+	id: string;
+	ok: true;
+	text: string;
 }
 
 export interface PullReply {

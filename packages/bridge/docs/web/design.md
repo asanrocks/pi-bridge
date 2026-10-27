@@ -70,6 +70,62 @@ browse branches in History. A steerer can do the following:
   token is path-like (a stricter predicate than Tab's: no empty or URL/scheme
   token), and a tap accepts a row; it stays non-modal and dismisses like the
   keyboard-triggered list.
+- Dictate into the composer. The microphone beside Attach is a disclosure for
+  the dictation toolbar, not a transport: it shows the toolbar and starts
+  recording (the press is the gesture the microphone permission needs), and
+  pressing it again keeps what was heard and closes the toolbar — never
+  discards. Every state transition is one of the toolbar's own controls, so no
+  control has two meanings: record, keep (finish now and insert the transcript),
+  and discard (drop the utterance), all icon-only and `aria-label`ed, since
+  glyphs cannot carry words. Record is the transport dot, never a microphone:
+  that glyph belongs to the disclosure, and one glyph cannot mean both "show the
+  controls" and "record". The toolbar stays open between utterances, so a
+  second one is one press, and a committed transcript leaves an undo control in
+  its idle row until the next utterance starts or the draft moves — the server
+  rewrites the text while it is spoken, so taking the result back belongs beside
+  the control that produced it, not in a notification. While an utterance runs
+  the row is a status as well: the phase in words, an elapsed clock, and the
+  level meter. The transcript is written into the field as IME composition and
+  becomes one undo step when it commits. The field, Send, and Enter-to-send are
+  locked while an utterance runs, and path completion pauses with them. The
+  lock refuses edits rather than making the field read-only: a focused textarea
+  that turns read-only loses its IME connection on Android, so the soft
+  keyboard would close at the start of every utterance and reopen at its end.
+  Escape dismisses in order of what is most transient: the running utterance,
+  then the toolbar, then the card. Collapsing the card, switching Sessions or Projects, and an external
+  edit to the field also end the utterance. The Project home offers the same
+  control. The credential comes from the daemon, so dictation needs a daemon
+  connection and a secure context (https or localhost); without either the
+  toolbar replaces its record control with the reason, in the same row, so the
+  capability answer is stated in place and works on touch (a title is
+  unreachable there). A dropped socket does not end a running utterance — the
+  ASR stream never used it — it only stops the toolbar from starting another
+  until reconnect, and a failed credential request retries in the background
+  while the row names it. A normal ending — the server expires the task after
+  ~20 s of silence, or the transcript never arrives — keeps whatever was
+  confirmed and reports the reason once as a notice; only a failure (no
+  microphone, an unsupported browser, a rejected credential) is a failure
+  toast.
+- Polish the draft from the same row. The idle row carries a sparkle between
+  Undo and Record: it sends the whole draft to the daemon and installs what comes
+  back. Nothing is polished in the background — the press is the disclosure, and
+  the control's tooltip says the text goes to the IME service, which is also why
+  the answer is remembered for undo rather than requiring a second press later. The row states the outcome in
+  place — "Polishing" with the pending dot while the round trip runs, then the
+  reason it failed, or "Nothing to polish. The text already reads well." when
+  the service had nothing to change — because a press deserves an answer in the
+  panel that owns it, not a toast over the field. The field, Send, and
+  Enter-to-send are locked for the round trip for the same reason they are
+  locked during an utterance: the answer replaces text, so "the user is typing
+  into it" and "the answer is about to land" cannot both be true. Discard stops
+  waiting and drops the answer. Polish is not offered while dictation runs and
+  dictation is not offered while polishing: one text operation at a time.
+  Undo is one control with one meaning — "take back the last thing this
+  composer did to the text" — and its words name the operation ("Remove the
+  inserted transcript" or "Undo the polish"). It covers the changed region
+  only, so carrying on writing outside what the polish rewrote leaves the
+  control usable, and a whole-draft rewrite therefore does not have to be
+  undone before the user can type.
 - Edit a past user message into a fork. Edit is available from the user-turn
   toolbar or `e` when that turn is keyboard-focused. The edited text is sent
   from the original parent, producing a sibling variant; the original message
@@ -912,8 +968,8 @@ notification.
 
 RPC and attachment failures appear in a persistent top tray of red,
 click-to-dismiss toasts. Toasts do not auto-dismiss, and the tray does not
-intercept clicks outside each toast. Connection down states remain full
-panels or a topbar chip rather than relying on a transient toast.
+intercept clicks outside each toast. Connection down states remain full panels
+or a topbar chip rather than relying on a transient toast.
 
 Secure-context guidance is not a toast: it is a one-time dialog on the shared
 `render/Dialog` portal surface, raised the first time a capability is withheld

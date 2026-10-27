@@ -489,3 +489,24 @@ used by Connections.
 The web client turns these frames into URL-driven navigation and a Document
 mirror; the overall layer relationship is described in
 [architecture](../architecture.md).
+
+## Third-Party Services
+
+Two daemon-global verbs reach endpoints the browser cannot. Neither is scoped to
+an attachment, and neither puts a credential on the wire.
+
+`asrCredentials` hands the page what it needs for dictation: a registered device
+id (the default, and shared rather than secret) or a SAMI token minted from
+`DOUBAO_ACCESS_KEY` when the operator sets it. The ASR stream itself runs from
+the browser to the endpoint, so the socket carries only the credential.
+
+`textPolish` is the opposite arrangement: the daemon speaks the whole protocol
+(WeChat IME `Kb-CmdId: 4549`, see `src/host/text-polish.ts`) and only the draft
+crosses the socket. That sends user text to a third party, so nothing runs
+speculatively: the composer asks only from a press whose tooltip names the
+destination, and the answer is kept only as the toolbar's undo. The guest
+identity is a private key: it lives at
+`<agentDir>/bridge/wxime-identity.json` (override
+`BRIDGE_TEXT_POLISH_IDENTITY`), mode `0600`, minted on first use and never
+rewritten when a file already exists. One exchange runs at a time — the service
+rate-limits a `uin` — and each request carries a 15 s abort timeout.

@@ -39,6 +39,7 @@
 	},
 	"dependencies": {
 		"@earendil-works/pi-ai": "1.4.0",
+		"@earendil-works/pi-asr": "1.4.0",
 		"@earendil-works/pi-coding-agent": "1.4.0",
 		"shiki": "4.3.1",
 		"diff": "8.0.4",

@@ -1,6 +1,8 @@
 import type { WebSocket } from "ws";
 import type {
 	ArchiveSessionRequest,
+	AsrCredential,
+	AsrCredentialsReply,
 	ClientMessage,
 	CloseSessionRequest,
 	DirectoryListing,
@@ -33,6 +35,8 @@ import type {
 	SetModelRequest,
 	SetThinkingLevelRequest,
 	SnapshotFile,
+	TextPolishReply,
+	TextPolishRequest,
 } from "../core/index.ts";
 import {
 	CompactCodec,
@@ -71,6 +75,14 @@ export interface DaemonVerbs {
 	/** Pin or unpin one model in the daemon-global list (ADR 15). The new list
 	 * arrives as a `pinned_models_changed` push. */
 	setModelPinned: (provider: string, modelId: string, pinned: boolean) => Promise<void>;
+	/** Dictation credentials, minted or registered by the daemon because a page
+	 * can do neither (see `asr-credentials.ts`). Daemon-global: the ASR session
+	 * runs from the browser to the endpoint, not through this socket. */
+	asrCredentials: () => Promise<AsrCredential>;
+	/** Rewrite one draft through the upstream text-polish service (see
+	 * `text-polish.ts`). Daemon-global for the same reason: the page cannot speak
+	 * the protocol, so the daemon does. Rejects when the feature is off. */
+	textPolish: (text: string) => Promise<string>;
 	/** Paginated history query for one Project. */
 	listSessions: (
 		projectId: string,
@@ -424,6 +436,26 @@ export class Connection {
 					if (typeof m.pinned !== "boolean") throw new Error("Missing `pinned`");
 					await this.daemonVerbs.setModelPinned(m.provider, m.modelId, m.pinned);
 					this.send({ id, ok: true });
+					break;
+				}
+				case "asrCredentials": {
+					// Daemon-global and attachment-free, like getDaemonInfo: the ASR
+					// stream belongs to the browser, so this socket carries only the
+					// credential. A failure here is a plain RPC error the client shows.
+					const auth = await this.daemonVerbs.asrCredentials();
+					const reply: AsrCredentialsReply = { id, ok: true, auth };
+					this.send(reply as unknown as Record<string, unknown>);
+					break;
+				}
+				case "textPolish": {
+					// Daemon-global like asrCredentials, and for the same reason: the browser
+					// cannot speak the upstream protocol, so the daemon does. The draft is
+					// the only payload; the credential never leaves the host.
+					const m = msg as unknown as TextPolishRequest;
+					if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
+					const text = await this.daemonVerbs.textPolish(m.text);
+					const reply: TextPolishReply = { id, ok: true, text };
+					this.send(reply as unknown as Record<string, unknown>);
 					break;
 				}
 				case "listFiles": {

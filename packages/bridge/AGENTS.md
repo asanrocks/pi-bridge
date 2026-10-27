@@ -38,6 +38,9 @@ Then read the docs for the area being changed:
 - Read the web design rules before adding buttons, chips, or Markdown hosts.
   Use the shared styling tokens and rendering primitives; the root
   `scripts/check-bridge-styling-tokens.mjs` enforces the token boundary.
+- Dictation credentials are daemon-held. The web client asks for
+  `asrCredentials` and receives a registered device or a minted token, never an
+  access key; do not add a browser-side minting path or an HTTP route for it.
 - Use the glossary's vocabulary. Add new coined terms there first, respect
   its domain-composition rule, and do not reintroduce retired words.
 

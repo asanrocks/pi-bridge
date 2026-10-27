@@ -362,6 +362,61 @@ commit against the right baseline. All four are attachment-free and absolutely
 addressed; `openFileViewer` resolves a relative entry-point path against the
 current Project cwd (via `infra/lib/paths.ts`) before opening the browser.
 
+`asrCredentialsRpc` fetches the dictation credential the daemon holds. It is
+store-free and not toasted: the composer disables its microphone and shows the
+reason in place, because a daemon that cannot mint a token or register a device
+is a capability answer. The credential is prefetched when the composer mounts
+(a `getUserMedia` call reached after an RPC await has lost the gesture that
+allowed it), and the ASR session itself runs from the page to the endpoint — the
+bridge socket carries only the credential.
+
+`dictationPolicy` answers the capability question instead of handling an error:
+a plain-HTTP origin outranks everything, a missing connection disables starting
+even with a cached credential, and a failed request keeps retrying with backoff
+while the control names the failure. A minted token is refreshed shortly before
+its advisory expiry, so the page never starts an utterance on a token the daemon
+has already rotated. `DraftOwnership` binds one utterance to the draft it began
+in: a Session or Project switch moves the ownership before cancelling, and every
+later read or write from that utterance is refused, so a delayed result cannot
+land at offsets that describe another document. The ASR package supplies the
+rest — cancellation ends a pending settlement, the commit's own native edit is
+what makes one undo remove the utterance, `onSettled` reports each ending once —
+and the hook only decides what to show and when the control may start.
+
+The dictation surface is a toolbar, and the microphone is only its disclosure:
+`DictationToggle` carries `aria-expanded`/`aria-controls` and no phase state,
+which is why the bridge does not use the ASR package's `bindButton` affordance
+(the demo still does). `useDictation` owns the disclosure flag beside the
+controller and exposes the toolbar's transport — record, keep, discard — with
+the field focused after each press, because the pressed control is replaced or
+removed by the phase it causes. `DictationToolbar` is phase-driven: an idle form
+with record, and while an utterance runs the phase word, a 1 Hz clock write, the
+meter reading `--asr-level`, and the two endings. Neither the clock nor the
+level enters React state. The availability reason is a row of the same panel,
+not a toast: an unavailable microphone still opens the toolbar and the row
+states why. `useDictation` also keeps the last edit the composer made and what its undo
+control would take back — offered only while the field still holds that edit, and
+verified again before it writes, so an edit that outran the press leaves the text
+alone.
+
+Text polish rides the same hook and the same row, because it is another
+operation on the same field and needs the same three guards — `DraftOwnership`,
+the edit refusal, and the toolbar. It has no controller: one `textPolish` RPC
+sends the whole draft, and the answer is installed as the one region that
+differs. `textPolish.ts` owns the parts that are pure — the changed span between
+the two texts, the "still installed" check, and the `PolishState` the row reads —
+so the rules are testable without a DOM. The undo record is a *replacement*
+(`span`, `inserted`, `replaced`) rather than an insertion, which is what lets one
+control serve both operations: a transcript inserted into an empty span and a
+polish that replaced a region are both undone by writing `replaced` back over
+`inserted`, and only after the field still holds `inserted` at that span.
+Scope is deliberately the changed region: typing elsewhere does not invalidate
+it, and a whole-draft rewrite therefore does not force the user to undo before
+carrying on. Polish needs nothing but a connection — the daemon owns the protocol
+and the identity, and no secure context is involved — so the control is offered
+whenever the composer is connected, and it states every failure in the row
+instead of a toast.
+
 A session switch can have old-session patches in flight until the target's
 initial sync arrives. `prepareSwitch` seeds a candidate mirror when it has a
 valid cache cursor. `sessionCandidate.ts` stores at most one candidate keyed

@@ -19,9 +19,12 @@ import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../.
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
+import { DictationToggle } from "./DictationToggle.tsx";
+import { DictationToolbar } from "./DictationToolbar.tsx";
 import styles from "./HomeCompose.module.css";
 import { clampToSupportedLevels } from "./thinkingLevels.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
+import { useDictation } from "./useDictation.ts";
 
 const MODEL_KEY_PREFIX = "pi-bridge:home-model:";
 
@@ -102,7 +105,25 @@ export const HomeCompose = memo(function HomeCompose({
 	const [sending, setSending] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-	const capabilities = useComposeCapabilities({ textareaRef });
+	const dictation = useDictation({
+		textareaRef,
+		enabled: connected,
+		scope: `p:${projectId}`,
+	});
+	const dictating = dictation.locked;
+	const { toolbarOpen, closeToolbar, dictation: controller } = dictation;
+
+	const capabilities = useComposeCapabilities({ textareaRef, dictating });
+
+	// The home has no card to collapse, so Escape dismisses what is running, then
+	// the dictation toolbar.
+	const handleEscape = useCallback(() => {
+		if (dictating) {
+			dictation.cancel();
+			return;
+		}
+		closeToolbar();
+	}, [dictating, dictation.cancel, closeToolbar]);
 
 	// Landing on the Project home is a come-to-type gesture — focus the card.
 	useEffect(() => {
@@ -246,6 +267,27 @@ export const HomeCompose = memo(function HomeCompose({
 				connected={connected}
 				placeholder={`Send a prompt to ${projectId}…`}
 				sending={sending}
+				onEscape={handleEscape}
+				dictating={dictating}
+				editsBlocked={dictation.editsBlocked}
+				dictationToolbar={
+					toolbarOpen ? (
+						<DictationToolbar
+							dictation={controller}
+							reason={dictation.reason}
+							undoKind={dictation.undoKind}
+							polish={dictation.polish}
+							canPolish={dictation.canPolish}
+							onRecord={dictation.record}
+							onKeep={dictation.commit}
+							onDiscard={dictation.cancel}
+							onUndo={dictation.undoLast}
+							onPolish={dictation.polishDraft}
+							onCancelPolish={dictation.cancelPolish}
+						/>
+					) : null
+				}
+				mic={<DictationToggle open={toolbarOpen} onToggle={dictation.toggleToolbar} />}
 				textareaRef={textareaRef}
 				model={effectiveModel}
 				models={models}

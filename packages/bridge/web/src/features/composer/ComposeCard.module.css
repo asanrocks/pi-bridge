@@ -307,6 +307,204 @@
 	background: var(--color-muted);
 }
 
+/* ── Dictation (microphone + toolbar) ──────────────────────────────────
+   The microphone is a disclosure, not a transport: it opens and closes the
+   dictation toolbar, where every state transition lives. That is why it has no
+   phase colours — an expanded control reads as accent, and the toolbar says
+   what the controller is doing (see DictationToolbar). */
+.dictationBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	transition:
+		color var(--dur-fast) ease,
+		background var(--dur-fast) ease;
+}
+
+/* Expanded: the toolbar it controls is on screen. It is not a recording state —
+   the toolbar owns that — so this is the only colour the button ever takes. */
+.dictationBtn[data-open] {
+	color: var(--color-accent);
+}
+
+/* Hover is a surface cue and nothing more: an expanded control keeps its accent
+   rather than being repainted as idle. Scoped to hover-capable inputs so a tap
+   does not leave the tint behind on touch (the app's idiom — .jumpToBottom). */
+@media (hover: hover) {
+	.dictationBtn:hover:not([data-open]) {
+		background: var(--color-muted);
+		color: var(--color-foreground);
+	}
+
+	.dictationBtn[data-open]:hover {
+		color: var(--color-accent-hover);
+	}
+}
+
+/* ── Dictation toolbar ────────────────────────────────────────────────
+   The panel the microphone discloses. It outlives an utterance, so it has an
+   idle form (record); while one runs it is a status — phase word, elapsed
+   clock, level meter — plus the two endings. The fill reads `--asr-level`,
+   which DictationToolbar writes to this element directly: the ~50 Hz channel
+   never enters React state, the same rule the microphone halo used to follow. */
+.dictationToolbar {
+	--asr-level: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 16px 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	user-select: none;
+}
+
+.dictationDot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--color-error);
+	flex-shrink: 0;
+}
+
+/* Starting, finishing and polishing are the accent phases: the dot agrees with
+   the control row's streaming/compacting vocabulary rather than inventing a
+   second one. Polish has no phases of its own — it is one round trip — so its
+   dot is the pending one. */
+.dictationToolbar[data-phase="preparing"] .dictationDot,
+.dictationToolbar[data-phase="committing"] .dictationDot,
+.dictationToolbar[data-phase="polishing"] .dictationDot {
+	background: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	/* The live dot pulses on the app's own streaming keyframes: the
+	   conversation's streaming dot already means "something is in flight". */
+	.dictationToolbar[data-phase="listening"] .dictationDot {
+		animation: streaming-pulse 1.5s infinite;
+	}
+
+	.dictationToolbar[data-phase="preparing"] .dictationDot,
+	.dictationToolbar[data-phase="committing"] .dictationDot,
+	.dictationToolbar[data-phase="polishing"] .dictationDot {
+		animation: dictation-pending 1s ease-in-out infinite;
+	}
+}
+
+.dictationLabel {
+	color: var(--color-secondary);
+	font-weight: 600;
+}
+
+/* The capability answer, in the toolbar's own voice: a sentence, not a label, so
+   it reads as an explanation rather than a state name. */
+.dictationReason {
+	color: var(--color-muted-foreground);
+}
+
+.dictationClock {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Capture is live: the bar tracks the smoothed level as presence, not as a
+   calibrated meter (noise suppression removes the room floor, §5.7), so it shows
+   what the ASR is about to see rather than how loud the room is. */
+.dictationMeter {
+	position: relative;
+	width: 48px;
+	height: 4px;
+	border-radius: var(--radius-full);
+	background: var(--color-muted);
+	overflow: hidden;
+	flex-shrink: 0;
+}
+
+.dictationMeterFill {
+	display: block;
+	height: 100%;
+	width: 100%;
+	border-radius: inherit;
+	background: var(--color-error);
+	transform: scaleX(var(--asr-level));
+	transform-origin: left center;
+}
+
+/* Three controls, told apart at a glance: a microphone records, a check keeps
+   what was heard, a close discards it. Icon-only, because worded buttons would
+   crowd the field on a phone; the words live in `aria-label`/`title`. */
+.dictationActions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: auto;
+}
+
+.dictationAction {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--color-muted-foreground);
+	cursor: pointer;
+	transition:
+		color var(--dur-fast) ease,
+		background var(--dur-fast) ease;
+}
+
+.dictationAction:hover {
+	background: var(--color-muted);
+	color: var(--color-foreground);
+}
+
+/* The affirmative actions carry the accent the committing dot uses; discard
+   stays muted so the destructive ending is never the loudest control. Polish
+   belongs here: it is the row's other way of producing text. */
+.dictationAction[data-action="record"],
+.dictationAction[data-action="keep"],
+.dictationAction[data-action="polish"] {
+	color: var(--color-accent);
+}
+
+.dictationAction[data-action="record"]:hover,
+.dictationAction[data-action="keep"]:hover,
+.dictationAction[data-action="polish"]:hover {
+	color: var(--color-accent-hover);
+}
+
+/* Undo is the quiet one: it takes back an edit that already looks right. */
+.dictationAction[data-action="undo"] {
+	color: var(--color-secondary);
+}
+
+@media (pointer: coarse) {
+	.dictationAction {
+		width: 36px;
+		height: 36px;
+	}
+}
+
+@keyframes dictation-pending {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.35;
+	}
+}
+
 /* ── Control row ──────────────────────────────────────────────────────── */
 
 .composerControlRow {
