@@ -27,9 +27,12 @@
 //     the composer under the recording.
 //   - The state machine is the toolbar's, not the microphone's. The mic is a
 //     disclosure (`openToolbar`) and the transport lives beside the text it
-//     affects: record, keep, discard. Opening records, because the press is the
+//     affects: record, keep, discard. Opening only shows the panel — nothing is
+//     captured until the record control is pressed, and that press is the
 //     gesture `getUserMedia` needs; the panel then stays open across utterances
-//     so a repeat is one press, and closing it keeps rather than discards.
+//     so a repeat is one press, and closing it keeps rather than discards. The
+//     disclosure flag is a device preference (`dictationToolbarPreference`), so
+//     the panel is where the user left it after a reload or a Session switch.
 //   - One utterance belongs to one draft (see DraftOwnership). A draft swap
 //     changes the field's text, so the utterance ends with the document it
 //     started in and its late results are refused rather than written at stale
@@ -70,6 +73,7 @@ import {
 	dictationEndingNotice,
 	TOKEN_REFRESH_MARGIN_MS,
 } from "./dictationPolicy.ts";
+import { loadDictationToolbarOpen, saveDictationToolbarOpen } from "./dictationToolbarPreference.ts";
 import { DraftOwnership } from "./draftOwnership.ts";
 import { changedSpan, installedSpan, isStillApplied, type PolishState, type TextEdit } from "./textPolish.ts";
 
@@ -137,9 +141,9 @@ export interface ComposerDictation {
 	// machine whose only vocabulary was its colour.
 	/** The toolbar is showing. */
 	toolbarOpen: boolean;
-	/** Show the toolbar and record: the press is the gesture `getUserMedia` needs,
-	 * and a panel containing no microphone session would ask for the same intent
-	 * twice. */
+	/** Show the toolbar. A disclosure only: recording is the toolbar's own
+	 * control, so a press that means "show me the controls" never asks for the
+	 * microphone. */
 	openToolbar: () => void;
 	/** Hide the toolbar. A running utterance is kept, never dropped: discard is a
 	 * control of its own. */
@@ -169,8 +173,9 @@ export function useDictation(options: {
 	const [credential, setCredential] = useState<AsrCredential | null>(null);
 	const [credentialError, setCredentialError] = useState<string | null>(null);
 	/** The dictation toolbar's disclosure state. UI state, not the controller's:
-	 * the panel outlives an utterance so a second one is one press away. */
-	const [toolbarOpen, setToolbarOpen] = useState(false);
+	 * the panel outlives an utterance so a second one is one press away, and it
+	 * is persisted because it describes this device, not this draft. */
+	const [toolbarOpen, setToolbarOpen] = useState(loadDictationToolbarOpen);
 	/** Read inside the session factory, which runs per utterance: a refreshed
 	 * token must be picked up without rebuilding the controller. */
 	const credentialRef = useRef<AsrCredential | null>(null);
@@ -367,11 +372,13 @@ export function useDictation(options: {
 			return;
 		}
 		// The field is gone (collapsed composer, another surface): the utterance
-		// has no document to write into, and the toolbar had nothing to show.
+		// has no document to write into, and a polish still in flight has no span
+		// to land in. The toolbar goes with the field because it is rendered inside
+		// the card, but the disclosure flag is remembered, so expanding the card
+		// again brings the panel back as the user left it.
 		if (dictationRef.current?.isActive) void dictationRef.current.cancel();
 		polishRequestRef.current = null;
 		setPolish(POLISH_IDLE);
-		setToolbarOpen(false);
 	});
 
 	useEffect(
@@ -425,13 +432,12 @@ export function useDictation(options: {
 
 	const openToolbar = useCallback(() => {
 		setToolbarOpen(true);
-		// Opening records: the press is the user gesture `getUserMedia` needs, and a
-		// panel with no session in it would ask for the same intent twice.
-		record();
-	}, [record]);
+		saveDictationToolbarOpen(true);
+	}, []);
 
 	const closeToolbar = useCallback(() => {
 		setToolbarOpen(false);
+		saveDictationToolbarOpen(false);
 		// Keep, never discard — and `stop()` on an idle controller is a no-op.
 		void dictationRef.current?.stop();
 		focusField();

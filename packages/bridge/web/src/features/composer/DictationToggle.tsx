@@ -8,9 +8,12 @@
 // press can never throw a transcript away by accident: closing the toolbar
 // keeps.
 //
-// Opening it records (see `useDictation.openToolbar`): the press is the gesture
-// `getUserMedia` needs, and a panel that opens without a session would ask for
-// the same intent twice.
+// A press only discloses: nothing is captured until the toolbar's own record
+// control is pressed. That keeps one intent per press — "show me the controls"
+// never asks for the microphone — and the record press is still a user gesture,
+// so `getUserMedia` is reached without an await in between. The disclosure
+// flag is persisted (see `dictationToolbarPreference`), so the panel reopens as
+// the user left it.
 //
 // A microphone that cannot start is not disabled: the press opens the toolbar,
 // which states the reason in place (see DictationToolbar). A disabled target
