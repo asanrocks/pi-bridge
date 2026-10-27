@@ -394,7 +394,11 @@ with record, and while an utterance runs the phase word, a 1 Hz clock write, the
 meter reading `--asr-level`, and the two endings. Neither the clock nor the
 level enters React state. The availability reason is a row of the same panel,
 not a toast: an unavailable microphone still opens the toolbar and the row
-states why. `useDictation` also keeps the last edit the composer made and what its undo
+states why. The disclosure flag lives beside the controller and is persisted
+(`dictationToolbarPreference`, one `localStorage` key for both surfaces), so
+showing the panel is a device preference rather than session state; and the mic
+only discloses — recording starts from the toolbar's record control, whose press
+is the `getUserMedia` gesture. `useDictation` also keeps the last edit the composer made and what its undo
 control would take back — offered only while the field still holds that edit, and
 verified again before it writes, so an edit that outran the press leaves the text
 alone.

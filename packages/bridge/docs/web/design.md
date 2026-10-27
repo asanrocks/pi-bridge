@@ -71,13 +71,17 @@ browse branches in History. A steerer can do the following:
   token), and a tap accepts a row; it stays non-modal and dismisses like the
   keyboard-triggered list.
 - Dictate into the composer. The microphone beside Attach is a disclosure for
-  the dictation toolbar, not a transport: it shows the toolbar and starts
-  recording (the press is the gesture the microphone permission needs), and
-  pressing it again keeps what was heard and closes the toolbar — never
-  discards. Every state transition is one of the toolbar's own controls, so no
-  control has two meanings: record, keep (finish now and insert the transcript),
-  and discard (drop the utterance), all icon-only and `aria-label`ed, since
-  glyphs cannot carry words. Record is the transport dot, never a microphone:
+  the dictation toolbar, not a transport: it shows the toolbar — nothing is
+  captured until the toolbar's own record control is pressed, whose press is the
+  gesture the microphone permission needs — and pressing it again keeps what was
+  heard and closes the toolbar, never discards. The disclosure flag is one
+  device preference (`localStorage`), shared by the session dock and the Project
+  home and applied on mount, so the panel reopens where the user left it and a
+  collapse or a reload does not lose it. Every state transition is one of the
+  toolbar's own controls, so no control has two meanings: record, keep (finish
+  now and insert the transcript), and discard (drop the utterance), all
+  icon-only and `aria-label`ed, since glyphs cannot carry words. Record is the
+  transport dot, never a microphone:
   that glyph belongs to the disclosure, and one glyph cannot mean both "show the
   controls" and "record". The toolbar stays open between utterances, so a
   second one is one press, and a committed transcript leaves an undo control in
