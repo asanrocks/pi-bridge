@@ -26,6 +26,14 @@
 			"@earendil-works/pi-mcp": ["./packages/mcp/src/index.ts"],
 			"@earendil-works/pi-mcp/oauth": ["./packages/mcp/src/oauth/index.ts"],
 			"@earendil-works/pi-mcp/testing": ["./packages/mcp/src/testing/index.ts"],
+			"@earendil-works/pi-asr": ["./packages/asr/src/index.ts"],
+			"@earendil-works/pi-asr/browser": ["./packages/asr/src/browser.ts"],
+			"@earendil-works/pi-asr/node": ["./packages/asr/src/node.ts"],
+			"@earendil-works/pi-asr/edit": ["./packages/asr/src/edit/index.ts"],
+			"@earendil-works/pi-asr/dictation": ["./packages/asr/src/dictation/index.ts"],
+			"@earendil-works/pi-asr/dom": ["./packages/asr/src/dom/index.ts"],
+			"@earendil-works/pi-asr/protocol": ["./packages/asr/src/protocol/index.ts"],
+			"@earendil-works/pi-asr/testing": ["./packages/asr/src/testing/index.ts"],
 			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
 			"@earendil-works/pi-ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
@@ -49,6 +57,6 @@
 			"@earendil-works/pi-agent-old/*": ["./packages/agent-old/src/*"]
 		}
 	},
-	"include": ["scripts/model-catalog-protocol.ts", "scripts/model-catalog-protocol.test.ts", "packages/*/src/**/*", "packages/*/test/**/*", "packages/durable/test-workers/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*"],
+	"include": ["scripts/model-catalog-protocol.ts", "scripts/model-catalog-protocol.test.ts", "packages/*/src/**/*", "packages/*/test/**/*", "packages/asr/demo/src/**/*", "packages/durable/test-workers/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*"],
 	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/gondolin/**"]
 }

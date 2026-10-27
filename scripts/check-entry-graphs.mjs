@@ -26,6 +26,7 @@ const WORKSPACE = {
 	"@earendil-works/pi-codemode": "packages/codemode/src",
 	"@earendil-works/pi-telemetry": "packages/telemetry/src",
 	"@earendil-works/pi-mcp": "packages/mcp/src",
+	"@earendil-works/pi-asr": "packages/asr/src",
 	"@earendil-works/pi-tui": "packages/tui/src",
 };
 
@@ -75,6 +76,53 @@ const BUDGETS = {
 		},
 		// The file tools reach their environment helpers and the Harness definitions they need, not the Harness itself.
 		"./tools": { maxFiles: 17, forbid: ["packages/durable/src/images/"] },
+	},
+	"packages/asr": {
+		// The executable form of the package's layer table (docs/integration.md). `./browser` is the
+		// wire plus the microphone, never the Node-only credentials; `./edit` is DOM- and wire-free;
+		// `./dom` knows fields but not sessions; `./protocol` is codecs with no session.
+		".": {
+			forbid: [
+				"packages/asr/src/device.ts",
+				"packages/asr/src/token.ts",
+				"packages/asr/src/mic/",
+				"packages/asr/src/dom/",
+			],
+		},
+		"./browser": {
+			forbid: [
+				"packages/asr/src/node.ts",
+				"packages/asr/src/device.ts",
+				"packages/asr/src/token.ts",
+				"packages/asr/src/dom/",
+			],
+		},
+		"./node": { forbid: ["packages/asr/src/dom/"] },
+		"./edit": {
+			forbid: [
+				"packages/asr/src/dom/",
+				"packages/asr/src/session.ts",
+				"packages/asr/src/mic/",
+				"packages/asr/src/transport.ts",
+				"packages/asr/src/protocol/",
+			],
+		},
+		"./dom": {
+			forbid: ["packages/asr/src/session.ts", "packages/asr/src/protocol/", "packages/asr/src/mic/"],
+		},
+		"./dictation": {
+			forbid: ["packages/asr/src/node.ts", "packages/asr/src/device.ts", "packages/asr/src/token.ts"],
+		},
+		"./protocol": {
+			forbid: [
+				"packages/asr/src/session.ts",
+				"packages/asr/src/dom/",
+				"packages/asr/src/mic/",
+				"packages/asr/src/edit/",
+				"packages/asr/src/dictation/",
+			],
+		},
+		"./testing": { forbid: ["packages/asr/src/dom/", "packages/asr/src/dictation/"] },
 	},
 };
 

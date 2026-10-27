@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@earendil-works/pi-asr demo — dictate into a textarea</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --ok: #157f3b;
+        --err: #b3261e;
+        --busy: #8a5a00;
+        --live: #2563eb;
+      }
+      body {
+        font: 15px/1.6 system-ui, sans-serif;
+        max-width: 46rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin-bottom: 0.25rem;
+      }
+      .field {
+        position: relative;
+      }
+      textarea#field {
+        width: 100%;
+        min-height: 9rem;
+        padding: 0.75rem 1rem 3.5rem;
+        font: inherit;
+        border: 1px solid #8886;
+        border-radius: 0.6rem;
+        resize: vertical;
+      }
+      /* The affordance: the SDK writes data-state, data-sending, data-speaking
+         and --asr-level; every visual decision below is the page's. */
+      button#mic {
+        position: absolute;
+        right: 0.75rem;
+        bottom: 0.75rem;
+        width: 2.6rem;
+        height: 2.6rem;
+        display: grid;
+        place-items: center;
+        font-size: 1.15rem;
+        border-radius: 50%;
+        border: 1px solid #8886;
+        background: #8881;
+        cursor: pointer;
+        touch-action: none;
+      }
+      button#mic::after {
+        content: '';
+        position: absolute;
+        inset: -0.25rem;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        transform: scale(calc(1 + var(--asr-level, 0) * 0.4));
+        transition: transform 80ms linear;
+      }
+      button#mic[data-state='preparing'] {
+        opacity: 0.7;
+      }
+      button#mic[data-state='preparing']::after {
+        border-color: var(--busy);
+        animation: pulse 1s ease-in-out infinite;
+      }
+      button#mic[data-state='listening']::after {
+        border-color: var(--live);
+        box-shadow: 0 0 0 calc(var(--asr-level, 0) * 0.5rem) #2563eb33;
+      }
+      /* Capturing, but the handshake has not landed yet: the audio is held in
+         the pre-roll, so say so rather than pretending the server is reachable. */
+      button#mic[data-sending='false']::after {
+        animation: pulse 1s ease-in-out infinite;
+      }
+      button#mic[data-speaking='true'] {
+        background: #2563eb33;
+      }
+      button#mic[data-state='committing'] {
+        opacity: 0.6;
+      }
+      button#mic[data-state='failed'] {
+        border-color: var(--err);
+        color: var(--err);
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      #status {
+        min-height: 1.6em;
+        color: #888;
+      }
+      #status[data-tone='ok'] {
+        color: var(--ok);
+      }
+      #status[data-tone='error'] {
+        color: var(--err);
+      }
+      #status[data-tone='busy'] {
+        color: var(--busy);
+      }
+      #log {
+        white-space: pre-wrap;
+        border-top: 1px solid #8884;
+        margin-top: 1rem;
+        padding-top: 0.75rem;
+        color: #888;
+      }
+      .hint {
+        color: #888;
+        font-size: 0.85rem;
+      }
+      code {
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Dictate into a real textarea</h1>
+    <p class="hint">
+      The page builds a <code>Dictation</code> and binds a button to it. The library owns the
+      microphone, the session, the editing model, and the phase machine; the page owns
+      credentials, the host, and every pixel. Audio goes from this tab straight to Doubao; only
+      the device credential comes from the local server.
+    </p>
+
+    <div class="field">
+      <textarea id="field">Here is my note: </textarea>
+      <button id="mic" type="button">🎙</button>
+    </div>
+
+    <p id="status">idle</p>
+    <p class="hint">
+      Tap the button on a desktop and press again to commit; press and hold it on a touch screen
+      and release to commit. Type into the field while speaking to see the dictation drop itself
+      instead of overwriting your edit.
+    </p>
+    <div id="log"></div>
+
+    <!-- The only place that says where the package entries live. The page code
+         imports `@earendil-works/pi-asr/dictation` and `@earendil-works/pi-asr/dom`; `tsc` checks those
+         names against package.json, so a renamed entry fails before it reaches a
+         browser. A consumer with a bundler does not need this block at all. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@earendil-works/pi-asr/dictation": "/dist/dictation/index.js",
+          "@earendil-works/pi-asr/dom": "/dist/dom/index.js"
+        }
+      }
+    </script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

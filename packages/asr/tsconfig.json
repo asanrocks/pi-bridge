@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"exactOptionalPropertyTypes": true,
+		"noUncheckedIndexedAccess": true
+	},
+	"include": ["src/**/*.ts", "test/**/*.ts"]
+}

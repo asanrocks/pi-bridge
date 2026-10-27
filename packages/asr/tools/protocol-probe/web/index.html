@@ -1,0 +1,193 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>webcodecs opus probe</title>
+<pre id="log">booting</pre>
+<script>
+  const APP_KEY = 'OrnqKvSSrs'
+  const DEVICE_ID = new URLSearchParams(location.search).get('did')
+  const SR = 16000
+  const FRAME_MS = 20
+  const FEED = Number(new URLSearchParams(location.search).get('chunk') ?? 320)
+  const out = []
+  const log = (...a) => {
+    const s = a.join(' ')
+    out.push(s)
+    document.getElementById('log').textContent = out.join('\n')
+  }
+
+  async function loadPcm() {
+    const buf = await (await fetch('/trunk16k.wav')).arrayBuffer()
+    const ctx = new AudioContext({ sampleRate: SR })
+    const ab = await ctx.decodeAudioData(buf)
+    await ctx.close()
+    return ab.getChannelData(0)
+  }
+
+  async function encodeOpus(samples) {
+    const per = (SR * FRAME_MS) / 1000
+    const packets = []
+    const errs = []
+    const enc = new AudioEncoder({
+      output: (chunk) => {
+        const b = new Uint8Array(chunk.byteLength)
+        chunk.copyTo(b)
+        packets.push(b)
+      },
+      error: (e) => errs.push(String(e.message ?? e)),
+    })
+    enc.configure({ codec: 'opus', sampleRate: SR, numberOfChannels: 1, bitrate: 32000 })
+    for (let off = 0; off + FEED <= samples.length; off += FEED) {
+      enc.encode(
+        new AudioData({
+          format: 'f32-planar',
+          sampleRate: SR,
+          numberOfFrames: FEED,
+          numberOfChannels: 1,
+          timestamp: Math.round((off / SR) * 1e6),
+          data: samples.slice(off, off + FEED),
+        }),
+      )
+    }
+    await enc.flush()
+    enc.close()
+    if (errs.length) throw new Error('encoder: ' + errs.join('; '))
+    return packets
+  }
+
+  async function runTest() {
+    const t0 = performance.now()
+    const samples = await loadPcm()
+    const packets = await encodeOpus(samples)
+    const encMs = performance.now() - t0
+    log(
+      `pcm ${samples.length} samples (${(samples.length / SR).toFixed(2)}s) -> ${packets.length} opus packets, ${packets.reduce((a, p) => a + p.length, 0)} B, encode ${encMs.toFixed(0)}ms`,
+    )
+    log(`avg packet ${(packets.reduce((a, p) => a + p.length, 0) / packets.length).toFixed(1)} B`)
+
+    const taskId = crypto.randomUUID()
+    const sessionId = crypto.randomUUID()
+    const url =
+      'wss://frontier-audio-ime-ws.doubao.com/ocean/api/v1/ws?aid=401734&device_id=' +
+      encodeURIComponent(DEVICE_ID)
+    const ws = new WebSocket(url)
+    ws.binaryType = 'arraybuffer'
+    let transcript = ''
+    let firstResultMs = 0
+    let finals = 0
+    const tStart = performance.now()
+
+    const msgLog = []
+    const closed = new Promise((res) => {
+      ws.onclose = (e) => {
+        msgLog.push(`CLOSE code=${e.code} reason=${e.reason}`)
+        res('closed')
+      }
+    })
+    ws.onerror = () => msgLog.push('WS ERROR')
+    ws.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') {
+        msgLog.push(`BIN ${ev.data.byteLength}`)
+        return
+      }
+      msgLog.push('TXT ' + String(ev.data).slice(0, 200))
+      const msg = JSON.parse(ev.data)
+      if (msg.status_code && msg.status_code !== 20000000) {
+        log(`ERR ${msg.status_code} ${msg.status_text}`)
+        ws.close()
+        return
+      }
+      if (msg.event === 'TaskFinished') {
+        ws.close()
+        return
+      }
+      if (!msg.payload) return
+      const p = JSON.parse(msg.payload)
+      const r = p.results?.[0]
+      if (!r?.text) return
+      firstResultMs ||= Math.round(performance.now() - tStart)
+      if (r.is_interim === false) {
+        finals++
+        transcript = r.text
+      }
+    }
+    await new Promise((res, rej) => {
+      ws.onopen = res
+      ws.onerror = () => rej(new Error('ws open failed'))
+    })
+
+    ws.send(
+      JSON.stringify({
+        task_id: taskId,
+        session_id: sessionId,
+        namespace: 'ASR',
+        event: 'StartTask',
+        appkey: APP_KEY,
+        token: APP_KEY,
+        payload: JSON.stringify({
+          app_name: 'DoubaoIme',
+          app_version: '1.0.0.207',
+          enable_asr_twopass: true,
+          enable_asr_threepass: true,
+          strong_ddc: true,
+          remove_space_between_han_num: true,
+          remove_space_between_han_eng: true,
+          enable_asr_format: true,
+          audio_info: { channel: 1, format: 'speech_opus', sample_rate: SR },
+          audio_format: 'speech_opus',
+        }),
+      }),
+    )
+
+    let sent = 0
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+    await sleep(300)
+    log(
+      'first packets hex: ' +
+        packets
+          .slice(0, 3)
+          .map((p) =>
+            Array.from(p)
+              .slice(0, 8)
+              .map((b) => b.toString(16).padStart(2, '0'))
+              .join(''),
+          )
+          .join(' | '),
+    )
+    for (const p of packets) {
+      ws.send(p)
+      sent += p.length
+      await sleep(FRAME_MS)
+    }
+    const zero = new Uint8Array(64)
+    for (let i = 0; i < 6; i++) {
+      ws.send(zero)
+      sent += zero.length
+      await sleep(FRAME_MS)
+    }
+    ws.send(
+      JSON.stringify({
+        task_id: taskId,
+        session_id: sessionId,
+        namespace: 'ASR',
+        event: 'FinishTask',
+        appkey: APP_KEY,
+        token: APP_KEY,
+      }),
+    )
+    await Promise.race([closed, sleep(8000)])
+
+    const secs = samples.length / SR
+    return {
+      ok: !!transcript,
+      transcript,
+      finals,
+      msgLog,
+      packets: packets.length,
+      opusBytes: sent,
+      kbps: +((sent * 8) / secs / 1000).toFixed(1),
+      firstResultMs,
+      totalMs: Math.round(performance.now() - tStart),
+    }
+  }
+  window.runTest = runTest
+</script>

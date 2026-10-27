@@ -5,6 +5,7 @@ import { build } from "esbuild";
 
 const outputPath = join(tmpdir(), "pi-browser-smoke.js");
 const durableOutputPath = join(tmpdir(), "pi-durable-browser-smoke.js");
+const asrOutputPath = join(tmpdir(), "pi-asr-browser-smoke.js");
 const agentTreeshakeOutputPath = join(tmpdir(), "pi-agent-treeshake-smoke.js");
 const errorLogPath = join(tmpdir(), "pi-browser-smoke-errors.log");
 const generatedCatalogDataDir = join(process.cwd(), "packages/ai/src/providers/data");
@@ -83,6 +84,51 @@ try {
 	]) {
 		const nodeAdapter = findInput(durableInputs, forbiddenInput);
 		if (nodeAdapter) throw new Error(`Durable browser bundle unexpectedly includes ${nodeAdapter}`);
+	}
+
+	// ASR's layer table is source-checked by check-entry-graphs, but that walk skips
+	// `node:` specifiers. Bundling the browser entry is what proves it contains no
+	// Node builtin and no credential code; esbuild stubs builtins for platform
+	// browser, so the plugin turns one into an error instead.
+	const asrBuild = await build({
+		entryPoints: ["packages/asr/src/browser.ts"],
+		bundle: true,
+		platform: "browser",
+		format: "esm",
+		logLevel: "silent",
+		metafile: true,
+		outfile: asrOutputPath,
+		plugins: [
+			{
+				name: "no-node-builtins",
+				setup(build) {
+					build.onResolve({ filter: /^node:/ }, (args) => ({
+						errors: [{ text: `a browser entry imports the Node builtin ${args.path}` }],
+					}));
+				},
+			},
+		],
+		write: false,
+	});
+	const asrInputs = asrBuild.metafile.inputs;
+	for (const expectedInput of [
+		"packages/asr/src/browser.ts",
+		"packages/asr/src/mic/capture.ts",
+		"packages/asr/src/session.ts",
+	]) {
+		if (!findInput(asrInputs, expectedInput)) {
+			throw new Error(`ASR browser bundle does not include ${expectedInput}`);
+		}
+	}
+	const asrPaths = Object.keys(asrInputs).map(normalizePath);
+	for (const forbiddenInput of [
+		"packages/asr/src/device.ts",
+		"packages/asr/src/token.ts",
+		"packages/asr/src/node.ts",
+		"packages/asr/src/dom/",
+	]) {
+		const leaked = asrPaths.find((input) => input.includes(forbiddenInput));
+		if (leaked) throw new Error(`ASR browser bundle unexpectedly includes ${leaked}`);
 	}
 
 	const agentTreeshakeBuild = await build({
