@@ -22,6 +22,7 @@ import {
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import styles from "./actions.module.css";
+import { withFoldLanding } from "./foldLanding.ts";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
 import { normalizeEditArgs, type ToolArgs, useCwd, useLiveArgs, useResultText } from "./tools/args.ts";
 import { BashHeader } from "./tools/BashHeader.tsx";
@@ -176,11 +177,11 @@ const ToolActionView = memo(function ToolActionView({
 
 	return (
 		<div className={styles.action} data-kind={kind}>
-			<div className={styles.actionHead}>
+			<div className={styles.actionHead} data-sticky-head>
 				<button
 					type="button"
 					className={styles.actionCollapsed}
-					onClick={handleToggle}
+					onClick={(e) => withFoldLanding(e.currentTarget, handleToggle)}
 					aria-expanded={isExpanded}
 					aria-label={`${isExpanded ? "Collapse" : "Expand"} ${liveSummary}`}
 				>

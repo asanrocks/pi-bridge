@@ -28,11 +28,26 @@
                      cap toggle (chevron "show all") and the copy/wrap/md/
                      view icon controls
                      live in the hover top bar of the expanded card
+
+   Sticky ladder (ADR 0017): both of those press points pin against the
+   viewport — the group header under the fixed TopBar, an action head under the
+   TopBar or the pinned group header — so a long group or card never scrolls its
+   fold control away. Pure CSS: each sticks inside its own containing block
+   (.actionGroup / .action), so sibling headers push each other out. A pinned
+   header keeps its resting chrome — no seam, no corner change: the conversation's
+   colour band stays unbroken while the content slides beneath.
    ========================================================================== */
 
 /* ── Group — a meta-group of consecutive actions. Neutral (no kind hue). ── */
 .actionGroup {
 	margin: 6px 0;
+	/* Sticky ladder, level 2's offset: an action head docks exactly under the
+	   pinned group header. The header is one nowrap line of --fs-sm with 4px
+	   vertical padding, so its height is derived rather than measured — no
+	   ResizeObserver, and both sides of the calc scale with --ui-scale together
+	   so the two pinned rows never open a gap. Keep in lockstep with
+	   .actionGroupHeader's line-height and padding. */
+	--group-head-h: calc(var(--fs-sm) * 1.6 + 8px);
 }
 
 /* Group header — a label row above the kinded actions. The group itself is
@@ -46,7 +61,7 @@
 	gap: 8px;
 	width: 100%;
 	padding: 4px 8px 4px 2px;
-	background: transparent;
+	background-color: var(--color-background);
 	cursor: pointer;
 	font-size: var(--fs-sm);
 	font-family: inherit;
@@ -55,10 +70,23 @@
 	border-radius: var(--radius-sm);
 	user-select: none;
 	text-align: left;
+	/* Sticky ladder, level 1 (module header): pinned under the fixed TopBar
+	   for as long as the group is on screen. The containing block is
+	   .actionGroup, so the next group's header pushes this one out; a
+	   collapsed group's containing block is exactly this row's height, so
+	   pinning is inert there and needs no gating. Opaque background: content
+	   scrolls underneath. */
+	position: sticky;
+	top: var(--topbar-h);
+	z-index: 2;
+	/* --group-head-h derives the height from it. */
+	line-height: 1.6;
 }
 
 .actionGroupHeader:hover {
-	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
+	/* Composited over the opaque base — a translucent wash would let the rows
+	   sliding under a pinned header bleed through. */
+	background-color: color-mix(in srgb, var(--color-muted) 45%, var(--color-background));
 }
 
 /* Collapse triangle — shared by group and action headers. Sits at the start. */
@@ -104,6 +132,11 @@
 	padding: 2px 0;
 }
 
+/* Inside a group an action head docks under the pinned group header. */
+.groupLine .actionHead {
+	top: calc(var(--topbar-h) + var(--group-head-h));
+}
+
 /* ── Action — the tinted region. hue = kind. ─────────────────────── */
 /* Unified anatomy: every tinted row has a 3px left strip + a uniform-strength
    tint, both hued from the same token. No per-kind special-cases — the
@@ -143,6 +176,19 @@
 	font-size: var(--fs-sm);
 	color: var(--color-foreground);
 	border-radius: 0 var(--radius-sm) 0 0;
+	/* Sticky ladder, level 2: the row carrying the fold control pins under the
+	   TopBar — or under the group header inside a group — so a tall card never
+	   scrolls its own collapse target away. Same containing-block rule as level
+	   1: a collapsed row has almost no range to pin across (its block is the row
+	   plus at most a short result preview). The hue tint is a translucent overlay
+	   on .action, so the pinned row composites it onto the page tone to stay
+	   opaque while still matching the row beneath — identical at rest, opaque
+	   while pinned. z-index because the card's flow content paints after this
+	   row. */
+	position: sticky;
+	top: var(--topbar-h);
+	z-index: 1;
+	background-color: color-mix(in srgb, var(--action-hue) var(--action-tint), var(--color-background));
 }
 
 /* Collapse button — triangle + summary. flex:1 fills the header so the cap

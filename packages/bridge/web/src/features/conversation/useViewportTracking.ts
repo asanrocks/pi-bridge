@@ -233,7 +233,17 @@ export function useViewportTracking(
 			// (open menu) falls through to the turn scan below.
 			const rect = container.getBoundingClientRect();
 			const hit = document.elementFromPoint(rect.left + rect.width / 2, probeY);
-			if (hit instanceof HTMLElement && hit !== container && container.contains(hit)) {
+			// A pinned group/action header is a sticky box: its rect top is the pin
+			// offset, not the document position of the content under the probe, and it
+			// holds that value for as long as it stays pinned — so capturing it would
+			// make the restore target non-unique. Fall through to the turn scan below,
+			// which pins the enclosing turn's boundary instead.
+			if (
+				hit instanceof HTMLElement &&
+				hit !== container &&
+				container.contains(hit) &&
+				!hit.closest("[data-sticky-head]")
+			) {
 				el = hit;
 				const turnEl = hit.closest("[data-turn-key]");
 				if (turnEl instanceof HTMLElement && turnEl.dataset.turnKey) {
