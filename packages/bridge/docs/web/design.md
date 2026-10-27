@@ -408,7 +408,9 @@ column width change (a ResizeObserver width filter — height growth is
 content, not rewrap) scrolls that point of that element back to the same
 viewport position. If React replaced the captured node meanwhile, the anchor
 degrades to the enclosing turn's boundary; with no anchor at all it keeps
-the offset.
+the offset. A pinned action or group header is excluded from the probe — its
+rect top is the pin offset, which would make the restore target non-unique — so
+the probe falls back to that turn boundary while a header is pinned.
 
 ### Compose dock
 
@@ -728,6 +730,32 @@ user intent. Each action has its own triangle. Long details use a separate
 expand control (chevron icon, with a "Show all" tooltip); the normal details
 region is capped at 300px and signals
 clipping with a fade. Touch inputs keep hover controls visible.
+
+Both fold controls pin against the viewport, which is the scroll container: the
+group header sticks under the fixed TopBar for as long as its group is on
+screen, and an action's own header — the row that carries its triangle — sticks
+beneath the group header, so a long group or a long card never scrolls its
+collapse target away. Nesting is the sticky offset (`--topbar-h`, then
+`--topbar-h` plus the derived `--group-head-h`); each header is bounded by its
+own containing block — the group, the action — so the next sibling's header
+pushes the pinned one out. Both paint an opaque surface, because content
+scrolls underneath: the group header the page tone, the action header its hue
+tint composited onto that tone. A pinned header keeps its resting chrome — no
+seam, no corner change, no shadow — so the conversation's colour band stays
+unbroken while content slides beneath it. The pinning is chrome only — it adds
+no height, and pinning itself does not affect the scroll anchor.
+
+A fold lands where it was clicked: the clicked header keeps its screen position
+and the body slides up beneath it. Pinning makes this necessary — a pinned
+header's flow position is far above the viewport, so collapsing the body would
+let the row fall back to it and disappear upward (and the shrunken document can
+then clamp the offset somewhere else entirely). The correction measures the
+header before the toggle and scrolls by the difference afterwards, which needs
+no pin line named and is a no-op for a header that was not pinned. It is
+upward-only: a collapse that shrank the document past the scroll range keeps
+the browser's clamp instead of scrolling down. Keyboard folds (the focused
+turn's first group) take no correction, since focusing a turn top-anchors it and
+leaves that group's header below the fold line.
 
 Action rows use four semantic hues: edit, write, and apply_patch share the
 mutate hue,

@@ -96,6 +96,11 @@ describe("ThinkActionView — collapsed preview", () => {
 		expect(harness.previews).toEqual([]);
 	});
 
+	test("marks the action head for the sticky ladder (ADR 0017)", () => {
+		setState("first line");
+		expect(render()).toContain('data-sticky-head="true"');
+	});
+
 	test("registers the thinking pull only while the lazy field is null", () => {
 		setState(null);
 		render();

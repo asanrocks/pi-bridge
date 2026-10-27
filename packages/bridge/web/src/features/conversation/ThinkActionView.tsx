@@ -23,6 +23,7 @@ import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import styles from "./actions.module.css";
+import { withFoldLanding } from "./foldLanding.ts";
 
 export const ThinkActionView = memo(function ThinkActionView({
 	entryId,
@@ -107,11 +108,11 @@ export const ThinkActionView = memo(function ThinkActionView({
 	// target; the unclamped full prose renders below it when expanded.
 	return (
 		<div className={styles.action} data-kind="think">
-			<div className={styles.actionHead}>
+			<div className={styles.actionHead} data-sticky-head>
 				<button
 					type="button"
 					className={styles.actionCollapsed}
-					onClick={handleToggle}
+					onClick={(e) => withFoldLanding(e.currentTarget, handleToggle)}
 					aria-expanded={isExpanded}
 					aria-label={`${isExpanded ? "Collapse" : "Expand"} thinking`}
 				>

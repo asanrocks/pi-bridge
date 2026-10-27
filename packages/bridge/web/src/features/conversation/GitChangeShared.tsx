@@ -13,6 +13,7 @@ import { gitBaseRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { projectCwdOf } from "../../infra/state/ui.ts";
 import styles from "./actions.module.css";
+import { withFoldLanding } from "./foldLanding.ts";
 import turnStyles from "./turns.module.css";
 import type { GitShowState } from "./useGitShow.ts";
 import { useGitShow } from "./useGitShow.ts";
@@ -84,12 +85,15 @@ export const GitChangeRow = memo(function GitChangeRow({ change }: { change: Git
 
 	return (
 		<div className={styles.action} data-kind="git" data-turn-key={change.entryId} data-entry-id={change.entryId}>
-			<div className={expandable ? styles.actionHead : `${styles.actionHead} ${styles.actionHeadStatic}`}>
+			<div
+				className={expandable ? styles.actionHead : `${styles.actionHead} ${styles.actionHeadStatic}`}
+				data-sticky-head
+			>
 				{expandable ? (
 					<button
 						type="button"
 						className={styles.actionCollapsed}
-						onClick={toggle}
+						onClick={(e) => withFoldLanding(e.currentTarget, toggle)}
 						aria-expanded={expanded}
 						aria-label={`${expanded ? "Collapse" : "Expand"} git change: ${summary}`}
 						title={headerLine}

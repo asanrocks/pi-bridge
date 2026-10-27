@@ -29,6 +29,7 @@ import {
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import styles from "./actions.module.css";
+import { withFoldLanding } from "./foldLanding.ts";
 import type { ActionSummaryItem } from "./formatGroupSummary.ts";
 import { formatGroupSummary } from "./formatGroupSummary.ts";
 import { GitChangeCard } from "./GitChangeCard.tsx";
@@ -142,10 +143,13 @@ export const ActionGroupView = memo(function ActionGroupView({
 			<button
 				type="button"
 				className={styles.actionGroupHeader}
-				onClick={() =>
-					onToggleGroup(
-						groupKey,
-						actions.map((h) => `${h.entryId}:b${h.blockIndex}`),
+				data-sticky-head
+				onClick={(e) =>
+					withFoldLanding(e.currentTarget, () =>
+						onToggleGroup(
+							groupKey,
+							actions.map((h) => `${h.entryId}:b${h.blockIndex}`),
+						),
 					)
 				}
 				aria-expanded={effectiveExpanded}
