@@ -1,0 +1,13 @@
+{
+  "name": "@earendil-works/pi-asr-probe-protocol",
+  "private": true,
+  "type": "module",
+  "description": "Protocol probes for the Doubao IME ASR endpoint (see docs/protocol.md)",
+  "scripts": {
+    "mint": "node mint.mjs",
+    "register": "node reg.mjs"
+  },
+  "dependencies": {
+    "libopus-wasm": "0.4.1"
+  }
+}

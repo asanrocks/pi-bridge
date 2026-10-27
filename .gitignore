@@ -39,6 +39,9 @@ out.html
 packages/coding-agent/binaries/
 packages/env/bin/
 packages/env/daemon/target/
+# Compiled from packages/asr/demo/src; the source is what is reviewed.
+packages/asr/demo/public/app.js
+packages/asr/tools/protocol-probe/creds.json
 todo.md
 plans/
 .pi/hf-sessions/

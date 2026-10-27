@@ -1,0 +1,94 @@
+{
+	"name": "@earendil-works/pi-asr",
+	"version": "1.4.0",
+	"description": "Doubao IME streaming ASR client: wire protocol, editing model, text-field adapters, dictation orchestrator",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./browser": {
+			"source": "./src/browser.ts",
+			"types": "./dist/browser.d.ts",
+			"import": "./dist/browser.js",
+			"default": "./dist/browser.js"
+		},
+		"./node": {
+			"source": "./src/node.ts",
+			"types": "./dist/node.d.ts",
+			"import": "./dist/node.js",
+			"default": "./dist/node.js"
+		},
+		"./edit": {
+			"source": "./src/edit/index.ts",
+			"types": "./dist/edit/index.d.ts",
+			"import": "./dist/edit/index.js",
+			"default": "./dist/edit/index.js"
+		},
+		"./dictation": {
+			"source": "./src/dictation/index.ts",
+			"types": "./dist/dictation/index.d.ts",
+			"import": "./dist/dictation/index.js",
+			"default": "./dist/dictation/index.js"
+		},
+		"./dom": {
+			"source": "./src/dom/index.ts",
+			"types": "./dist/dom/index.d.ts",
+			"import": "./dist/dom/index.js",
+			"default": "./dist/dom/index.js"
+		},
+		"./protocol": {
+			"source": "./src/protocol/index.ts",
+			"types": "./dist/protocol/index.d.ts",
+			"import": "./dist/protocol/index.js",
+			"default": "./dist/protocol/index.js"
+		},
+		"./testing": {
+			"source": "./src/testing/index.ts",
+			"types": "./dist/testing/index.d.ts",
+			"import": "./dist/testing/index.js",
+			"default": "./dist/testing/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist"
+	],
+	"sideEffects": false,
+	"license": "MIT",
+	"author": "Earendil Works",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/earendil-works/pi.git",
+		"directory": "packages/asr"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"keywords": [
+		"asr",
+		"speech",
+		"dictation",
+		"streaming",
+		"doubao"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist demo/public/app.js",
+		"build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+		"typecheck": "tsc -p tsconfig.json",
+		"demo:build": "tsc -p demo/tsconfig.json",
+		"demo": "npm run build && npm run demo:build && node demo/server.mjs",
+		"test": "vitest --run",
+		"test:e2e": "vitest --run --config vitest.e2e.config.ts",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"devDependencies": {
+		"shx": "0.3.4",
+		"vitest": "4.1.12"
+	}
+}

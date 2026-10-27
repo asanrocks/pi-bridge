@@ -31,6 +31,7 @@
 			"packages/*/src/**/*.tsx",
 			"packages/*/test/**/*.ts",
 			"packages/ai/catalog/**/*.ts",
+			"packages/asr/demo/src/**/*.ts",
 			"packages/*/web/**/*.tsx",
 			"packages/*/web/**/*.ts",
 			"packages/coding-agent/examples/**/*.ts",
