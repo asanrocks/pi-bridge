@@ -33,12 +33,16 @@ export function usePathCompletion(options: {
 	onChange: (text: string) => void;
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 	complete: (prefix: string) => Promise<PathCompletionEntry[]>;
+	/** False while the field is not the user's (e.g. a dictation owns it): no
+	 * Tab trigger and no touch auto-open, but an already-open list stays
+	 * navigable. */
+	enabled?: boolean;
 }): {
 	handleKeyDown: (e: React.KeyboardEvent) => boolean;
 	node: ReactNode;
 	close: () => void;
 } {
-	const { value, onChange, textareaRef, complete } = options;
+	const { value, onChange, textareaRef, complete, enabled = true } = options;
 	const [open, setOpen] = useState(false);
 	const [completions, setCompletions] = useState<PathCompletionEntry[]>([]);
 	const [index, setIndex] = useState(0);
@@ -93,7 +97,7 @@ export function usePathCompletion(options: {
 	// in `handleKeyDown`, and refetching keeps the list in step with the prefix.
 	const coarsePointer = useMediaQuery("(pointer: coarse)");
 	useEffect(() => {
-		if (!coarsePointer || value === "") return;
+		if (!enabled || !coarsePointer || value === "") return;
 		const timer = setTimeout(() => {
 			const el = textareaRef.current;
 			if (!el || document.activeElement !== el) return;
@@ -101,7 +105,7 @@ export function usePathCompletion(options: {
 			if (info) void fetchCompletions(info.token, info.start);
 		}, AUTO_OPEN_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [value, coarsePointer, getAutoPrefix, fetchCompletions, textareaRef]);
+	}, [enabled, value, coarsePointer, getAutoPrefix, fetchCompletions, textareaRef]);
 
 	// Accept a completion — replace the token from start to cursor
 	const accept = useCallback(
@@ -178,7 +182,7 @@ export function usePathCompletion(options: {
 			// Tab (not shift) with a path-like token before the cursor triggers
 			// completion. Available in both compose and edit drafts — editing a
 			// message often involves editing paths too.
-			if (e.key === "Tab" && !e.shiftKey) {
+			if (enabled && e.key === "Tab" && !e.shiftKey) {
 				const pathInfo = getPathPrefix();
 				if (pathInfo) {
 					e.preventDefault();
@@ -188,7 +192,7 @@ export function usePathCompletion(options: {
 			}
 			return false;
 		},
-		[open, completions, index, accept, close, getPathPrefix, fetchCompletions],
+		[enabled, open, completions, index, accept, close, getPathPrefix, fetchCompletions],
 	);
 
 	return {

@@ -247,6 +247,20 @@ export class BridgeClient {
 		return this.call({ verb: "getDaemonInfo" });
 	}
 
+	/** Daemon-held dictation credentials (see AsrCredentialsRequest). The page
+	 * never holds an ASR secret; a registered device or a minted token is all
+	 * it receives. */
+	asrCredentials(): Promise<RpcReply> {
+		return this.call({ verb: "asrCredentials" });
+	}
+
+	/** Rewrite one composer draft (see TextPolishRequest). The daemon speaks the
+	 * upstream protocol because a page cannot; only the text crosses the wire,
+	 * and only when the operator enabled the feature. */
+	textPolish(text: string): Promise<RpcReply> {
+		return this.call({ verb: "textPolish", text });
+	}
+
 	pull(requests: { entryId: string; fieldPath: string }[]): Promise<RpcReply> {
 		return this.call({ verb: "pull", requests });
 	}

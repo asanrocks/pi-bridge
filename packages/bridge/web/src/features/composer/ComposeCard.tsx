@@ -13,7 +13,7 @@
 // via the same CSS module — one spec per role (ADR 07 §Styling invariants).
 // ============================================================================
 
-import { memo, type ReactNode, useCallback, useRef, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
@@ -61,6 +61,14 @@ export interface ComposeCardProps {
 	isBusy?: boolean;
 	/** Send disabled (compaction blocks sends; steering does not). */
 	isCompacting?: boolean;
+	/** Dictation owns the field: Send is unavailable until the utterance settles. */
+	dictating?: boolean;
+	/** The dictation is rewriting its span, so edits are refused. Narrower than
+	 * `dictating`: the commit itself writes through the native edit command. */
+	editsBlocked?: boolean;
+	/** Live dictation panel (record/keep/discard, phase, clock, meter), owned by
+	 * the container: the microphone toggles it and it outlives an utterance. */
+	dictationToolbar?: ReactNode;
 	/** Send disabled while peeking another branch (mutation lock). The
 	 * tooltip is the affordance; Enter-to-send is gated with it. */
 	sendLocked?: boolean;
@@ -83,6 +91,9 @@ export interface ComposeCardProps {
 	// ── Slots ──
 	/** Left control group (session: context % + bar + cost). */
 	leftControls?: ReactNode;
+	/** Microphone (dictation) affordance, owned by the container: the card
+	 * renders it beside Attach without knowing what it does. */
+	mic?: ReactNode;
 	/** Completion dropdown (rendered above the card; see usePathCompletion). */
 	completion?: ReactNode;
 	/** Pre-send key hook (completion navigation). Returns true when consumed. */
@@ -113,6 +124,9 @@ export const ComposeCard = memo(function ComposeCard({
 	onDiscardSteer,
 	isBusy = false,
 	isCompacting = false,
+	dictating = false,
+	editsBlocked = false,
+	dictationToolbar,
 	sendLocked = false,
 	onStop,
 	model,
@@ -126,6 +140,7 @@ export const ComposeCard = memo(function ComposeCard({
 	onCycleModel,
 	onTogglePin,
 	leftControls,
+	mic,
 	completion,
 	beforeKeyDown,
 }: ComposeCardProps) {
@@ -150,9 +165,29 @@ export const ComposeCard = memo(function ComposeCard({
 
 	const hasContent = value.trim().length > 0 || images.length > 0;
 	const handleSend = useCallback(() => {
-		if (!hasContent || sendLocked) return;
+		if (!hasContent || sendLocked || dictating) return;
 		onCommit();
-	}, [hasContent, sendLocked, onCommit]);
+	}, [hasContent, sendLocked, dictating, onCommit]);
+
+	// A dictation rewrites the span under the caret, so edits must be refused
+	// while it does. `readOnly` is the wrong tool: making a focused textarea
+	// read-only tears down the IME connection on Android, so the soft keyboard
+	// closes when the utterance starts and reopens when it settles — and again
+	// across the commit's own unlock/restore — resizing the layout each time.
+	// Refusing `beforeinput` blocks the same edits (typing, soft-keyboard input,
+	// paste, cut, drop) while the field stays editable as far as the browser is
+	// concerned, so the keyboard is left alone. The dictation's own writes bypass
+	// this path (`setRangeText` plus a synthetic `input`), and the refusal is off
+	// during `committing`, whose transcript arrives through
+	// `document.execCommand("insertText")` — the native edit command behind the
+	// one-step undo — which a refusal would swallow.
+	useEffect(() => {
+		const element = editsBlocked ? textareaRef.current : null;
+		if (element === null) return;
+		const refuse = (event: Event): void => event.preventDefault();
+		element.addEventListener("beforeinput", refuse);
+		return () => element.removeEventListener("beforeinput", refuse);
+	}, [editsBlocked, textareaRef]);
 
 	// Focus moving to something inside the card (e.g. the attach button or
 	// the hidden file input keeping the click chain inside) is not a blur.
@@ -290,6 +325,8 @@ export const ComposeCard = memo(function ComposeCard({
 					readOnly={!connected}
 				/>
 
+				{dictationToolbar}
+
 				{/* Control row. Left group ordered context-first (pct, bar, cost):
 				   context is the actionable metric, cost is a ledger. Mobile and
 				   desktop share this layout; the breakpoint only hides the bar and
@@ -306,6 +343,7 @@ export const ComposeCard = memo(function ComposeCard({
 						>
 							📎
 						</button>
+						{mic}
 						{leftControls}
 					</div>
 
@@ -344,7 +382,7 @@ export const ComposeCard = memo(function ComposeCard({
 							type="button"
 							className={styles.composerSendBtn}
 							onClick={handleSend}
-							disabled={!connected || !hasContent || isCompacting || sendLocked || sending}
+							disabled={!connected || !hasContent || isCompacting || sendLocked || sending || dictating}
 							aria-label={sendLocked ? "Send (back to live to send)" : "Send"}
 							title={sendLocked ? "Back to live to send" : "Send"}
 						>

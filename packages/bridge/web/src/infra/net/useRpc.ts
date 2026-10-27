@@ -6,6 +6,8 @@
 
 import { useCallback, useMemo } from "react";
 import type {
+	AsrCredential,
+	AsrCredentialsReply,
 	DirectoryListing,
 	GitBaseReply,
 	GitDiffReply,
@@ -24,6 +26,7 @@ import type {
 	SessionRef,
 	SnapshotFile,
 	SnapshotState,
+	TextPolishReply,
 } from "../../../../src/core/index.ts";
 import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
@@ -382,6 +385,49 @@ export async function listFilesRpc(
 		return (r.entries as Array<{ path: string; isDirectory: boolean }>) ?? [];
 	} catch {
 		return [];
+	}
+}
+
+/**
+ * Dictation credentials (`asrCredentials`). Prefetched by the composer, not
+ * toasted: the composer disables its control and shows the reason in place, so
+ * a daemon that cannot register a device or mint a token is a capability
+ * answer rather than an error the user has to dismiss.
+ */
+export async function asrCredentialsRpc(): Promise<{ auth: AsrCredential } | { error: string }> {
+	const client = getGlobalClient();
+	if (!client) return { error: "not connected" };
+	try {
+		const reply = await client.asrCredentials();
+		if (!reply.ok) return { error: typeof reply.error === "string" ? reply.error : "credentials unavailable" };
+		const auth = (reply as unknown as AsrCredentialsReply).auth;
+		if (auth === undefined) return { error: "credentials unavailable" };
+		return { auth };
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : "credentials unavailable" };
+	}
+}
+
+/**
+ * Rewrite one draft (`textPolish`). Untoasted, like `asrCredentialsRpc`: the
+ * composer states the answer in its dictation toolbar, and a press is the only
+ * thing that can fail there. Cancellation is the caller's business — the client
+ * has no request cancellation, so a caller that stops caring ignores the answer
+ * while the daemon's own request finishes inside its timeout.
+ */
+export async function textPolishRpc(text: string): Promise<{ text: string } | { error: string }> {
+	const client = getGlobalClient();
+	if (!client) return { error: "Text polish needs a daemon connection" };
+	try {
+		const reply = await client.textPolish(text);
+		if (!reply.ok) {
+			return { error: typeof reply.error === "string" ? reply.error : "Text polish is unavailable" };
+		}
+		const polished = (reply as unknown as TextPolishReply).text;
+		if (typeof polished !== "string") return { error: "Text polish returned nothing" };
+		return { text: polished };
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : "Text polish is unavailable" };
 	}
 }
 

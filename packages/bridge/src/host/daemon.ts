@@ -34,6 +34,8 @@ import type {
 	SessionRef,
 	SnapshotFile,
 } from "../core/index.ts";
+import type { AsrCredentialProvider } from "./asr-credentials.ts";
+import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection, type DaemonVerbs } from "./connection.ts";
 import embeddedAssets from "./embedded-assets.ts";
@@ -51,6 +53,7 @@ import {
 	stemFromSessionPath,
 } from "./projects.ts";
 import { readBridgeSettings } from "./settings.ts";
+import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -150,6 +153,15 @@ export class Daemon {
 	private modelRuntime!: ModelRuntime;
 	private idleGcMs = DEFAULT_IDLE_GC_MS;
 	private unflushedIdleGcMs = DEFAULT_UNFLUSHED_IDLE_GC_MS;
+	/** Dictation credentials (device registration or SAMI minting). Created with
+	 * the Daemon so a provider failure never outlives one request; it reads the
+	 * access key from the environment at construction. */
+	private asrCredentials: AsrCredentialProvider = createAsrCredentialProvider();
+	/** Draft rewriting through the upstream text-polish service. The identity path
+	 * is resolved lazily against `agentDir`. */
+	private textPolish: TextPolishProvider = createTextPolishProvider({
+		identityPath: () => this.textPolishIdentityPath(),
+	});
 
 	/** Per-file mtime cache: only re-read session files whose mtime changed. */
 	private sessionMetaCache = new Map<string, { mtimeMs: number; meta: FileMeta }>();
@@ -717,6 +729,15 @@ export class Daemon {
 		for (const conn of this.connections) conn.push(frame);
 	}
 
+	/** Where the text-polish guest identity lives: the operator's override, else a
+	 * file beside the bridge settings. Never inside a Project: it is a daemon
+	 * credential (a private key), not repository content. */
+	private textPolishIdentityPath(): string {
+		const override = process.env[TEXT_POLISH_IDENTITY_ENV];
+		if (override !== undefined && override !== "") return override;
+		return join(this.agentDir, "bridge", "wxime-identity.json");
+	}
+
 	// ── Daemon verbs (called by Connection) ───────────────────────────────
 
 	private daemonVerbs: DaemonVerbs = {
@@ -858,6 +879,15 @@ export class Daemon {
 			if (!project) throw new Error(`Unknown project: ${projectId}`);
 			return listFiles(prefix, project.cwd);
 		},
+
+		// The browser cannot mint a SAMI token or register a device; it gets the
+		// result and never the access key. See asr-credentials.ts.
+		asrCredentials: () => this.asrCredentials.get(),
+
+		// The browser cannot speak the polish protocol either (AES-ECB, secp128r1
+		// ECDH, signed headers); only the draft crosses this socket. See
+		// text-polish.ts.
+		textPolish: (text: string) => this.textPolish.polish(text),
 
 		readFile: (path: string, state?: string) => readFileAtSnapshot(path, state ?? "worktree"),
 

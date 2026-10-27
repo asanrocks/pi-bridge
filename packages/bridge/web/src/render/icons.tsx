@@ -80,6 +80,86 @@ export const CheckIcon = memo(function CheckIcon({ size = 16, className }: IconP
 	);
 });
 
+/** Record — the transport symbol for starting capture. Deliberately not a
+ * microphone: the microphone is the composer's disclosure for the dictation
+ * panel, and one glyph cannot mean both "show the controls" and "record". */
+export const RecordIcon = memo(function RecordIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg width={size} height={size} viewBox="0 0 16 16" color="currentColor" className={className} aria-hidden="true">
+			<circle cx="8" cy="8" r="4.5" fill="currentColor" />
+		</svg>
+	);
+});
+
+/** Undo — "take it back" affordance: an arrow curving back over what was
+ * inserted. */
+export const UndoIcon = memo(function UndoIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 16 16"
+			color="currentColor"
+			stroke="currentColor"
+			strokeWidth={1.5}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			fill="none"
+			className={className}
+			aria-hidden="true"
+		>
+			<path d="M2.5 6.5h6.25a3.75 3.75 0 1 1 0 7.5H6.5" />
+			<path d="M5.5 3.5 2.5 6.5l3 3" />
+		</svg>
+	);
+});
+
+/** Polish — "tidy this up" affordance: a sparkle, the one glyph in the row that
+ * is not a transport or an ending. Never a wand over text: the editor is already
+ * full of text, and the words live in `aria-label`/`title`. */
+export const PolishIcon = memo(function PolishIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 16 16"
+			color="currentColor"
+			stroke="currentColor"
+			strokeWidth={1.5}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			fill="none"
+			className={className}
+			aria-hidden="true"
+		>
+			<path d="M6.5 2.5 7.6 5.4 10.5 6.5 7.6 7.6 6.5 10.5 5.4 7.6 2.5 6.5 5.4 5.4Z" />
+			<path d="M11.8 9.6l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5Z" />
+		</svg>
+	);
+});
+
+/** Close — "discard" affordance: drop the thing being shown, without acting
+ * on it. */
+export const CloseIcon = memo(function CloseIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 16 16"
+			color="currentColor"
+			stroke="currentColor"
+			strokeWidth={1.5}
+			strokeLinecap="round"
+			fill="none"
+			className={className}
+			aria-hidden="true"
+		>
+			<path d="M4.5 4.5l7 7" />
+			<path d="M11.5 4.5l-7 7" />
+		</svg>
+	);
+});
+
 /** Eye — "view" affordance: open the referenced file in the in-app viewer. */
 export const EyeIcon = memo(function EyeIcon({ size = 16, className }: IconProps) {
 	return (
@@ -120,6 +200,30 @@ export const MarkdownIcon = memo(function MarkdownIcon({ size = 16, className }:
 				fillRule="evenodd"
 				d="M1.5 3H14.5A1.5 1.5 0 0 1 16 4.5V11.5A1.5 1.5 0 0 1 14.5 13H1.5A1.5 1.5 0 0 1 0 11.5V4.5A1.5 1.5 0 0 1 1.5 3ZM0.9 4.4V11.6H15.1V4.4H0.9ZM3 10.6V5.4H4.5L5.7 7.1L6.9 5.4H8.4V10.6H7.1V7.7L5.7 9.6L4.3 7.7V10.6H3ZM10.4 5.4H11.8V8H13.3L11.1 11L9 8H10.4V5.4Z"
 			/>
+		</svg>
+	);
+});
+
+/** Microphone — the dictation affordance; "record" rather than "sound on",
+ * matching the composer's other outline-free glyph roles. Filled to the same
+ * 16x16 grid as the rest of the set. */
+export const MicIcon = memo(function MicIcon({ size = 16, className }: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 16 16"
+			color="currentColor"
+			strokeLinecap="round"
+			stroke="currentColor"
+			strokeWidth={1.5}
+			fill="none"
+			className={className}
+			aria-hidden="true"
+		>
+			<rect x="6" y="1.75" width="4" height="7.5" rx="2" fill="currentColor" stroke="none" />
+			<path d="M3.5 7.5a4.5 4.5 0 0 0 9 0" />
+			<path d="M8 12v2.25" />
 		</svg>
 	);
 });

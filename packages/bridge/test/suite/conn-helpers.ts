@@ -101,6 +101,8 @@ export const mockDaemonVerbs: DaemonVerbs = {
 		devMode: false,
 	}),
 	setModelPinned: async () => {},
+	asrCredentials: async () => ({ kind: "device", deviceId: "mock-device" }),
+	textPolish: async (text: string) => `polished: ${text}`,
 	openSession: async () => ({ ok: true, session: mockSessionRef }),
 	newSession: async () => ({ ok: true, session: mockSessionRef }),
 	detach: () => {},

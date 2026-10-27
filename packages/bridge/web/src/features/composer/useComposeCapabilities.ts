@@ -29,7 +29,12 @@ export type ComposeCapabilityProps = Pick<
 /** No Project address (the global launcher) → no completion source. */
 const NO_COMPLETIONS = async (): Promise<PathCompletionEntry[]> => [];
 
-export function useComposeCapabilities(options: { textareaRef: React.RefObject<HTMLTextAreaElement | null> }): {
+export function useComposeCapabilities(options: {
+	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+	/** A dictation owns the field: path completion must not open on transcript
+	 * changes (they arrive as ordinary `input` events). */
+	dictating?: boolean;
+}): {
 	cardProps: ComposeCapabilityProps;
 	images: ImageContent[];
 	closeCompletion: () => void;
@@ -51,6 +56,7 @@ export function useComposeCapabilities(options: { textareaRef: React.RefObject<H
 		onChange: setDraftText,
 		textareaRef: options.textareaRef,
 		complete,
+		enabled: options.dictating !== true,
 	});
 
 	return {

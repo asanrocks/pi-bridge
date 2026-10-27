@@ -31,8 +31,11 @@ import cardStyles from "./ComposeCard.module.css";
 import { ComposeCard } from "./ComposeCard.tsx";
 import styles from "./ComposeDock.module.css";
 import { CostPopover } from "./CostPopover.tsx";
+import { DictationToggle } from "./DictationToggle.tsx";
+import { DictationToolbar } from "./DictationToolbar.tsx";
 import { formatCost } from "./formatters.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
+import { useDictation } from "./useDictation.ts";
 import { useModelCycling } from "./useModelCycling.ts";
 
 interface ComposeDockProps {
@@ -108,7 +111,21 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// ── Shared compose capabilities (attachments + path completion) ──────
 	// Completion is Project-scoped (ADR 12) and the hook reads the current
 	// address from the store, so this is identical to the Project home's call.
-	const capabilities = useComposeCapabilities({ textareaRef });
+	// Dictation: the mic in the control row discloses the dictation toolbar, the
+	// hook owns the ASR controller and both endings (see useDictation), and the
+	// field is locked while an utterance runs. The scope is the address pair the
+	// field shows, so a Session or Project switch ends the utterance with the
+	// draft it was editing.
+	const currentProjectId = useStore((s) => s.currentProjectId);
+	const currentStem = useStore((s) => s.currentStem);
+	const dictation = useDictation({
+		textareaRef,
+		enabled: connected,
+		scope: `${currentProjectId ?? ""}/${currentStem ?? ""}`,
+	});
+	const dictating = dictation.locked;
+	const { toolbarOpen, closeToolbar, dictation: controller } = dictation;
+	const capabilities = useComposeCapabilities({ textareaRef, dictating });
 
 	// ── Auto-expand transitions ─────────────────────────────────────────
 	// Open when streaming or editing starts, or while steers are queued.
@@ -246,12 +263,22 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 		rpc.abort();
 	}, [pendingSteer, draft, setDraftText, rpc]);
 
-	// ── Escape: collapse; cancel edit if editing ───────────────────────
-	// Edit drafts are cleared (Escape exits edit mode). Compose drafts are
-	// kept dormant (collapse is visual; the draft re-shows on re-expand),
-	// with the cursor position saved for restoration. Steers queued
-	// mid-stream block collapse so the draft chips stay visible.
+	// ── Escape: dismiss in order of what is most transient ─────────────
+	// A running utterance first (its transcript is a pre-edit, so collapsing now
+	// would unmount the field it owns), then the open dictation toolbar, then the
+	// card itself. Edit drafts are cleared (Escape exits edit mode); compose drafts
+	// are kept dormant (collapse is visual; the draft re-shows on re-expand), with
+	// the cursor position saved for restoration. Steers queued mid-stream block
+	// collapse so the draft chips stay visible.
 	const handleEscape = useCallback(() => {
+		if (dictating) {
+			dictation.cancel();
+			return;
+		}
+		if (toolbarOpen) {
+			closeToolbar();
+			return;
+		}
 		if (isEditing) {
 			clearDraft();
 			setExpanded(false);
@@ -262,7 +289,16 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 			cursorPosRef.current = [textareaRef.current.selectionStart ?? 0, textareaRef.current.selectionEnd ?? 0];
 		}
 		setExpanded(false);
-	}, [isEditing, clearDraft, pendingSteer.length, setExpanded]);
+	}, [
+		dictating,
+		dictation.cancel,
+		toolbarOpen,
+		closeToolbar,
+		isEditing,
+		clearDraft,
+		pendingSteer.length,
+		setExpanded,
+	]);
 
 	// Cancel edit (the edit header's Cancel button). Mirrors Escape's
 	// edit-cancel path: clearDraft + collapse. Explicit, like the popover's
@@ -339,7 +375,27 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					isBusy={isBusy}
 					isCompacting={isCompacting}
 					sendLocked={sendLocked}
+					dictating={dictating}
+					editsBlocked={dictation.editsBlocked}
+					dictationToolbar={
+						toolbarOpen ? (
+							<DictationToolbar
+								dictation={controller}
+								reason={dictation.reason}
+								undoKind={dictation.undoKind}
+								polish={dictation.polish}
+								canPolish={dictation.canPolish}
+								onRecord={dictation.record}
+								onKeep={dictation.commit}
+								onDiscard={dictation.cancel}
+								onUndo={dictation.undoLast}
+								onPolish={dictation.polishDraft}
+								onCancelPolish={dictation.cancelPolish}
+							/>
+						) : null
+					}
 					onStop={handleStop}
+					mic={<DictationToggle open={toolbarOpen} onToggle={dictation.toggleToolbar} />}
 					model={model}
 					models={models}
 					pinnedModels={pinnedModels}

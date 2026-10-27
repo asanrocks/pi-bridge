@@ -8,7 +8,9 @@
 			"@earendil-works/pi-agent-core": ["../agent/dist/index.d.ts"],
 			"@earendil-works/pi-agent-core/*": ["../agent/dist/*.d.ts"],
 			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
-			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"]
+			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
+			"@earendil-works/pi-asr": ["../asr/dist/index.d.ts"],
+			"@earendil-works/pi-asr/*": ["../asr/dist/*.d.ts"]
 		},
 		"rootDir": "./src"
 	},
