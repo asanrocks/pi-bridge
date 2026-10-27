@@ -4,6 +4,9 @@
 
 ### Added
 
+- Session events name the entry they will persist as. `message_start`, `message_update`, `message_end`, and the tool-execution lifecycle carry `entryId`, reserved before the item can be observed and consumed by the matching append, so a consumer never has to match a streamed item to its persisted entry by heuristic. `SessionManager.reserveEntryId()`, `releaseEntryId()`, and `appendMessage(message, reservedId?)` expose the reservation, and `readEntries(from)` returns the appended suffix with its next position, selected leaf, and list version.
+
+
 - Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
 
 ### Changed

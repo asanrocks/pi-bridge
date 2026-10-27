@@ -992,6 +992,14 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
+	/**
+	 * Changes whenever the ordered entry list is replaced wholesale (a new
+	 * session, a load, a branched-session rewrite). A reader that reads the
+	 * entry list incrementally uses it to detect that its position is stale.
+	 */
+	private entriesVersion = 0;
+	/** Ids handed out by `reserveEntryId()` that no append consumed yet. */
+	private readonly reservedIds = new Set<string>();
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
@@ -1069,6 +1077,7 @@ export class SessionManager {
 			parentSession: options?.parentSession,
 		};
 		this.fileEntries = [header];
+		this.entriesVersion++;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1087,6 +1096,7 @@ export class SessionManager {
 
 		if (header) {
 			this.fileEntries = entries;
+			this.entriesVersion++;
 			this.sessionId = header.id;
 
 			if (migrateToCurrentVersion(this.fileEntries)) {
@@ -1201,10 +1211,10 @@ export class SessionManager {
 	 * so it is easier to find them.
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
-	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+	appendMessage(message: Message | CustomMessage | BashExecutionMessage, reservedId?: string): string {
 		const entry: SessionMessageEntry = {
 			type: "message",
-			id: generateId(this.byId),
+			id: this._consumeEntryId(reservedId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			message,
@@ -1213,11 +1223,48 @@ export class SessionManager {
 		return entry.id;
 	}
 
+	/**
+	 * Reserve an entry id before the entry can be observed.
+	 *
+	 * An event that exposes an item under a displayable identity must name the
+	 * entry it will persist as, and the append must consume that same id. The id
+	 * is not in the entry list yet, but it is never handed out twice, so a
+	 * consumer can merge a live form and its persisted form by identity alone.
+	 * Release an unused reservation with `releaseEntryId`.
+	 */
+	reserveEntryId(): string {
+		const id = this._newEntryId();
+		this.reservedIds.add(id);
+		return id;
+	}
+
+	/** Return an unused reservation. Never accepts a persisted entry's id. */
+	releaseEntryId(id: string): void {
+		if (this.byId.has(id)) {
+			throw new Error(`Entry id ${id} is already persisted`);
+		}
+		this.reservedIds.delete(id);
+	}
+
+	private _consumeEntryId(reservedId?: string): string {
+		if (reservedId === undefined) return this._newEntryId();
+		if (this.byId.has(reservedId)) {
+			throw new Error(`Entry id ${reservedId} is already persisted`);
+		}
+		this.reservedIds.delete(reservedId);
+		return reservedId;
+	}
+
+	/** An id no persisted or reserved entry holds. */
+	private _newEntryId(): string {
+		return generateId({ has: (candidate) => this.byId.has(candidate) || this.reservedIds.has(candidate) });
+	}
+
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
 	appendThinkingLevelChange(thinkingLevel: string): string {
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			thinkingLevel,
@@ -1230,7 +1277,7 @@ export class SessionManager {
 	appendModelChange(provider: string, modelId: string): string {
 		const entry: ModelChangeEntry = {
 			type: "model_change",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			provider,
@@ -1244,7 +1291,7 @@ export class SessionManager {
 	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
 		const entry: UsageEntry = {
 			type: "usage",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			kind,
@@ -1268,7 +1315,7 @@ export class SessionManager {
 	): string {
 		const timestamp = new Date().toISOString();
 		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
-		const id = generateId(this.byId);
+		const id = this._newEntryId();
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			id,
@@ -1292,7 +1339,7 @@ export class SessionManager {
 			type: "custom",
 			customType,
 			data,
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
@@ -1305,7 +1352,7 @@ export class SessionManager {
 		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
 		const entry: SessionInfoEntry = {
 			type: "session_info",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			name: sanitizedName,
@@ -1341,6 +1388,7 @@ export class SessionManager {
 		content: string | (TextContent | ImageContent)[],
 		display: boolean,
 		details?: T,
+		reservedId?: string,
 	): string {
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
@@ -1348,7 +1396,7 @@ export class SessionManager {
 			content,
 			display,
 			details,
-			id: generateId(this.byId),
+			id: this._consumeEntryId(reservedId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
@@ -1387,7 +1435,7 @@ export class SessionManager {
 				: replacement;
 		const entry: ContextEditEntry = {
 			type: "context_edit",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			targetId,
@@ -1444,7 +1492,7 @@ export class SessionManager {
 		}
 		const entry: LabelEntry = {
 			type: "label",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			targetId,
@@ -1510,6 +1558,37 @@ export class SessionManager {
 	/** Number of session entries (excludes header), without copying them like `getEntries()`. */
 	getEntryCount(): number {
 		return this.byId.size;
+	}
+
+	/**
+	 * Read the entry list from `from` onward, together with the leaf it selects.
+	 *
+	 * This is the read boundary for a consumer that mirrors the session: it
+	 * returns one synchronous snapshot of the appended suffix, its next read
+	 * position, the current leaf, and the version of the whole list. Entries,
+	 * position, and leaf therefore always describe the same instant, so a
+	 * consumer never has to infer an append from an event's payload.
+	 *
+	 * `version` changes when the ordered list is replaced wholesale. A reader
+	 * holding entries from an older version must discard them and read again
+	 * from zero; append-only growth keeps the version and the position valid.
+	 */
+	readEntries(from: number): {
+		entries: SessionEntry[];
+		next: number;
+		leafId: string | null;
+		version: number;
+	} {
+		// The header, when present, is always first and is not an entry.
+		const offset = this.fileEntries.length > 0 && this.fileEntries[0].type === "session" ? 1 : 0;
+		const total = this.fileEntries.length - offset;
+		const start = Number.isFinite(from) ? Math.min(Math.max(Math.trunc(from), 0), total) : 0;
+		return {
+			entries: this.fileEntries.slice(offset + start) as SessionEntry[],
+			next: total,
+			leafId: this.leafId,
+			version: this.entriesVersion,
+		};
 	}
 
 	/**
@@ -1611,7 +1690,7 @@ export class SessionManager {
 		this.leafId = branchFromId;
 		const entry: BranchSummaryEntry = {
 			type: "branch_summary",
-			id: generateId(this.byId),
+			id: this._newEntryId(),
 			parentId: branchFromId,
 			timestamp: new Date().toISOString(),
 			fromId,
@@ -1710,6 +1789,8 @@ export class SessionManager {
 			}
 
 			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			// The entry sequence is replaced wholesale: an incremental reader's position is stale.
+			this.entriesVersion++;
 			this.sessionId = newSessionId;
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
@@ -1742,6 +1823,8 @@ export class SessionManager {
 			parentId = labelEntry.id;
 		}
 		this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+		// The entry sequence is replaced wholesale: an incremental reader's position is stale.
+		this.entriesVersion++;
 		this.sessionId = newSessionId;
 		this._buildIndex();
 		return undefined;

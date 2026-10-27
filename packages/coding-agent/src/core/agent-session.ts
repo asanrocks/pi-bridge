@@ -192,9 +192,27 @@ type WithParentToolCallId<E> = E extends {
 	? E & { parentToolCallId?: string }
 	: E;
 
+/**
+ * A lifecycle event for an item that pi persists names the entry it will be
+ * stored as. The identity is reserved before the event is observable, so a
+ * consumer can address the live form under its final id and merge the
+ * persisted form by identity instead of by heuristic.
+ */
+type WithEntryId<E> = E extends {
+	type:
+		| "message_start"
+		| "message_update"
+		| "message_end"
+		| "tool_execution_start"
+		| "tool_execution_update"
+		| "tool_execution_end";
+}
+	? E & { entryId?: string }
+	: E;
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
-	| WithParentToolCallId<Exclude<AgentEvent, { type: "agent_end" }>>
+	| WithEntryId<WithParentToolCallId<Exclude<AgentEvent, { type: "agent_end" }>>>
 	| {
 			type: "agent_end";
 			messages: AgentMessage[];
@@ -472,6 +490,12 @@ export class AgentSession {
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	/** Created on the first `ctx.executeTool()` call. */
 	private _nestedToolCalls: NestedToolCallRunner | undefined;
+	/** Entry id reserved for the assistant message currently streaming. */
+	private _pendingAssistantEntryId: string | null = null;
+	/** Entry ids reserved per tool call, consumed by the tool-result message. */
+	private readonly _pendingToolResultEntryIds = new Map<string, string>();
+	/** Entry ids reserved for user/system messages, by message object. */
+	private readonly _pendingMessageEntryIds = new WeakMap<object, string>();
 	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
 	private _hiddenDeclarations: ReadonlySet<string> = new Set();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
@@ -1145,9 +1169,37 @@ export class AgentSession {
 			}
 		}
 
+		// Reserve the persisted identity before an entry becomes observable. Every
+		// later event for that item carries it, and persistence consumes it.
+		let reservedEntryId: string | undefined;
+		if (event.type === "message_start") {
+			reservedEntryId = this._reserveEntryForStart(event.message);
+		} else if (event.type === "message_update") {
+			reservedEntryId = this._pendingAssistantEntryId ?? undefined;
+		} else if (event.type === "message_end") {
+			reservedEntryId = this._takeEntryForEnd(event.message);
+		} else if (
+			event.type === "tool_execution_start" ||
+			event.type === "tool_execution_update" ||
+			event.type === "tool_execution_end"
+		) {
+			reservedEntryId = this._reserveEntryForTool(
+				event.toolCallId,
+				(event as { parentToolCallId?: string }).parentToolCallId,
+			);
+		}
+
 		// Emit to extensions first, then notify public listeners.
 		await this._emitExtensionEvent(event);
-		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+		if (event.type === "agent_end") {
+			this._emit({ ...event, willRetry: this._willRetryAfterAgentEnd(event) });
+		} else if (reservedEntryId === undefined) {
+			// A nested tool call owns no entry: its output belongs to the result of
+			// the call that issued it.
+			this._emit(event as AgentSessionEvent);
+		} else {
+			this._emit({ ...event, entryId: reservedEntryId } as AgentSessionEvent);
+		}
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -1160,6 +1212,7 @@ export class AgentSession {
 					event.message.content,
 					event.message.display,
 					event.message.details,
+					reservedEntryId,
 				);
 			} else if (
 				event.message.role === "system" ||
@@ -1168,7 +1221,7 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				entryId = this.sessionManager.appendMessage(event.message);
+				entryId = this.sessionManager.appendMessage(event.message, reservedEntryId);
 			}
 			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -1202,6 +1255,74 @@ export class AgentSession {
 			this._flushPendingCustomMessages();
 		}
 	};
+
+	/**
+	 * Reserve the persisted identity of a message that is about to become
+	 * observable. The id is public from `message_start` and is consumed by the
+	 * matching `message_end`.
+	 */
+	private _reserveEntryForStart(message: AgentMessage): string | undefined {
+		const role = message.role;
+		if (role !== "user" && role !== "system" && role !== "assistant" && role !== "toolResult" && role !== "custom") {
+			return undefined;
+		}
+		const entryId = this.sessionManager.reserveEntryId();
+		if (role === "assistant") {
+			// A retry can start a new response before the previous one ended; the
+			// previous reservation is dropped, and a consumer that kept its live
+			// form discards it once it is absent from the entry list.
+			if (this._pendingAssistantEntryId !== null) {
+				this.sessionManager.releaseEntryId(this._pendingAssistantEntryId);
+			}
+			this._pendingAssistantEntryId = entryId;
+		} else if (role === "toolResult") {
+			const toolCallId = (message as ToolResultMessage).toolCallId;
+			// The id was normally reserved at tool_execution_start so partial
+			// output could be addressed before the result message existed.
+			const existing = this._pendingToolResultEntryIds.get(toolCallId);
+			if (existing !== undefined) {
+				this.sessionManager.releaseEntryId(entryId);
+				return existing;
+			}
+			this._pendingToolResultEntryIds.set(toolCallId, entryId);
+		} else {
+			this._pendingMessageEntryIds.set(message, entryId);
+		}
+		return entryId;
+	}
+
+	/**
+	 * The result entry a tool call will persist under. Reserved before the tool
+	 * runs so partial output is addressed by the final identity.
+	 */
+	private _reserveEntryForTool(toolCallId: string, parentToolCallId?: string): string | undefined {
+		// A nested call owns no entry: its output is recorded on the result of
+		// the call that issued it.
+		if (parentToolCallId !== undefined) return undefined;
+		const existing = this._pendingToolResultEntryIds.get(toolCallId);
+		if (existing !== undefined) return existing;
+		const entryId = this.sessionManager.reserveEntryId();
+		this._pendingToolResultEntryIds.set(toolCallId, entryId);
+		return entryId;
+	}
+
+	/** Take the reservation a finishing message started under. */
+	private _takeEntryForEnd(message: AgentMessage): string | undefined {
+		if (message.role === "assistant") {
+			const entryId = this._pendingAssistantEntryId ?? undefined;
+			this._pendingAssistantEntryId = null;
+			return entryId;
+		}
+		if (message.role === "toolResult") {
+			const toolCallId = (message as ToolResultMessage).toolCallId;
+			const entryId = this._pendingToolResultEntryIds.get(toolCallId);
+			this._pendingToolResultEntryIds.delete(toolCallId);
+			return entryId;
+		}
+		const entryId = this._pendingMessageEntryIds.get(message);
+		this._pendingMessageEntryIds.delete(message);
+		return entryId;
+	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		if (this._agentRunAbortRequested) return false;
@@ -2399,15 +2520,17 @@ export class AgentSession {
 	}
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
+		const entryId = this.sessionManager.reserveEntryId();
 		this.sessionManager.appendCustomMessageEntry(
 			appMessage.customType,
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
+			entryId,
 		);
 		this._refreshFinalizedContext();
-		this._emit({ type: "message_start", message: appMessage });
-		this._emit({ type: "message_end", message: appMessage });
+		this._emit({ type: "message_start", message: appMessage, entryId });
+		this._emit({ type: "message_end", message: appMessage, entryId });
 	}
 
 	/**
