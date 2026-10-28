@@ -110,7 +110,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 			aria-label={copied ? "Copied" : label}
 			title={label}
 		>
-			{copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+			{copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 		</button>
 	);
 }

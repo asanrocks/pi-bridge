@@ -28,6 +28,7 @@ import {
 } from "../../../../src/viewmodel/index.ts";
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
+import { CaretIcon } from "../../render/icons.tsx";
 import styles from "./actions.module.css";
 import { withFoldLanding } from "./foldLanding.ts";
 import type { ActionSummaryItem } from "./formatGroupSummary.ts";
@@ -155,7 +156,9 @@ export const ActionGroupView = memo(function ActionGroupView({
 				aria-expanded={effectiveExpanded}
 				aria-label={`${effectiveExpanded ? "Collapse" : "Expand"} action group: ${label}`}
 			>
-				<span className={styles.collapseTri}>{effectiveExpanded ? "\u25BE" : "\u25B8"}</span>
+				<span className={styles.collapseTri}>
+					<CaretIcon size={12} direction={effectiveExpanded ? "down" : "right"} />
+				</span>
 				{/* Left-edge hue legend — always visible (stable landmark;
 				    the tinted rows below are the expanded detail, the dots are the
 				    summary). One dot per hue, same --kind-* tokens as

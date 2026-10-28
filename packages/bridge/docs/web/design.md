@@ -51,10 +51,10 @@ browse branches in History. A steerer can do the following:
   nothing folds. A pinned model is a promotion: it repeats in its provider group
   and stays normal, never folded. Searching bypasses the
   tiers so a folded model stays findable. Hovering a row reveals its
-  `provider/modelId` and, on an unpinned row, a ghost pin toggle; a pinned row
-  keeps a filled pin visible, so the pinned set is scannable. The glyph is
-  state only — hovering it changes the button surface, never the symbol, and
-  the tooltip names the action. Shift+Enter toggles the focused row. Ctrl/Cmd+P
+  `provider/modelId` and, on an unpinned row, a pin toggle that its hover
+  reveals; a pinned row keeps a filled pin visible, so the pinned set is
+  scannable. The glyph is state only — hovering the control changes its fill,
+  never the symbol, and the tooltip names the action. Shift+Enter toggles the focused row. Ctrl/Cmd+P
   cycles the pinned list; Shift reverses the cycle. The controls remain
   available whenever connected.
 - Attach PNG, JPEG, WebP, or GIF images by file picker, paste, or drag and
@@ -229,8 +229,8 @@ The launcher also owns the connection down-state panels:
   fact that automatic retry continues.
 - Daemon unresponsive shows the initialization error and a `Retry` action.
 
-The attached topbar mirrors these states with a clickable connection chip in
-the top-bar button spec; the launcher panel remains the full explanation when
+The attached topbar mirrors these states with a clickable connection control on
+the TopBar's ghost spec; the launcher panel remains the full explanation when
 no Session is attached.
 
 ### Sidebar
@@ -283,8 +283,8 @@ readable rows. Dragging below its minimum hides it; dragging above its
 maximum previews and enters the overlay. While hidden, hovering the topbar
 hamburger opens a temporary peek drawer; clicking the drawer pins the rail.
 The pane carries a corner toggle at the TopBar hamburger's exact position in
-every open mode (peek: hamburger pins the rail; fullscreen and rail: an ✕
-that dismisses or hides), so the same screen corner toggles the sidebar
+every open mode (peek: hamburger pins the rail; fullscreen and rail: a close
+control that dismisses or hides), so the same screen corner toggles the sidebar
 throughout. A 12px left-edge drag zone can reveal and size the rail. Any
 pick that navigates — opening a Session or a Project home — dismisses a peek
 or mobile overlay.
@@ -307,6 +307,13 @@ the fullscreen overlay. Each pane supplies its bounds, its header chrome
 picks dismiss transient surfaces (fullscreen backs off to the rail on
 desktop, closes on mobile; the peek hides).
 
+The peek drawer covers the TopBar, including the toggle that opened it, so the
+drawer's own header action takes over that toggle's box — 6px from the top, 12px
+from the pane's edge, 36×36, the same box `.topBarBtn` occupies. The corner
+control therefore never moves between the hover target and the surface it opens:
+both panes do this arithmetic (Sidebar `.overlayHeader`, History `.headerPeek`),
+and the peek's action is the one that pins the rail rather than a second close.
+
 ### Topbar
 
 The TopBar is fixed between the Sidebar and History gutters. Its left control
@@ -316,9 +323,9 @@ is the History clock, symmetric with the hamburger: shown when a session is
 open and the History pane is hidden, hidden when the pane has a surface of
 its own, and hover-peeks the pane while it is hidden. It is not shown on the
 launcher, where there is no history. A down-state connection icon sits beside
-the name and retries when clicked: an icon-only broken-chain-link button on
-the topbar button spec, with no text — the state phrase lives in the tooltip
-and aria-label.
+the name and retries when clicked: an icon-only broken-chain-link control on
+the TopBar's ghost spec, with no text — the state phrase lives in the tooltip
+and `aria-label`.
 Its visible grammar is two-state: an animated link (opacity pulse; slow in
 muted gray while first connecting, fast in error red while retrying) means a
 retry loop is running, and a still red link means the connection has given
@@ -443,7 +450,10 @@ is hidden below 640px and the model name becomes the fixed `Models` label;
 otherwise control order is shared between desktop and mobile. Send is disabled
 when disconnected, empty, compacting, or already committing, but is enabled
 during streaming to queue a steer. Model and thinking selection are separate
-from Send and can be changed while connected.
+from Send and can be changed while connected. Send and Stop are the row's only
+filled controls and the client's only two; every other control in the row is a
+ghost control (see
+[Iconography and control surfaces](#iconography-and-control-surfaces)).
 
 When the tail turn is broken — it ended in an error after retries were
 exhausted, was stopped (a user Stop or a session close mid-run, which leave
@@ -527,8 +537,8 @@ asks, and no separate timeline pane. Each names its endpoint pair explicitly;
 none infers a turn-scoped window git cannot know.
 
 - **The turn chip** (the git identity on a user message) is a static label
-  until the turn has something to review, then a `▾` menu. Its items are the
-  commits observed during the turn (`UserTurn.gitTransitions`): a stamp whose
+  until the turn has something to review, then a disclosure menu. Its items are
+  the commits observed during the turn (`UserTurn.gitTransitions`): a stamp whose
   commit differs from the previously observed one, attributed to the turn open
   at its path position — a prompt stamp is persisted before the message it
   labels, so it closes the previous turn while its identity becomes the next
@@ -559,8 +569,8 @@ not an archived worktree.
 ### Repository browser
 
 The browser is the one fullscreen repository surface (ADR 14): a file tree on
-the left, file content on the right, in the portal role (Escape, ✕, and
-backdrop close; read-only). Every entry point opens this same surface with a
+the left, file content on the right, in the portal role (Escape, the close
+control, and the backdrop close it; read-only). Every entry point opens this same surface with a
 different target — a Markdown link or a tool card opens one file with the full
 tree, a turn chip menu or a git card's `review` control opens a changed-files
 review, the TopBar badge's menu opens the live uncommitted review, and the
@@ -856,7 +866,11 @@ for new buttons, chips, action rows, and Markdown hosts.
   `@theme` (light) and the media-gated dark block (see Theming below).
   Components consume `var(--color-...)`, `var(--kind-...)`, `var(--radius-...)`,
   `var(--fs-...)`, `var(--dur-...)`, `var(--shadow-...)`, `var(--tracking-...)`,
-  and `var(--z-...)`; they do not introduce raw hex colors or color functions.
+  and `var(--z-...)`. Components introduce no raw pigment: no hex literal and
+  no color literal outside a `var()`. A `color-mix()` whose inputs are all
+  tokens, with one literal alpha, is a rule over the ladder rather than a
+  pigment of its own — it follows the dark block through the tokens it mixes,
+  and the ghost control's hover fill is the case that needs it.
   Elevation pigments are structural, not a second color palette. A token that
   merely restates another token's value is declared as a `var()` alias so a
   retune cannot diverge — and so it follows the dark block for free.
@@ -894,11 +908,18 @@ for new buttons, chips, action rows, and Markdown hosts.
   the padding edge instead of the text) and makes the apparent margin
   padding + marker. Padding is clearance, not taste: level 1 clears a
   two-digit `ol` marker, nested levels only a disc or single digit.
+- **Controls are glyph-first and chromeless at rest.** A button paints no
+  background and no border, and its state lives in the ink and in one optional
+  hover fill rather than in chrome; the composer's Send and Stop are the only
+  two exceptions. Icon-only is the default for verbs, and no in-document
+  control is a font glyph or an emoji. See
+  [Iconography and control surfaces](#iconography-and-control-surfaces).
 - **One spec per role.** A role has one visual specification wherever it
   appears. `ComposeCard` and `ComposeBar` share the card shell; toolbar and
   touch-target rules are shared across turn surfaces; action hue, strip, and
   card anatomy are shared across tool, user-bash, and git-change rows. Do not
-  create a near-duplicate button or chip for a second host.
+  create a near-duplicate button or chip for a second host; the ghost control
+  is one spec, and a host inherits its states rather than restating them.
 - **Streamdown overrides stay scoped.** Markdown host corrections target
   Streamdown's `data-streamdown` markers in `index.css` and the app's
   `.markdownContent` rules. They remove unwanted nested card chrome, preserve
@@ -912,9 +933,11 @@ for new buttons, chips, action rows, and Markdown hosts.
   (timestamps, paths, model names, status values) takes natural formatting with
   no case transformation. Ellipses use the `…` character, not `...`.
 - **Every feature owns a CSS module.** Feature components and their CSS stay
-  co-located. Shared rendering primitives own their own modules. Global CSS
-  is reserved for tokens, base elements, shell custom properties, focus, and
-  scoped third-party Markdown corrections.
+  co-located. Shared rendering primitives own their own modules. A spec shared
+  across features (the ghost control) lives in one shared module and is adopted
+  with CSS Modules `composes`, so it has one declaration site without becoming a
+  global utility class. Global CSS is reserved for tokens, base elements, shell
+  custom properties, focus, and scoped third-party Markdown corrections.
 - **Custom properties carry live geometry.** `--sidebar-w` and
   `--history-w` are published by their resize controllers and are consumed by
   the body, TopBar, conversation, and compose dock. They are zero when a
@@ -934,7 +957,254 @@ for new buttons, chips, action rows, and Markdown hosts.
   tint, and the composer is the raised white surface. Cards are reserved for
   individual actions, dialogs, file viewing, and repeated rows; page sections
   are not nested cards. Radius stays in the token scale, with the composer as
-  the deliberate larger-radius exception.
+  the deliberate larger-radius exception. A hairline border is a boundary
+  between two surfaces — a field, a portal, a card, a thumbnail — and never the
+  thing that says a control can be clicked.
+
+### Iconography and control surfaces
+
+A control is a hit target carrying one glyph, plus a label when it needs words.
+At rest it paints no background and no border, so its only ink is the symbol.
+Chrome that exists to announce clickability competes with `--color-border`'s
+single job — hairlines between surfaces — so a control earns a boundary only by
+being a container.
+
+**Reviewing the set.** `web/src/dev/glyphs.tsx` renders every export at all four
+slots and again inside the box ladder, served by the dev server at
+`/glyphs.html` and never built (Vite's entry is `index.html`). "This glyph is not
+pretty" is the one finding no gate can produce, so the answer is a surface where
+the whole set is visible at once instead of one screen at a time.
+
+**One glyph set.** `web/src/render/icons.tsx` is the only source. Its file
+header is the registry (role, glyph, one sentence each), exports are named
+`<Role>Icon`, and adding a glyph means adding it there rather than inlining an
+`<svg>` in a feature.
+
+- **Grid and live area.** Every glyph is drawn in a `0 0 16 16` viewBox with a
+  12×12 live area centred at 2..14. Ink stays inside the live area except round
+  caps and joins, which may cross it by half a stroke. The live area is the
+  answer to "how much blank surrounds the icon": it is applied inside the
+  viewBox, so two glyphs by different hands read at one optical size and no
+  consumer has to tune padding per symbol. Containment is not enough, though —
+  any scale below the live area satisfies it and still reads as a size bug. So
+  art authored elsewhere declares its **ink box** and `liveFit` maps it in: the
+  larger ink dimension lands on 12, the smaller follows the aspect ratio, and
+  the result is centred. One hand-applied constant cannot do that, because the
+  imported solid marks span 16×10 (Markdown) to 14×15 (Copy) and a shared 0.75
+  fits the widest while leaving Copy 12% narrow.
+- **Stroke weight is stated in rendered pixels, not viewBox units.** A 16-grid
+  glyph rendered at `S` CSS px carries `stroke-width: W * 16 / S`, which lands at
+  `W` px on screen. `W` is 1.5 at the 16 and 20 slots and 1.25 at 12 and 14: the
+  weight steps down on the optical-size step, because 1.5px of stroke on a 12px
+  glyph is over a tenth of its height and starts to blob. Stated the other way
+  round — one fixed viewBox stroke — a glyph rendered at 20px would be a third
+  heavier than the same glyph at 14px, which is how a shared set drifts into two
+  weights.
+- **Four slots, no free numbers.** The slot follows the row, not the meaning:
+  12 for meta marks (chip marks, section carets, a chevron beside a short
+  label), 14 in compact control rows (card and turn toolbars, row menus), 16 for
+  full-size icon controls (composer row, dialog and portal actions, the
+  fullscreen viewer's close), 20 for chrome (TopBar and pane-header toggles). A
+  feature picks a slot, never a number; 11, 13, and 18 are drift, and so is a
+  per-call-site size.
+- **Two ink modes, assigned by family.** Outline is the default. Solid is a
+  closed set of three families with their own slot rules. **Object marks** (Copy,
+  Check, Eye, Wrap, Markdown) sit beside Streamdown's own solid copy pair and
+  must match it in the same row; they are legal at 12 and 14 only, because a
+  filled symbol at 16 or 20 reads as a badge rather than a control. The one
+  exception is Check in the composer's dictation row, where the check is that
+  row's command rather than a mark beside copy art. **Menu marks** (More, the
+  row overflow) are made of dots, which have no outline form — a stroked dot at
+  14px closes its own counter and reads as a smudge — so they are solid by
+  construction, at 12 and 14 by the same badge argument. **Transport solids**
+  (Record, Send, Stop) are filled because solidity is the meaning; they render
+  at 16, where the filled box around them carries the size. A new glyph is
+  outline unless it joins one of those families, and the gate requires the
+  decision at the point the export is added.
+- **Directional marks split by what their rotation means.** Chevrons are
+  outline and point at something. The fold caret is solid, and it is the only
+  solid directional mark: rotation *is* its state (right / diagonal / down for
+  folded / active / open), so it carries that state as three glyph directions
+  rather than a CSS transform a consumer can forget. A filled triangle used as
+  a chevron would be a different symbol, not a weight choice. Because the
+  directions are one path under rotation, the path is authored symmetric about
+  (8,8) — an off-centre source box would orbit the rotation origin instead of
+  turning in place.
+- **Box ladder and bleed.** An icon-only control is square, from
+  24 / 28 / 32 / 36, chosen by the row it lives in. The hover and press rect
+  outgrows the glyph without moving layout: `margin: -pad` with an equal
+  `padding`, where `pad` is the row's own gap. That is what lets a 14px glyph in
+  a card toolbar offer a 28px target, and what keeps neighbouring icons from
+  reflowing when one of them lights up. Touch takes the other direction: on a
+  coarse pointer the box the row declares is the box the finger gets, and a
+  transparent overlay of the row's own gap carries the larger target
+  (`turns.module.css`: a 28px square with a 40px target). Enlarging the border box
+  instead repaints the control at finger size and lifts the row's height with it,
+  which is exactly what makes a conversation header read loose on a phone — the
+  target grew, the glyph did not, and the space between controls grew with both.
+- **Nothing in the document is a font glyph.** No emoji, and no geometric
+  character (`▾ ▶ ■ ✕ …`) standing in for an icon. Three concrete reasons: an
+  emoji is a colour bitmap that ignores `currentColor`, so it cannot follow the
+  dark ladder, the disabled opacity, or an accent hue; a text glyph sits on the
+  baseline, so a centred square hit box drifts a pixel or two per font and per
+  size; and its advance width is not its ink width, so "centre this" and "size
+  this" disagree. A **status mark is an icon, not data**, so it becomes a glyph
+  too (a failed directory listing shows a warning triangle, not `!`). Typed
+  characters that *are* the data stay text: git's own `A`/`M`/`D` status
+  letters, diff `+`/`−`, a `HEAD → working tree` label, and `…` as punctuation.
+  The one legal emoji sits outside the document — the `document.title` activity
+  marker, which no SVG can reach.
+- **A glyph carries no words.** An icon-only control carries `aria-label` and
+  its `<svg>` is `aria-hidden`. Never both: `role="img"` with an `aria-label`
+  inside an already-labelled button announces the control twice.
+
+**State is ink, not chrome.** A ghost control has five states and one channel
+each:
+
+| State | Ink | Fill |
+| --- | --- | --- |
+| rest | `--color-secondary` | none |
+| hover | `--color-foreground` | `color-mix(in srgb, currentColor var(--state-fill-alpha), transparent)` |
+| pressed (`aria-pressed`) | `--color-accent` | none |
+| engaged (`data-on`) | `--color-accent` | `color-mix(in srgb, currentColor var(--state-fill-alpha), transparent)` |
+| disabled | `--color-secondary` | none (`opacity: .4`) |
+
+The two engaged states differ by one channel on purpose. `aria-pressed` is state
+about the thing the control stands for — this row's model is pinned — so the ink
+says it and nothing else does; a chip behind every pinned row would turn a column
+of state into a column of buttons. `data-on` is a control that stays engaged, like
+a toolbar's wrap or an open dictation disclosure, and it takes the fill so the row
+reads as a pressed tool. Neither repaints its hue on hover.
+
+The ink change carries the hover, and the fill has to be strong enough not to
+pretend otherwise: the `--color-muted` surface token is 1.20:1 against the page
+tone and 1.25:1 against the raised composer, below the threshold where a fill
+reads as a change at all. So the fill is derived from `currentColor` — one
+declaration that follows whatever hue the state already chose, in both ladders —
+and the ink moves a full text level at the same time. The strength is
+`--state-fill-alpha` rather than a literal per rule, and a **state fill must
+clear ~1.4:1** against the surface it sits on, or the state is ink-only and the
+fill is just texture. The shipped 20% resolves to 1.45:1 on the light page (the
+earlier 12% was 1.25:1, within noise of the muted hover it replaced) and 1.78:1
+in dark, where the same alpha moves more luminance over near-black. Rest ink
+stays at the secondary level rather than the meta level, because with no border
+the glyph is the only thing marking the control. Disabled is opacity plus a
+rest-ink reset — a browser still matches `:hover` on a disabled button, so the
+hover hue would otherwise sit under the opacity — and WCAG exempts inactive
+components from the 3:1 non-text rule, so no per-state disabled color is needed.
+Focus is never the control's business — the global accent ring in `index.css`
+covers every button — and a control must not restate hover or focus as a
+`border-color` change, which it cannot do anyway once it has no border.
+
+**Toggle state swaps the glyph when the glyph has two forms.** Colour alone
+cannot carry on/off (WCAG 1.4.1), so a toggle whose symbol can differ shows the
+difference: an outline pin to a filled pin, a folded caret to an open one, the
+cap chevron to its collapse direction. The swap is the state. A toggle whose
+glyph has only one form (line wrap, Markdown rendering) takes the accent and the
+engaged fill (`data-on`) instead, so the row of card controls shows which tools
+are on at a glance; `aria-pressed` remains the non-visual state channel. Hover may change the fill but never the symbol, or the symbol
+stops meaning state.
+
+**A filled box marks a surface's primary command.** It is distinct from a solid
+glyph, which is ink without a box. The family is small and each member is the
+one control its surface exists to offer: Send and Stop in the composer (the
+commit and the interrupt — ghosting them would leave the accent with nowhere to
+live at rest and turn "stop the agent now" into a 1.5px stroke), the confirm in
+a dialog, `Apply` in the compare menu, and `Retry now` in a connection down
+state. Everything else is a ghost. A new filled control has to be that same
+thing — a command issued at the edge of a surface whose state changes something
+— and Send and Stop are the only two whose glyphs are also transport solids, in
+`--color-on-accent`, so box and symbol never disagree about weight.
+
+**A control that floats over content keeps a container.** The attachment remove
+button sits on a thumbnail, the jump button floats over the conversation, and
+the per-message copy chip floats over Markdown: what is beneath them is content,
+not a row, so each keeps a filled disc or card to stay legible against it. That
+is a legibility requirement, not chrome, and it is the only exception the border
+rule needs.
+
+A floating container's fill alone is not enough, which is why the copy chip
+carries `--shadow-chip`: a raised surface on the page tone is 1.05:1, so the
+half-pixel ring is what defines the shape — without it the chip reads as a hole
+punched in the paragraph rather than a control placed over it. Two placement
+rules follow from the same idea. A floating control stays inside the element it
+belongs to and never crosses that element's top edge upward: the chip's earlier
+`-8px` offset put it behind the fixed TopBar whenever its line sat at the top of
+the viewport, which looks like clipping. And the box takes the slot that its
+glyph fills — the copy mark is wide and squat, so 24 rather than 28 is what makes
+a 14-slot glyph read at size.
+
+**Text instead of a glyph, and the other way round.** Icon-only is the default
+for verbs. Text stays where the control carries a value rather than an action —
+the model and thinking label, context percentage, the cost ledger, the changes
+count, the Session name — because an icon would erase the value. A verb whose
+glyph is not yet established on screen, and an irreversible action with a small
+target, keeps a label *or a glyph the surface already uses for that same
+meaning*: discarding a steer, removing an attachment, and cancelling the
+composer's edit are all the close glyph, so that card never words one and glyphs
+another. At minimum a `title` and an `aria-label` name the outcome, and the
+tooltip is also the only teacher on a hoverless device. A dashed outline is
+the one border a control may own, and only for absent data — the unlabeled-turn
+chip marks a placeholder, not a resting clickable state. A comparison label
+(`HEAD → working tree`, the compare menu's between-chips arrow) is an
+expression, not an icon: typed characters stay legal inside data.
+
+Icon-first is not icon-always. The words stay wherever a glyph cannot carry the
+operation's *object and scope*, and there are eight such groups in this client:
+
+| Control | Why words rather than a glyph |
+| --- | --- |
+| `Review`, `File`/`Diff`, `Changed (3)`/`All files`, `Compare…`, `Refresh` | The words name which rendering, which state pair, or which read is being re-run. No glyph distinguishes two renderings of the same object without inventing a vocabulary for it, and a lone circular arrow among four text chips in one header would be the only glyph in the row — the same mixed-kind problem as the recovery bar below. |
+| `Collapse files`/`Expand files` | A second chevron pair in the same review bar collides with the lines toggle one row below; the words are the only thing carrying the scope. |
+| the `Full output` chip, the changes count | Values, not actions. |
+| `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
+| `Cancel`, `Done`, `Open link`, `Open comparison` **in a dialog footer** | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
+| `Load more` | The ghost tier's own example — a continuation, not an action on an object. |
+| `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
+| a row menu's `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
+
+Three rules keep the glyph rows honest. **One kind per surface**: a tool surface
+(the composer card, a card toolbar, the file browser header) is all glyphs, and a
+decision surface (a dialog footer) is all words, because a single glyph beside a
+single word reads as a mistake in one of them. **A pane name pairs with a close
+glyph, never with a word**: the file tree is `Files` while it is closed and its
+dismiss is the `CloseIcon`, because a name and a verb are different kinds and a
+pair must be one. **One consequence per glyph**: the dictation row discards a
+recording with `CloseIcon` (the audio is gone) and cancels a pending polish with
+`StopIcon` (the transcript is intact), because a single glyph for both would
+leave the row unable to say which of the two a click performs.
+
+**Implementation.** One spec, one file: `web/src/render/buttons.module.css`
+holds the ghost control and feature modules adopt it with CSS Modules
+`composes` (`composes: ghost from "../../render/buttons.module.css"`), never by
+restating its states. That keeps one declaration site without a global utility
+class, so the global stylesheet stays tokens, base elements, shell geometry,
+focus, and scoped third-party corrections.
+
+**The cascade layer order is declared in every file that opens the `control`
+layer, and it must be.** `composes` does not link rules — the bundler inlines a
+copy into every consumer — and a layer's priority is fixed by the first
+appearance of its name in the *bundled* stylesheet, not by the order the source
+files feel like they have. The inlined copies reach the CSS chunk before
+`app/index.css` does, so declaring the order only in `index.css` registered
+`control` first: preflight's `button { color: inherit; background-color:
+transparent }` then outranked every ghost rule, and the controls lost both their
+rest ink and their hover fill in the built client while the dev server, which
+injects one copy ahead of everything, looked correct. The statement is
+idempotent, so `index.css` and `render/buttons.module.css` both carry the full
+list and whichever lands first establishes it — a statement placed after any
+rule is too late. `scripts/check-bridge-styling-tokens.mjs` fails on a file that
+opens the layer without it, and on any order other than
+`theme, base, components, control, utilities`.
+
+**These rules are gated, not just written.**
+`scripts/check-bridge-icon-contract.mjs` (in `npm run check`) fails on an inline
+`<svg>` outside the glyph set, on a geometric or emoji character in the document,
+and on a solid mark rendered outside its family's slots. It also requires every
+exported `<Role>Icon` to be classified, so adding a glyph forces an ink-mode
+decision where it is added. Typed slot values could not catch any of this on
+their own: the slot union proves a number is legal, not that the glyph belonged
+there.
 
 ### Theming
 

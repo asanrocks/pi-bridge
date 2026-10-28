@@ -50,7 +50,7 @@ export const DictationToggle = memo(function DictationToggle({
 			aria-controls={open ? DICTATION_TOOLBAR_ID : undefined}
 			title={name}
 			aria-label={name}
-			data-open={open || undefined}
+			data-on={open || undefined}
 			onPointerDown={keepFocus}
 			onClick={onToggle}
 		>

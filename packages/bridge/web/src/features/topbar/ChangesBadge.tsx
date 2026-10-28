@@ -15,6 +15,7 @@ import type { GitDiffFileStat } from "../../../../src/core/index.ts";
 import { gitDiffRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
+import { BranchIcon, ChevronDownIcon } from "../../render/icons.tsx";
 import styles from "./TopBar.module.css";
 
 type Uncommitted =
@@ -92,9 +93,9 @@ export function ChangesBadge() {
 				aria-label={`${state.count} uncommitted file${state.count === 1 ? "" : "s"}`}
 				title={`${state.count} file${state.count === 1 ? "" : "s"} differ from HEAD — as of ${state.asOf}`}
 			>
-				{"Δ "}
+				<BranchIcon size={12} />
 				{state.count}
-				{" ▾"}
+				<ChevronDownIcon size={12} />
 			</button>
 			{menu && (
 				<AnchoredMenu

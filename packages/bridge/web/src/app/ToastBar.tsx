@@ -7,6 +7,7 @@
 import { memo, useCallback } from "react";
 import type { Toast } from "../infra/state/store.ts";
 import { getStore, useStore } from "../infra/state/store.tsx";
+import { CloseIcon } from "../render/icons.tsx";
 import styles from "./ToastBar.module.css";
 
 export const ToastBar = memo(function ToastBar() {
@@ -31,7 +32,9 @@ const ToastItem = memo(function ToastItem({ toast }: { toast: Toast }) {
 	return (
 		<button type="button" className={styles.toast} onClick={handleDismiss}>
 			<span className={styles.toastText}>{toast.message}</span>
-			<span className={styles.toastClose}>✕</span>
+			<span className={styles.toastClose}>
+				<CloseIcon size={14} />
+			</span>
 		</button>
 	);
 });

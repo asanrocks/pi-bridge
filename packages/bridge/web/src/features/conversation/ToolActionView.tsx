@@ -21,6 +21,7 @@ import {
 } from "../../../../src/viewmodel/index.ts";
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
+import { CaretIcon } from "../../render/icons.tsx";
 import styles from "./actions.module.css";
 import { withFoldLanding } from "./foldLanding.ts";
 import { ActionDetails } from "./tools/ActionDetails.tsx";
@@ -185,7 +186,9 @@ const ToolActionView = memo(function ToolActionView({
 					aria-expanded={isExpanded}
 					aria-label={`${isExpanded ? "Collapse" : "Expand"} ${liveSummary}`}
 				>
-					<span className={styles.collapseTri}>{isExpanded ? "\u25BE" : "\u25B8"}</span>
+					<span className={styles.collapseTri}>
+						<CaretIcon size={12} direction={isExpanded ? "down" : "right"} />
+					</span>
 					<span className={styles.actionSummary}>
 						{/* Collapsed shell actions render the beautified command (elided
 						  tokens as chips); the raw string stays the aria label, and the

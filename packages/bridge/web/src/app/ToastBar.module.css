@@ -47,9 +47,8 @@
 }
 
 .toastClose {
+	display: inline-flex;
 	opacity: 0.7;
-	font-size: var(--fs-sm);
-	line-height: 1;
 }
 
 .toast:hover .toastClose {

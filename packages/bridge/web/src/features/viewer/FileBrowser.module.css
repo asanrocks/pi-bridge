@@ -89,10 +89,12 @@
 }
 
 .treeMark {
-	width: 10px;
-	flex: 0 0 10px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 12px;
+	flex: 0 0 12px;
 	color: var(--color-muted-foreground);
-	font-size: var(--fs-sm);
 }
 
 .treeName {
@@ -114,16 +116,23 @@
 	font-size: var(--fs-sm);
 }
 
+/* A failed listing is a mark, not data. The letters beside it *are* the data
+   (git's own A/M/D), which is why that slot is monospace text; a status glyph
+   takes the icon slot instead so it inherits the control's optical size and
+   centring rather than the text baseline. */
+.treeStatusMark {
+	margin-left: auto;
+	padding-right: 8px;
+	display: inline-flex;
+	align-items: center;
+	color: var(--color-error);
+}
+
 .treeRow[data-status="added"] .treeStatus {
 	color: var(--color-success);
 }
 
 .treeRow[data-status="deleted"] .treeStatus {
-	color: var(--color-error);
-}
-
-/* A directory whose listing failed (the node is not empty, it is unreadable). */
-.treeRow[data-error] .treeStatus {
 	color: var(--color-error);
 }
 
@@ -347,10 +356,10 @@
 	cursor: default;
 }
 
+/* A data control: the label is the comparison endpoint, so it keeps its words
+   and the monospace face; the ghost spec carries the states. */
 .stateChip {
-	background: none;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
+	composes: ghost from "../../render/buttons.module.css";
 	color: var(--color-foreground);
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -366,17 +375,12 @@
 	font-family: inherit;
 }
 
-/* Chip as a selector: a button, so it needs the button reset and a caret. */
+/* Chip as a selector: a button, so it needs the ghost reset and a caret. */
 .stateChipBtn {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
 	cursor: pointer;
-}
-
-.stateChipBtn:hover {
-	border-color: var(--color-accent);
-	color: var(--color-foreground);
 }
 
 .stateChipLabel {
@@ -450,25 +454,24 @@
 	white-space: nowrap;
 }
 
-.refreshBtn[data-on] {
-	color: var(--color-foreground);
-	border-color: var(--color-foreground);
-}
-
 .refreshBtn {
-	background: none;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
+	composes: ghost from "../../render/buttons.module.css";
 	color: var(--color-muted-foreground);
-	cursor: pointer;
 	font-size: var(--fs-xs);
 	padding: 2px 8px;
 	flex-shrink: 0;
 }
 
-.refreshBtn:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
+/* An icon-only control sitting among the header's text chips: square from the
+   24 step, with the negative margin the box ladder prescribes so its 24px hit
+   rect does not make the row taller than the ~20px chips beside it. */
+.fileIconBtn {
+	composes: ghost from "../../render/buttons.module.css";
+	width: 24px;
+	height: 24px;
+	margin: -2px 0;
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
 }
 
 /* ── File sections ─────────────────────────────────────────────────────── */
@@ -519,31 +522,24 @@
 	color: var(--color-foreground);
 }
 
-/* Whole-file toggle — the section's own quiet control, matching the
-   state-pair Refresh chrome. */
+/* Whole-file toggle — the section's own quiet control, matching the state-pair
+   Refresh chrome. `data-on` is the ghost spec's "on" state. */
 .sectionFileBtn {
-	background: none;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
+	composes: ghost from "../../render/buttons.module.css";
 	color: var(--color-muted-foreground);
-	cursor: pointer;
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 1px 6px;
 	flex-shrink: 0;
 }
 
-.sectionFileBtn:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
-}
-
 .sectionFileBtn[data-on] {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
+	color: var(--color-accent);
 }
 
 .sectionTri {
+	display: inline-flex;
+	align-items: center;
 	color: var(--color-muted-foreground);
 	flex-shrink: 0;
 }

@@ -12,6 +12,7 @@
 
 import { memo } from "react";
 import type { GitDiffFileStatus } from "../../../../src/core/index.ts";
+import { CaretIcon, WarningIcon } from "../../render/icons.tsx";
 import styles from "./FileBrowser.module.css";
 
 export interface TreeNode {
@@ -123,7 +124,6 @@ function TreeRow({
 				data-active={active || undefined}
 				data-on-path={inActivePath || undefined}
 				data-status={letter || undefined}
-				data-error={node.error || undefined}
 				style={{ paddingLeft: `${depth * 12 + 6}px` }}
 				title={
 					node.error
@@ -134,13 +134,17 @@ function TreeRow({
 				}
 				onClick={onClick}
 			>
-				<span className={styles.treeMark}>{node.isDirectory ? (node.children === undefined ? "▸" : "▾") : ""}</span>
+				<span className={styles.treeMark}>
+					{node.isDirectory ? (
+						<CaretIcon size={12} direction={node.children === undefined ? "right" : "down"} />
+					) : null}
+				</span>
 				{oldName !== null && <span className={styles.treeOldName}>{oldName}</span>}
 				<span className={styles.treeName}>{node.name}</span>
 				{letter && <span className={styles.treeStatus}>{letter}</span>}
 				{!letter && node.error && (
-					<span className={styles.treeStatus} role="img" aria-label="could not list">
-						!
+					<span className={styles.treeStatusMark} role="img" aria-label="could not list">
+						<WarningIcon size={12} />
 					</span>
 				)}
 			</button>

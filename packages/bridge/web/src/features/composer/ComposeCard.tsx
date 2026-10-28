@@ -17,6 +17,7 @@ import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from "
 import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
+import { ArrowUpIcon, ChevronDownIcon, CloseIcon, PaperclipIcon, StopIcon } from "../../render/icons.tsx";
 import { displayModelName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 import { ModelPickerPortal } from "./ModelPickerPortal.tsx";
@@ -273,7 +274,7 @@ export const ComposeCard = memo(function ComposeCard({
 							aria-label="Cancel edit"
 							title="Cancel edit"
 						>
-							Cancel
+							<CloseIcon size={14} />
 						</button>
 					</div>
 				)}
@@ -291,7 +292,7 @@ export const ComposeCard = memo(function ComposeCard({
 							title="Clear all pending steers"
 							aria-label="Clear all pending steers"
 						>
-							×
+							<CloseIcon size={12} />
 						</button>
 					</div>
 				)}
@@ -307,7 +308,7 @@ export const ComposeCard = memo(function ComposeCard({
 									aria-label="Remove image"
 									title="Remove image"
 								>
-									×
+									<CloseIcon size={12} />
 								</button>
 							</span>
 						))}
@@ -341,7 +342,7 @@ export const ComposeCard = memo(function ComposeCard({
 							aria-label="Attach image"
 							title={attachTitle ?? "Attach image (or paste / drag-drop)"}
 						>
-							📎
+							<PaperclipIcon size={16} />
 						</button>
 						{mic}
 						{leftControls}
@@ -368,8 +369,8 @@ export const ComposeCard = memo(function ComposeCard({
 								) : null}
 							</span>
 							<span className={styles.composerModelMobileLabel}>Models</span>
-							<span className={styles.composerModelChevron} aria-hidden="true">
-								▾
+							<span className={styles.composerModelChevron}>
+								<ChevronDownIcon size={14} />
 							</span>
 						</button>
 
@@ -386,7 +387,7 @@ export const ComposeCard = memo(function ComposeCard({
 							aria-label={sendLocked ? "Send (back to live to send)" : "Send"}
 							title={sendLocked ? "Back to live to send" : "Send"}
 						>
-							➤
+							<ArrowUpIcon size={16} />
 						</button>
 						{isBusy && onStop && (
 							<button
@@ -396,7 +397,7 @@ export const ComposeCard = memo(function ComposeCard({
 								aria-label="Stop"
 								title="Stop"
 							>
-								■
+								<StopIcon size={16} />
 							</button>
 						)}
 					</div>

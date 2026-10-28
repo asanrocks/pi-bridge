@@ -191,8 +191,12 @@
 	text-align: center;
 }
 
+/* The failed phase's mark. A 20-slot glyph, not the 32px character it replaces:
+   the slot ladder ends at 20 and a free number per hero mark is exactly the drift
+   the ladder exists to stop. It inherits the panel's ink, as the character did. */
 .stateWarn {
-	font-size: 32px;
+	display: inline-flex;
+	align-items: center;
 	line-height: 1;
 }
 

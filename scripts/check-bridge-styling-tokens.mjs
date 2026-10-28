@@ -37,6 +37,16 @@
 //     (var() values) are exempt from the counterpart rule: they resolve
 //     through what they alias, which the dark block moves.
 //
+//   - A cascade layer's priority is fixed by the first appearance of its name
+//     in the *bundled* stylesheet, so a shared spec's rules cannot declare
+//     their own priority late: the `control` layer's order statement must sit
+//     in every file that opens that layer, ahead of its first rule. Declaring
+//     it once in app/index.css is not enough — `composes` inlines
+//     render/buttons.module.css into module CSS that reaches the CSS chunk
+//     first, which registered `control` ahead of preflight and silently gave
+//     `button { color: inherit; background-color: transparent }` priority over
+//     the ghost control (no ink, no hover fill).
+//
 //   - The OS preference is the only theme trigger and index.css is its only
 //     branch site: `prefers-color-scheme` in any other sheet is an error. The
 //     app has no stored theme preference, so a second trigger would mean a
@@ -59,6 +69,12 @@ const DARK_MEDIA = "@media (prefers-color-scheme: dark)";
 // The meta in the document head is what keeps the pre-stylesheet canvas on the
 // OS side instead of flashing white while index.css loads.
 const INDEX_HTML = "packages/bridge/web/index.html";
+
+// The one legal order, and the canonical statement text. `control` sits between
+// `components` and `utilities`; see the header for why every carrier repeats it.
+const LAYER_ORDER = "theme, base, components, control, utilities";
+const LAYER_STATEMENT = `@layer ${LAYER_ORDER};`;
+const LAYER_BLOCK = /@layer\s+control\s*\{/;
 
 // Token names renamed away in the @theme unification. If you rename a
 // token again, add the old name here so stragglers surface.
@@ -181,12 +197,15 @@ const files = walk(ROOT).filter((f) => f.endsWith(".css") || f.endsWith(".ts") |
 // ── Pass 1: per-line rules, and collect definitions + references ────────────
 
 const declared = new Set();
+const css = new Map(); // file -> comment-stripped source, for whole-file rules
 const references = []; // {name, loc}
 
 for (const f of files) {
 	const isCss = f.endsWith(".css");
 	const isTsLike = f.endsWith(".ts") || f.endsWith(".tsx");
-	const lines = strippedLines(readFileSync(f, "utf-8"), isTsLike);
+	const source = readFileSync(f, "utf-8");
+	if (isCss) css.set(f, strippedLines(source, false).join("\n"));
+	const lines = strippedLines(source, isTsLike);
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
@@ -196,6 +215,15 @@ for (const f of files) {
 		// Definitions: CSS declarations, and dynamic custom-property keys set
 		// from .tsx inline styles (`["--gutter-width" as string]: …`).
 		if (isCss) {
+			if (LAYER_BLOCK.test(line) && !css.get(f)?.includes(LAYER_STATEMENT)) {
+				errors.push(
+					`${loc}: opens the \`control\` layer without declaring the order — add "${LAYER_STATEMENT}" above the first rule in this file, or \`control\` may be registered before preflight`,
+				);
+			}
+			const order = /@layer\s+([a-z]+(?:,\s*[a-z]+)+)\s*;/.exec(line);
+			if (order && order[1].replace(/\s+/g, " ").trim() !== LAYER_ORDER) {
+				errors.push(`${loc}: cascade layer order "${order[1]}" — the one legal order is ${LAYER_ORDER}`);
+			}
 			const decl = DECLARATION.exec(line);
 			if (decl) declared.add(decl[1]);
 		} else {

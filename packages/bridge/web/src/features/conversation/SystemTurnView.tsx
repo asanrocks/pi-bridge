@@ -10,6 +10,7 @@ import { formatTimestamp } from "../../infra/lib/time.ts";
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CodeSnippet } from "../../render/CodeSnippet.tsx";
+import { CaretIcon } from "../../render/icons.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import actionStyles from "./actions.module.css";
@@ -66,7 +67,9 @@ const SystemPromptCard = memo(function SystemPromptCard({ turn, isDimmed }: { tu
 					aria-expanded={expanded}
 					aria-label={`${expanded ? "Collapse" : "Expand"} ${name}`}
 				>
-					<span className={actionStyles.collapseTri}>{expanded ? "\u25BE" : "\u25B8"}</span>
+					<span className={actionStyles.collapseTri}>
+						<CaretIcon size={12} direction={expanded ? "down" : "right"} />
+					</span>
 					<span className={actionStyles.actionSummary}>{name}</span>
 				</button>
 			</div>

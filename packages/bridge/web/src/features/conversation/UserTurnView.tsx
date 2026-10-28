@@ -12,7 +12,7 @@ import { copyToClipboard } from "../../infra/lib/clipboard.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
-import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
+import { BranchIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, PencilIcon } from "../../render/icons.tsx";
 import { ResultImages } from "../../render/ResultImages.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
 import { formatGitIdentity } from "./format.ts";
@@ -123,6 +123,7 @@ export const UserTurnView = memo(function UserTurnView({
 									aria-expanded={gitMenu !== null}
 									onClick={() => setGitMenu(gitButtonRef.current?.getBoundingClientRect() ?? null)}
 								>
+									<BranchIcon size={12} />
 									{gitStamp}
 								</button>
 								{gitMenu && (
@@ -136,6 +137,7 @@ export const UserTurnView = memo(function UserTurnView({
 							</>
 						) : (
 							<span className={styles.gitStamp} title={turn.gitCommitSubject ?? undefined}>
+								<BranchIcon size={12} />
 								{gitStamp}
 							</span>
 						))}
@@ -156,6 +158,7 @@ export const UserTurnView = memo(function UserTurnView({
 						<div className={styles.userMsgPager}>
 							<button
 								type="button"
+								className={styles.pagerBtn}
 								aria-label="Previous branch"
 								disabled={turn.currentSiblingIndex === 0}
 								onClick={() => {
@@ -163,13 +166,14 @@ export const UserTurnView = memo(function UserTurnView({
 									if (prev) onNavigate(newestLeafInSubtree(prev, entriesRef.current));
 								}}
 							>
-								◀
+								<ChevronLeftIcon size={14} />
 							</button>
 							<span>
 								{turn.currentSiblingIndex! + 1} / {turn.siblings!.length}
 							</span>
 							<button
 								type="button"
+								className={styles.pagerBtn}
 								aria-label="Next branch"
 								disabled={turn.currentSiblingIndex === turn.siblings!.length - 1}
 								onClick={() => {
@@ -177,7 +181,7 @@ export const UserTurnView = memo(function UserTurnView({
 									if (next) onNavigate(newestLeafInSubtree(next, entriesRef.current));
 								}}
 							>
-								▶
+								<ChevronRightIcon size={14} />
 							</button>
 						</div>
 					)}
@@ -188,7 +192,7 @@ export const UserTurnView = memo(function UserTurnView({
 						aria-label="Edit message"
 						title="Edit message"
 					>
-						✎
+						<PencilIcon size={14} />
 					</button>
 				</div>
 			</div>

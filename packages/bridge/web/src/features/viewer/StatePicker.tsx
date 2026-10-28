@@ -70,7 +70,7 @@ export function StatePicker({
 				title={title}
 			>
 				<span className={styles.stateChipLabel}>{label}</span>
-				<ChevronDownIcon size={11} />
+				<ChevronDownIcon size={12} />
 			</button>
 			{anchor && (
 				<>

@@ -2,7 +2,7 @@
    edge-reveal strip) live in render/PaneShell.module.css; this module keeps
    only the sidebar's own chrome and content. */
 
-/* Overlay toggle row — shared by the fullscreen overlay (close ✕) and the
+/* Overlay toggle row — shared by the fullscreen overlay (close glyph) and the
    hover-peek drawer (hamburger, pins the rail open). Docked LEFT at the
    TopBar hamburger's position, so the same screen corner always toggles
    the sidebar. */
@@ -16,7 +16,7 @@
 }
 
 /* The corner toggle matches the TopBar hamburger's button size (36×36,
-   .topBarBtn), not the 32×32 pane-header action spec (.sidebarAddBtn). */
+   .topBarBtn), not the 32×32 pane-header action (.sidebarAddBtn). */
 .overlayHeader .sidebarAddBtn {
 	margin-left: 4px;
 	width: 36px;
@@ -85,40 +85,20 @@
    center in .headerActions), and auto-height made the header variant
    collapse to the bare 12px SVG while folder rows grew to the row height. */
 .sidebarFolderNewBtn {
+	composes: ghost from "../../render/buttons.module.css";
 	flex-shrink: 0;
 	align-self: center;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
 	width: 24px;
 	height: 24px;
-	padding: 0;
-	background: none;
-	border: none;
-	cursor: pointer;
-	color: var(--color-muted-foreground);
 }
 
-.sidebarFolderNewBtn:hover {
-	color: var(--color-foreground);
-	background: var(--color-muted);
-	border-radius: var(--radius-sm);
-}
-
+/* Fold caret: right (folded), diagonal (active rows only — children exist but
+   the history stays hidden), down (open). The three states are the glyph's own
+   directions (`CaretIcon`), so there is no rotation here to drift from the
+   state. */
 .sidebarChevron {
 	flex-shrink: 0;
 	color: var(--color-muted-foreground);
-	transition: transform var(--dur-fast) ease;
-}
-
-.sidebarChevronOpen {
-	transform: rotate(90deg);
-}
-
-/* Middle fold state (active rows only): diagonal — children exist but the
-   history stays hidden. */
-.sidebarChevronMid {
-	transform: rotate(45deg);
 }
 
 /* Leaves: flush with the folder row — no indent. No hairline or other
@@ -201,21 +181,13 @@
    hover surface so the time beneath doesn't bleed through. pointer-events
    track visibility so a hidden button never swallows row clicks. */
 .sidebarMenuBtn {
+	composes: ghost from "../../render/buttons.module.css";
 	position: absolute;
 	right: 4px;
 	top: 50%;
 	transform: translateY(-50%);
-	width: 22px;
-	height: 22px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	background: var(--color-muted);
-	color: var(--color-muted-foreground);
-	border: none;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
+	width: 24px;
+	height: 24px;
 	opacity: 0;
 	pointer-events: none;
 }
@@ -346,22 +318,14 @@ difference between them. */
 /* Fold-all toggle: the section header's label doubles as the button that
    cycles every folder's fold state. Inherits the header's typography. */
 .sidebarSectionToggle {
-	display: inline-flex;
-	align-items: center;
+	composes: ghost from "../../render/buttons.module.css";
+	justify-content: flex-start;
 	gap: 6px;
 	padding: 0;
 	font: inherit;
 	color: inherit;
 	text-transform: inherit;
 	letter-spacing: inherit;
-	background: none;
-	border: none;
-	cursor: pointer;
-	user-select: none;
-}
-
-.sidebarSectionToggle:hover {
-	color: var(--color-foreground);
 }
 
 /* Right slot of a section header: stacks multiple action buttons (the
@@ -406,33 +370,13 @@ difference between them. */
 	margin-top: 6px;
 }
 
-/* Header action button (32×32 bordered icon slot) — shared chrome across
+/* Pane header action control (32×32 ghost slot) — shared chrome across
    panes: this +, the instance-list button next to it, Launcher .addBtn,
    HistoryPane .closeBtn. */
 .sidebarAddBtn {
-	background: none;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
-	color: var(--color-muted-foreground);
-	cursor: pointer;
-	font-size: var(--fs-md);
+	composes: ghost from "../../render/buttons.module.css";
 	width: 32px;
 	height: 32px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	line-height: 1;
-}
-
-.sidebarAddBtn:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
-}
-
-.sidebarAddBtn:disabled {
-	opacity: 0.3;
-	cursor: default;
 }
 
 /* Liveness indicator on a session row: green when the session is active,

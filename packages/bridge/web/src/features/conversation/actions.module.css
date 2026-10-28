@@ -89,13 +89,15 @@
 	background-color: color-mix(in srgb, var(--color-muted) 45%, var(--color-background));
 }
 
-/* Collapse triangle — shared by group and action headers. Sits at the start. */
+/* Collapse caret — shared by group and action headers. Sits at the start; the
+   span centres the glyph and reserves its 12px column, and the direction lives
+   in the glyph (`CaretIcon`), never in a CSS rotation. */
 .collapseTri {
+	display: inline-flex;
+	align-items: center;
 	width: 12px;
-	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
 	flex-shrink: 0;
-	text-align: center;
 }
 
 .actionGroupSummary {
@@ -756,38 +758,20 @@
 }
 
 .cardCtrlBtn {
-	display: inline-flex;
-	align-items: center;
-	background: none;
-	border: none;
-	padding: 1px 5px;
+	composes: ghost from "../../render/buttons.module.css";
+	padding: 4px 6px;
 	font: inherit;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-	user-select: none;
 }
 
-.cardCtrlBtn:hover {
-	color: var(--color-secondary);
-	background: color-mix(in srgb, var(--color-muted) 45%, transparent);
-}
+/* The cap toggle flips its chevron by direction, not by hue; hover and pressed
+   states belong to the ghost spec. */
 
-/* Toggle state: on reads brighter than off, so the affordance is legible
-   without hover (both tiers stay muted — controls stay subordinate). */
-.cardCtrlBtn[data-on] {
-	color: var(--color-secondary);
-}
-
-/* Icon-only controls: block-level svg kills the inline baseline gap; the
-   cap toggle flips the chevron for the collapse direction. */
+/* Icon-only controls: block-level svg kills the inline baseline gap. The cap
+   toggle's direction is its own glyph (`ChevronUpIcon`), never a rotation. */
 .cardCtrlBtn svg {
 	display: block;
-}
-
-.cardCtrlBtn[data-dir="up"] svg {
-	transform: rotate(180deg);
 }
 
 /* Header line — the full-form identifier (full cwd-relative path with

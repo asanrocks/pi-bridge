@@ -12,6 +12,7 @@ import type { GitIdentity, GitStampAnchor } from "../../../../src/core/index.ts"
 import { gitBaseRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { projectCwdOf } from "../../infra/state/ui.ts";
+import { CaretIcon } from "../../render/icons.tsx";
 import styles from "./actions.module.css";
 import { withFoldLanding } from "./foldLanding.ts";
 import turnStyles from "./turns.module.css";
@@ -98,7 +99,9 @@ export const GitChangeRow = memo(function GitChangeRow({ change }: { change: Git
 						aria-label={`${expanded ? "Collapse" : "Expand"} git change: ${summary}`}
 						title={headerLine}
 					>
-						<span className={styles.collapseTri}>{expanded ? "\u25BE" : "\u25B8"}</span>
+						<span className={styles.collapseTri}>
+							<CaretIcon size={12} direction={expanded ? "down" : "right"} />
+						</span>
 						<span className={styles.actionSummary}>{summary}</span>
 						{metaSpan}
 					</button>

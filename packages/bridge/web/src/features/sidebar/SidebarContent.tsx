@@ -14,6 +14,7 @@
 import { memo, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
+import { CaretIcon, GridIcon } from "../../render/icons.tsx";
 import { ProjectFolder } from "./ProjectFolder.tsx";
 import styles from "./Sidebar.module.css";
 import type { FolderFoldState } from "./useFolderExpansion.ts";
@@ -90,12 +91,7 @@ export const SidebarContent = memo(function SidebarContent({
 	};
 	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "open");
 	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "folded");
-	const headerChevronCls = [
-		styles.sidebarChevron,
-		allOpen ? styles.sidebarChevronOpen : allFolded ? "" : styles.sidebarChevronMid,
-	]
-		.filter(Boolean)
-		.join(" ");
+	const headerCaret = allOpen ? "down" : allFolded ? "right" : "diagonal";
 
 	return (
 		<>
@@ -108,26 +104,17 @@ export const SidebarContent = memo(function SidebarContent({
 					onClick={() => onToggleAllFolders(hasActiveById)}
 					title="Fold / active / unfold all"
 				>
-					<svg
-						viewBox="0 0 16 16"
-						width="12"
-						height="12"
-						className={headerChevronCls}
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<path d="M6 3l5 5-5 5z" />
-					</svg>
+					<CaretIcon size={12} direction={headerCaret} className={styles.sidebarChevron} />
 					<span>Projects</span>
 				</button>
 				<span className={styles.headerActions}>
 					{/* To the global project picker (Launcher — detach). Hidden while
-					    already there. Same ghost icon-button spec as the folders'
-					    new-session button — pane-level actions share one style. The
-					    2×2 grid glyph is deliberate: the action is a destination
-					    overview ("browse all Projects"), not a directional back, and
-					    a directional arrow next to the fold chevrons read as
-					    collapse. Filled dots match the chevrons' filled style. */}
+					    already there. Same ghost control as the folders' new-session
+					    button — pane-level actions share one style. The 2×2 grid
+					    glyph is deliberate: the action is a destination overview
+					    ("browse all Projects"), not a directional back, and a
+					    directional arrow next to the fold carets would read as
+					    collapse. */}
 					{currentProjectId !== null && (
 						<button
 							type="button"
@@ -136,12 +123,7 @@ export const SidebarContent = memo(function SidebarContent({
 							title="All projects"
 							aria-label="All projects"
 						>
-							<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
-								<circle cx="4.5" cy="4.5" r="1.8" />
-								<circle cx="11.5" cy="4.5" r="1.8" />
-								<circle cx="4.5" cy="11.5" r="1.8" />
-								<circle cx="11.5" cy="11.5" r="1.8" />
-							</svg>
+							<GridIcon size={12} />
 						</button>
 					)}
 				</span>

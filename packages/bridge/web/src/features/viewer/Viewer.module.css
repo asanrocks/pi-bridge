@@ -72,22 +72,10 @@
 }
 
 .viewerClose {
+	composes: ghost from "../../render/buttons.module.css";
 	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
 	width: 24px;
 	height: 24px;
-	background: none;
-	border: none;
-	border-radius: var(--radius-sm);
-	color: var(--color-muted-foreground);
-	font-size: var(--fs-md);
-}
-
-.viewerClose:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
 }
 
 /* A fullscreen panel covers its own backdrop, so on a touch device this is the

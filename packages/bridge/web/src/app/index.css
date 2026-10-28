@@ -1,3 +1,19 @@
+/* Cascade layer order — also declared at the top of render/buttons.module.css,
+   and it has to be in both. A layer's priority is fixed by the first appearance
+   of its name in the *bundled* stylesheet, and `composes` inlines the ghost spec
+   into module CSS that reaches the chunk before this file does. Declaring the
+   order only here registered `control` first, so preflight's
+   `button { color: inherit; background-color: transparent }` outranked every
+   ghost rule and the hover fill vanished. The statement is idempotent:
+   whichever carrier lands first establishes the order, and a statement placed
+   after any rule is too late.
+
+   `control` sits between `components` and `utilities`: a host's own (unlayered)
+   rule beats the shared control spec, the shared spec beats preflight, and a
+   utility class on a control still wins. `@layer` statements are the one
+   at-rule the spec allows before `@import`. */
+@layer theme, base, components, control, utilities;
+
 @import "tailwindcss";
 @import "streamdown/styles.css";
 
@@ -125,9 +141,19 @@
   --dur-fast: 0.15s;  /* hover/fade/transform feedback, toast entrance */
   --dur-slow: 0.3s;   /* larger geometry moves (composer expansion) */
 
+  /* ── Control state ──────────────────────────────────────────────────── */
+  /* The one strength for a control's hover and engaged fill, derived from
+     `currentColor` at the use site so it follows whatever hue the state already
+     chose — this token carries only the number. 20% resolves to 1.45:1 against
+     the light page tone and 1.78:1 in dark (alpha over near-black moves more
+     luminance per unit), so the light ladder binds. Below ~18% the fill stops
+     being a perceptible step — at 12% it was 1.25:1, within noise of the
+     --color-muted hover it was introduced to replace — and the ink change would
+     be carrying the state alone. */
+  --state-fill-alpha: 20%;
+
   /* ── Elevation (shadows are structural, not a second color palette) ── */
-  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.15);   /* small floating controls */
-  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);  /* popovers, panels, portals */
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.15);   /* small floating controls */  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);  /* popovers, panels, portals */
   /* Directional and composite elevation. These began as inline literals
      (each with exactly one consumer), but dark mode has to restate every one
      of them: a black drop shadow vanishes against a near-black page, and the
@@ -141,6 +167,12 @@
   --shadow-compose-hover: 0 4px 24px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
   --shadow-compose-focus: 0 4px 24px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.35);
   --shadow-drop-up: 0 -4px 12px rgba(0, 0, 0, 0.1);     /* completion dropdown, upward */
+  /* A chip that floats over *content* (the per-message copy control) needs a
+     boundary, not a fill: it sits on the page tone, where a raised surface is
+     only 1.05:1 and cannot define a shape on its own — the chip read as a hole
+     punched in the paragraph. Same technique as the compose card at chip scale:
+     a short drop shadow plus a half-pixel ring. */
+  --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.18);
 
   /* ── Letter tracking ────────────────────────────────────────────────── */
   --tracking-caps: 0.04em; /* uppercase structural labels — the one spec */
@@ -260,6 +292,7 @@
     --shadow-compose-hover: 0 4px 24px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.20);
     --shadow-compose-focus: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.20);
     --shadow-drop-up: 0 -4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 0 0.5px rgba(255, 255, 255, 0.16);
   }
 }
 

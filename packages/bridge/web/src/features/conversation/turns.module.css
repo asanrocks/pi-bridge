@@ -99,18 +99,23 @@
 	margin: 0 2px;
 }
 
-/* ADR 10 git identity chip ("⎇ main @ a1b2c3d") — the effective
-   repository identity at this send, carried forward from the last stamp
-   on the path. Same tertiary treatment as .msgTiming. */
+/* ADR 10 git identity chip ("main @ a1b2c3d") — the effective repository
+   identity at this send, carried forward from the last stamp on the path. Same
+   tertiary treatment as .msgTiming. An inline flex so the git mark and the text
+   share one baseline, with the separator dot as the first item (it used to ride
+   on the text as a `::before` with margins; in a flex row a margin plus the row
+   gap would double the spacing). */
 .gitStamp {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	color: var(--color-muted-foreground);
 	white-space: nowrap;
 	flex-shrink: 0;
 }
 
 .gitStamp::before {
-	content: "· ";
-	margin: 0 2px;
+	content: "·";
 }
 
 /* User-defined label (pi tree-selector bookmark) resolved onto the turn —
@@ -338,60 +343,66 @@
 	}
 }
 
+/* The sibling pager reads as one control: two square arrows from the same box
+   ladder as the toolbar's other controls, around a count that holds its width
+   (tabular figures plus a floor sized for "99 / 99" — 6ch covers four digit
+   advances, two spaces, and the slash in any UI sans) so stepping never shifts
+   the arrows under the pointer. */
 .userMsgPager {
 	display: inline-flex;
 	align-items: center;
-	gap: 2px;
+	gap: 4px;
 	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
 	color: var(--color-secondary);
 }
 
-/* Toolbar buttons — bordered chips with clear affordance (Copy / Edit /
-   pager arrows share one style). Tap targets grow on coarse pointers. */
-.toolbarBtn,
-.userMsgPager button {
-	background: transparent;
-	border: 1px solid var(--color-border);
-	color: var(--color-secondary);
-	font-size: var(--fs-xs);
-	padding: 2px 10px;
-	min-height: 30px;
-	border-radius: var(--radius-sm);
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	cursor: pointer;
+.userMsgPager > span {
+	min-width: 6ch;
+	text-align: center;
 }
 
-/* Hover scoped to hover-capable inputs so the background doesn't stick
-   after a tap on touch. */
-@media (hover: hover) {
-	.toolbarBtn:hover,
-	.userMsgPager button:hover:not(:disabled) {
-		background: var(--color-muted);
-		color: var(--color-foreground);
-		border-color: var(--color-secondary);
-	}
+/* Toolbar controls — Copy / Edit (icon-only) and the sibling pager (two arrows
+   around a position readout, so it keeps its width). Ghost spec at the 28px
+   square; touch takes the target outward from it (see the coarse rule below). */
+.toolbarBtn {
+	composes: ghost from "../../render/buttons.module.css";
+	position: relative;
+	width: 28px;
+	height: 28px;
+	font-size: var(--fs-xs);
+}
 
-	/* On the tinted user tinted row, a gray hover reads off-hue — blue-tinted. */
-	.userMsg .toolbarBtn:hover,
-	.userMsg .userMsgPager button:hover:not(:disabled) {
-		background: color-mix(in srgb, var(--color-user-border) 50%, transparent);
-		border-color: var(--color-user-border);
-	}
+/* The pager's own buttons: arrow, position readout, arrow. `composes` needs a
+   single class selector, so the pager styles its buttons directly instead of
+   descending from `.userMsgPager`. */
+.pagerBtn {
+	composes: ghost from "../../render/buttons.module.css";
+	position: relative;
+	width: 28px;
+	height: 28px;
+	font-size: var(--fs-xs);
 }
 
 .toolbarBtn:disabled,
-.userMsgPager button:disabled {
+.pagerBtn:disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
 }
 
+/* Touch takes the target outward instead of growing the box: the 28px square a
+   pointer aims at is the square a finger aims at, and a transparent overlay
+   carries the 40px target. Growing the box itself lifted the header row from 28
+   to 40 and pulled Copy, the pager, and Edit apart, which read as looseness
+   rather than as reach. The overlay is 6px — the row's own gap — so neighbouring
+   targets meet exactly and never overlap, and the focus ring still draws on the
+   box the user sees. */
 @media (pointer: coarse) {
-	.toolbarBtn,
-	.userMsgPager button {
-		min-height: 40px;
-		padding: 6px 14px;
+	.toolbarBtn::after,
+	.pagerBtn::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
 	}
 }
 
@@ -459,24 +470,21 @@
 /* Ghost in the error hue — same shape language as the composer's secondary
    controls. */
 .recoveryBtn {
-	display: inline-flex;
-	align-items: center;
-	background: transparent;
+	composes: ghost from "../../render/buttons.module.css";
 	color: var(--color-error);
-	border: 1px solid color-mix(in srgb, var(--color-error) 40%, transparent);
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	font-family: inherit;
 	padding: 3px 10px;
 	min-height: 28px;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
 	flex-shrink: 0;
 	white-space: nowrap;
 }
 
+/* The failure hue is the button's whole signal, so hover holds it rather than
+   letting the ghost spec move the ink to the foreground. */
 .recoveryBtn:hover {
-	background: color-mix(in srgb, var(--color-error) 10%, transparent);
+	color: var(--color-error);
 }
 
 .errorAttrKey {
@@ -489,20 +497,43 @@
 }
 
 /* Floating placement for the per-message copy chip on assistant text
-   segments: the .toolbarBtn visual spec (identical to the user-message
-   Copy chip) anchored at the segment's top-right, offset into the gap
-   above. Only placement and reveal live here — size, border, hover, and
-   tap-target growth are owned by .toolbarBtn. Solid-bg override: the chip
-   floats over markdown on desktop, and .toolbarBtn's transparent bg would
-   let text show through (this rule sits after .toolbarBtn in the file, so
-   the override holds). */
+   segments: the .toolbarBtn spec (identical to the user-message Copy chip),
+   anchored inside the segment's top-right corner. Three placement decisions are
+   deliberate:
+
+   - It stays *inside* the segment. The earlier -8px offset pushed it above the
+     segment, which put it behind the fixed TopBar whenever the line sat at the
+     top of the viewport — the chip looked clipped. A control may overlap its
+     own text (it is hover-revealed and opaque, so it never occludes anything
+     being read) but it must not cross its own box upward.
+   - 24 is the box slot, not 28: the Copy mark is wide and squat (its ink is
+     ~7.7px tall once fitted), so in a 28px box it filled 27% of the height and
+     read as an undersized glyph. In 24 the same 14 slot fills 58%.
+   - Solid fill plus `--shadow-chip`: the ghost spec's transparent background
+     would let markdown show through, and a raised surface alone is 1.05:1 on
+     the page tone, so the half-pixel ring is what makes the chip a shape rather
+     than a hole in the paragraph.
+
+   Only placement, box, and reveal live here — states belong to .toolbarBtn. */
 .msgCopyBtn {
 	position: absolute;
-	top: -8px;
+	top: 2px;
 	right: 0;
-	background: var(--color-surface-raised);
+	width: 24px;
+	height: 24px;
+	/* Intra-component stacking stays literal: keep the chip above any positioned
+	   Markdown (code-block chrome, table wrappers) inside the same segment. */
+	z-index: 1;
 	opacity: 0;
+	box-shadow: var(--shadow-chip);
 	transition: opacity var(--dur-fast) ease;
+}
+
+/* Hover restates the opaque surface at the same specificity as the ghost spec,
+   so the floating chip never turns translucent over live text. */
+.msgCopyBtn,
+.msgCopyBtn:hover {
+	background: var(--color-surface-raised);
 }
 
 .textSegment:hover .msgCopyBtn,
@@ -520,6 +551,10 @@
 	.msgCopyBtn {
 		position: static;
 		float: right;
+		/* Touch keeps the 40px tap target `.toolbarBtn` grows to, which would
+		   otherwise be overridden by the 24px box above. */
+		width: 40px;
+		height: 40px;
 		margin-left: 8px;
 		margin-bottom: 4px;
 		opacity: 1;

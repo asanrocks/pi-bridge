@@ -17,6 +17,7 @@
 import { memo, useCallback, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
+import { CloseIcon, MenuIcon } from "../../render/icons.tsx";
 import { PaneShell, type PaneShellHeaderActions, type PaneVariant } from "../../render/PaneShell.tsx";
 import type { PaneMode } from "../../render/usePaneMode.ts";
 import styles from "./Sidebar.module.css";
@@ -32,8 +33,8 @@ const SIDEBAR_MAX_W = 360;
 
 /* Corner toggle: the same (12, 6) box as the TopBar hamburger and the peek
    drawer's pin button, so the same screen corner toggles the sidebar
-   throughout. ✕ matches the fullscreen overlay: an open sidebar closes;
-   only the transient peek shows the hamburger, which pins the rail. */
+   throughout. The close glyph matches the fullscreen overlay: an open sidebar
+   closes; only the transient peek shows the hamburger, which pins the rail. */
 const renderSidebarHeader = (variant: PaneVariant, actions: PaneShellHeaderActions) => (
 	<div className={styles.overlayHeader}>
 		{variant === "peek" ? (
@@ -44,11 +45,7 @@ const renderSidebarHeader = (variant: PaneVariant, actions: PaneShellHeaderActio
 				aria-label="Open sidebar"
 				title="Open sidebar"
 			>
-				<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
-					<rect x="3" y="6" width="18" height="2" />
-					<rect x="3" y="11" width="18" height="2" />
-					<rect x="3" y="16" width="18" height="2" />
-				</svg>
+				<MenuIcon size={20} />
 			</button>
 		) : (
 			<button
@@ -58,18 +55,7 @@ const renderSidebarHeader = (variant: PaneVariant, actions: PaneShellHeaderActio
 				aria-label={variant === "rail" ? "Hide sidebar" : "Close sidebar"}
 				title={variant === "rail" ? "Hide sidebar" : "Close (Esc)"}
 			>
-				<svg
-					viewBox="0 0 20 20"
-					width="18"
-					height="18"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth="1.5"
-					strokeLinecap="round"
-					aria-hidden="true"
-				>
-					<path d="M5 5l10 10M15 5L5 15" />
-				</svg>
+				<CloseIcon size={20} />
 			</button>
 		)}
 	</div>

@@ -1,11 +1,14 @@
 // ============================================================================
 // SessionRow — one sidebar leaf: liveness dot + label + relative time, plus
 // the row menu. Close appears on live rows, Archive on any durable row (a
-// dormant row's close is a no-op, so only the move remains).
+// dormant row's close is a no-op, so only the move remains). The menu's glyph
+// is the overflow dots, never the hamburger: that one is the Sidebar's own
+// disclosure, and this row's menu is not that menu.
 // ============================================================================
 
 import { memo, useState } from "react";
 import type { SessionInfo } from "../../../../src/core/index.ts";
+import { MoreIcon } from "../../render/icons.tsx";
 import styles from "./Sidebar.module.css";
 import { relativeTime } from "./timeUtils.ts";
 
@@ -69,18 +72,7 @@ export const SessionRow = memo(function SessionRow({
 						setMenuAnchor(e.currentTarget.getBoundingClientRect());
 					}}
 				>
-					<svg
-						viewBox="0 0 16 16"
-						width="14"
-						height="14"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.5"
-						strokeLinecap="round"
-						aria-hidden="true"
-					>
-						<path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-					</svg>
+					<MoreIcon size={14} />
 				</button>
 			)}
 			{menuAnchor && (
