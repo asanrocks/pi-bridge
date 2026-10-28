@@ -49,12 +49,13 @@ export class DocumentMirror {
 	/** The local mirror. Never authoritative — replaced on reconnect. */
 	document: Document;
 
-	/** Monotonic count of entry-root replacements applied by patches: an
-	 * `add`/`replace` on `/entries/<id>` for an id the mirror already held.
-	 * Structural identity (paths, block counts, text lengths) cannot see
-	 * these — a replacement may differ only in content those never read —
-	 * so consumers gate re-projection on this counter. */
-	rewrites = 0;
+	/** Monotonic revision of this mirror's document. Advanced by a wholesale
+	 * `applyReplace` and by any patch that replaces an entry root an earlier
+	 * revision had already installed. Structural identity (paths, block
+	 * counts, text lengths) cannot see a same-id replacement that differs
+	 * only in content those never read, so consumers gate re-projection on
+	 * the revision instead. */
+	revision = 0;
 
 	constructor(document?: Document) {
 		this.document = document ?? emptyMirror();
@@ -67,6 +68,7 @@ export class DocumentMirror {
 	 */
 	applyReplace(snapshot: Document): void {
 		this.document = snapshot;
+		this.revision++;
 	}
 
 	/**
@@ -81,7 +83,7 @@ export class DocumentMirror {
 				isEntryRootPath(op.path) &&
 				this.document.entries[op.path.slice(ENTRY_ROOT_PREFIX.length)] !== undefined
 			) {
-				this.rewrites++;
+				this.revision++;
 			}
 		}
 		this.document = applyPatch(this.document, ops);

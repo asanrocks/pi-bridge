@@ -155,6 +155,27 @@ describe("setRenderLeaf (peek pin)", () => {
 	});
 });
 
+describe("applyReplace × document revision", () => {
+	it("advances the revision when the publisher supplies none", () => {
+		// Cache restore and cache seeding replace the document outside the
+		// mirror; without an advancing revision, a same-shape replacement (a
+		// changed label, a changed tool name) would hit a stale ViewModel cache
+		// entry — the structural key cannot see it.
+		const store = createClientStore();
+		const before = store.getState().docRevision;
+		store.getState().applyReplace(store.getState().document);
+		expect(store.getState().docRevision).toBe(before + 1);
+	});
+
+	it("publishes the publisher's revision when supplied", () => {
+		// The wire pipeline owns the mirror's revision counter and publishes
+		// it with the document it describes — one store write, both values.
+		const store = createClientStore();
+		store.getState().applyReplace(store.getState().document, 42);
+		expect(store.getState().docRevision).toBe(42);
+	});
+});
+
 describe("setActiveSessionId × peek pin", () => {
 	it("clears the rendered-leaf override when a different session activates", () => {
 		const store = createClientStore();

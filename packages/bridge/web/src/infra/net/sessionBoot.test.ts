@@ -93,6 +93,17 @@ describe("restoreLocalSession", () => {
 		expect(Object.keys(s.document.entries).sort()).toEqual(["a", "b"]);
 	});
 
+	it("publishes the restored document with an advanced revision", async () => {
+		// The restore replaces the document outside the mirror, and a cached
+		// document can differ from the prior paint only in content the
+		// structural ViewModel key cannot see (same ids, same lengths — a
+		// changed label). The revision is the declared projection input that
+		// moves, so the restore must publish it together with the document.
+		const before = getStore().getState().docRevision;
+		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		expect(getStore().getState().docRevision).toBeGreaterThan(before);
+	});
+
 	it("quiesces volatile status flags from the cached hint", async () => {
 		const records = [msgRecord("s1", 0, "a")];
 		const hint: SessionStatusHint = { isStreaming: true, isCompacting: true, pendingSteer: ["queued"] };

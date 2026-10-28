@@ -79,7 +79,10 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		if (disposed) return;
 		const store = getStore();
 		const after = client.mirror.document;
-		store.getState().applyReplace(after);
+		// One store write: the document and the revision it was published with
+		// describe the same mirror snapshot, so a same-shape replacement can
+		// never pair new content with a stale revision (or vice versa).
+		store.getState().applyReplace(after, client.mirror.revision);
 		// Write-through (ADR 09): persist committed-entry deltas under the
 		// active session, planned against the session's cache base.
 		if (cacheMode === "delta") {
@@ -127,10 +130,6 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	};
 
 	// ── Push handler ───────────────────────────────────────────────────
-	// Entry-root replacements seen as of the last push: an authoritative
-	// replacement can change content the projection reads but the structural
-	// cache key does not (same ids, same lengths), so the store re-projects.
-	let lastRewrites = client.mirror.rewrites;
 
 	const onPush = (push: ServerPushMessage) => {
 		if (disposed) return;
@@ -229,16 +228,13 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		if (push.kind === "patch") {
 			if (pendingOps === null) pendingOps = [];
 			for (const op of push.ops) pendingOps.push(op);
+			// A live patch that replaced an entry the mirror already held
+			// (sealing in place, or an authoritative rewrite) advanced the
+			// mirror's revision; the flush publishes the document and its
+			// revision together, and the projection re-runs on the revision —
+			// the structural cache key cannot see a same-id content change.
 			if (push.ops.some((op) => op.path.startsWith("/status"))) flush();
 			else scheduleFlush();
-			// A live patch replaced an entry the mirror already held (sealing in
-			// place, or an authoritative rewrite). The flush publishes the
-			// document; this bump makes the projection re-run — the structural
-			// cache key cannot see a same-id content change.
-			if (client.mirror.rewrites !== lastRewrites) {
-				lastRewrites = client.mirror.rewrites;
-				store.getState().bumpPullTick();
-			}
 		}
 	};
 

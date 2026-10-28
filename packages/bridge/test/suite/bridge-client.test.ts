@@ -188,10 +188,11 @@ describe("BridgeClient", () => {
 		expect(client.mirror.document.status.model).toEqual({ provider: "anthropic", modelId: "claude" });
 	});
 
-	it("counts an entry-root replacement, not a new entry", () => {
-		// An `add` on `/entries/<id>` for an id the mirror already held is an
-		// authoritative replacement: structural identity (paths, lengths) cannot
-		// see the content change, so consumers gate re-projection on `rewrites`.
+	it("advances the revision on wholesale replaces and entry-root replacements", () => {
+		// A `replace` push and an `add` on `/entries/<id>` for an id the mirror
+		// already held are authoritative content changes: structural identity
+		// (paths, lengths) cannot see them, so consumers gate re-projection on
+		// the mirror's revision.
 		const { client, transport } = makeClient();
 
 		const emptyStatus = {
@@ -212,23 +213,24 @@ describe("BridgeClient", () => {
 			content: [{ type: "text", text }],
 		});
 
+		// A wholesale replace is a revision of everything the mirror holds.
 		transport.inject({ kind: "replace", document: { status: emptyStatus, entries: { e1: entry("streamed") } } });
-		expect(client.mirror.rewrites).toBe(0);
+		expect(client.mirror.revision).toBe(1);
 
 		// A block-level update inside the entry is not a replacement.
 		transport.inject({
 			kind: "patch",
 			ops: [{ op: "replace", path: "/entries/e1/content/0/text", value: "more" }],
 		});
-		expect(client.mirror.rewrites).toBe(0);
+		expect(client.mirror.revision).toBe(1);
 
 		// Sealing in place — an entry-root add on an existing id — is one.
 		transport.inject({ kind: "patch", ops: [{ op: "add", path: "/entries/e1", value: entry("final") }] });
-		expect(client.mirror.rewrites).toBe(1);
+		expect(client.mirror.revision).toBe(2);
 
 		// A genuinely new entry is not.
 		transport.inject({ kind: "patch", ops: [{ op: "add", path: "/entries/e2", value: entry("new") }] });
-		expect(client.mirror.rewrites).toBe(1);
+		expect(client.mirror.revision).toBe(2);
 	});
 
 	it("fires onPush callback for push frames", () => {

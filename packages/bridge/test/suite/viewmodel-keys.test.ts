@@ -58,11 +58,15 @@ describe("viewModelCacheKey", () => {
 		).not.toBe(base);
 	});
 
-	it("changes when the external inputs change (scope, pullTick, modelsKey)", () => {
+	it("changes when the external inputs change (scope, pullTick, docRevision, modelsKey)", () => {
 		const base = viewModelCacheKey(doc(), "stem", 0);
 		expect(viewModelCacheKey(doc(), "other-stem", 0)).not.toBe(base);
 		expect(viewModelCacheKey(doc(), null, 0)).not.toBe(base);
 		expect(viewModelCacheKey(doc(), "stem", 1)).not.toBe(base);
+		// A same-id entry-root replacement (sealing in place, an authoritative
+		// rewrite) is invisible to the structural key; the revision is the
+		// declared input that re-projects.
+		expect(viewModelCacheKey(doc(), "stem", 0, undefined, undefined, 1)).not.toBe(base);
 		// The catalogue is a projection input (context percentage is computed
 		// against each model's context window), so its identity re-projects even
 		// over an unchanged document.
