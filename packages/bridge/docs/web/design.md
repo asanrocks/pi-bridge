@@ -1042,6 +1042,43 @@ header is the registry (role, glyph, one sentence each), exports are named
   instead repaints the control at finger size and lifts the row's height with it,
   which is exactly what makes a conversation header read loose on a phone — the
   target grew, the glyph did not, and the space between controls grew with both.
+- **Shell coordinates are names, not numbers.** The frame has one action column
+  (`--action-col`, a list's `--pane-inset` plus an `--action-gap`), one
+  TopBar-band control box (`--control-box`, with `--control-box-sm` and
+  `--control-box-xs` below it), and one band height (`--topbar-row`, the band's
+  height minus twice `--topbar-pad-y`). They are declared in `app/index.css`
+  under "Shell coordinates" and consumed by name: a pane header's action and the
+  TopBar toggle it replaces are the same two names, so the corner control cannot
+  drift between the hover target and the drawer it opens. This exists because
+  the numbers used to be restated: one x-coordinate was derived five ways (a
+  list inset, a row padding, a slot offset, a header padding, a group padding)
+  and one control box was written eight times, which is the same bug five times
+  — alignment prose in the doc, five copies of the arithmetic in the CSS.
+  `scripts/check-bridge-styling-tokens.mjs` fails a rule that restates a listed
+  coordinate instead of consuming the token, and fails when a listed rule
+  disappears, so the table cannot rot silently. The sidebar list does not use a
+  `subgrid` column for the same alignment: the trees' rows are buttons with their
+  own fills and absolutely positioned menus, so a grid restructure would add
+  structural risk without removing a remaining way to disagree — the column is
+  one token and the gate holds every consumer to it. Revisit only if a third
+  pane needs the same column, where a shared grid would be cheaper than three
+  consumers of one token.
+- **Anchored surfaces are positioned by CSS, not by a rect.** The trigger carries
+  an `anchor-name` while its panel exists (`render/useAnchorName.ts`, a layout
+  effect so the panel never paints at its static position); the panel declares
+  `position-anchor`, `anchor(bottom)` / `anchor(inline-start)` insets, and
+  `position-try-fallbacks` for the flip. A `DOMRect` snapshot goes stale on the
+  first scroll, and the clamp arithmetic was hand-written per popover. The sides
+  are physical (`left: anchor(left)`): `<anchor-side>` is a closed set with no
+  `inline-start`, and an invalid side is silently dropped — the inset then falls
+  back to `auto` while the block offset stays anchored, so the panel opens in the
+  right column at the wrong place. `check-bridge-styling-tokens.mjs` validates
+  every `anchor()` argument for that reason. Two
+  surfaces still take rects and are the remaining conversions: `PathCompletion`
+  anchors to a textarea caret (not an element, so it needs a zero-width anchor
+  element rather than a token), and the model picker and cost popover receive
+  rects from their hosts. This assumes the client's browser floor (`anchor()`,
+  `subgrid`, `color-mix()`, cascade layers) — a 2026 baseline, not a 2021 one.
 - **Nothing in the document is a font glyph.** No emoji, and no geometric
   character (`▾ ▶ ■ ✕ …`) standing in for an icon. Three concrete reasons: an
   emoji is a colour bitmap that ignores `currentColor`, so it cannot follow the
@@ -1116,23 +1153,63 @@ thing — a command issued at the edge of a surface whose state changes somethin
 — and Send and Stop are the only two whose glyphs are also transport solids, in
 `--color-on-accent`, so box and symbol never disagree about weight.
 
-**A control that floats over content keeps a container.** The attachment remove
-button sits on a thumbnail, the jump button floats over the conversation, and
-the per-message copy chip floats over Markdown: what is beneath them is content,
-not a row, so each keeps a filled disc or card to stay legible against it. That
-is a legibility requirement, not chrome, and it is the only exception the border
-rule needs.
+**A boundary belongs to the container, not to the control.** This is the rule the
+rest of this section follows from. A control earns a line or an edge by being a
+container or by floating over content — never because of what it contains. The
+proof is in the app twice: the turn toolbar's Copy and the per-message Copy chip
+are the same glyph at the same slot, and only the floating one has an edge.
 
-A floating container's fill alone is not enough, which is why the copy chip
-carries `--shadow-chip`: a raised surface on the page tone is 1.05:1, so the
-half-pixel ring is what defines the shape — without it the chip reads as a hole
-punched in the paragraph rather than a control placed over it. Two placement
-rules follow from the same idea. A floating control stays inside the element it
-belongs to and never crosses that element's top edge upward: the chip's earlier
-`-8px` offset put it behind the fixed TopBar whenever its line sat at the top of
-the viewport, which looks like clipping. And the box takes the slot that its
-glyph fills — the copy mark is wide and squat, so 24 rather than 28 is what makes
-a 14-slot glyph read at size.
+**Three text tiers, one emphasis each.** A text control picks a tier by what it
+has to say, and the tiers differ in *kind*, not degree. Each tier is a class in
+`render/buttons.module.css`, so a feature composes it rather than restating its
+states:
+
+| Tier | Shape | When |
+| --- | --- | --- |
+| ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | the default verb in a row — `Show all`, `Load more`, the model and cost readouts, sidebar rows |
+| outlined | 1px `--color-border-control`, surface's radius | a text verb with no row or hue to mark it, sitting inside a container that already carries chrome: `.recoveryBtn` beside the error line, a dialog's cancel |
+| filled | accent fill, `--color-on-accent` | the primary command *of the surface* — Send, Stop, `Retry now`, a dialog's confirm, the compare menu's `Apply` |
+
+The tiers are enforced, not just described: `check-bridge-icon-contract.mjs`
+fails a `<button>` whose class resolves to none of them, unless its class is in
+the gate's role table (backdrop, row, menu item, fold header, chip, floating
+control, inline link) with the reason. That table is what "one spec per role"
+was missing — opt-in composition binds the modules that opt in and nothing else,
+which is how six hand-rolled buttons survived three sweeps.
+
+The outlined tier is deliberately narrow. It exists for verbs whose label cannot
+become a glyph and that would otherwise be unmarked — not as a default, because
+border every text verb and the transcript's verbs outrank the tool rows and error
+lines that carry the actual meaning. It is also the lightest compliant boundary:
+`--color-border-control` sits at 3.18:1 on the page and 3.35:1 on the raised
+composer, the warmest grey that clears WCAG 1.4.11 — where `--color-border`
+(1.47:1) separates surfaces and cannot define a control. A button is never both
+outlined and filled, and a destructive verb takes the error hue in whichever tier
+it uses.
+
+**A control that floats over content keeps a container.** The attachment remove
+button sits on a thumbnail, the jump button floats over the conversation, and the
+per-message copy chip floats over Markdown: what is beneath them is content, not
+a row, so each keeps a container to stay legible against it. That is a legibility
+requirement, not chrome.
+
+The container has one recipe with two variants, chosen by what is underneath:
+
+- **Over a uniform surface** (page tone, a card): opaque `--color-surface-raised`
+  fill plus `--shadow-chip`. The fill alone is 1.05:1 on the page, which is why a
+  semi-transparent or bare surface reads as a hole punched in the text; the
+  half-pixel ring in `--shadow-chip` is what makes it a shape.
+- **Over an image**: opaque fill plus a 1px `--color-border-control` ring and no
+  shadow. An image's luminance is arbitrary, so the boundary must clear 3:1 on
+  its own, and a drop shadow says nothing against a photograph.
+
+Two placement rules follow. A floating control stays inside the element it
+belongs to and never crosses that element's top edge upward — the copy chip's
+earlier `-8px` offset put it behind the fixed TopBar whenever its line sat at the
+top of the viewport, which reads as clipping. And the box takes the slot its
+glyph fills: the copy mark is wide and squat, so 24 rather than 28 is what makes
+a 14-slot glyph read at size. Elevation is never nested — a control inside a
+dialog, menu, or toast carries none, because its host already floats.
 
 **Text instead of a glyph, and the other way round.** Icon-only is the default
 for verbs. Text stays where the control carries a value rather than an action —
@@ -1150,18 +1227,20 @@ chip marks a placeholder, not a resting clickable state. A comparison label
 expression, not an icon: typed characters stay legal inside data.
 
 Icon-first is not icon-always. The words stay wherever a glyph cannot carry the
-operation's *object and scope*, and there are eight such groups in this client:
+operation's *object and scope*. The table is keyed by **surface and control**:
+grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
+`Cancel` were once treated as one case when they are two.
 
-| Control | Why words rather than a glyph |
-| --- | --- |
-| `Review`, `File`/`Diff`, `Changed (3)`/`All files`, `Compare…`, `Refresh` | The words name which rendering, which state pair, or which read is being re-run. No glyph distinguishes two renderings of the same object without inventing a vocabulary for it, and a lone circular arrow among four text chips in one header would be the only glyph in the row — the same mixed-kind problem as the recovery bar below. |
-| `Collapse files`/`Expand files` | A second chevron pair in the same review bar collides with the lines toggle one row below; the words are the only thing carrying the scope. |
-| the `Full output` chip, the changes count | Values, not actions. |
-| `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
-| `Cancel`, `Done`, `Open link`, `Open comparison` **in a dialog footer** | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
-| `Load more` | The ghost tier's own example — a continuation, not an action on an object. |
-| `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
-| a row menu's `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
+| Surface | Control | Why words rather than a glyph |
+| --- | --- | --- |
+| File browser header | `Review`, `File`/`Diff`, `Changed (3)`/`All files`, `Compare…`, `Refresh` | The words name which rendering, which state pair, or which read is being re-run. No glyph distinguishes two renderings of the same object without inventing a vocabulary for it, and a lone circular arrow among four text chips in one header would be the only glyph in the row. |
+| File browser review bar | `Collapse files`/`Expand files` | A second chevron pair in the same bar collides with the lines toggle below it; the words are the only thing carrying the scope. |
+| Tool card | the `Full output` chip, the uncommitted count | Values, not actions. |
+| Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
+| Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
+| Sidebar list | `Load more` | The ghost tier's own example — a continuation, not an action on an object. |
+| Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
+| Sidebar row menu | `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
 
 Three rules keep the glyph rows honest. **One kind per surface**: a tool surface
 (the composer card, a card toolbar, the file browser header) is all glyphs, and a
@@ -1197,7 +1276,10 @@ rule is too late. `scripts/check-bridge-styling-tokens.mjs` fails on a file that
 opens the layer without it, and on any order other than
 `theme, base, components, control, utilities`.
 
-**These rules are gated, not just written.**
+**These rules are gated, not just written.** The styling gate also rejects a
+`composes: ghost` rule that draws `--color-border` (a hairline cannot define a
+control) or carries any elevation other than `--shadow-chip` (a control in a row
+does not float).
 `scripts/check-bridge-icon-contract.mjs` (in `npm run check`) fails on an inline
 `<svg>` outside the glyph set, on a geometric or emoji character in the document,
 and on a solid mark rendered outside its family's slots. It also requires every

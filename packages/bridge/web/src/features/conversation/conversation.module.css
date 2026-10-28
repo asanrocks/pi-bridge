@@ -49,9 +49,11 @@
 	align-items: center;
 	justify-content: center;
 	background: var(--color-surface-raised);
-	border: 1px solid var(--color-border);
 	color: var(--color-secondary);
-	box-shadow: var(--shadow-1);
+	/* Floating control over arbitrary content: the chip recipe's edge (see
+	   docs/web/design.md). A hairline here was the one remaining border on a
+	   control that had to define its own extent. */
+	box-shadow: var(--shadow-chip);
 	cursor: pointer;
 	opacity: 0;
 	visibility: hidden;

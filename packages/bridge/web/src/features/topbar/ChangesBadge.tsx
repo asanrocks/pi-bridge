@@ -30,7 +30,7 @@ export function ChangesBadge() {
 	const leafId = useStore((s) => s.document.status.leafId);
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const [state, setState] = useState<Uncommitted>({ status: "idle" });
-	const [menu, setMenu] = useState<DOMRect | null>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const buttonRef = useRef<HTMLButtonElement>(null);
 	// Last-write-wins for overlapping refreshes. Cross-session staleness is
 	// covered by the currentStem guard in the request.
@@ -87,9 +87,9 @@ export function ChangesBadge() {
 				ref={buttonRef}
 				type="button"
 				className={styles.changesBadge}
-				onClick={() => setMenu(buttonRef.current?.getBoundingClientRect() ?? null)}
+				onClick={() => setMenuOpen((open) => !open)}
 				aria-haspopup="menu"
-				aria-expanded={menu !== null}
+				aria-expanded={menuOpen}
 				aria-label={`${state.count} uncommitted file${state.count === 1 ? "" : "s"}`}
 				title={`${state.count} file${state.count === 1 ? "" : "s"} differ from HEAD — as of ${state.asOf}`}
 			>
@@ -97,11 +97,11 @@ export function ChangesBadge() {
 				{state.count}
 				<ChevronDownIcon size={12} />
 			</button>
-			{menu && (
+			{menuOpen && (
 				<AnchoredMenu
-					anchor={menu}
+					anchor={buttonRef.current}
 					items={items}
-					onClose={() => setMenu(null)}
+					onClose={() => setMenuOpen(false)}
 					align="end"
 					label="Uncommitted changes"
 				/>

@@ -47,6 +47,30 @@
 //     `button { color: inherit; background-color: transparent }` priority over
 //     the ghost control (no ink, no hover fill).
 //
+//   - A boundary on a control is a different token from a hairline between
+//     surfaces. `--color-border` (1.47:1 on the page) separates panels; a rule
+//     that composes the ghost control and draws a border is defining the
+//     control's own extent, which WCAG 1.4.11 requires at 3:1, so it must use
+//     `--color-border-control`. That keeps `--color-border` to one job and keeps
+//     the outlined tier honest.
+//
+//   - A control in a row does not float. `composes: ghost` rules may not carry
+//     `--shadow-*` other than `--shadow-chip` (the floating control's edge);
+//     any other elevation says the control is above the surface it sits in.
+//
+//   - `anchor()` takes one of a closed set of anchor sides. `anchor(inline-start)`
+//     is not in it, so the declaration is dropped and the surface keeps its
+//     static inline position while its block offset stays anchored — a menu that
+//     opens in the right column, at the wrong place.
+//
+//   - The shell coordinates are consumed by name, not restated as numbers. The
+//     frame has one action column, one TopBar-band control box, and one header
+//     box per pane; the table below names the rules that must take those values
+//     from the token. This is the rule that was missing when the same
+//     x-coordinate was derived five ways and the corner controls drifted between
+//     states — prose described the alignment, and five copies of the arithmetic
+//     disagreed with it.
+//
 //   - The OS preference is the only theme trigger and index.css is its only
 //     branch site: `prefers-color-scheme` in any other sheet is an error. The
 //     app has no stored theme preference, so a second trigger would mean a
@@ -265,6 +289,143 @@ for (const f of files) {
 				}
 			}
 		}
+	}
+}
+
+// ── Pass 1b: a control's boundary and elevation are not a hairline's ────────
+
+const GHOST_COMPOSES = /composes:\s*[^;]*buttons\.module\.css/;
+const BORDER_DECL = /(?:^|;|\s)border(?:-color)?\s*:\s*([^;]+);/;
+
+for (const [f, source] of css) {
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const body = block[2];
+		if (!GHOST_COMPOSES.test(body)) continue;
+		const loc = `${f}: ${block[1].trim().split("\n").pop()?.trim() ?? ""}`;
+
+		const border = BORDER_DECL.exec(body);
+		if (border && /var\(--color-border\)/.test(border[1])) {
+			errors.push(
+				`${loc}: control border uses the surface hairline --color-border (1.47:1) — a control's boundary must clear 3:1, so use --color-border-control`,
+			);
+		}
+
+		for (const shadow of body.matchAll(/box-shadow\s*:\s*([^;]+);/g)) {
+			const value = shadow[1];
+			if (/var\(--shadow-/.test(value) && !/var\(--shadow-chip\)/.test(value)) {
+				errors.push(
+					`${loc}: control in a row carries ${value.trim()} — only a floating control takes an edge, and it is --shadow-chip`,
+				);
+			}
+		}
+	}
+}
+
+// ── Pass 1c: shell coordinates come from their names ───────────────────────
+
+// The frame's relationships. Each row says: this declaration must take its
+// value from one of these tokens, because the number is a coordinate several
+// surfaces share. Adding a row is how a new shared coordinate becomes binding
+// instead of folklore.
+const COORDINATES = [
+	["features/sidebar/Sidebar.module.css", ".overlayHeader", "padding", ["--topbar-pad-y", "--topbar-pad-x"]],
+	["features/sidebar/Sidebar.module.css", ".overlayHeader .sidebarAddBtn", "width", ["--control-box"]],
+	["features/sidebar/Sidebar.module.css", ".overlayHeader .sidebarAddBtn", "height", ["--control-box"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarList", "padding", ["--pane-inset"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarFolderRowGroup", "padding-right", ["--action-gap"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarFolderNewBtn", "width", ["--control-box-xs"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarFolderNewBtn", "height", ["--control-box-xs"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarMenuBtn", "right", ["--action-gap"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarMenuBtn", "width", ["--control-box-xs"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarMenuBtn", "height", ["--control-box-xs"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarItem", "padding", ["--action-col"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarSectionHeader", "padding", ["--action-col"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarAddBtn", "width", ["--control-box-sm"]],
+	["features/sidebar/Sidebar.module.css", ".sidebarAddBtn", "height", ["--control-box-sm"]],
+	["features/topbar/TopBar.module.css", ".topBar", "padding", ["--topbar-pad-y", "--topbar-pad-x"]],
+	["features/topbar/TopBar.module.css", ".topBarBtn", "width", ["--control-box"]],
+	["features/topbar/TopBar.module.css", ".topBarBtn", "height", ["--control-box"]],
+	["features/topbar/TopBar.module.css", ".changesBadge", "height", ["--topbar-row"]],
+	["features/history/HistoryPane.module.css", ".header", "padding", ["--action-col"]],
+	["features/history/HistoryPane.module.css", ".headerPeek", "padding", ["--topbar-pad-y", "--topbar-pad-x"]],
+	["features/history/HistoryPane.module.css", ".headerPeek .closeBtn", "width", ["--control-box"]],
+	["features/history/HistoryPane.module.css", ".headerPeek .closeBtn", "height", ["--control-box"]],
+	["features/history/HistoryPane.module.css", ".closeBtn", "width", ["--control-box-sm"]],
+	["features/history/HistoryPane.module.css", ".closeBtn", "height", ["--control-box-sm"]],
+];
+
+const coordinatesSeen = new Set();
+for (const [f, source] of css) {
+	const file = f.replace(/\\/g, "/");
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const selector = (block[1].split("\n").map((s) => s.trim()).filter(Boolean).pop() ?? "").replace(/\s+/g, " ");
+		const body = block[2];
+		for (const [wantFile, wantSelector, prop, tokens] of COORDINATES) {
+			if (!file.endsWith(`/${wantFile}`) || selector !== wantSelector) continue;
+			const decl = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+);`).exec(body);
+			if (!decl) continue;
+			coordinatesSeen.add(`${wantFile}|${wantSelector}|${prop}`);
+			if (!tokens.some((token) => decl[1].includes(`var(${token}`))) {
+				errors.push(
+					`${file}: ${wantSelector} { ${prop} } restates a shell coordinate as a number — take it from ${tokens.map((t) => `var(${t})`).join(" or ")} (see app/index.css, "Shell coordinates")`,
+				);
+			}
+		}
+	}
+}
+for (const [wantFile, wantSelector, prop] of COORDINATES) {
+	if (!coordinatesSeen.has(`${wantFile}|${wantSelector}|${prop}`)) {
+		errors.push(
+			`${wantFile}: coordinate row "${wantSelector} { ${prop} }" no longer exists — update COORDINATES in scripts/check-bridge-styling-tokens.mjs`,
+		);
+	}
+}
+
+// ── Pass 1d: anchor() takes an anchor side, and the rule names its anchor ───
+//
+// `<anchor-side>` is a closed set; `anchor(inline-start)` is not in it, so the
+// declaration is dropped and the panel keeps its static inline position while
+// its block offset stays anchored — a menu that opens in the right column but
+// the wrong place, which is exactly the bug this rule was written from.
+
+const ANCHOR_SIDES = new Set([
+	"top",
+	"left",
+	"right",
+	"bottom",
+	"start",
+	"end",
+	"self-start",
+	"self-end",
+	"center",
+	"inside",
+	"outside",
+]);
+
+for (const [f, source] of css) {
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const body = block[2];
+		if (!body.includes("anchor(")) continue;
+		const selector = block[1].split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
+		for (const call of body.matchAll(/anchor\(([^)]*)\)/g)) {
+			const args = call[1].split(",").map((arg) => arg.trim());
+			const side = args[args.length - 1];
+			const named = args.length === 1 || (args.length === 2 && /^--[A-Za-z0-9-]+$/.test(args[0]));
+			if (!ANCHOR_SIDES.has(side) || !named) {
+				errors.push(
+					`${f}: ${selector} uses anchor(${call[1]}) — the side must be one of ${[...ANCHOR_SIDES].join(", ")}; an invalid side is dropped, which leaves the inset auto and the surface at its static position`,
+				);
+			}
+		}
+	}
+}
+
+// `position-anchor` is inherited by the state variants of the same element (the
+// `[data-align]` rule), so the name is checked per file rather than per rule.
+for (const [f, source] of css) {
+	if (!source.includes("anchor(")) continue;
+	if (!/(?:^|;|\s)position-anchor\s*:/.test(source) && !/anchor\(\s*--/.test(source)) {
+		errors.push(`${f}: uses anchor() but never names an anchor — add position-anchor (or pass the anchor name to anchor()) so the offsets have something to resolve against`);
 	}
 }
 

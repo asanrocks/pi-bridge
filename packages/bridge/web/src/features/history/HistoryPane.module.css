@@ -13,7 +13,7 @@
 	align-items: center;
 	justify-content: space-between;
 	margin-top: 12px;
-	padding: 4px 10px 4px 13px;
+	padding: 4px var(--action-col) 4px 13px;
 	flex-shrink: 0;
 }
 
@@ -28,25 +28,25 @@
 
 /* Peek: the drawer covers the TopBar, so its action has to take over the TopBar
    clock's box instead of sitting in the quiet header row the rail and fullscreen
-   use — 6px top, 12px right, 36×36 is exactly where the clock was, so the corner
-   control never shifts a pixel between the hover target and the drawer it opens.
-   The Sidebar's .overlayHeader is the same arithmetic for the hamburger. */
+   use. Both halves are the band's own names — its padding and its control box —
+   so the corner control never shifts between the hover target and the drawer it
+   opens. The Sidebar's .overlayHeader is the same two names for the hamburger. */
 .headerPeek {
 	margin-top: 0;
-	padding: 6px 12px 0;
+	padding: var(--topbar-pad-y) var(--topbar-pad-x) 0;
 }
 
 .headerPeek .closeBtn {
-	width: 36px;
-	height: 36px;
+	width: var(--control-box);
+	height: var(--control-box);
 }
 
-/* Close button — identical chrome to the Sidebar's .sidebarAddBtn (+), so the
-   two panes' header action buttons read as a matched pair. */
+/* Close button — the same pane-header action the Sidebar's .sidebarAddBtn (+)
+   uses, so the two panes' header buttons read as a matched pair. */
 .closeBtn {
 	composes: ghost from "../../render/buttons.module.css";
-	width: 32px;
-	height: 32px;
+	width: var(--control-box-sm);
+	height: var(--control-box-sm);
 }
 
 .scroll {

@@ -219,21 +219,13 @@
 }
 
 .stateBtn {
+	composes: filled from "../../render/buttons.module.css";
 	margin-top: 8px;
 	padding: 8px 16px;
 	min-height: 36px;
 	font-size: var(--fs-md);
 	font-family: inherit;
 	font-weight: 600;
-	background: var(--color-accent);
-	color: var(--color-on-accent);
-	border: none;
 	border-radius: var(--radius-md);
-	cursor: pointer;
 	flex-shrink: 0;
-	user-select: none;
-}
-
-.stateBtn:hover {
-	background: var(--color-accent-hover);
 }

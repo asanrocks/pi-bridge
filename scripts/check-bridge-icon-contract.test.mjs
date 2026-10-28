@@ -129,3 +129,29 @@ test("rejects an unclassified export", async (t) => {
 	assert.match(result.stderr, /"SparkleIcon" is exported but unclassified/);
 	assert.match(result.stderr, /"ArrowUpIcon" is listed as a solid mark but is no longer exported/);
 });
+
+test("rejects a button that composes no tier", async (t) => {
+	const root = await fixture(t, {
+		"features/demo/Demo.module.css": ".plain {\n\tpadding: 0;\n}\n",
+		"features/demo/Demo.tsx": [
+			'import styles from "./Demo.module.css";',
+			"export const Demo = () => <button type=\"button\" className={styles.plain}>Go</button>;",
+		].join("\n"),
+	});
+	const result = check(root);
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /composes no tier/);
+});
+
+test("accepts a button that composes the ghost tier", async (t) => {
+	const root = await fixture(t, {
+		"render/buttons.module.css": ".ghost {\n\tpadding: 0;\n}\n",
+		"features/demo/Demo.module.css": ".go {\n\tcomposes: ghost from \"../../render/buttons.module.css\";\n}\n",
+		"features/demo/Demo.tsx": [
+			'import styles from "./Demo.module.css";',
+			"export const Demo = () => <button type=\"button\" className={styles.go}>Go</button>;",
+		].join("\n"),
+	});
+	const result = check(root);
+	assert.equal(result.status, 0, result.stderr);
+});

@@ -214,6 +214,178 @@ for (const name of exported) {
 	}
 }
 
+// ── Rule 4: every control resolves to a tier, or to a declared role ────────
+//
+// "One spec per role" only binds modules that opt in, so a control that never
+// composes a tier is invisible to every other check — which is how six
+// hand-rolled buttons survived three sweeps. Every `<button>` either resolves
+// (through `composes`) to a tier in render/buttons.module.css, or its class is
+// listed below with the reason it is not a control box. Same shape as the icon
+// families: the decision is made at the point of use, and a stale entry fails.
+
+const TIERS = new Set(["ghost", "outlined", "filled"]);
+
+// class name -> why this button is not a tiered control. Global by name: a role
+// is a role wherever it appears, and a name collision would be a spec bug first.
+const CONTROL_ROLES = new Map(
+	Object.entries({
+		// Backdrops: a full-viewport hit area, not a control.
+		overlay: "backdrop (click dismisses)",
+		portalOverlay: "backdrop (click dismisses)",
+		pickerOverlay: "backdrop (click dismisses)",
+		viewerOverlay: "backdrop (click dismisses)",
+		treeScrim: "backdrop (click dismisses)",
+		// Containers that happen to be buttons: the whole surface is the target.
+		toast: "the toast is dismissed by clicking it",
+		composerBar: "the collapsed composer bar is one wide control",
+		rowMain: "launcher row (navigates)",
+		// List rows and menu items: a fill plus hover, not a boxed control.
+		item: "menu row",
+		sidebarItem: "session row",
+		sidebarItemSelected: "session row (selected)",
+		sidebarMenuItem: "menu row",
+		sidebarMenuClose: "menu row (destructive)",
+		sidebarMenuArchive: "menu row",
+		sidebarFolderRow: "folder row (the fold target)",
+		treeRow: "file tree row",
+		pickerOption: "list row",
+		comparePreset: "list row",
+		completionItem: "list row",
+		portalItemSelect: "list row",
+		portalMore: "list row",
+		supersededRow: "history row",
+		gitDiffAction: "history row action",
+		// Fold headers: a full-width target carrying a caret and a label.
+		actionCollapsed: "fold header",
+		actionGroupHeader: "action group header (sticky fold)",
+		sectionToggle: "file section fold header",
+		editDiffSectionTitle: "diff section fold header",
+		// Chips: a label or a value with its own geometry.
+		msgLabel: "label chip (a value)",
+		msgLabelGhost: "label chip (the add affordance for absent data)",
+		supersededBadge: "status chip",
+		noticePath: "path chip (opens the file)",
+		// Value controls: the words or the number are the content.
+		topBarTitle: "the Session name (rename target)",
+		gitStamp: "git identity chip",
+		gitStampBtn: "git identity chip (menu trigger)",
+		// Floating controls keep a container (see design.md), so they are not
+		// ghost boxes.
+		attachRemove: "floating control over an image (ring recipe)",
+		jumpToBottom: "floating control over the conversation",
+		// Links inside prose.
+		browse: "inline link in a sentence",
+	}),
+);
+
+// A button whose class comes from a variable cannot be resolved here; the files
+// allowed to do that are listed, so the exemption is explicit.
+const UNRESOLVED_OK = new Set(["features/viewer/MarkdownLink.tsx"]);
+
+function parseModules() {
+	const modules = new Map();
+	for (const file of walk(ROOT).filter((f) => f.endsWith(".module.css"))) {
+		const rules = new Map();
+		for (const block of readFileSync(file, "utf-8").matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+			const selector = block[1]
+				.split("\n")
+				.map((s) => s.trim())
+				.filter(Boolean)
+				.pop();
+			const name = selector === undefined ? null : /^\.([A-Za-z0-9_-]+)$/.exec(selector)?.[1];
+			if (!name) continue;
+			const composes = /composes\s*:\s*([^;]+);/.exec(block[2]);
+			if (!composes) continue;
+			const value = composes[1].trim();
+			rules.set(name, {
+				names: value.split(" from ")[0].trim().split(/\s+/),
+				from: /from\s+["']([^"']+)["']/.exec(value)?.[1],
+			});
+		}
+		modules.set(file, rules);
+	}
+	return modules;
+}
+
+const MODULES = parseModules();
+
+/** The value of a `className` attribute, brace-balanced so a template literal's
+ * `${…}` does not truncate it (a partial capture would silently drop the second
+ * class, and with it that class's role). */
+function classNameExpression(tag) {
+	const at = tag.indexOf("className=");
+	if (at < 0) return "";
+	const rest = tag.slice(at + "className=".length);
+	const quote = rest[0];
+	if (quote === '"' || quote === "'") return rest.slice(1, rest.indexOf(quote, 1));
+	let depth = 0;
+	for (let i = 0; i < rest.length; i++) {
+		if (rest[i] === "{") depth++;
+		else if (rest[i] === "}") {
+			depth--;
+			if (depth === 0) return rest.slice(1, i);
+		}
+	}
+	return rest;
+}
+
+function resolvesToTier(file, name, seen = new Set()) {
+	const key = `${file}:${name}`;
+	if (seen.has(key)) return false;
+	seen.add(key);
+	if (file.endsWith("buttons.module.css") && TIERS.has(name)) return true;
+	const rule = MODULES.get(file)?.get(name);
+	if (!rule) return false;
+	const next = rule.from === undefined ? file : join(file, "..", rule.from);
+	return rule.names.some((composed) => resolvesToTier(next, composed, seen));
+}
+
+const rolesUsed = new Set();
+for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+	// Comments are stripped: the transcript's own prose mentions `<button>`.
+	const source = codeLines(readFileSync(file, "utf-8")).join("\n");
+	const imports = new Map();
+	for (const m of source.matchAll(/import\s+(\w+)\s+from\s+["']([^"']+\.module\.css)["']/g)) {
+		imports.set(m[1], join(file, "..", m[2]));
+	}
+	for (const tag of source.matchAll(/<button\b[^>]*>/g)) {
+		const idents = [...classNameExpression(tag[0]).matchAll(/(\w+)\.(\w+)/g)].map((m) => [m[1], m[2]]);
+		const file_ = relative(ROOT, file).replace(/\\/g, "/");
+		if (idents.length === 0) {
+			if (!UNRESOLVED_OK.has(file_)) {
+				errors.push(`${file}: <button> has no resolvable tier class — compose ghost/outlined/filled or list the file in UNRESOLVED_OK`);
+			}
+			continue;
+		}
+		const local = idents.filter(([variable]) => imports.has(variable));
+		const tiered = local.some(([variable, name]) => resolvesToTier(imports.get(variable), name));
+		if (tiered) continue;
+		// A state modifier (`…Selected`, `…Focused`, a hue) rides alongside the
+		// role class, so one recognised role is enough.
+		const roles = local.filter(([, name]) => CONTROL_ROLES.has(name));
+		if (roles.length > 0) {
+			for (const [, name] of roles) rolesUsed.add(name);
+			continue;
+		}
+		errors.push(
+			`${file}: <button className={…${local.map(([, name]) => `.${name}`).join(", ")}}> composes no tier (ghost/outlined/filled) and is not in CONTROL_ROLES — either make it a tiered control or record the role it plays instead`,
+		);
+	}
+}
+
+// The role table describes this app's surfaces, so its anti-rot check only
+// means something against the real tree: the unit tests build a fixture holding
+// just the glyph set, where no feature module exists to use a role.
+const scannedFeatureModules = [...MODULES.keys()].some((f) => f.replace(/\\/g, "/").endsWith("features/sidebar/Sidebar.module.css"));
+
+for (const name of scannedFeatureModules ? CONTROL_ROLES.keys() : []) {
+	if (!rolesUsed.has(name)) {
+		errors.push(
+			`${ROOT}: CONTROL_ROLES lists ".${name}" but no button uses it — update CONTROL_ROLES in scripts/check-bridge-icon-contract.mjs so the role table cannot rot`,
+		);
+	}
+}
+
 if (errors.length) {
 	console.error(`Icon and control contract violations in ${ROOT}:`);
 	console.error("");

@@ -15,31 +15,21 @@
 	margin-bottom: 4px;
 }
 
+/* Toggle row: two glyph-only controls (wrap, markdown), so the ghost tier owns
+   their states — the same spec the card toolbars use for the same two toggles. */
 .control {
+	composes: ghost from "./buttons.module.css";
 	flex-shrink: 0;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 24px;
-	height: 24px;
-	background: none;
-	border: none;
-	border-radius: var(--radius-sm);
+	width: var(--control-box-xs);
+	height: var(--control-box-xs);
 	color: var(--color-muted-foreground);
-	padding: 0;
-	cursor: pointer;
 }
 
 .control svg {
 	display: block;
 }
 
-.control:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
-}
-
-/* Toggle state: on reads brighter than off (same treatment as cardCtrlBtn). */
+/* On reads brighter than off (same treatment as cardCtrlBtn). */
 .control[data-on] {
 	color: var(--color-secondary);
 }

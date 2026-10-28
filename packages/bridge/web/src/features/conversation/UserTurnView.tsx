@@ -54,7 +54,7 @@ export const UserTurnView = memo(function UserTurnView({
 	const baseline = turn.gitIdentity?.commit ?? null;
 	const transitions = turn.gitTransitions;
 	const gitButtonRef = useRef<HTMLButtonElement>(null);
-	const [gitMenu, setGitMenu] = useState<DOMRect | null>(null);
+	const [gitMenuOpen, setGitMenuOpen] = useState(false);
 
 	// The chip's menu names every reviewable pair explicitly: the turn's
 	// observed commits (or one union window), plus the live tail's comparison
@@ -120,17 +120,17 @@ export const UserTurnView = memo(function UserTurnView({
 									title={`Review changes — ${turn.gitCommitSubject ?? "state at send"}`}
 									aria-label="Review repository changes for this turn"
 									aria-haspopup="menu"
-									aria-expanded={gitMenu !== null}
-									onClick={() => setGitMenu(gitButtonRef.current?.getBoundingClientRect() ?? null)}
+									aria-expanded={gitMenuOpen}
+									onClick={() => setGitMenuOpen((open) => !open)}
 								>
 									<BranchIcon size={12} />
 									{gitStamp}
 								</button>
-								{gitMenu && (
+								{gitMenuOpen && (
 									<AnchoredMenu
-										anchor={gitMenu}
+										anchor={gitButtonRef.current}
 										items={gitMenuItems()}
-										onClose={() => setGitMenu(null)}
+										onClose={() => setGitMenuOpen(false)}
 										label="Review changes"
 									/>
 								)}
