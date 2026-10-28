@@ -1,7 +1,10 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Document, SessionRef } from "../../src/core/index.ts";
 import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
+import type { DaemonVerbs } from "../../src/host/connection.ts";
 import { Connection } from "../../src/host/connection.ts";
+import type { Manager } from "../../src/host/manager.ts";
 import {
 	collectFrames,
 	createWsPair,
@@ -14,6 +17,47 @@ import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
 const FIXTURE_URL = new URL("../../../coding-agent/test/fixtures/before-compaction.jsonl", import.meta.url);
+
+/** A Manager stand-in: only the members the Connection path under test reads. */
+function fakeManager(overrides: Partial<Manager> = {}): Manager {
+	return {
+		document: {
+			status: {
+				leafId: null,
+				name: "",
+				model: { provider: "", modelId: "" },
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+				contextUsage: null,
+				pendingSteer: [],
+			},
+			entries: {},
+		} as Document,
+		liveSessionId: "s",
+		cwd: "/proj",
+		sessionFile: "/proj/s.jsonl",
+		createdAt: new Date(0).toISOString(),
+		onPatch: () => () => {},
+		addConnection: () => {},
+		removeConnection: () => {},
+		onSettled: () => () => {},
+		prompt: async () => {},
+		promptAdmitted: async () => {},
+		executeBash: async () => {},
+		abort: async () => {},
+		discardSteer: async () => {},
+		setModel: async () => {},
+		setThinkingLevel: async () => {},
+		renameSession: async () => {},
+		setLabel: async () => {},
+		navigate: async () => {},
+		recoverTurn: async () => "retry",
+		dispose: async () => {},
+		...overrides,
+	} as unknown as Manager;
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -440,4 +484,159 @@ describe("Connection + Daemon", () => {
 		serverWs.close();
 		clientWs.close();
 	});
+
+	// ── command target capture ──────────────────────────────────────────
+
+	it("a command started for one session cannot be retargeted by a transition completing during it", async () => {
+		// A rename is in flight when an openSession transition completes and
+		// moves the attachment to another session. The rename must finish
+		// against — and broadcast for — the session it was started for. The
+		// broadcast previously read the live attachment after its await, so the
+		// Project refresh went to the successor session's Project.
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		const refA: SessionRef = { projectId: "proj-a", sessionId: "sa", stem: "a" };
+		const refB: SessionRef = { projectId: "proj-b", sessionId: "sb", stem: "b" };
+
+		let releaseRename: () => void = () => {};
+		const renameGate = new Promise<void>((resolve) => {
+			releaseRename = resolve;
+		});
+		const managerA = fakeManager({
+			renameSession: async () => {
+				await renameGate;
+			},
+		});
+		const managerB = fakeManager();
+
+		let releaseOpen: () => void = () => {};
+		const openGate = new Promise<void>((resolve) => {
+			releaseOpen = resolve;
+		});
+		const sessionsChanged: string[] = [];
+		const verbs: DaemonVerbs = {
+			...mockDaemonVerbs,
+			openSession: async (_projectId, _stem, conn) => {
+				await openGate;
+				conn.attach(managerB, refB);
+				return { ok: true, session: refB };
+			},
+			sessionsChanged: (projectId) => sessionsChanged.push(projectId),
+		};
+
+		const conn = new Connection(serverWs, verbs, null, false);
+		conn.attach(managerA, refA);
+		await waitForOpen(clientWs);
+
+		clientWs.send(JSON.stringify({ id: "1", verb: "openSession", projectId: "proj-b", stem: "b" }));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		clientWs.send(JSON.stringify({ id: "2", verb: "renameSession", name: "renamed" }));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		// The transition completes and moves the attachment.
+		releaseOpen();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(conn.attachedSession?.projectId).toBe("proj-b");
+
+		// The rename completes against its captured target.
+		releaseRename();
+		const reply = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "2");
+		expect((reply as Record<string, unknown>).ok).toBe(true);
+		expect(sessionsChanged).toEqual(["proj-a"]);
+
+		serverWs.close();
+		clientWs.close();
+	}, 30000);
+
+	// ── transition serialization ────────────────────────────────────────
+
+	it("serializes concurrent openSession RPCs in arrival order", async () => {
+		// The first open is slow (a manager being created); the second arrives
+		// while it is in flight. Without serialization both run concurrently and
+		// the second replies first — the client then trusts a reply order the
+		// server's attachment does not follow. Serialized, each transition runs
+		// to completion before the next: reply order equals arrival order.
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		let releaseFirst: () => void = () => {};
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const opened: string[] = [];
+		const verbs: DaemonVerbs = {
+			...mockDaemonVerbs,
+			openSession: async (_projectId, stem) => {
+				opened.push(stem);
+				if (opened.length === 1) await firstGate;
+				return { ok: true, session: { ...mockSessionRef, stem } };
+			},
+		};
+		new Connection(serverWs, verbs, null, false);
+		await waitForOpen(clientWs);
+
+		clientWs.send(JSON.stringify({ id: "1", verb: "openSession", projectId: "proj", stem: "first" }));
+		clientWs.send(JSON.stringify({ id: "2", verb: "openSession", projectId: "proj", stem: "second" }));
+		// Both messages are handled; the first transition is parked on its gate.
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(opened).toEqual(["first"]);
+
+		releaseFirst();
+
+		const reply1 = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "1");
+		const reply2 = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "2");
+		expect((reply1 as Record<string, unknown>).ok).toBe(true);
+		expect((reply2 as Record<string, unknown>).ok).toBe(true);
+		// Arrival order: the first request replied before the second.
+		expect(clientFrames.indexOf(reply1)).toBeLessThan(clientFrames.indexOf(reply2));
+		expect(opened).toEqual(["first", "second"]);
+
+		serverWs.close();
+		clientWs.close();
+	}, 30000);
+
+	it("refuses transitions that reach their turn after the connection is disposed", async () => {
+		// A socket can close while a transition is in flight and more can be
+		// queued behind it. A disposed connection must never attach: nothing
+		// would ever release it. The queued transition replies with an error
+		// instead of running.
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		let releaseFirst: () => void = () => {};
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const opened: string[] = [];
+		const verbs: DaemonVerbs = {
+			...mockDaemonVerbs,
+			openSession: async (_projectId, stem) => {
+				opened.push(stem);
+				if (opened.length === 1) await firstGate;
+				return { ok: true, session: { ...mockSessionRef, stem } };
+			},
+		};
+		const conn = new Connection(serverWs, verbs, null, false);
+		await waitForOpen(clientWs);
+
+		clientWs.send(JSON.stringify({ id: "1", verb: "openSession", projectId: "proj", stem: "in-flight" }));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		// The socket closes mid-transition (the daemon's close handler disposes).
+		conn.dispose();
+		clientWs.send(JSON.stringify({ id: "2", verb: "openSession", projectId: "proj", stem: "queued" }));
+		releaseFirst();
+
+		// The in-flight transition completes; the queued one is refused and the
+		// verb is never called for it.
+		const reply1 = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "1");
+		expect((reply1 as Record<string, unknown>).ok).toBe(true);
+		const reply2 = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).id === "2");
+		expect((reply2 as Record<string, unknown>).ok).toBe(false);
+		expect(opened).toEqual(["in-flight"]);
+
+		serverWs.close();
+		clientWs.close();
+	}, 30000);
 }, 30000);

@@ -357,10 +357,19 @@ export class BridgeClient {
 	private call(body: RpcRequestBody): Promise<RpcReply> {
 		const id = String(++this.nextId);
 		const request: Record<string, unknown> = { id, ...body };
-		this.transport.send(JSON.stringify(request));
-
 		return new Promise<RpcReply>((resolve, reject) => {
+			// Correlation precedes transmission: a transport may deliver a reply
+			// inside `send` (an in-process link) or fail synchronously (a closed
+			// socket). Installing the pending record first means a synchronous
+			// reply finds its caller; a throwing `send` removes the record and
+			// rejects exactly once, so a failed request leaves nothing pending.
 			this.pending.set(id, { resolve, reject });
+			try {
+				this.transport.send(JSON.stringify(request));
+			} catch (err) {
+				this.pending.delete(id);
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
 		});
 	}
 

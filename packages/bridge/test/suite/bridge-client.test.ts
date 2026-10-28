@@ -60,6 +60,49 @@ describe("BridgeClient", () => {
 		expect(reply.ok).toBe(true);
 	});
 
+	it("keeps the reply of a transport that answers inside send", async () => {
+		// Correlation must be installed before transmission: an in-process
+		// transport can deliver the reply synchronously inside `send`, and a
+		// record installed after would miss it — the caller then awaits a
+		// promise no later event can settle.
+		const transport = new MockTransport();
+		transport.send = (data: string) => {
+			const { id } = JSON.parse(data) as { id: string };
+			transport.onMessage?.(JSON.stringify({ id, ok: true, answered: "inside-send" }));
+		};
+		const client = new BridgeClient(transport);
+
+		const reply = await client.prompt("hello");
+		expect(reply.ok).toBe(true);
+		expect((reply as unknown as { answered?: string }).answered).toBe("inside-send");
+	});
+
+	it("rejects with the transport's error instead of throwing synchronously", async () => {
+		// A closed socket throws from `send`. The caller used the documented
+		// Promise shape, so the failure must arrive as a rejection — and the
+		// failed request must leave nothing pending for a later disconnect to
+		// reject twice.
+		const transport = new MockTransport();
+		transport.send = () => {
+			throw new Error("socket closed");
+		};
+		const client = new BridgeClient(transport);
+
+		let promise: Promise<unknown>;
+		try {
+			promise = client.prompt("hello");
+		} catch {
+			throw new Error("call must not throw synchronously");
+		}
+		await expect(promise).rejects.toThrow("socket closed");
+
+		// Nothing stays pending: a late reply for the failed id resolves no one,
+		// and disconnect does not double-reject.
+		transport.send = () => {};
+		client.disconnect();
+		await expect(promise).rejects.toThrow("socket closed");
+	});
+
 	it("rejects all pending RPCs on disconnect", async () => {
 		const { client } = makeClient();
 
