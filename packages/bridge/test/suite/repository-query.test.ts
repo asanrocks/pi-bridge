@@ -18,7 +18,7 @@ import {
 	readFileAtSnapshot,
 	resolveGitBase,
 	runGitDiff,
-} from "../../src/host/daemon.ts";
+} from "../../src/host/repository.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 

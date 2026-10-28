@@ -30,10 +30,23 @@ export function addressKey(projectId: string, stem: string): string {
 	return `${projectId}\0${stem}`;
 }
 
+/** The registration's authorization identity: this registry's incarnation
+ * (one daemon run) plus the registration's generation within it. Work
+ * composed against a registration names this pair, so a replaced
+ * registration never inherits its predecessor's commands, delivery, or
+ * attachments. In this in-process link a new generation is always a new
+ * Manager and a new attachment. */
+export interface ActivationAuthorization {
+	readonly incarnation: string;
+	readonly generation: number;
+}
+
 /** One live Activation: a Manager, its attached Connections, and its claims. */
 export interface ActivationRecord {
 	id: string;
 	ref: SessionRef;
+	/** This registration's authorization identity (see above). */
+	authorization: ActivationAuthorization;
 	manager: Manager;
 	/** Attached Connections. GC is gated on this being empty. */
 	connections: Set<Connection>;
@@ -43,6 +56,9 @@ export interface ActivationRecord {
 }
 
 export interface ActivationRegistryOptions {
+	/** This registry's incarnation: the identity a registration's generation
+	 * is scoped to (one daemon run for the in-process link). */
+	incarnation: string;
 	/** Create the Manager for a session file. Throws when creation fails. */
 	createManager: (project: ProjectConfig, stem: string, abs: string) => Promise<Manager>;
 	/** Idle GC delay for a durable or empty session. */
@@ -72,6 +88,9 @@ export class ActivationRegistry {
 	private sessionOwnerById = new Map<string, { projectId: string; stem: string }>();
 	/** The Connection → Activation attachment index. */
 	private connectionActivation = new Map<Connection, ActivationRecord>();
+	/** Monotonic registration counter: a generation is never reused within
+	 * the registry's incarnation. */
+	private generations = 0;
 	/** Terminal state: set synchronously at the top of dispose(), so no
 	 * admission can interleave with the drain. */
 	private disposed = false;
@@ -230,6 +249,7 @@ export class ActivationRegistry {
 		const record: ActivationRecord = {
 			id: randomUUID(),
 			ref,
+			authorization: { incarnation: this.options.incarnation, generation: ++this.generations },
 			manager,
 			connections: new Set(),
 			gcTimer: null,

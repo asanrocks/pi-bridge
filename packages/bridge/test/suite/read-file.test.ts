@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import { Connection, type DaemonVerbs } from "../../src/host/connection.ts";
-import { MAX_READ_FILE_BYTES, readFileAtSnapshot } from "../../src/host/daemon.ts";
+import { MAX_READ_FILE_BYTES, readFileAtSnapshot } from "../../src/host/repository.ts";
 import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";

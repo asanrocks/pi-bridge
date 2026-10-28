@@ -100,8 +100,14 @@ persisted entries from pi's entry list through one refresh boundary; it sends
 patches to its listeners. A Connection owns one WebSocket and one attachment. It filters
 lazy paths using its own subscriptions, handles `pull`, demultiplexes typed
 RPC verbs, and sends initial sync before later live patches. The Daemon owns
-Projects, Activation reservations and collection, Connection registration,
-Project/session queries, and HTTP serving.
+Projects, Connection registration, Project/session queries, and HTTP serving,
+and routes Session execution through one seam (`src/host/execution-link.ts`):
+the Activation registry, Manager creation, and the per-session choreography
+sit behind the `ExecutionLink` interface, with a local in-process
+implementation and an authorization identity (incarnation + generation) per
+registration. The repository read surface (snapshot reads, listings, the diff
+directive, `git show`, path completion) is its own module
+(`src/host/repository.ts`), shared by whichever link serves it.
 
 **Web.** `BridgeClient` is the only browser-side wire envelope owner. Its
 DocumentMirror applies `replace` and `patch` pushes with immutable structural

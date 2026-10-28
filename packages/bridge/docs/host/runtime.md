@@ -6,6 +6,23 @@ contains one Manager and serves exactly one Session for its entire lifetime.
 Activations are daemon-internal; the wire carries Session addresses and
 references, never an Activation.
 
+Session execution sits behind one seam: `src/host/execution-link.ts`. The
+Daemon owns configuration, catalogues, scanning, broadcasts, and the
+HTTP/WebSocket surface, and routes every session-lifecycle verb through the
+`ExecutionLink` interface — open, create, awaitSettled, collect, release,
+live, dispose. The local implementation owns the Activation registry and the
+per-session choreography (Manager creation, registration, the pre-attach
+model/thinking choices, first-prompt admission); a future remote
+implementation (a Worker process over a socket) can implement the same
+contract without the Daemon branching on locality. Every Activation
+registration carries an authorization — the link's `incarnation` (one daemon
+run) plus the registration's `generation` within it — so work composed against
+a registration names an identity a replaced registration never inherits; in
+the local link a new generation is always a new Manager and a new attachment.
+The repository read surface (`src/host/repository.ts`: snapshot reads,
+directory listings, the review diff directive, `git show`, path completion)
+is likewise its own module, shared by whichever link serves it.
+
 The canonical Session content is a `Document` owned by its Manager. The
 Document and its patch protocol are defined in [the core data model](../core/data-model.md).
 The host's initial-sync and lazy-field behavior uses the wire contract in
@@ -225,7 +242,8 @@ The daemon can also use `push` on a Connection for registry broadcasts.
 ## Activation Registry
 
 `src/host/activation-registry.ts` owns the whole live-Activation lifetime —
-one state machine, in one module:
+one state machine, in one module — behind the local ExecutionLink (the
+Daemon never touches it directly):
 
 ```text
 absent -> creating -> live -> collecting -> absent
@@ -235,9 +253,11 @@ It maintains the Activation records (keyed by daemon-local id), the address
 index keyed by `(projectId, stem)`, pending-creation promises keyed by the
 same address, the `sessionId` ownership index, and the Connection-to-Activation
 attachment index. These are implementation state and never cross the wire. The
-Daemon supplies the Manager factory, the idle-collection delays, and the
-broadcast hooks (settlement, streaming transitions, registration/collection);
-it holds no Activation state of its own.
+Daemon supplies the Manager factories (open and create), the idle-collection
+delays, the pre-clamp thinking-level read, and the broadcast hooks (settlement,
+streaming transitions, registration/collection); it holds no Activation state
+of its own. Each registration carries its authorization (`incarnation` +
+`generation`), assigned here and never reused within the incarnation.
 
 Shutdown is a terminal state. `dispose()` sets the flag and clears every
 index in one synchronous block — so a record is either in the drain's
@@ -334,8 +354,9 @@ The timer model and its reservation invariant govern this runtime.
 
 ### `newSession`
 
-`newSession` requires a non-empty text prompt and a Project id. The Daemon
-creates a fresh Manager, derives its allocated stem from the Manager's session
+`newSession` requires a non-empty text prompt and a Project id. The
+execution link creates a fresh Manager, derives its allocated stem from the
+Manager's session
 file, and registers the Activation. Before attaching the Connection it applies
 an optional `model` and `thinkingLevel`, then calls `promptAdmitted` with the
 text and optional images. A `model` pick without a `thinkingLevel` gets one
