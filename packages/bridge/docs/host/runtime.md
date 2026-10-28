@@ -186,13 +186,26 @@ lazy path also registers that path for subsequent live patches.
 
 The Connection demultiplexes RPC frames by verb. Attached Session verbs are:
 `prompt`, `abort`, `discardSteer`, `setModel`, `setThinkingLevel`,
-`renameSession`, and `navigate`. They require an attachment and route to that
-Manager. The host validates prompt image envelopes and enforces the shared
+`renameSession`, `setLabel`, `navigate`, and `recoverTurn`. They require an
+attachment and route to that Manager. Each captures its target — the attached
+Manager and SessionRef — at handler entry, before any await, so a transition
+that completes while the command runs cannot retarget it: the command
+executes against, and reports on, the session attached when the request
+arrived. The host validates prompt image envelopes and enforces the shared
 image-count and image-size limits.
 
 Navigation verbs are `openSession`, `newSession`, `detach`, `closeSession`,
 and `archiveSession`. They route to the Daemon because they change attachment
-or Activation state. Query verbs are `listSessions`, `listActiveSessions`,
+or Activation state. The three that change this Connection's attachment —
+`openSession`, `newSession`, and `detach` — are serialized: each runs to
+completion before the next begins, in arrival order, so concurrent
+transitions cannot each decide which Manager ends up attached, and the reply
+the client trusts describes the same operation as the attachment the server
+keeps. A disposed Connection refuses admission: a transition that arrives
+after the socket closed, or that reaches its turn after it, replies with an
+error instead of attaching something nothing would ever release.
+`closeSession` and `archiveSession` change Activation state, not this
+Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listActiveSessions`,
 `getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,
 `gitBase`, and `gitDiff`. `listFiles` is Project-addressed; `readFile`,
 `listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),

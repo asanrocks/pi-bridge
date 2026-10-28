@@ -18,6 +18,12 @@ A server push has no `id`. The connection demultiplexes by the presence of
 `BridgeClient` applies `replace` and `patch` pushes to its `DocumentMirror`,
 while exposing all pushes to the web store.
 
+Correlation precedes transmission: the client installs an RPC's pending record
+before the request leaves, because a transport may deliver a reply inside
+`send` (an in-process link) or fail synchronously (a closed socket). A reply
+with no pending record is dropped, and a throwing `send` removes the record
+and rejects exactly once, so a failed request leaves nothing pending.
+
 ## Push frames
 
 | `kind` | Payload and contract |

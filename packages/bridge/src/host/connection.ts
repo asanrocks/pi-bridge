@@ -168,6 +168,8 @@ export class Connection {
 	private _attachedManager: Manager | null = null;
 	private _attachedSession: SessionRef | null = null;
 	private _disposed = false;
+	/** Serialized attachment-changing transitions (see runTransition). */
+	private transitionChain: Promise<void> = Promise.resolve();
 
 	constructor(ws: WebSocket, daemonVerbs: DaemonVerbs, logger: TrafficLogger | null, devMode: boolean) {
 		this.ws = ws;
@@ -251,6 +253,44 @@ export class Connection {
 
 	// ── Message handler ──────────────────────────────────────────────────
 
+	/**
+	 * Run one attachment-changing verb (openSession, newSession, detach).
+	 * Transitions are serialized: each runs to completion before the next
+	 * begins, in arrival order. A connection has at most one attachment, so
+	 * two concurrent transitions deciding independently which manager ends
+	 * up attached — the last writer winning — would make the reply the
+	 * client trusts and the attachment the server keeps different operations'
+	 * results. A disposed connection refuses admission: a transition that
+	 * arrives after the socket closed, or that reaches its turn after it,
+	 * replies with an error instead of attaching something nothing would
+	 * ever release.
+	 */
+	private runTransition(id: string, op: () => Promise<void>): void {
+		const attempt = async (): Promise<void> => {
+			if (this._disposed) {
+				this.sendReply(id, false, "connection closed");
+				return;
+			}
+			try {
+				await op();
+			} catch (err) {
+				this.sendReply(id, false, (err as Error).message);
+			}
+		};
+		this.transitionChain = this.transitionChain.then(attempt, attempt);
+	}
+
+	/**
+	 * The attachment a session command addresses, captured at handler entry —
+	 * before any await. A transition that completes while the command runs
+	 * cannot retarget it: the command executes against, and reports on, the
+	 * session that was attached when the request arrived.
+	 */
+	private requireAttachment(): { manager: Manager; session: SessionRef } {
+		if (!this._attachedManager || !this._attachedSession) throw new Error("no session attached");
+		return { manager: this._attachedManager, session: this._attachedSession };
+	}
+
 	private async handleMessage(msg: ClientMessage): Promise<void> {
 		const { id, verb } = msg;
 
@@ -258,7 +298,7 @@ export class Connection {
 			switch (verb) {
 				// ── Attached session verbs ─────────────────────────────────
 				case "prompt": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as PromptRequest;
 					if (typeof m.text !== "string") throw new Error("Missing `text`");
 					// Light shape validation: images are opaque base64 blobs relayed
@@ -280,67 +320,70 @@ export class Connection {
 					) {
 						throw new Error("Invalid `images`");
 					}
-					await this._attachedManager.prompt(m.text, images);
+					await target.manager.prompt(m.text, images);
 					this.sendReply(id, true);
 					break;
 				}
 				case "abort": {
-					if (!this._attachedManager) throw new Error("no session attached");
-					await this._attachedManager.abort();
+					const target = this.requireAttachment();
+					await target.manager.abort();
 					this.sendReply(id, true);
 					break;
 				}
 				case "discardSteer": {
-					if (!this._attachedManager) throw new Error("no session attached");
-					await this._attachedManager.discardSteer();
+					const target = this.requireAttachment();
+					await target.manager.discardSteer();
 					this.sendReply(id, true);
 					break;
 				}
 				case "setModel": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as SetModelRequest;
-					await this._attachedManager.setModel(m.provider, m.model);
+					await target.manager.setModel(m.provider, m.model);
 					this.sendReply(id, true);
 					break;
 				}
 				case "setThinkingLevel": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as SetThinkingLevelRequest;
-					await this._attachedManager.setThinkingLevel(m.level);
+					await target.manager.setThinkingLevel(m.level);
 					this.sendReply(id, true);
 					break;
 				}
 				case "renameSession": {
-					if (!this._attachedManager || !this._attachedSession) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as RenameSessionRequest;
 					if (typeof m.name !== "string") throw new Error("Missing `name`");
-					await this._attachedManager.renameSession(m.name);
+					await target.manager.renameSession(m.name);
 					this.sendReply(id, true);
-					this.daemonVerbs.sessionsChanged(this._attachedSession.projectId);
+					// The refresh broadcast belongs to the command's target — read
+					// from the capture, never from the live attachment, which a
+					// transition completing during the rename may have moved.
+					this.daemonVerbs.sessionsChanged(target.session.projectId);
 					break;
 				}
 				case "setLabel": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as SetLabelRequest;
 					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 					if (typeof m.label !== "string") throw new Error("Missing `label`");
-					await this._attachedManager.setLabel(m.entryId, m.label);
+					await target.manager.setLabel(m.entryId, m.label);
 					this.sendReply(id, true);
 					break;
 				}
 				case "navigate": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as NavigateRequest;
 					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					await this._attachedManager.navigate(m.entryId);
+					await target.manager.navigate(m.entryId);
 					this.sendReply(id, true);
 					break;
 				}
 				case "recoverTurn": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					// The Manager re-derives the boundary and refuses when the tail
 					// is not recoverable; `action` reports which repair ran.
-					const action = await this._attachedManager.recoverTurn();
+					const action = await target.manager.recoverTurn();
 					this.send({ id, ok: true, action: action as unknown as JsonValue });
 					break;
 				}
@@ -348,42 +391,48 @@ export class Connection {
 				// ── Navigation verbs (Daemon, side-effectful) ──────────────
 				case "openSession": {
 					const m = msg as unknown as OpenSessionRequest;
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-					const result = await this.daemonVerbs.openSession(m.projectId, m.stem, this, m.cursor ?? null);
-					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
-					else this.sendReply(id, false, result.error);
+					this.runTransition(id, async () => {
+						if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+						if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
+						const result = await this.daemonVerbs.openSession(m.projectId, m.stem, this, m.cursor ?? null);
+						if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
+						else this.sendReply(id, false, result.error);
+					});
 					break;
 				}
 				case "newSession": {
 					const m = msg as unknown as NewSessionRequest;
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
-					if (m.images !== undefined && !Array.isArray(m.images)) throw new Error("Invalid `images`");
-					if (
-						m.model !== undefined &&
-						(typeof m.model !== "object" ||
-							m.model === null ||
-							typeof m.model.provider !== "string" ||
-							typeof m.model.modelId !== "string")
-					) {
-						throw new Error("Invalid `model`");
-					}
-					if (m.thinkingLevel !== undefined && typeof m.thinkingLevel !== "string") {
-						throw new Error("Invalid `thinkingLevel`");
-					}
-					const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, {
-						images: m.images,
-						model: m.model,
-						thinkingLevel: m.thinkingLevel,
+					this.runTransition(id, async () => {
+						if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+						if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
+						if (m.images !== undefined && !Array.isArray(m.images)) throw new Error("Invalid `images`");
+						if (
+							m.model !== undefined &&
+							(typeof m.model !== "object" ||
+								m.model === null ||
+								typeof m.model.provider !== "string" ||
+								typeof m.model.modelId !== "string")
+						) {
+							throw new Error("Invalid `model`");
+						}
+						if (m.thinkingLevel !== undefined && typeof m.thinkingLevel !== "string") {
+							throw new Error("Invalid `thinkingLevel`");
+						}
+						const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, {
+							images: m.images,
+							model: m.model,
+							thinkingLevel: m.thinkingLevel,
+						});
+						if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
+						else this.sendReply(id, false, result.error);
 					});
-					if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
-					else this.sendReply(id, false, result.error);
 					break;
 				}
 				case "detach": {
-					this.daemonVerbs.detach(this);
-					this.sendReply(id, true);
+					this.runTransition(id, async () => {
+						this.daemonVerbs.detach(this);
+						this.sendReply(id, true);
+					});
 					break;
 				}
 				case "closeSession": {
@@ -498,8 +547,8 @@ export class Connection {
 					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
 					// Requires an attachment: the recorded commit belongs to the
 					// attached session's repository, so its cwd is the query base.
-					if (!this._attachedManager) throw new Error("no session attached");
-					const result = await this.daemonVerbs.gitShow(m.commit, this._attachedManager.cwd);
+					const target = this.requireAttachment();
+					const result = await this.daemonVerbs.gitShow(m.commit, target.manager.cwd);
 					this.send({ id, ok: true, ...result });
 					break;
 				}
@@ -531,12 +580,12 @@ export class Connection {
 
 				// ── Connection-local verb ──────────────────────────────────
 				case "pull": {
-					if (!this._attachedManager) throw new Error("no session attached");
+					const target = this.requireAttachment();
 					const m = msg as unknown as PullRequest;
 					if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
 					const values: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
 					for (const req of m.requests) {
-						const entry = this._attachedManager.document.entries[req.entryId];
+						const entry = target.manager.document.entries[req.entryId];
 						if (!entry) continue;
 						const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
 						if (value !== undefined) {
