@@ -12,7 +12,7 @@ The entry shape and the other `custom` entry rules are defined in [the core
 data model](../core/data-model.md). The host writes stamps, the core module
 owns the payload contract and parsing, and the viewmodel and web client own
 projection and rendering. The stamp is ordinary Document data: it is persisted,
-reconciled, cached, and synchronized like any other custom Entry, while
+refreshed, cached, and synchronized like any other custom Entry, while
 remaining inert in LLM context.
 
 ## Observation Boundaries
@@ -67,10 +67,10 @@ after the host applies and publishes the bash entry. A slow observation can
 still encounter another append before it writes; the resulting parent is the
 current leaf when the append occurs, so sequence placement is best effort.
 
-A `tool_end` stamp parents on the persisted assistant entry, which mid-turn
-the live Document holds only as its `pending:message` provisional. The
-append therefore defers to the turn-end reconcile: clients see the stamp
-when the turn settles, not during streaming.
+A `tool_end` stamp parents on the persisted assistant entry, which mid-turn the
+live Document holds as that entry's live form — the same id, so the parent
+resolves. The stamp itself is published by the host's next refresh, so clients
+see it when that refresh lands rather than mid-token.
 
 ## Payload Versions
 

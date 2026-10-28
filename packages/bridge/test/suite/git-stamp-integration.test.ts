@@ -129,7 +129,7 @@ describe("git identity stamps (integration)", () => {
 		// Index of the first op that mentions the entry id, in wire order. The wire
 		// may compact single-append patches, so match on serialized content.
 		// Upstream commits a turn's boundary drafts (system message, stamp, user
-		// message) in one reconcile patch, so compare op order rather than patch
+		// message) before one refresh installs them, so compare op order rather than patch
 		// order: the stamp's append still precedes the user message's parentId
 		// update, which is what the live identity fold depends on.
 		const opIndexOf = (id: string) =>
@@ -230,8 +230,8 @@ describe("git identity stamps (integration)", () => {
 
 		const s = await waitForStamps(h, 2);
 		expect(s).toHaveLength(2);
-		// The bash stamp carries no ord until the next reconcile, so select by
-		// anchor rather than position.
+		// The bash stamp carries no ord until the next refresh installs it, so
+		// select by anchor rather than position.
 		const promptStamp = s.find((x) => x.anchor === "prompt");
 		const bashStamp = s.find((x) => x.anchor === "user_bash_end");
 		expect(promptStamp).toMatchObject({ commit: head1 });
@@ -349,16 +349,15 @@ describe("git identity stamps (integration)", () => {
 		expect(s[1]).toMatchObject({ anchor: "prompt", commit: head, branch: null });
 	});
 
-	// Regression (profiled live failure, 2026-09-22): a mid-turn tool_end
-	// stamp is appended with parentId = the REAL assistant entry id from the
-	// session file, which the live document does not know yet (it holds that
-	// message as the `pending:message` provisional; real ids fold in only at
-	// the turn-end reconcile). entry_appended moved status.leafId onto the
-	// stamp, the leaf-path walk stopped at the unknown parent, and the
-	// ViewModel collapsed to the lone git card — the client unmounted the
-	// whole conversation (blank page), then the turn-end reconcile restored
-	// it with zero identity reuse: every turn remounted and every Markdown
-	// block re-parsed (a 500ms main-thread task in the wild).
+	// Regression (profiled live failure, 2026-09-22, fixed by the stable-id
+	// projection): a mid-turn tool_end stamp was appended with parentId = the
+	// REAL assistant entry id from the session file, which the live document
+	// did not know yet under its provisional naming. entry_appended moved
+	// status.leafId onto the stamp, the leaf-path walk stopped at the unknown
+	// parent, and the ViewModel collapsed to the lone git card — the client
+	// unmounted the whole conversation (blank page), then the turn-end
+	// refresh restored it with zero identity reuse: every turn remounted and
+	// every Markdown block re-parsed (a 500ms main-thread task in the wild).
 	it("a mid-turn tool_end stamp never collapses the turn list or breaks turn identity", async () => {
 		const h = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
@@ -374,15 +373,12 @@ describe("git identity stamps (integration)", () => {
 		toolGit = h.git;
 
 		const keyOf = (t: TurnVM) => (t.kind === "assistant" ? t.turnKey : t.entryId);
-		// Identity reuse is not expected for: (a) turns keyed by a provisional
-		// entry (pending: → real id is an add/remove pair, not a break), (b)
-		// user-bash turns, which do not participate in prevTurns reuse at all
-		// (a separate gap), and (c) the turn that is actively growing — it holds
-		// a provisional block or is the trailing turn while the session
-		// streams, so its identity legitimately changes on every flush.
+		// Identity reuse is not expected for: (a) user-bash turns, which do not
+		// participate in prevTurns reuse at all (a separate gap), and (b) the
+		// turn that is actively growing — the trailing turn while the session
+		// streams, whose content legitimately changes on every flush.
 		const isGrowing = (t: TurnVM, vm: ReturnType<typeof computeViewModel>) =>
-			(t.kind === "assistant" && t.blocks.some((b) => b.entryId.startsWith("pending:"))) ||
-			(t === vm.turns[vm.turns.length - 1] && h.manager.document.status.isStreaming);
+			t === vm.turns[vm.turns.length - 1] && h.manager.document.status.isStreaming;
 
 		// Checked after every emitted patch, against the previous projection.
 		const failures: string[] = [];
@@ -395,16 +391,19 @@ describe("git identity stamps (integration)", () => {
 			if (vm.turns.length < baseline) {
 				failures.push(`turn list collapsed mid-turn: ${baseline} -> ${vm.turns.length}`);
 			}
-			// One patch appends at most one entry (plus turn-end reconcile
-			// pairing the user and assistant provisionals); a mass re-add is
-			// the blank-page remount signature.
+			// One patch appends or seals at most one entry; a mass re-add is the
+			// blank-page remount signature.
 			const added = vm.turns.filter((t) => !prev.turns.some((p) => keyOf(p) === keyOf(t))).length;
 			if (added > 3) failures.push(`patch materialized ${added} turns (identity reuse lost)`);
 			for (const t of vm.turns) {
 				const key = keyOf(t);
-				if (key.includes("pending:") || t.kind === "userBash" || isGrowing(t, vm)) continue;
+				if (t.kind === "userBash" || isGrowing(t, vm)) continue;
 				const p = prev.turns.find((x) => keyOf(x) === key);
-				if (p !== undefined && p !== t) failures.push(`turn identity broken: ${key}`);
+				// Sealing replaces an entry with its persisted form on purpose, so a
+				// new object is only a break when nothing rendered changed.
+				if (p !== undefined && p !== t && JSON.stringify(p) === JSON.stringify(t)) {
+					failures.push(`turn identity broken: ${key}`);
+				}
 			}
 			prev = vm;
 		});

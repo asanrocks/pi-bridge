@@ -2,7 +2,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { AddOp, PatchOp } from "../../src/core/index.ts";
+import { isEntrySealed, type PatchOp } from "../../src/core/index.ts";
 import type { BridgeHarness, MirrorHarness } from "./harness.ts";
 import { assertMirrorInSync, createBridgeHarness, createMirrorHarness } from "./harness.ts";
 
@@ -114,9 +114,18 @@ describe("streaming edge cases", () => {
 
 		assertMirrorInSync(tm.mh, "after streaming tool turn");
 
-		// The client receives replace ops on tool result content during streaming
+		// The client received replace ops on that entry's content while it ran.
+		const streamedToolIds = new Set(
+			tm.ops.flatMap((op) =>
+				op.op === "add" &&
+				op.path.startsWith("/entries/") &&
+				(op.value as { kind?: string } | undefined)?.kind === "tool_result"
+					? [op.path.slice("/entries/".length)]
+					: [],
+			),
+		);
 		const toolContentOps = tm.ops.filter(
-			(op) => op.path.includes("pending:") && op.path.includes("/content") && op.op === "replace",
+			(op) => [...streamedToolIds].some((id) => op.path.startsWith(`/entries/${id}/content`)) && op.op === "replace",
 		);
 		expect(toolContentOps.length).toBeGreaterThanOrEqual(3);
 
@@ -132,9 +141,9 @@ describe("streaming edge cases", () => {
 			expect((textBlocks[0] as { text: string }).text).toContain("final: hello");
 		}
 
-		// No provisional entries left in the mirror
-		const provisionalIds = Object.keys(tm.mh.mirror.document.entries).filter((id) => id.startsWith("pending:"));
-		expect(provisionalIds).toEqual([]);
+		// No unsealed entries left in the mirror
+		const unsealed = Object.values(tm.mh.mirror.document.entries).filter((entry) => !isEntrySealed(entry));
+		expect(unsealed).toEqual([]);
 	}, 60000);
 
 	// ── concurrent tool execution ─────────────────────────────────────────
@@ -157,19 +166,18 @@ describe("streaming edge cases", () => {
 
 		assertMirrorInSync(tm.mh, "after concurrent tools");
 
-		// The client received add ops for two pending tool result entries
-		const addOps = tm.ops.filter(
-			(op) =>
+		// Two distinct tool-result identities were announced (each as its live
+		// form and again as its persisted form, under the same id).
+		const toolIds = new Set(
+			tm.ops.flatMap((op) =>
 				op.op === "add" &&
-				op.path.startsWith("/entries/pending:") &&
-				!op.path.includes("/content") &&
-				!op.path.includes("/details"),
+				op.path.startsWith("/entries/") &&
+				(op.value as { kind?: string } | undefined)?.kind === "tool_result"
+					? [op.path.slice("/entries/".length)]
+					: [],
+			),
 		);
-		const toolPendingAdds = addOps.filter((op) => {
-			const val = (op as AddOp).value as { kind?: string } | undefined;
-			return val?.kind === "tool_result";
-		});
-		expect(toolPendingAdds.length).toBe(2);
+		expect(toolIds.size).toBe(2);
 
 		// After the turn, two noop results in the mirror
 		const noopResults = Object.values(tm.mh.mirror.document.entries).filter(
@@ -239,6 +247,7 @@ describe("streaming edge cases", () => {
 			(e) => e.kind === "message" && e.role === "assistant",
 		);
 		expect(assistants.length).toBeGreaterThan(0);
+		assistants.sort((a, b) => (a.ord ?? -1) - (b.ord ?? -1));
 		const last = assistants[assistants.length - 1];
 		expect(last.kind).toBe("message");
 		if (last.kind === "message") {
@@ -246,7 +255,7 @@ describe("streaming edge cases", () => {
 		}
 
 		// No provisional entries left
-		const provisionals = Object.keys(tm.mh.mirror.document.entries).filter((id) => id.startsWith("pending:"));
+		const provisionals = Object.values(tm.mh.mirror.document.entries).filter((entry) => !isEntrySealed(entry));
 		expect(provisionals).toEqual([]);
 
 		// Status settled
@@ -308,6 +317,7 @@ describe("streaming edge cases", () => {
 		const assistants = Object.values(tm.mh.mirror.document.entries).filter(
 			(e) => e.kind === "message" && e.role === "assistant",
 		);
+		assistants.sort((a, b) => (a.ord ?? -1) - (b.ord ?? -1));
 		const last = assistants[assistants.length - 1];
 		expect(last.kind).toBe("message");
 		if (last.kind === "message") {
@@ -316,11 +326,11 @@ describe("streaming edge cases", () => {
 		}
 
 		// No provisional entries left
-		const provisionals = Object.keys(tm.mh.mirror.document.entries).filter((id) => id.startsWith("pending:"));
+		const provisionals = Object.values(tm.mh.mirror.document.entries).filter((entry) => !isEntrySealed(entry));
 		expect(provisionals).toEqual([]);
 	}, 60000);
 
-	// ── silent entries (thinking_level_change via reconcile) ──────────────
+	// ── silent entries (thinking_level_change via refresh) ────────────────
 
 	it("thinking_level_change appears in client mirror and status updated", async () => {
 		const harness = await createBridgeHarness({
@@ -376,7 +386,7 @@ describe("streaming edge cases", () => {
 		expect(userMessages.length).toBeGreaterThanOrEqual(3);
 
 		// No provisional entries left
-		const provisionals = Object.keys(tm.mh.mirror.document.entries).filter((id) => id.startsWith("pending:"));
+		const provisionals = Object.values(tm.mh.mirror.document.entries).filter((entry) => !isEntrySealed(entry));
 		expect(provisionals).toEqual([]);
 	}, 60000);
 

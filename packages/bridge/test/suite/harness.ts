@@ -31,6 +31,8 @@ export interface BridgeHarnessOptions {
 export interface BridgeHarness {
 	/** The Manager (replaces Host from ADR 02/03). */
 	manager: Manager;
+	/** The Manager's injected SessionManager — silent appends (no event) go here. */
+	sessionManager: SessionManager;
 	faux: FauxProviderRegistration;
 	/** The harness temp cwd — session files written here are switch targets. */
 	tempCwd: string;
@@ -122,6 +124,7 @@ export async function createBridgeHarness(opts: BridgeHarnessOptions): Promise<B
 
 	return {
 		manager,
+		sessionManager,
 		faux,
 		tempCwd,
 		git,

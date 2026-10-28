@@ -34,6 +34,7 @@ import type {
 	ToolResultEntry,
 	Usage,
 } from "../core/types.ts";
+import { isEntrySealed } from "../core/types.ts";
 import { applyPatchInput, extractApplyPatchPaths } from "./apply-patch.ts";
 import { resolveLabels } from "./tree.ts";
 
@@ -808,7 +809,7 @@ function projectLeafPath(doc: Document, viewLeafId?: string | null): Entry[] {
  * Structural identity of the leaf path: `pathIds::provCounts`.
  * - `pathIds` are leaf->root entry ids, stable across recomputations of the
  *   ViewModel, so key equality holds across recomputations.
- * - `provCounts` are content-block counts for `pending:` entries on the path;
+ * - `provCounts` are content-block counts for unsealed entries on the path;
  *   they change as streaming assistant messages append blocks.
  */
 export function leafPathKey(doc: Document, viewLeafId?: string | null): string {
@@ -822,7 +823,7 @@ export function leafPathKey(doc: Document, viewLeafId?: string | null): string {
 		cursor = entry.parentId;
 	}
 	const provCounts = pathIds
-		.filter((id) => id.startsWith("pending:"))
+		.filter((id) => !isEntrySealed(entries[id]))
 		.map((id) => {
 			const e = entries[id];
 			return e && "content" in e && Array.isArray(e.content) ? e.content.length : 0;
@@ -891,21 +892,23 @@ export function leafTextKey(doc: Document, viewLeafId?: string | null): string {
  * Full cache key for the store→ViewModel projection (see useViewModel in
  * the web client): `leafPathKey` + `leafStreamingKey` (structural identity)
  * plus the status fields that gate re-projection on non-structural state
- * changes, and the two external inputs that are not part of the Document
+ * changes, plus the external inputs that are not part of the Document
  * (`scope` — the current session stem, so a session switch re-projects even
- * onto an identical document — and `pullTick`, so lazy-pull ingests
- * re-project). `viewLeafId` is the rendered-leaf override (web peek): it must
- * be in the key or a peek/un-peek over an unchanged document would hit a
- * stale cache entry. Keeping this beside leafPathKey/leafStreamingKey means a
- * new `Status` field that affects the projection gets added in one place, next
- * to the code that reads it, instead of in a hand-maintained list in a
- * component.
+ * onto an identical document; `pullTick`, so lazy-pull ingests and content
+ * rewrites re-project; and `modelsKey` — the model catalogue identity, since
+ * the context percentage is computed against each model's context window).
+ * `viewLeafId` is the rendered-leaf override (web peek): it must be in the key
+ * or a peek/un-peek over an unchanged document would hit a stale cache entry.
+ * Keeping this beside leafPathKey/leafStreamingKey means a new input that
+ * affects the projection gets added in one place, next to the code that reads
+ * it, instead of in a hand-maintained list in a component.
  */
 export function viewModelCacheKey(
 	doc: Document,
 	scope: string | null,
 	pullTick: number,
 	viewLeafId?: string | null,
+	modelsKey?: string,
 ): string {
 	const status = doc.status;
 	return [
@@ -923,6 +926,7 @@ export function viewModelCacheKey(
 		// share one key — they resolve to the same projection. Entry ids are
 		// never empty strings, so "" unambiguously means "following live".
 		viewLeafId ?? "",
+		modelsKey ?? "",
 	].join("::");
 }
 
@@ -1106,7 +1110,7 @@ function buildAssistantTurn(
 	// Flatten pass: one descriptor per accumulated block ref, in order.
 	const blocks: AssistantBlockVM[] = [];
 	for (const { entry, blockIndex } of refs) {
-		const isProvisional = entry.id.startsWith("pending:");
+		const isProvisional = !isEntrySealed(entry);
 		const vm = buildBlockVM(entry.id, blockIndex, entry.content[blockIndex], isProvisional, toolResultMap);
 		if (vm) blocks.push(reuseBlock(prevBlocks, vm));
 	}
@@ -1363,7 +1367,7 @@ function buildBlockVM(
 				// tool_execution_start and lives until tool_execution_end seals
 				// it to a durable id — so provisional means the tool is running,
 				// not done.
-				if (resultEntry.id.startsWith("pending:")) {
+				if (!isEntrySealed(resultEntry)) {
 					status = "running";
 				} else {
 					status = resultEntry.isError ? "error" : "done";

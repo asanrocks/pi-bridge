@@ -7,8 +7,8 @@
 // web/, in-memory stores in tests) consume CacheEntryRecords.
 //
 // Invariants (ADR 09 §Cache Projection and Storage):
-//   - only committed entries with server-assigned `ord` are cached;
-//   - provisional entries (`pending:*`) are never cached;
+//   - only sealed entries with server-assigned `ord` are cached;
+//   - live forms (`isSealed: false`) are never cached;
 //   - cached entries use one deterministic projection with all lazy fields
 //     null, so concurrent writers converge on identical records;
 //   - the cursor is derived from the contiguous record prefix, never from
@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { deriveStatus, stripLazyFields } from "./document.ts";
-import type { Document, Entry, PrefixCursor, Status } from "./types.ts";
+import { type Document, type Entry, isEntrySealed, type PrefixCursor, type Status } from "./types.ts";
 
 /** One cached entry. The storage key is `[sessionId, ord]`. */
 export interface CacheEntryRecord {
@@ -113,7 +113,9 @@ export function computeCursor(records: CacheEntryRecord[]): PrefixCursor | null 
  * details are always null; pull responses are never persisted.
  */
 export function entryForCache(entry: Entry): Entry {
-	return stripLazyFields(entry);
+	// A cached record is authoritative by definition: only sealed entries are
+	// written, and the record says so rather than leaving the flag to the reader.
+	return { ...stripLazyFields(entry), isSealed: true } as Entry;
 }
 
 /**
@@ -128,14 +130,14 @@ export function entryForCache(entry: Entry): Entry {
  * from the base entry's. Comparison is by JSON string; key-order divergence
  * can only cause a spurious (idempotent) write, never a missed one.
  *
- * Selected entries must be committed (no `pending:*` id) and carry `ord`.
+ * Selected entries must be sealed and carry `ord`.
  * Records are returned in ord order so storage transactions are
  * deterministic.
  */
 export function planCacheWrites(sessionId: string, before: Document, after: Document): CacheEntryRecord[] {
 	const writes: CacheEntryRecord[] = [];
 	for (const [id, entry] of Object.entries(after.entries)) {
-		if (id.startsWith("pending:")) continue;
+		if (!isEntrySealed(entry)) continue;
 		if (entry.ord === undefined) continue;
 		const base = before.entries[id];
 		if (base === entry) continue;
@@ -159,7 +161,7 @@ export function planCacheWrites(sessionId: string, before: Document, after: Docu
 export function cacheRecordsOfDocument(sessionId: string, doc: Document): CacheEntryRecord[] {
 	const records: CacheEntryRecord[] = [];
 	for (const [id, entry] of Object.entries(doc.entries)) {
-		if (id.startsWith("pending:")) continue;
+		if (!isEntrySealed(entry)) continue;
 		if (entry.ord === undefined) continue;
 		records.push({ sessionId, ord: entry.ord, entryId: id, entry: entryForCache(entry) });
 	}

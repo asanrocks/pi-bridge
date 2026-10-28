@@ -10,17 +10,17 @@ export {
 } from "./cache.ts";
 export type { BridgeTransport, PullRequestItem, PullResponseItem } from "./client.ts";
 export { BridgeClient, DocumentMirror, planPull } from "./client.ts";
-export type { ReconcileOptions } from "./document.ts";
 export {
 	__enableInvariantChecks,
 	applyEvent,
 	applyPatch,
 	CompactCodec,
 	computeObjectDiff,
+	deriveStatsForEntries,
 	filterPatchForSocket,
 	getAtPath,
 	initFromEntries,
-	reconcile,
+	projectEntry,
 	resolveFieldPath,
 	setAtPath,
 	snapshotForWire,
@@ -36,6 +36,8 @@ export {
 	parseGitStampEntry,
 	sameGitIdentity,
 } from "./git-stamp.ts";
+export type { EntryProjection, EntrySnapshot } from "./projection.ts";
+export { createEntryProjection } from "./projection.ts";
 export type { RecoverableTurnInfo } from "./recovery.ts";
 export { computeRecoverableTurn } from "./recovery.ts";
 export { buildInitialSync, validateCursor } from "./sync.ts";
@@ -140,6 +142,7 @@ export type {
 	VerbReply,
 } from "./types.ts";
 export {
+	isEntrySealed,
 	isLazyFieldPath,
 	LAZY_FIELD_PATTERNS,
 	MAX_IMAGE_BASE64_LENGTH,

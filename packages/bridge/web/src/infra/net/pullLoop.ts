@@ -59,8 +59,8 @@ export async function flushPullQueue(): Promise<void> {
 		// when a non-null value was ingested. A null reply means the field
 		// is not filled yet on an in-flight entry (deltas/seal will push
 		// it) — retry rides the capped backoff, not the render cadence.
-		// Committed entries never answer null (invariant 7; reconcile
-		// backfills at seal) — if one does, that is a server bug and the
+		// Committed entries never answer null (the persisted form installs
+		// complete content) — if one does, that is a server bug and the
 		// backoff merely degrades it instead of flickering.
 		const gotValue = (values ?? []).some((v) => v.value !== null);
 		if (gotValue) {

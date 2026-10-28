@@ -63,17 +63,30 @@ export interface Usage {
 // Entry union (wire-safe projection of SessionEntry)
 // ---------------------------------------------------------------------------
 export interface EntryBase {
-	id: string; // provisional ("pending:...") until seal
+	id: string; // stable identity from the entry's first event; never reused
 	parentId: string | null; // set at seal for streamed entries
 	timestamp: string; // set at seal for streamed entries
 	/**
+	 * Lifecycle fact, independent of the entry's kind and of its execution
+	 * state: `false` while this is the live, not-yet-persisted form of an item,
+	 * `true` once the authoritative persisted entry has been installed. Absent
+	 * means sealed, so records written before this field existed stay
+	 * authoritative. Never infer it from the id.
+	 */
+	isSealed?: boolean;
+	/**
 	 * Zero-based index in SessionManager.getEntries() (ADR 09). Assigned only
-	 * where the full file-ordered list is in hand (initFromEntries, reconcile,
+	 * where the full file-ordered list is in hand (initFromEntries, a refresh,
 	 * initial sync) — never by applyEvent. Absent on provisional entries and
-	 * on entry_appended entries until the next reconcile assigns it. Once
+	 * on entry_appended entries until the next refresh installs it. Once
 	 * assigned for a logical session it does not change.
 	 */
 	ord?: number;
+}
+
+/** The one lifecycle predicate: `isSealed` is the only seal authority. */
+export function isEntrySealed(entry: EntryBase): boolean {
+	return entry.isSealed !== false;
 }
 
 export interface MessageEntry extends EntryBase {
@@ -462,7 +475,7 @@ export interface RenameSessionRequest {
 
 /** Set or clear a user-defined label on one entry (pi `LabelEntry`). An empty
  * string clears. The append is metadata-only — it never enters LLM context —
- * and reaches every attached connection through the reconcile patch. */
+ * and reaches every attached connection through the refresh patch. */
 export interface SetLabelRequest {
 	verb: "setLabel";
 	entryId: string;

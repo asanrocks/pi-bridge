@@ -46,55 +46,6 @@ function setAdd(s: Set<string>, key: string): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
-// migrateExpandKeys — rewrite keys on provisionally sealed → durable move
-// ---------------------------------------------------------------------------
-
-export interface ExpandKeySets {
-	expandedActionGroups: Set<string>;
-	expandedActions: Set<string>;
-	frozenActionGroups: Set<string>;
-	frozenActions: Set<string>;
-	loadingPaths: Set<string>;
-	uncappedDetails: Set<string>;
-}
-
-/**
- * On every `move` op (provisional → durable id), rewrite keys in the expand,
- * frozen, and loading sets that start with the old provisional id prefix to
- * use the new committed id. Frozen sets are permanent — this migration is why
- * keys never collide across turns.
- *
- * Key formats:
- *   expandedActionGroups / frozenActionGroups: "${entryId}:${blockIndex}"
- *   expandedActions / frozenActions:              "${entryId}:b${blockIndex}"
- *   loadingPaths: fieldPath starting with "/entries/${entryId}/"
- */
-export function migrateExpandKeys(sets: ExpandKeySets, oldId: string, newId: string): ExpandKeySets {
-	const migrate = (s: Set<string>): Set<string> => {
-		const next = new Set<string>();
-		for (const key of s) {
-			if (key.startsWith(`${oldId}:`)) {
-				next.add(newId + key.slice(oldId.length));
-			} else if (key.startsWith(`/entries/${oldId}/`)) {
-				next.add(`/entries/${newId}/${key.slice("/entries/".length + oldId.length + 1)}`);
-			} else {
-				next.add(key);
-			}
-		}
-		return next;
-	};
-
-	return {
-		expandedActionGroups: migrate(sets.expandedActionGroups),
-		expandedActions: migrate(sets.expandedActions),
-		uncappedDetails: migrate(sets.uncappedDetails),
-		frozenActionGroups: migrate(sets.frozenActionGroups),
-		frozenActions: migrate(sets.frozenActions),
-		loadingPaths: migrate(sets.loadingPaths),
-	};
-}
-
-// ---------------------------------------------------------------------------
 // Rendered-leaf override (peek)
 // ---------------------------------------------------------------------------
 
@@ -348,13 +299,6 @@ export interface UiSlice {
 	toggleCardMarkdown: () => void;
 	setLoadingPaths: (paths: Set<string>) => void;
 	bumpPullTick: () => void;
-	migrateExpandKeys: (oldId: string, newId: string) => void;
-	/** Rewrite focusedTurnId on a provisional → durable id move (same move
-	    ops as migrateExpandKeys). Turn identity makes the streaming entry
-	    focusable at turn granularity (pending:message, or
-	    pending:message:b<index> if a turn ever starts mid-entry) — without
-	    this the focus ring would vanish at seal. */
-	migrateFocusedTurnId: (oldId: string, newId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,14 +449,4 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 	setLoadingPaths: (loadingPaths) => set({ loadingPaths }),
 
 	bumpPullTick: () => set((s) => ({ pullTick: s.pullTick + 1 })),
-
-	migrateExpandKeys: (oldId, newId) => set((s) => migrateExpandKeys(s, oldId, newId)),
-	migrateFocusedTurnId: (oldId, newId) =>
-		set((s) => {
-			const focused = s.focusedTurnId;
-			if (focused === null) return s;
-			if (focused === oldId) return { focusedTurnId: newId };
-			if (focused.startsWith(`${oldId}:b`)) return { focusedTurnId: newId + focused.slice(oldId.length) };
-			return s;
-		}),
 });

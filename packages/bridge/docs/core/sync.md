@@ -1,7 +1,7 @@
 # Incremental Sync
 
 Incremental sync uses the durable Session file as an ordered log. The server
-assigns each committed entry an `ord`, and the web cache derives a prefix
+assigns each persisted entry an `ord`, and the web cache derives a prefix
 cursor from those positions. The canonical document remains authoritative;
 the cache is a disposable projection used to paint quickly and request only a
 missing suffix. The Document and lazy-value rules are in
@@ -14,17 +14,17 @@ missing suffix. The Document and lazy-value rules are in
 `SessionManager.getEntries()` result. It is a server-assigned file position,
 not receive order, render order, or a transport sequence number.
 
-`initFromEntries` assigns `ord` while bootstrapping. `reconcile` walks every
-entry by index and assigns or repairs positions, including positions for
-already-known later entries when it discovers an earlier hole. An
-`entry_appended` event can add a committed entry before the next full ordered
-walk; that entry has no `ord` until reconcile or initial-sync construction.
-Provisional entries never have `ord`. A stable append-only Session does not
-change the assigned position of an entry.
+`initFromEntries` assigns `ord` while bootstrapping. The entry projection's
+`refresh` installs each appended suffix entry with its file position; a
+wholesale list replacement re-reads from zero and reassigns every position.
+An `entry_appended` event is only an invalidation hint — the entry installs,
+with its position, at the next refresh. Provisional entries never have `ord`.
+A stable append-only Session does not change the assigned position of an
+entry.
 
 Initial-sync construction can add `ord` to its wire projection without
-mutating the canonical document. The later reconcile patch assigns the same
-value canonically. Rendering still follows `parentId` and branch structure;
+mutating the canonical document. The refresh installs the same value
+canonically. Rendering still follows `parentId` and branch structure;
 `ord` exists for sync and cache safety.
 
 This file-position rule matters because discovery order can differ from file
@@ -71,35 +71,28 @@ address-bearing frame.
 With a valid cursor it emits a `patch` whose `session` is the supplied
 `SessionRef`. The operations are, in order:
 
-1. `add` each committed file entry with `ord >= cursor.entryCount`, in file
+1. `add` each persisted file entry with `ord >= cursor.entryCount`, in file
    order, with lazy fields stripped;
-2. `add` all current provisional entries as lazy-stripped skeletons; and
+2. `add` each live form whose entry pi has not persisted yet, under the id it
+   already carries; and
 3. `replace /status` with current status.
 
 The status replacement is unconditional, so this patch is never a compact
-single-append frame. It supplies provisional skeletons even
-when the cache already contains a committed prefix, because later live
-streaming patches need those paths to exist.
+single-append frame. Live forms are supplied even when the cache already
+contains a persisted prefix, because later streaming patches target them.
 
 With no cursor or an invalid cursor it emits a `replace` whose `session` is the
-same `SessionRef`. The document contains every eligible committed file entry
-with its file `ord`, every current provisional entry, and current status and
-scoped models. This frame is also the cache repair input.
+same `SessionRef`. The document contains every eligible persisted entry with
+its file `ord`, every live form, and current status and scoped models. This
+frame is also the cache repair input.
 
-### Mid-turn pairing
+### Mid-turn attach
 
-Pi can have already persisted a user, assistant, or tool-result message while
-the canonical document still holds its `pending:*` provisional. During
-initial sync, `collectCommitted` excludes a durable entry only when it is not
-already in the document and `findProvisional` pairs it with a current
-provisional. The provisional is sent instead. Sending both would render a
-message twice; omitting the provisional would make the later seal `move`
-invalid on the mirror.
-
-Known committed entries are not passed through that pairing check, so a
-mid-turn attach does not accidentally drop earlier assistant entries. The
-excluded durable entry is admitted by the next reconcile or initial sync after
-seal and then receives its `ord` and cache record.
+A message's entry id is public from its first event, before pi persists it, so
+a mid-turn document and the persisted entry list agree on identity. A
+persisted entry is sent as its sealed projection; an entry pi has not stored
+yet is sent as its live form. There is no pairing step, no provisional name to
+translate, and no later `move`: sealing replaces the entry under the same id.
 
 The host attaches a Connection synchronously after cursor validation and sync
 construction. Initial sync is emitted before later live patches on that
@@ -117,13 +110,13 @@ storage.
 - `entryForCache(entry)` applies the deterministic lazy-stripped projection.
   Thinking, tool-call arguments, tool-result content, and tool-result details
   are always `null`; pull responses are never persisted.
-- `planCacheWrites(sessionId, before, after)` selects changed or new committed
-  entries with an `ord`, excludes every `pending:*` entry, strips lazy fields,
+- `planCacheWrites(sessionId, before, after)` selects changed or new sealed
+  entries with an `ord`, excludes every unsealed entry, strips lazy fields,
   and returns records ordered by `ord`. It uses structural sharing to skip
   unchanged entries. A change that only fills a lazy field produces no cache
   write because its projection is unchanged.
 - `cacheRecordsOfDocument(sessionId, doc)` creates the complete ordered record
-  set for replace repair, with the same committed-and-ord filter.
+  set for replace repair, with the same sealed-and-ord filter.
 - `statusHintOfDocument(doc)` selects name, model, thinking level, and context
   usage as a paint hint. It is not canonical status.
 - `seedDocument(records, statusHint)` reconstructs entries in ord order,
@@ -189,12 +182,11 @@ The convergence path is:
 3. open the Project/stem with that cursor;
 4. apply the address-bearing delta patch or replace snapshot;
 5. make current server status and scoped models authoritative;
-6. write committed, ord-bearing projections through the cache policy; and
+6. write sealed, ord-bearing projections through the cache policy; and
 7. issue fresh lazy pulls for visible fields.
 
-A successful delta adds only the missing committed suffix plus current
-provisionals and full state. A full replacement repairs the cache and mirror
-from the server. A provisional never reaches cache storage, and a committed
-entry without `ord` is withheld until the next complete file-order
-construction. These rules make the cache a performance projection while the
+A successful delta adds only the missing persisted suffix plus current live
+forms and full state. A full replacement repairs the cache and mirror from the
+server. A live form never reaches cache storage, and a persisted entry without
+`isSealed`/`ord` is withheld until the next complete file-order construction. These rules make the cache a performance projection while the
 server Document remains the sole synchronization authority.

@@ -270,6 +270,27 @@ describe("resolveLabels", () => {
 		]);
 		expect(resolveLabels(doc.entries).has("u1")).toBe(false);
 	});
+
+	it("file position decides between a set and a clear that share a timestamp", () => {
+		// A set and its clear can land in the same millisecond; entry ids are
+		// random, so only `ord` — the file position — preserves append order.
+		// Here the clear was appended after the set: the target stays cleared.
+		const ts = "2024-01-01T00:00:00Z";
+		const doc = setEntries(emptyDoc(), [
+			userEntry("u1", null, ts),
+			{ ...labelEntry("l1", "u1", ts, "u1", "keep"), ord: 1, isSealed: true },
+			{ ...labelEntry("l2", "l1", ts, "u1", undefined), ord: 2, isSealed: true },
+		]);
+		expect(resolveLabels(doc.entries).has("u1")).toBe(false);
+
+		// Reversed file order: the set is the later write and wins.
+		const flipped = setEntries(emptyDoc(), [
+			userEntry("u1", null, ts),
+			{ ...labelEntry("l1", "u1", ts, "u1", undefined), ord: 1, isSealed: true },
+			{ ...labelEntry("l2", "l1", ts, "u1", "keep"), ord: 2, isSealed: true },
+		]);
+		expect(resolveLabels(flipped.entries).get("u1")).toBe("keep");
+	});
 });
 
 // ---------------------------------------------------------------------------

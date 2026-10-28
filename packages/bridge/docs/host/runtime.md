@@ -91,12 +91,34 @@ Connection or a group of Connections from changing the Session served by an
 existing Activation.
 
 The Manager applies pi events to its Document and emits patches to registered
-listeners. At `turn_end` or `agent_settled` it reconciles against the durable
-pi entries, updates live model, thinking, and context data, and then notifies
-settled listeners. Reconcile seals provisional entries and assigns durable
-entry positions. Idle model, thinking-level, and rename operations reconcile
-when necessary; navigation updates the Document leaf directly so it preserves
-the selected branch.
+listeners. pi is an asynchronous machine: an event describes the item in
+flight, while pi's entry list is authoritative. The Manager therefore merges
+two inputs through one refresh boundary — `SessionManager.readEntries(from)`
+returns the appended entries, the next position, the selected leaf, and a list
+version — and never treats an event payload as proof that an entry exists.
+
+A refresh installs each persisted entry under its own id (content, parent,
+timestamp, `isSealed: true`, and `ord`), including entries no event announced,
+then updates model and thinking level. Context usage is sampled only where it
+can move — settle boundaries and attach — because pi derives it from a full
+session projection and the per-event refresh runs at token cadence. When the
+list version changes — the entry list was replaced wholesale, by a fork — the
+refresh re-reads from position zero: the suffix the old position selects
+belongs to a list the projection no longer holds. At `turn_end` or
+`agent_settled` it also drops live forms that never persisted and re-derives
+the recovery kind before notifying settled listeners — except while a recovery
+continuation (ADR 16) is still running, whose live forms survive until the
+continuation's compensated end. Attach is a refresh before the initial-sync
+frame, and it publishes what it discovers to the clients already attached:
+the read position advances with the refresh, so an established mirror must
+receive the discovery as a patch — nothing would ever resend it. The Manager's
+own verbs refresh when they finish, which is how a silent append (a label)
+reaches clients. Navigation goes through the same refresh boundary: after the
+branch it reads pi's post-branch leaf back, so the leaf, the branch statistics,
+and the recovery kind all describe the newly selected branch instead of
+leaving the previous branch's totals in place. A suffix that carries a
+`session_info` entry re-derives the session name, so a reopened session's
+title publishes without a rename event.
 
 For in-flight timing the Manager keeps one bridge-only, in-memory
 `toolCallId → start` map. On `tool_execution_start` it stamps the start and
@@ -107,15 +129,10 @@ reconnecting after the browser closed, recovers the running tool's elapsed
 from the initial sync. The client rebases the value onto its own clock, so
 host/client clock skew does not leak into the displayed elapsed.
 
-An `entry_appended` whose parent chain does not resolve in the Document is
-not applied live. Mid-turn, the streaming assistant is a `pending:message`
-provisional while pi has already persisted it under its real id, so an
-append at that boundary (the git-stamp `tool_end` anchor) parents on an id
-the Document does not know; applying it would move the leaf onto an
-unresolvable chain and collapse the leaf path. Such entries defer to the
-seal, which discovers them from the durable entries like any other
-silently-appended entry. Known-parent appends — prompt stamps, bash entries,
-and their `user_bash_end` stamps — still apply live.
+An `entry_appended` payload is an invalidation hint, not content: the entry is
+installed by the next refresh, which reads it from pi's list in file order. A
+listener that appends while another entry is being published therefore cannot
+produce a child whose parent the Document has not installed.
 
 The Manager API has these Session operations:
 
@@ -129,10 +146,11 @@ of `newSession`.
 - `abort` clears queued steering text before waiting for pi to stop.
 - `discardSteer` clears queued steering text without aborting the run.
 - `setModel`, `setThinkingLevel`, `renameSession`, and `navigate` update the
-  Session and reconcile or patch the Document as needed. `navigate` is the
+  Session and refresh or patch the Document as needed. `navigate` is the
   server-side mutation lock enforcement point: it throws while the Document
   is streaming or compacting, because branching swaps the LLM context under
-  the in-flight turn (`agent.state.messages` is rebuilt from the new branch).
+  the in-flight turn (`agent.state.messages` is rebuilt from the new branch);
+  the refresh that follows re-derives what the new selection describes.
 - `dispose` aborts and flushes the current runtime, unsubscribes from pi, and
   disposes the runtime.
 
@@ -163,7 +181,7 @@ The codec reset is part of attachment correctness: an append-compression path
 remembered for one Session must not be reused for another. Initial-sync frames
 are sent unfiltered and clear lazy subscriptions. Live patches are filtered by
 those subscriptions before the Connection sends them. A `pull` request reads
-values from the attached Manager's canonical Document; pulling a provisional
+values from the attached Manager's canonical Document; pulling an unsealed
 lazy path also registers that path for subsequent live patches.
 
 The Connection demultiplexes RPC frames by verb. Attached Session verbs are:

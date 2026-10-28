@@ -2,7 +2,7 @@
 // Regression: same model id, different providers.
 //
 // Before the fix, Status.model was a bare id string — the provider was dropped
-// at deriveModel / reconcile / manager boundaries. That broke three things
+// at deriveModel / manager boundaries. That broke three things
 // when two providers offered the same model id (e.g. "claude-sonnet-4-5"
 // under both Anthropic and an OpenRouter-compatible provider):
 //   1. Ctrl+P cycle started from the wrong provider's slot (findIndex matched
@@ -12,20 +12,14 @@
 //
 // Root cause: Status.model now carries { provider, modelId } (ModelRef),
 // mirroring ModelChangeEntry. These tests pin the pair at every boundary it
-// crosses: deriveModel, reconcile (patch + no-op equality), findNextModel
-// (cycle), and isModelSelected (picker highlight).
+// crosses: deriveModel, applyPatch (status round-trip), findNextModel
+// (cycle), and isModelSelected (picker highlight). The Manager's refresh
+// boundary — which repairs status.model drift — is pinned by the manager
+// verbs suite.
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import {
-	applyPatch,
-	type Document,
-	initFromEntries,
-	type JsonValue,
-	type ModelRef,
-	reconcile,
-	setAtPath,
-} from "../../src/core/index.ts";
+import { applyPatch, type Document, initFromEntries, type JsonValue, type ModelRef } from "../../src/core/index.ts";
 import { findNextModel, isModelSelected, type ModelRefLike } from "../../src/viewmodel/index.ts";
 
 // Minimal catalog entry shape (ModelInfo / PinnedModelInfo both satisfy this).
@@ -66,38 +60,6 @@ describe("model ref disambiguation — document layer", () => {
 		];
 		const doc = initFromEntries(entries as unknown as Parameters<typeof initFromEntries>[0]);
 		expect(doc.status.model).toEqual({ provider: "faux-b", modelId: "shared" });
-	});
-
-	it("reconcile emits a replace /status/model patch when only the provider differs", () => {
-		// Same id, different provider — must still patch (the pre-fix id-only
-		// comparison would have seen "shared" === "shared" and skipped).
-		let doc: Document = initFromEntries([]);
-		doc = setAtPath(doc, "/status/model", {
-			provider: "faux-a",
-			modelId: "shared",
-		} as unknown as JsonValue);
-
-		const patch = reconcile(doc, [], { model: { provider: "faux-b", modelId: "shared" } });
-		expect(patch).not.toBeNull();
-		const modelOps = patch!.ops.filter((o) => o.path === "/status/model");
-		expect(modelOps).toHaveLength(1);
-		expect(modelOps[0]).toEqual({
-			op: "replace",
-			path: "/status/model",
-			value: { provider: "faux-b", modelId: "shared" } as unknown as JsonValue,
-		});
-	});
-
-	it("reconcile does NOT emit a model patch when the full pair is unchanged", () => {
-		// Guards against a reference-inequality regression: a fresh {provider,
-		// modelId} literal must compare equal to the stored pair field-wise,
-		// else every reconcile would emit a spurious replace.
-		const doc: Document = initFromEntries([]);
-		const ref: ModelRef = { provider: "faux-a", modelId: "shared" };
-		const withModel = setAtPath(doc, "/status/model", ref as unknown as JsonValue);
-		const patch = reconcile(withModel, [], { model: { provider: "faux-a", modelId: "shared" } });
-		const modelOps = patch?.ops.filter((o) => o.path === "/status/model") ?? [];
-		expect(modelOps).toHaveLength(0);
 	});
 
 	it("the pair survives a patch round-trip through applyPatch", () => {

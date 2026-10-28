@@ -129,16 +129,15 @@ sets, `loadingPaths`, `pullTick`, the rendered-leaf override, history, the
 browser target, and toast notifications. Expansion keys use
 the first action's entry and block index; action keys use the entry and block
 index. Manual toggles add keys to the corresponding frozen set, preventing
-streaming auto-expansion from overriding user intent. A provisional-to-durable
-`move` rewrites expansion, frozen, uncapped-detail, loading-path, and
-focused-turn keys through `migrateExpandKeys` and `migrateFocusedTurnId`.
+streaming auto-expansion from overriding user intent. Sealing keeps an entry's
+id, so expansion, frozen, loading-path, and focus keys need no migration.
 
 `renderLeafId` is the rendered-leaf override behind read-only branch peeking.
 `null` follows the live leaf; a non-null value pins the projection to a
-committed entry's root-to-leaf path without touching `status.leafId` — the
-daemon never learns about a peek. `setRenderLeaf` accepts only committed
-entries (sealed entries carry `ord`), clamping a `pending:` target to its
-nearest committed ancestor, and normalizes pinning the live leaf back to
+sealed entry's root-to-leaf path without touching `status.leafId` — the
+daemon never learns about a peek. `setRenderLeaf` accepts only sealed
+entries (sealed entries carry `ord`), clamping an unsealed target to its
+nearest sealed ancestor, and normalizes pinning the live leaf back to
 `null`. Divergence (`selectRenderDiverged`) is the mutation lock: while the
 rendering leaf is pinned away from the live leaf, send, edit, and branch
 navigation are blocked; the jump button is the return-to-live gesture. The
@@ -160,11 +159,15 @@ data. `useViewModel` selects the Document, model catalog, current stem,
 `pullTick`, and the UI slice's rendered-leaf override, then memoizes
 `computeViewModel` using `viewModelCacheKey`. Its cache key combines the leaf
 path identity, streaming text/thinking lengths, relevant status fields, the
-current stem, the pull tick, and the override. The stem matters even when two
-Documents are structurally equal; the pull tick matters when lazy values
-arrive without a new path shape; the override matters so peek and un-peek
-re-project over an unchanged Document (null and absent override share one
-key — they resolve identically).
+current stem, the pull tick, the override, and the model catalog identity.
+The stem matters even when two Documents are structurally equal; the pull tick
+matters when lazy values arrive without a new path shape; the override matters
+so peek and un-peek re-project over an unchanged Document (null and absent
+override share one key — they resolve identically); the catalog matters
+because the context percentage is computed against each model's context
+window. Structural identity cannot see a same-id content replacement — the
+pipeline bumps the pull tick when the mirror counts one — so re-projection
+is gated on the tick, not on the key alone.
 
 The projection first walks the effective leaf — the rendered-leaf override
 when it resolves to a known entry, `status.leafId` otherwise — through
@@ -297,12 +300,15 @@ cache updates:
   their timers, so a coalesced status write would only land at the resume
   flush, with a stale `document.hidden` read, losing the turn-completion
   notification that observes the streaming→idle transition at store level;
+  a live patch that replaces an entry root the mirror already held also bumps
+  `pullTick` — a same-id content replacement is invisible to the structural
+  ViewModel cache key, so re-projection is gated on the mirror's count of
+  replacements rather than on the key;
 - a replace is an immediate flush barrier;
 - live deltas use `planCacheWrites` against a per-session `cacheBase`, writing
-  committed, ordered cache records through the IndexedDB adapter;
+  sealed, ordered cache records through the IndexedDB adapter;
 - a replace repairs the entire session cache, including deleting stale suffix
   records, and establishes the new cache base; and
-- provisional-to-durable move operations migrate UI expansion and focus keys
   before the new Document root is published.
 
 The pipeline handles registry pushes without touching the Document. A
@@ -610,10 +616,9 @@ scoped model data and establishes the current `activeSessionId`.
 
 Session-scoped expand and freeze state is preserved across reconnect because
 reconnect does not call `clearCurrentSession`. Initial sync and pull ticks make
-visible lazy fields re-register. A provisional entry that seals during or
-around reconnect is handled by the same move-key migration as a live patch, so
-manual expansion, frozen behavior, and keyboard focus survive the identity
-change. A deliberate detach, Project switch, or failed open does clear those
+visible lazy fields re-register. A live form that seals during or around
+reconnect keeps its id, so manual expansion, frozen behavior, and keyboard
+focus survive the transition unchanged. A deliberate detach, Project switch, or failed open does clear those
 session-scoped values through `clearCurrentSession`.
 
 Offline rendering is that invariant seen from boot: the document is always

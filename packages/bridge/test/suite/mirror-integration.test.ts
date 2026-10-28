@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	type Document,
 	DocumentMirror,
+	isEntrySealed,
 	type JsonValue,
 	resolveFieldPath,
 	snapshotForWire,
@@ -15,6 +16,22 @@ import {
 	deepEqual,
 	normalizeForComparison,
 } from "./harness.ts";
+
+/** The sealed entry with the highest file position. Map key order is not
+ * file order — an all-digit entry id enumerates before every string key —
+ * so "the last entry" is selected by `ord`. */
+function lastSealedId(doc: Document): string | null {
+	let best: string | null = null;
+	let bestOrd = -1;
+	for (const [id, entry] of Object.entries(doc.entries)) {
+		if (!isEntrySealed(entry) || entry.ord === undefined) continue;
+		if (entry.ord > bestOrd) {
+			best = id;
+			bestOrd = entry.ord;
+		}
+	}
+	return best;
+}
 
 const FIXTURE_URL = new URL("../../../coding-agent/test/fixtures/before-compaction.jsonl", import.meta.url);
 
@@ -58,7 +75,7 @@ describe("mirror integration (property-based sync)", () => {
 
 		const ids = Object.keys(mh.mirror.document.entries);
 		expect(ids.length).toBeGreaterThan(0);
-		for (const id of ids.filter((x) => !x.startsWith("pending:"))) {
+		for (const id of ids.filter((x) => isEntrySealed(mh.mirror.document.entries[x]!))) {
 			expect(mh.mirror.document.entries[id].parentId).toBeDefined();
 			expect(mh.mirror.document.entries[id].timestamp).toBeTruthy();
 		}
@@ -84,13 +101,13 @@ describe("mirror integration (property-based sync)", () => {
 		const ids = Object.keys(mh.mirror.document.entries);
 		const assistantIds = ids.filter(
 			(id) =>
-				!id.startsWith("pending:") &&
+				isEntrySealed(mh.mirror.document.entries[id]!) &&
 				mh.mirror.document.entries[id].kind === "message" &&
 				mh.mirror.document.entries[id].role === "assistant",
 		);
 		expect(assistantIds.length).toBeGreaterThan(0);
 
-		const lastId = ids.filter((x) => !x.startsWith("pending:")).pop();
+		const lastId = lastSealedId(mh.mirror.document);
 		expect(mh.mirror.document.status.leafId).toBe(lastId);
 	});
 
@@ -113,19 +130,20 @@ describe("mirror integration (property-based sync)", () => {
 
 		const ids = Object.keys(mh.mirror.document.entries);
 		const toolResultIds = ids.filter(
-			(id) => !id.startsWith("pending:") && mh.mirror.document.entries[id].kind === "tool_result",
+			(id) =>
+				isEntrySealed(mh.mirror.document.entries[id]!) && mh.mirror.document.entries[id].kind === "tool_result",
 		);
 		expect(toolResultIds.length).toBeGreaterThan(0);
 
 		const assistantIds = ids.filter(
 			(id) =>
-				!id.startsWith("pending:") &&
+				isEntrySealed(mh.mirror.document.entries[id]!) &&
 				mh.mirror.document.entries[id].kind === "message" &&
 				mh.mirror.document.entries[id].role === "assistant",
 		);
 		expect(assistantIds.length).toBeGreaterThanOrEqual(2);
 
-		const lastId = ids.filter((x) => !x.startsWith("pending:")).pop();
+		const lastId = lastSealedId(mh.mirror.document);
 		expect(mh.mirror.document.status.leafId).toBe(lastId);
 	});
 
@@ -150,7 +168,7 @@ describe("mirror integration (property-based sync)", () => {
 		const afterTurn2Ids = Object.keys(mh.mirror.document.entries);
 		expect(afterTurn2Ids.length).toBeGreaterThan(afterTurn1Ids.length);
 
-		const lastId = afterTurn2Ids.filter((x) => !x.startsWith("pending:")).pop();
+		const lastId = lastSealedId(mh.mirror.document);
 		expect(mh.mirror.document.status.leafId).toBe(lastId);
 	});
 
@@ -228,7 +246,7 @@ describe("mirror integration (property-based sync)", () => {
 
 		expect(mh.mirror.document.status.isStreaming).toBe(false);
 		expect(mh.mirror.document.status.leafId).toBeTruthy();
-		expect(mh.mirror.document.status.leafId).not.toContain("pending:");
+		expect(isEntrySealed(mh.mirror.document.entries[mh.mirror.document.status.leafId!]!)).toBe(true);
 	});
 
 	// ── tool result content delivered ──────────────────────────────────────
@@ -250,7 +268,8 @@ describe("mirror integration (property-based sync)", () => {
 
 		const ids = Object.keys(mh.mirror.document.entries);
 		const toolResultIds = ids.filter(
-			(id) => !id.startsWith("pending:") && mh.mirror.document.entries[id].kind === "tool_result",
+			(id) =>
+				isEntrySealed(mh.mirror.document.entries[id]!) && mh.mirror.document.entries[id].kind === "tool_result",
 		);
 		expect(toolResultIds.length).toBeGreaterThan(0);
 
@@ -284,7 +303,7 @@ describe("mirror integration (property-based sync)", () => {
 		const ids = Object.keys(mh.mirror.document.entries);
 		const userMessages = ids.filter(
 			(id) =>
-				!id.startsWith("pending:") &&
+				isEntrySealed(mh.mirror.document.entries[id]!) &&
 				mh.mirror.document.entries[id].kind === "message" &&
 				mh.mirror.document.entries[id].role === "user",
 		);
@@ -327,51 +346,38 @@ describe("mirror integration (property-based sync)", () => {
 		);
 		expect(streamingOps).toBeDefined();
 
-		// Phase 2: Provisional entries appear (user + assistant + optional content)
-		const hasUserSkeleton = sequence.some((s) =>
-			s.opPaths.some((p) => p.startsWith("/entries/pending:user:") && s.opKinds.includes("add")),
+		// Phase 2: The live forms appear under the ids pi reserved for them.
+		const addedEntries = sequence.flatMap((s) =>
+			s.opPaths.flatMap((path, i) =>
+				s.opKinds[i] === "add" && path.startsWith("/entries/") && path.split("/").length === 3
+					? [path.slice("/entries/".length)]
+					: [],
+			),
 		);
-		expect(hasUserSkeleton).toBe(true);
+		expect(addedEntries.length).toBeGreaterThan(0);
 
-		const hasAssistantSkeleton = sequence.some((s) =>
-			s.opPaths.some((p) => p === "/entries/pending:message" && s.opKinds.includes("add")),
-		);
-		expect(hasAssistantSkeleton).toBe(true);
-
-		// Phase 3: Text content delivered (append or replace on /entries/pending:message/content)
+		// Phase 3: Streamed content is addressed by those same ids.
 		const hasTextContent = sequence.some((s) =>
-			s.opPaths.some((p) => p.startsWith("/entries/pending:message/content")),
+			s.opPaths.some((p) => s.opKinds.includes("append") && p.includes("/content/")),
 		);
 		expect(hasTextContent).toBe(true);
 
-		// Phase 4: Seal — move from pending:message to real id, add metadata
-		const hasMove = sequence.some((s) => s.opKinds.includes("move"));
-		expect(hasMove).toBe(true);
+		// Phase 4: Sealing replaces the entry under the same id — no identity
+		// move, no re-keying. A sealed entry is never announced as a move.
+		expect(sequence.some((s) => s.opKinds.includes("move"))).toBe(false);
 
-		const hasMetadata = sequence.some((s) =>
-			s.opPaths.some(
-				(p) =>
-					p.includes("/stopReason") || p.includes("/api") || p.includes("/parentId") || p.includes("/timestamp"),
-			),
-		);
-		expect(hasMetadata).toBe(true);
-
-		// Phase 5: Settle — isStreaming false
-		const settledPatch = sequence.find((s) =>
-			s.opPaths.some((p) => p === "/status/isStreaming" && s.opKinds.includes("replace")),
-		);
-		expect(settledPatch).toBeDefined();
-
-		// Verify ordering: streaming starts before seal
-		const moveIdx = sequence.findIndex((s) => s.opKinds.includes("move"));
+		// Phase 5: Settle — isStreaming false, reported after streaming started.
 		const streamIdx = sequence.findIndex((s) =>
 			s.opPaths.some((p) => p === "/status/isStreaming" && s.opKinds.includes("replace")),
 		);
-		expect(streamIdx).toBeLessThan(moveIdx);
+		const settleIdx = sequence.findIndex(
+			(s) => s.patchIndex > streamIdx && s.opPaths.some((p) => p === "/status/isStreaming"),
+		);
+		expect(settleIdx).toBeGreaterThan(streamIdx);
 
-		// No provisional entries left in the final document
-		const provisionals = Object.keys(mh.mirror.document.entries).filter((id) => id.startsWith("pending:"));
-		expect(provisionals).toEqual([]);
+		// No unsealed entries left in the final document
+		const unsealed = Object.values(mh.mirror.document.entries).filter((entry) => !isEntrySealed(entry));
+		expect(unsealed).toEqual([]);
 	});
 
 	// ── reconnect flow ────────────────────────────────────────────────────

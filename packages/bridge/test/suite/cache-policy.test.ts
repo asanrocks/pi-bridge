@@ -10,9 +10,9 @@ import {
 	entryForCache,
 	initFromEntries,
 	planCacheWrites,
-	reconcile,
 	seedDocument,
 } from "../../src/core/index.ts";
+import { createDriver } from "./projection-driver.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -50,7 +50,9 @@ function record(sessionId: string, ord: number, entryId: string): CacheEntryReco
 		sessionId,
 		ord,
 		entryId,
-		entry: initFromEntries([userEntry(entryId)]).entries[entryId] as Entry,
+		// A real record's entry carries the file position the record keys it
+		// under; derivation selects by that position, not by map key order.
+		entry: { ...initFromEntries([userEntry(entryId)]).entries[entryId]!, ord } as Entry,
 	};
 }
 
@@ -180,19 +182,20 @@ describe("planCacheWrites", () => {
 	});
 
 	it("writes changed and new committed entries with ord, in ord order", () => {
-		const before = initFromEntries([userEntry("a"), userEntry("b")]);
-		// Seal a new user message: applyEvent creates the provisional,
-		// reconcile seals it with ord 2.
-		let after = before;
-		const started = applyEvent(after, {
+		const driver = createDriver(initFromEntries([]));
+		driver.refresh([userEntry("a"), userEntry("b")]);
+		// Seal a new user message: applyEvent opens its live form under the
+		// reserved id; the refresh seals it with ord 2.
+		const before = driver.document;
+		const started = driver.applyEvent({
 			type: "message_start",
+			entryId: "c",
 			message: { role: "user", content: "hi", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
 		if (!started) throw new Error("expected a patch");
-		after = applyPatch(after, started.ops);
-		const sealed = reconcile(after, [userEntry("a"), userEntry("b"), userEntry("c")]);
+		const sealed = driver.refresh([userEntry("a"), userEntry("b"), userEntry("c")]);
 		if (!sealed) throw new Error("expected a patch");
-		after = applyPatch(after, sealed.ops);
+		const after = driver.document;
 
 		const writes = planCacheWrites("s", before, after);
 		expect(writes.map((w) => w.entryId)).toEqual(["c"]);
@@ -206,22 +209,24 @@ describe("planCacheWrites", () => {
 		const before = initFromEntries([]);
 		const started = applyEvent(before, {
 			type: "message_start",
+			entryId: "c",
 			message: { role: "user", content: "hi", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
 		if (!started) throw new Error("expected a patch");
 		const after = applyPatch(before, started.ops);
-		expect(after.entries["pending:user:1"]).toBeDefined();
+		expect(after.entries.c).toBeDefined();
 		expect(planCacheWrites("s", before, after)).toEqual([]);
 	});
 
-	it("excludes committed entries without ord", () => {
+	it("excludes unsealed entries without ord", () => {
 		const before = initFromEntries([]);
-		const appended = applyEvent(before, {
-			type: "entry_appended",
-			entry: userEntry("x"),
+		const started = applyEvent(before, {
+			type: "message_start",
+			entryId: "x",
+			message: { role: "user", content: "hi", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
-		if (!appended) throw new Error("expected a patch");
-		const after = applyPatch(before, appended.ops);
+		if (!started) throw new Error("expected a patch");
+		const after = applyPatch(before, started.ops);
 		expect(after.entries.x).toBeDefined();
 		expect((after.entries.x as { ord?: number }).ord).toBeUndefined();
 		expect(planCacheWrites("s", before, after)).toEqual([]);
@@ -266,18 +271,28 @@ describe("cache determinism", () => {
 		// Multi-tab invariant: a tab that lived through the turn caches the
 		// streaming-derived sealed entry; a fresh attach caches the file
 		// projection. Both must produce the same cache record at (sessionId, ord).
-		let doc = initFromEntries([]);
+		const driver = createDriver(initFromEntries([]));
 		const events: Array<Record<string, unknown>> = [
-			{ type: "message_start", message: { role: "user", content: "question", timestamp: 0 } },
+			{ type: "message_start", entryId: "u1", message: { role: "user", content: "question", timestamp: 0 } },
 			{
 				type: "message_start",
+				entryId: "a1",
 				message: { role: "assistant", content: [], api: "anthropic", provider: "anthropic", model: "claude" },
 			},
-			{ type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } },
-			{ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ans" } },
-			{ type: "message_update", assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "answer" } },
+			{ type: "message_update", entryId: "a1", assistantMessageEvent: { type: "text_start", contentIndex: 0 } },
+			{
+				type: "message_update",
+				entryId: "a1",
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "ans" },
+			},
+			{
+				type: "message_update",
+				entryId: "a1",
+				assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "answer" },
+			},
 			{
 				type: "message_end",
+				entryId: "a1",
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "answer" }],
@@ -298,8 +313,7 @@ describe("cache determinism", () => {
 			},
 		];
 		for (const event of events) {
-			const patch = applyEvent(doc, event as unknown as AgentSessionEvent);
-			if (patch) doc = applyPatch(doc, patch.ops);
+			driver.applyEvent(event as unknown as AgentSessionEvent);
 		}
 
 		const userFile: SessionEntry = {
@@ -333,9 +347,8 @@ describe("cache determinism", () => {
 			},
 		} as unknown as SessionEntry;
 
-		const sealed = reconcile(doc, [userFile, assistantFile]);
-		if (!sealed) throw new Error("expected a patch");
-		doc = applyPatch(doc, sealed.ops);
+		driver.refresh([userFile, assistantFile]);
+		const doc = driver.document;
 
 		expect(doc.entries.a1).toBeDefined();
 		expect(doc.entries.u1).toBeDefined();
@@ -354,10 +367,10 @@ describe("seedDocument", () => {
 		const name = se("session_info", { id: "n1", name: "my session" });
 		const records: CacheEntryRecord[] = [
 			record("s", 1, "b"),
-			{ ...record("s", 0, "a"), entry: initFromEntries([name, userEntry("a")]).entries.a as Entry },
+			{ ...record("s", 0, "a"), entry: { ...initFromEntries([name, userEntry("a")]).entries.a!, ord: 0 } as Entry },
 			{
 				...record("s", 2, "n1"),
-				entry: initFromEntries([name, userEntry("a")]).entries.n1 as Entry,
+				entry: { ...initFromEntries([name, userEntry("a")]).entries.n1!, ord: 2 } as Entry,
 			},
 		];
 		const doc = seedDocument(records);

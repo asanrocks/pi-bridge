@@ -95,9 +95,9 @@ cache/sync policy. The ViewModel is also pure and maps the active Document
 branch into turns, actions, git observations, sibling navigation, and pull
 requests. Neither layer knows about WebSockets, the DOM, or the filesystem.
 
-**Host.** The Manager subscribes to pi, applies events in order, reconciles
-against durable entries at settle boundaries, and sends patches to its
-listeners. A Connection owns one WebSocket and one attachment. It filters
+**Host.** The Manager subscribes to pi, applies live events, and installs
+persisted entries from pi's entry list through one refresh boundary; it sends
+patches to its listeners. A Connection owns one WebSocket and one attachment. It filters
 lazy paths using its own subscriptions, handles `pull`, demultiplexes typed
 RPC verbs, and sends initial sync before later live patches. The Daemon owns
 Projects, Activation reservations and collection, Connection registration,
@@ -127,27 +127,28 @@ level, streaming and compaction flags, token/cost statistics, context usage,
 and pending steer messages. `entries` contains the complete wire-safe union:
 messages, tool results, user bash executions, compaction and branch summaries,
 model and thinking-level changes, labels, Session info, and custom entries.
-Committed entries are immutable. During a turn, streamed entries live beside
-them under provisional ids such as `pending:message` and
-`pending:<toolCallId>`.
+Sealed entries are immutable. During a turn, the live form of the item in
+flight sits beside them under the id pi reserved for it, marked
+`isSealed: false`.
 
-The event path is delta-driven:
+Two inputs meet in the document:
 
-- `applyEvent(document, event)` creates provisional skeletons, updates status,
-  appends streamed strings, and applies authoritative end values.
-- `reconcile(document, piEntries, options)` walks the complete durable list in
-  file order, discovers silent entries, repairs status, assigns `ord`, and
-  seals provisional entries by moving them to durable ids.
+- `applyEvent(document, event)` is the live half: it opens the in-flight form,
+  updates status, appends streamed strings, and applies streamed end values.
+  It never writes an entry that already sealed.
+- The entry projection (`createEntryProjection`) is the authoritative half,
+  and the only entry lifecycle: `refresh` installs each appended suffix entry
+  under its own id — content, parent, timestamp, `isSealed: true`, and `ord` —
+  including entries no event announced, and `settle` removes live forms that
+  never persisted at a settle boundary.
 
-A seal is one atomic Patch. The patch includes the move, durable metadata,
-any needed lazy backfill, and related status changes. Cancellation finalizes
-assistant and tool-result entries as aborted or error entries; it does not
-remove a partial entry.
+Sealing is a replacement under an unchanged id, never a rename. Cancellation
+finalizes assistant and tool-result entries as aborted or error entries; it
+does not remove a persisted partial entry.
 
-`ord` is the zero-based position in the complete durable Session entry list.
-It is sync and cache metadata, not render order. It is assigned only when the
-ordered list is available, so a provisional or newly observed entry may lack
-it until reconciliation or initial-sync construction.
+`ord` is the zero-based position in the complete persisted Session entry list.
+It is sync and cache metadata, not render order, and it is assigned together
+with `isSealed: true`; a live form has neither.
 
 Laziness is a wire projection, not a canonical storage property. The canonical
 Document holds real values. Thinking text, tool-call arguments, tool-result
@@ -197,7 +198,7 @@ PrefixCursor {
 
 The server validates the cursor against the current Session id, length, and
 anchor. A valid cursor produces one address-bearing multi-operation patch for
-the missing committed suffix, current provisional skeletons, full status, and
+the missing persisted suffix, current live forms, full status, and
 scoped models. An absent or invalid cursor produces one address-bearing
 replace. Either form repairs the mirror's authority; a replace also repairs
 the Session's cache records and removes stale suffixes.
@@ -212,7 +213,7 @@ falls back to replace.
 
 The web ViewModel declares pending lazy paths while rendering. One pull-loop
 drainer deduplicates them against the mirror and in-flight requests, sends one
-batch, and ingests the values. Pulling a provisional field also subscribes the
+batch, and ingests the values. Pulling an unsealed field also subscribes the
 Connection to later updates on that path; pulling a committed field is
 one-shot. The Connection filters live patches per subscription and sanitizes
 lazy fields embedded inside parent add/replace values, so filtered replay and
@@ -233,15 +234,16 @@ it.
 bootstrap --initFromEntries--> idle
 idle --live pi event--> streaming
 streaming --turn_end / agent_settled--> sealing
-sealing --reconcile and seal--> idle
+sealing --refresh and seal--> idle
 idle --idle Session verb--> idle
 ```
 
-The event loop is serial. `applyEvent` and `reconcile` are synchronous pure
-projections; the host applies each resulting Patch before dispatching the next
-one. `setModel`, `setThinkingLevel`, and `renameSession` reconcile immediately
-when idle. `navigate` changes `status.leafId` directly so reconciliation does
-not undo a selected branch.
+The event loop is serial. `applyEvent`, `refresh`, and `settle` are
+synchronous pure projections; the host applies each resulting Patch before
+dispatching the next one. `setModel`, `setThinkingLevel`, and `renameSession`
+refresh immediately when idle. `navigate` goes through the same refresh
+boundary, so the leaf, the branch statistics, and the recovery kind describe
+the selected branch.
 
 ### Connection and Activation lifecycle
 
@@ -267,10 +269,11 @@ These are the load-bearing rules for changes across layers:
 
 1. **The Manager owns the canonical Document.** No other path writes that
    canonical root; pi is the durable backing store.
-2. **Committed entries are immutable.** Only provisional entries change during
-   streaming, and every provisional eventually seals or is finalized by pi.
+2. **Sealed entries are immutable.** Only live forms change during streaming,
+   and every live form either seals or is removed at a settle boundary.
 3. **A Patch is the transaction boundary.** Every complete Patch leaves a
-   domain-valid Document; seal moves and metadata changes are one transaction.
+   domain-valid Document; a seal installs content and metadata in one
+   transaction.
 4. **Core and ViewModel are pure and browser-safe.** They have no filesystem,
    network, DOM, or Node runtime dependency.
 5. **The pi event loop is serial.** The bridge observes event order and adds
@@ -304,7 +307,7 @@ These are the load-bearing rules for changes across layers:
 
 Tests preserve the same boundaries used in production.
 
-- Pure unit tests exercise `applyEvent`, `reconcile`, patch application,
+- Pure unit tests exercise `applyEvent`, the entry projection, patch application,
   immutable mirror updates, lazy filtering, compact transport, cursor/cache
   policy, git-stamp parsing, and ViewModel/tree projection with hand-built
   inputs.

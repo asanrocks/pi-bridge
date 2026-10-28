@@ -136,6 +136,77 @@ describe("Manager verbs", () => {
 		expect(addOps.length).toBeGreaterThan(0);
 	});
 
+	it("setModel repairs status.model when only the provider differs", async () => {
+		// Same model id offered by two providers: switching between them must
+		// re-key /status/model on the full pair, not just the id. The refresh
+		// boundary (the Manager) is the owner of this status repair.
+		const tempCwd = join(tmpdir(), `pi-bridge-verbs-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempCwd, { recursive: true });
+		const tempAgentDir = join(tempCwd, "agent");
+		mkdirSync(tempAgentDir, { recursive: true });
+		const fauxA = registerFauxProvider({ provider: "faux-a", models: [{ id: "shared" }] });
+		const fauxB = registerFauxProvider({ provider: "faux-b", models: [{ id: "shared" }] });
+		const authStorage = AuthStorage.inMemory();
+		const modelRuntime = await ModelRuntime.create({ credentials: authStorage });
+		for (const faux of [fauxA, fauxB]) {
+			const model = faux.getModel();
+			await modelRuntime.setRuntimeApiKey(model.provider, "faux-key");
+			modelRuntime.registerProvider(model.provider, {
+				baseUrl: model.baseUrl,
+				apiKey: "faux-key",
+				api: faux.api,
+				models: faux.models.map((m) => ({
+					id: m.id,
+					name: m.name,
+					api: m.api,
+					reasoning: m.reasoning,
+					input: m.input,
+					cost: m.cost,
+					contextWindow: m.contextWindow,
+					maxTokens: m.maxTokens,
+					baseUrl: m.baseUrl,
+				})),
+			});
+		}
+		const manager = await createManager({
+			cwd: tempCwd,
+			agentDir: tempAgentDir,
+			modelRuntime,
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } } as Record<string, unknown>),
+			model: fauxA.getModel(),
+		});
+		harnesses.push({
+			manager,
+			faux: fauxA,
+			patches: [],
+			tempCwd,
+			tempAgentDir,
+			cleanup() {
+				manager.dispose();
+				fauxA.unregister();
+				fauxB.unregister();
+				if (existsSync(tempCwd)) rmSync(tempCwd, { recursive: true, force: true });
+			},
+		});
+		const patches: Patch[] = [];
+		manager.onPatch((p) => patches.push(p));
+
+		await manager.setModel("faux-a", "shared");
+		expect(manager.document.status.model).toEqual({ provider: "faux-a", modelId: "shared" });
+
+		patches.length = 0;
+		await manager.setModel("faux-b", "shared");
+		// The provider is the only difference, and the status still moved.
+		expect(manager.document.status.model).toEqual({ provider: "faux-b", modelId: "shared" });
+		const modelOps = patches.flatMap((p) => p.ops).filter((o) => o.path === "/status/model");
+		expect(modelOps).toHaveLength(1);
+		expect(modelOps[0]).toEqual({
+			op: "replace",
+			path: "/status/model",
+			value: { provider: "faux-b", modelId: "shared" },
+		});
+	});
+
 	// ── setThinkingLevel ─────────────────────────────────────────────────
 
 	it("setThinkingLevel emits event-driven status update", async () => {
@@ -145,7 +216,7 @@ describe("Manager verbs", () => {
 		h.patches.length = 0;
 		await h.manager.setThinkingLevel("high");
 
-		// Status thinkingLevel updated via event + reconcile
+		// Status thinkingLevel updated via event + refresh
 		expect(h.manager.document.status.thinkingLevel).toBe("high");
 		expect(h.patches.length).toBeGreaterThan(0);
 	});
@@ -168,7 +239,7 @@ describe("Manager verbs", () => {
 
 	// ── setLabel ─────────────────────────────────────────────────────────
 
-	it("setLabel appends a label entry, publishes it via reconcile, and clears with empty string", async () => {
+	it("setLabel appends a label entry, publishes it via the refresh boundary, and clears with empty string", async () => {
 		const h = await createVerbHarness();
 		harnesses.push(h);
 
@@ -179,7 +250,7 @@ describe("Manager verbs", () => {
 		await h.manager.setLabel(target, "checkpoint");
 
 		// The label entry is in the Document (appendLabelChange appends
-		// silently; the verb's reconcile is what publishes it).
+		// silently; the verb's refresh is what publishes it).
 		const labelEntries = Object.values(h.manager.document.entries).filter(
 			(e): e is LabelEntry => e.kind === "label" && e.targetId === target,
 		);
@@ -189,10 +260,43 @@ describe("Manager verbs", () => {
 
 		// Clearing: an empty string maps to appendLabelChange(undefined).
 		await h.manager.setLabel(target, "");
-		const after = Object.values(h.manager.document.entries).filter(
-			(e): e is LabelEntry => e.kind === "label" && e.targetId === target,
-		);
+		// Ordered by file position: an all-digit entry id enumerates before every
+		// string key in a JS object, so map order is not append order.
+		const after = Object.values(h.manager.document.entries)
+			.filter((e): e is LabelEntry => e.kind === "label" && e.targetId === target)
+			.sort((a, b) => (a.ord ?? 0) - (b.ord ?? 0));
 		expect(after.at(-1)!.label).toBeUndefined();
+	});
+
+	it("a silent append published before a child keeps the parent chain resolvable", async () => {
+		// A label is appended with no event of its own. A later entry parents on
+		// the label, so publishing the child without first reading the label from
+		// pi's entry list would leave the consumer with an unresolvable leaf.
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const target = Object.keys(h.manager.document.entries)[0]!;
+		await h.manager.setLabel(target, "checkpoint");
+		await h.manager.executeBash("echo chained");
+
+		const entries = h.manager.document.entries;
+		const label = Object.values(entries).find((e) => e.kind === "label" && e.targetId === target);
+		const bash = Object.values(entries).find((e) => e.kind === "bash_execution");
+		expect(label).toBeDefined();
+		expect(bash).toBeDefined();
+		// The child's parent is in the same document — the label was read from
+		// pi's entry list, not from an event payload that never arrived.
+		expect(bash?.parentId === null || entries[bash!.parentId!] !== undefined).toBe(true);
+
+		// Every entry's parent resolves, from the leaf back to the root.
+		let cursor: string | null = h.manager.document.status.leafId;
+		const seen = new Set<string>();
+		while (cursor !== null) {
+			expect(entries[cursor], `unresolved parent ${cursor}`).toBeDefined();
+			expect(seen.has(cursor)).toBe(false);
+			seen.add(cursor);
+			cursor = entries[cursor]!.parentId;
+		}
 	});
 
 	it("setLabel rejects an unknown target", async () => {
@@ -252,6 +356,27 @@ describe("Manager verbs", () => {
 
 		// Patch emitted for leafId change
 		expect(h.patches.length).toBeGreaterThan(0);
+	});
+
+	it("navigate recomputes the branch statistics of the new selection", async () => {
+		// The projection owns the leaf: a branch move must re-derive the stats
+		// that describe the selected branch. Publishing the leaf alone left the
+		// previous branch's message/token rollup in place.
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const before = h.manager.document.status.stats;
+		const originalLeafId = h.manager.document.status.leafId;
+		expect(before.messages).toBeGreaterThan(0);
+
+		// Reset to the root: the empty branch has no messages at all.
+		await h.manager.navigate(null);
+		expect(h.manager.document.status.leafId).toBeNull();
+		expect(h.manager.document.status.stats.messages).toBe(0);
+		expect(h.manager.document.status.stats.tokens.total).toBe(0);
+
+		await h.manager.navigate(originalLeafId);
+		expect(h.manager.document.status.stats).toEqual(before);
 	});
 
 	it("navigate rejects invalid entry id", async () => {
@@ -400,9 +525,9 @@ describe("Manager verbs", () => {
 		expect(settled).toContain("assistant");
 	});
 
-	// ── idle-state reconcile ─────────────────────────────────────────────
+	// ── idle-state refresh ────────────────────────────────────────────────
 
-	it("setModel reconciles immediately when idle", async () => {
+	it("setModel refreshes immediately when idle", async () => {
 		const h = await createVerbHarness();
 		harnesses.push(h);
 
@@ -412,7 +537,7 @@ describe("Manager verbs", () => {
 		expect(h.patches.length).toBeGreaterThan(0);
 	});
 
-	it("setThinkingLevel reconciles immediately when idle", async () => {
+	it("setThinkingLevel refreshes immediately when idle", async () => {
 		const h = await createVerbHarness();
 		harnesses.push(h);
 

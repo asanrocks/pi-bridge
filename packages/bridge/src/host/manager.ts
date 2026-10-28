@@ -15,11 +15,11 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
-	applyEvent,
 	applyPatch,
 	buildInitialSync,
 	type ContextUsage,
 	computeRecoverableTurn,
+	createEntryProjection,
 	type Document,
 	GIT_STAMP_CUSTOM_TYPE,
 	type ImageContent,
@@ -29,10 +29,8 @@ import {
 	type PatchMessage,
 	type PatchOp,
 	type PrefixCursor,
-	type ReconcileOptions,
 	type RecoverableTurnKind,
 	type ReplaceMessage,
-	reconcile,
 	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
@@ -56,20 +54,6 @@ function toBridgeContextUsage(pi: PiContextUsage | undefined): ContextUsage | nu
 /** Get context usage from session, return it (or null) for inclusion in ReconcileOptions. */
 function getContextUsageOption(session: AgentSession | undefined): ContextUsage | null | undefined {
 	return toBridgeContextUsage(session?.getContextUsage());
-}
-
-/** True when the parent chain of `parentId` hits an id the Document does not
- * hold — the entry is parented into a suffix only the session file knows.
- * The walk stops at the first known ancestor, so it only ever walks the
- * current turn's in-flight suffix, not the whole history. */
-function hasUnknownAncestor(doc: Document, parentId: string | null | undefined): boolean {
-	let cursor = parentId ?? null;
-	while (cursor !== null) {
-		const entry = doc.entries[cursor];
-		if (!entry) return true;
-		cursor = entry.parentId;
-	}
-	return false;
 }
 
 /** The repair per recovery kind (ADR 16): whether recovery branches past
@@ -250,19 +234,6 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	};
 
 	const processEvent = (event: AgentSessionEvent) => {
-		const patches: Patch[] = [];
-
-		// An appended entry can reference ids only the session file knows (the
-		// streaming assistant is a `pending:` provisional until the seal; the
-		// git-stamp extension parents on the real persisted id). Applying it
-		// would move the leaf onto an unresolvable chain — the path walk breaks,
-		// the ViewModel collapses, and the seal restore remounts every turn.
-		// Such entries defer to the seal instead: reconcile discovers them from
-		// the file (the same path that picks up silently-appended entries), under
-		// its normal pairing conditions. Known-parent appends (prompt stamps,
-		// bash entries and their user_bash_end stamps) still apply live.
-		const orphaned = event.type === "entry_appended" && hasUnknownAncestor(document, event.entry.parentId);
-
 		// Ephemeral in-flight anchor — bridge-only, never persisted. A whole-object
 		// replace avoids toolCallId path escaping (ids are opaque). The client
 		// rebases the value onto its own clock, so only "how long ago" matters.
@@ -276,25 +247,31 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			inFlightOps.push({ op: "replace", path: "/status/inFlightTools", value: inFlightElapsed() });
 		}
 
-		const eventPatch = orphaned ? null : applyEvent(document, event);
-		const ops = [...(eventPatch?.ops ?? []), ...inFlightOps];
-		if (ops.length > 0) {
-			document = applyPatch(document, ops);
-			patches.push({ ops });
+		// The live half: create or update the form of the item in flight. The
+		// persistent half is discovered below from pi's entry list, so an event
+		// payload is never treated as proof that an entry exists.
+		const livePatch = projection.applyEvent(event);
+		{
+			// The projection already applied its ops to the canonical Document.
+			const ops = [...(livePatch?.ops ?? []), ...inFlightOps];
+			if (inFlightOps.length > 0) state.document = applyPatch(state.document, inFlightOps);
+			// Emit before the boundary refresh runs: a later patch mutates the
+			// canonical Document, and a mirror that received this one only must
+			// still match it at this point.
+			if (ops.length > 0) emitPatch({ ops });
 		}
+		// Read pi's entry list now: a refresh that finds nothing new is O(live
+		// forms), and the Document and its patches stay in lockstep per event.
+		refresh();
 
 		if (event.type === "turn_end" || event.type === "agent_settled") {
 			const recPatch = boundaryReconcile(event.type === "agent_settled");
-			if (recPatch) {
-				patches.push(recPatch);
-			}
+			if (recPatch) emitPatch(recPatch);
 			// Notify connections that the session has settled — the first turn
 			// after newSession writes the session file, and listeners can rescan
 			// to pick up the now-on-disk metadata (name, message count, etc.).
 			for (const l of settledListeners) l();
 		}
-
-		for (const p of patches) emitPatch(p);
 
 		// ADR 10 v2: a persisted user bash entry (a `!`/`!!` command) is a Git
 		// observation boundary. Fired after the entry is applied and published,
@@ -357,28 +334,35 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const session = runtime.session;
 	await session.bindExtensions({});
 
-	// Bootstrap the canonical Document
-	let document: Document = initFromEntries(sessionManager.getEntries());
+	// Bootstrap the canonical Document from pi's entry list. The projection owns
+	// every later merge of live forms and persisted entries.
+	const state: { document: Document } = { document: initFromEntries([]) };
+	const projection = createEntryProjection(state);
+	projection.refresh(sessionManager.readEntries(0));
 	if (session.model) {
-		document = setAtPath(document, "/status/model", {
+		state.document = setAtPath(state.document, "/status/model", {
 			provider: session.model.provider,
 			modelId: session.model.id,
 		} as unknown as JsonValue);
 	}
-	document = setAtPath(document, "/status/thinkingLevel", session.thinkingLevel);
+	state.document = setAtPath(state.document, "/status/thinkingLevel", session.thinkingLevel);
 	// Sync initial context usage into the document (no listeners subscribed yet
 	// during bootstrap, so this doesn't emit a patch). The first `replace` push
 	// sent by addConnection will include the value.
 	{
 		const cu = getContextUsageOption(session);
 		if (cu !== undefined) {
-			document = setAtPath(document, "/status/contextUsage", cu as unknown as JsonValue);
+			state.document = setAtPath(state.document, "/status/contextUsage", cu as unknown as JsonValue);
 		}
 	}
 	// ADR 16: a resumed session can carry a broken tail (terminal error or
 	// dangling tool calls) — the first replace a client receives already
 	// carries the recovery kind, so the affordance is there on first paint.
-	document = setAtPath(document, "/status/recoverableTurn", computeRecoverableTurn(document)?.kind ?? null);
+	state.document = setAtPath(
+		state.document,
+		"/status/recoverableTurn",
+		computeRecoverableTurn(state.document)?.kind ?? null,
+	);
 
 	// Subscribe to pi events
 	unsubscribe = session.subscribe(processEvent);
@@ -388,41 +372,72 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const recoverableTurnKindOf = (doc: Document): RecoverableTurnKind | null =>
 		computeRecoverableTurn(doc)?.kind ?? null;
 
-	// Publish a leaf move (branch/reset) plus the re-derived recovery kind in
-	// one patch, so a client never renders a recovered turn parented onto the
-	// abandoned path (effects-via-push, §7.13).
-	const publishLeaf = (entryId: string | null): void => {
+	/**
+	 * Bring the Document up to date with pi's entry list and live status.
+	 *
+	 * This is the single publication boundary. Events, idle verbs, and attach
+	 * all funnel here, so a consumer never sees a child before its parent nor an
+	 * entry that only an event payload claimed exists. `settle` is for a boundary
+	 * where pi proves no further persistence will happen: live forms without an
+	 * entry are then dropped. A recovery continuation (ADR 16) runs outside pi's
+	 * settle events while the Document reports idle, so its live forms survive
+	 * until the continuation's own compensated end drops them.
+	 *
+	 * Context usage is sampled only where it can move — settle boundaries and
+	 * attach — because pi derives it from a full session projection and the
+	 * per-event refresh runs at token cadence.
+	 */
+	const refresh = (options: { settle?: boolean; emit?: boolean; usage?: boolean } = {}): Patch | null => {
 		const ops: PatchOp[] = [];
-		if (document.status.leafId !== entryId) {
-			document = setAtPath(document, "/status/leafId", entryId);
-			ops.push({ op: "replace", path: "/status/leafId", value: (entryId ?? null) as unknown as JsonValue });
+		const settling = options.settle === true && recoveryRun === null;
+		if (settling) {
+			const settled = projection.settle();
+			if (settled) ops.push(...settled.ops);
 		}
-		const kind = recoverableTurnKindOf(document);
-		if ((document.status.recoverableTurn ?? null) !== kind) {
-			document = setAtPath(document, "/status/recoverableTurn", kind);
-			ops.push({ op: "replace", path: "/status/recoverableTurn", value: kind as unknown as JsonValue });
+		const refreshed = projection.refreshFrom((from) => sessionManager.readEntries(from));
+		if (refreshed) ops.push(...refreshed.ops);
+
+		// Status fields the entry list cannot supply.
+		const modelRef = session?.model ? { provider: session.model.provider, modelId: session.model.id } : undefined;
+		if (modelRef) {
+			const current = state.document.status.model;
+			if (current.provider !== modelRef.provider || current.modelId !== modelRef.modelId) {
+				state.document = setAtPath(state.document, "/status/model", modelRef as unknown as JsonValue);
+				ops.push({ op: "replace", path: "/status/model", value: modelRef as unknown as JsonValue });
+			}
 		}
-		if (ops.length > 0) emitPatch({ ops });
+		if (session) {
+			const level = session.thinkingLevel;
+			if (state.document.status.thinkingLevel !== level) {
+				state.document = setAtPath(state.document, "/status/thinkingLevel", level);
+				ops.push({ op: "replace", path: "/status/thinkingLevel", value: level });
+			}
+		}
+		if (options.settle === true || options.usage === true) {
+			const cu = getContextUsageOption(session);
+			if (cu !== undefined && JSON.stringify(cu) !== JSON.stringify(state.document.status.contextUsage)) {
+				state.document = setAtPath(state.document, "/status/contextUsage", cu as unknown as JsonValue);
+				ops.push({ op: "replace", path: "/status/contextUsage", value: cu as unknown as JsonValue });
+			}
+		}
+		if (settling) {
+			const kind = recoverableTurnKindOf(state.document);
+			if ((state.document.status.recoverableTurn ?? null) !== kind) {
+				state.document = setAtPath(state.document, "/status/recoverableTurn", kind);
+				ops.push({ op: "replace", path: "/status/recoverableTurn", value: kind as unknown as JsonValue });
+			}
+		}
+
+		if (ops.length === 0) return null;
+		const patch: Patch = { ops };
+		if (options.emit !== false) emitPatch(patch);
+		return patch;
 	};
 
-	/** Turn-boundary reconcile shared by the event path and the recovery
-	 * continuation's compensation (ADR 16). Applies to the Document and
-	 * returns the patch for the caller to emit in event order. Syncs model,
-	 * thinking level, and context usage — pi's getContextUsage() is
-	 * authoritative after a turn (compaction gaps, trailing estimates,
-	 * percentage), bundled into one patch so it is atomic with the seal — and
-	 * at settle boundaries re-derives the recovery kind (mid-run turn_end
-	 * boundaries are unstable: results still arriving). */
-	const boundaryReconcile = (settle: boolean): Patch | null => {
-		const recPatch = reconcile(document, sessionManager.getEntries(), {
-			model: session?.model ? { provider: session.model.provider, modelId: session.model.id } : undefined,
-			thinkingLevel: session?.thinkingLevel ?? "off",
-			contextUsage: getContextUsageOption(session),
-			...(settle ? { recoverableTurn: recoverableTurnKindOf(document) } : {}),
-		});
-		if (recPatch) document = applyPatch(document, recPatch.ops);
-		return recPatch;
-	};
+	/** Turn-boundary refresh shared by the event path and the recovery
+	 * continuation's compensation (ADR 16). Drops live forms that will never
+	 * persist and re-derives the recovery kind. */
+	const boundaryReconcile = (settle: boolean): Patch | null => refresh({ settle, emit: false });
 
 	// ADR 16: an in-flight recovery continuation (agent.continue(), which runs
 	// outside pi's _runAgentPrompt wrapper). AgentSession.isStreaming stays
@@ -434,24 +449,18 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		if (recoveryRun) await recoveryRun.catch(() => {});
 	};
 
-	function tryReconcile(opts: ReconcileOptions): void {
-		if (document.status.isStreaming || document.status.isCompacting) return;
-		const recPatch = reconcile(document, sessionManager.getEntries(), {
-			...opts,
-			contextUsage: getContextUsageOption(session),
-			recoverableTurn: recoverableTurnKindOf(document),
-		});
-		if (recPatch) {
-			document = applyPatch(document, recPatch.ops);
-			emitPatch(recPatch);
-		}
+	/** Idle boundary: install silent entries (labels, extension entries) and
+	 * refresh status. Refused mid-run, where the event path owns publication. */
+	function tryReconcile(): void {
+		if (state.document.status.isStreaming || state.document.status.isCompacting) return;
+		refresh({ settle: true });
 	}
 
 	// ── Manager object ────────────────────────────────────────────────────
 
 	const mgr: Manager = {
 		get document() {
-			return document;
+			return state.document;
 		},
 
 		get liveSessionId() {
@@ -477,18 +486,24 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			return () => patchListeners.delete(listener);
 		},
 		addConnection(handle, sessionRef, cursor = null) {
-			connectionHandles.add(handle);
 			// Refresh the in-flight anchors so a (re)connecting client recovers the
 			// elapsed of tools already running. Not emitted as a patch: live clients
 			// tick from their own local anchor, and only the fresh snapshot needs it.
 			if (inFlightStart.size > 0) {
-				document = applyPatch(document, [
+				state.document = applyPatch(state.document, [
 					{ op: "replace", path: "/status/inFlightTools", value: inFlightElapsed() },
 				]);
 			}
-			// Initial sync is emitted synchronously at attach, before any later
-			// live patch on this Connection (ADR 09 invariant 7).
-			handle.onInitialSync(buildInitialSync(document, sessionManager.getEntries(), sessionRef, cursor));
+			// Attach is a publication boundary. Refresh first, sampling context
+			// usage for the frame, and publish what the refresh discovers to the
+			// clients already attached: their mirrors must not miss entries the
+			// refresh consumes, and the read position advances with it — a later
+			// refresh would never resend them. The new connection is registered
+			// after, so it receives the same state once, as its initial sync,
+			// before any later live patch (ADR 09 invariant 7).
+			refresh({ usage: true });
+			connectionHandles.add(handle);
+			handle.onInitialSync(buildInitialSync(state.document, sessionManager.getEntries(), sessionRef, cursor));
 		},
 		removeConnection(handle) {
 			connectionHandles.delete(handle);
@@ -570,14 +585,12 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			const model = modelRuntime.getModel(provider, modelId);
 			if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 			await session.setModel(model);
-			tryReconcile({
-				model: session.model ? { provider: session.model.provider, modelId: session.model.id } : undefined,
-			});
+			tryReconcile();
 		},
 
 		async setThinkingLevel(level: string) {
 			session.setThinkingLevel(level as ThinkingLevel);
-			tryReconcile({ thinkingLevel: session.thinkingLevel });
+			tryReconcile();
 		},
 
 		async renameSession(name: string) {
@@ -589,14 +602,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// session leaf, and interleaving a metadata entry with a pending turn
 			// buys nothing — labels are never urgent. The client guards too, but
 			// the daemon is the enforcement point for second tabs and raw RPC.
-			if (document.status.isStreaming || document.status.isCompacting) {
+			if (state.document.status.isStreaming || state.document.status.isCompacting) {
 				throw new Error("Cannot set a label while a turn is in flight");
 			}
 			sessionManager.appendLabelChange(entryId, label === "" ? undefined : label);
-			// appendLabelChange appends to the session file without an
-			// AgentSessionEvent, so reconcile from the file is what publishes the
-			// entry to the Document — and through the patch, to every connection.
-			tryReconcile({});
+			// appendLabelChange appends without an AgentSessionEvent. The refresh
+			// reads it from the entry list, which is why a silent append needs no
+			// notification of its own.
+			tryReconcile();
 		},
 
 		async navigate(entryId: string | null) {
@@ -605,7 +618,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// during an in-flight turn or compaction would corrupt the run. The
 			// client disables this path, but the daemon is the enforcement point —
 			// a second tab or raw RPC must not fork mid-turn either.
-			if (document.status.isStreaming || document.status.isCompacting) {
+			if (state.document.status.isStreaming || state.document.status.isCompacting) {
 				throw new Error("Cannot navigate while a turn is in flight");
 			}
 			if (entryId === null) {
@@ -618,16 +631,20 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// retains the old full conversation path after branching; the
 			// next prompt would send stale history to the LLM.
 			session.agent.state.messages = sessionManager.buildSessionContext().messages;
-			publishLeaf(entryId);
+			// The projection owns the leaf: read pi's post-branch state back so
+			// the leaf, the branch statistics, and the recovery kind all describe
+			// the selected branch — publishing the leaf alone left the previous
+			// branch's totals in place.
+			tryReconcile();
 		},
 
 		async recoverTurn(): Promise<"retry" | "continue"> {
 			// Same mutation lock as navigate: recovery branches (swapping the LLM
 			// context) and then starts a run.
-			if (document.status.isStreaming || document.status.isCompacting) {
+			if (state.document.status.isStreaming || state.document.status.isCompacting) {
 				throw new Error("Cannot recover while a turn is in flight");
 			}
-			const info = computeRecoverableTurn(document);
+			const info = computeRecoverableTurn(state.document);
 			if (!info) {
 				throw new Error("No failed or interrupted turn to recover");
 			}
@@ -637,14 +654,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// branches past them, and the relay carries bounded copies of exactly
 			// those. ("Continue." is the interruptedTools fallback for the
 			// killed-mid-run shape, whose results stay on the path.)
-			const relay = repair.restart === "prompt" ? buildInterruptedToolsRelay(document, info) : "Continue.";
+			const relay = repair.restart === "prompt" ? buildInterruptedToolsRelay(state.document, info) : "Continue.";
 
 			// Branch past the dead entry — the navigate verb's exact machinery —
 			// except unfinishedTurn, whose tail is already a valid continuation
 			// boundary (fully-answered tool results, no final assistant), so the
 			// run is simply continued from where it stopped.
 			if (repair.branch) {
-				const target = document.entries[info.entryId];
+				const target = state.document.entries[info.entryId];
 				if (!target || target.parentId === null) {
 					throw new Error("Recovery target has no parent to branch to");
 				}
@@ -653,7 +670,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				// abandoned tail must leave agent.state.messages before the
 				// continued run sends its context to the LLM.
 				session.agent.state.messages = sessionManager.buildSessionContext().messages;
-				publishLeaf(target.parentId);
+				// Same boundary as navigate: the projection re-reads pi's leaf and
+				// re-derives what the new selection describes.
+				tryReconcile();
 			}
 
 			// interruptedTools: a visible relay through AgentSession's normal
@@ -673,7 +692,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// runs outside pi's _runAgentPrompt wrapper (its only public
 			// continuation entry), so this run gets no auto-retry/overflow
 			// handling and fires no agent_settled — the event the Document's
-			// isStreaming reset and the settle reconcile key on. The run is
+			// isStreaming reset and the settle refresh key on. The run is
 			// tracked (abort/dispose await it via the Manager), and the finally
 			// compensates on every exit path (success, error, abort); the
 			// missing retry loop is an accepted limitation (ADR 16).
@@ -684,8 +703,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			} finally {
 				recoveryRun = null;
 				const ops: PatchOp[] = [];
-				if (document.status.isStreaming) {
-					document = setAtPath(document, "/status/isStreaming", false);
+				if (state.document.status.isStreaming) {
+					state.document = setAtPath(state.document, "/status/isStreaming", false);
 					ops.push({ op: "replace", path: "/status/isStreaming", value: false });
 				}
 				if (ops.length > 0) emitPatch({ ops });

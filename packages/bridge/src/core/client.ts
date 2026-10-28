@@ -37,6 +37,10 @@ export interface PullResponseItem {
 	value: JsonValue;
 }
 
+/** An op that addresses a whole entry (`/entries/<id>`), not a field in it. */
+const ENTRY_ROOT_PREFIX = "/entries/";
+const isEntryRootPath = (path: string): boolean => /^\/entries\/[^/]+$/.test(path);
+
 // ---------------------------------------------------------------------------
 // DocumentMirror
 // ---------------------------------------------------------------------------
@@ -44,6 +48,13 @@ export interface PullResponseItem {
 export class DocumentMirror {
 	/** The local mirror. Never authoritative — replaced on reconnect. */
 	document: Document;
+
+	/** Monotonic count of entry-root replacements applied by patches: an
+	 * `add`/`replace` on `/entries/<id>` for an id the mirror already held.
+	 * Structural identity (paths, block counts, text lengths) cannot see
+	 * these — a replacement may differ only in content those never read —
+	 * so consumers gate re-projection on this counter. */
+	rewrites = 0;
 
 	constructor(document?: Document) {
 		this.document = document ?? emptyMirror();
@@ -64,6 +75,15 @@ export class DocumentMirror {
 	 * Each Patch is an atomic transaction.
 	 */
 	applyPatch(ops: PatchOp[]): void {
+		for (const op of ops) {
+			if (
+				(op.op === "add" || op.op === "replace") &&
+				isEntryRootPath(op.path) &&
+				this.document.entries[op.path.slice(ENTRY_ROOT_PREFIX.length)] !== undefined
+			) {
+				this.rewrites++;
+			}
+		}
 		this.document = applyPatch(this.document, ops);
 	}
 

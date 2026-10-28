@@ -58,11 +58,18 @@ describe("viewModelCacheKey", () => {
 		).not.toBe(base);
 	});
 
-	it("changes when the external inputs change (scope, pullTick)", () => {
+	it("changes when the external inputs change (scope, pullTick, modelsKey)", () => {
 		const base = viewModelCacheKey(doc(), "stem", 0);
 		expect(viewModelCacheKey(doc(), "other-stem", 0)).not.toBe(base);
 		expect(viewModelCacheKey(doc(), null, 0)).not.toBe(base);
 		expect(viewModelCacheKey(doc(), "stem", 1)).not.toBe(base);
+		// The catalogue is a projection input (context percentage is computed
+		// against each model's context window), so its identity re-projects even
+		// over an unchanged document.
+		expect(viewModelCacheKey(doc(), "stem", 0, null, "p/m:1000")).not.toBe(base);
+		expect(viewModelCacheKey(doc(), "stem", 0, null, "p/m:2000")).not.toBe(
+			viewModelCacheKey(doc(), "stem", 0, null, "p/m:1000"),
+		);
 	});
 
 	it("changes with the rendered-leaf override (peek); null and undefined share the live key", () => {

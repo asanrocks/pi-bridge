@@ -41,6 +41,7 @@ import type {
 import {
 	CompactCodec,
 	filterPatchForSocket,
+	isEntrySealed,
 	MAX_IMAGE_BASE64_LENGTH,
 	MAX_IMAGES_PER_MESSAGE,
 	type Patch,
@@ -540,7 +541,7 @@ export class Connection {
 						const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
 						if (value !== undefined) {
 							values.push({ entryId: req.entryId, fieldPath: req.fieldPath, value: value as JsonValue });
-							if (req.entryId.startsWith("pending:")) {
+							if (!isEntrySealed(entry)) {
 								this.subscriptions.add(req.fieldPath);
 							}
 						}

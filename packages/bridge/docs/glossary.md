@@ -17,7 +17,7 @@ Words are paid for at three rates:
   disambiguation cost on every use. The coined budget is **three**; a fourth
   requires amending this document and passing all criteria below.
 - **Bound** — an established word bound to a precise local meaning (mirror,
-  cursor, reconcile, turn). Cheap: one sentence pays for it; the reader
+  cursor, refresh, turn). Cheap: one sentence pays for it; the reader
   brings the word, we supply only the claim.
 - **Composed** — existing terms plus common words ("action group", "initial
   sync"). Free.
@@ -137,24 +137,25 @@ How Session content travels. Defined by the [core data model](core/data-model.md
    edit, a usage record) is an **internal entry** and is hidden. A message
    whose role is neither user nor assistant is not a conversation turn: a
    system-role message is a prompt-section diff.
-3. An Entry is **committed** *(bound)* or **provisional** *(bound)*;
-   provisional identity is mutable until it is sealed.
-4. **Reconcile** *(bound)* aligns the Document with the durable entries; it
-   runs at **settle** *(bound)* — the end of a turn, when streaming stops —
-   and on idle-state verbs. Reconcile **seals** *(coined)* provisional
-   entries: each provisional id is replaced by its durable id, emitted as a
-   `move` op. Settle is the event; sealing is the identity transition at that
-   event. `sealed` and `seal timestamp` name the resulting state, so "on
-   seal" means "when the entry is sealed" — never a second event.
+3. An Entry is **sealed** *(bound)* or a **live form** *(composed)*. An id is
+   stable from the entry's first event through persistence and reopen; a live
+   form is the not-yet-persisted form of that entry, never a second entry.
+4. **Refresh** *(bound)* aligns the Document with pi's entry list; it runs at
+   **settle** *(bound)* — the end of a turn, when streaming stops — and on
+   idle-state verbs. A refresh **seals** *(coined)* an entry by installing its
+   authoritative persisted form under the same id. Settle is the event;
+   sealing is the content transition at that event. `sealed` and `seal
+   timestamp` name the resulting state, so "on seal" means "when the entry is
+   sealed" — never a second event.
 5. A **Mirror** *(bound)* is the synchronized client-side replica of a
    Document.
 6. Entry fields are **lazy** *(bound)* or **eager** *(bound)*. Lazy fields
    are withheld on the wire and fetched on demand; the canonical Document
    always holds real content. Text is eager; thinking, tool arguments, tool
    results, and a system message's section text are lazy.
-7. A **pull** *(bound)* fetches withheld content: on a provisional Entry it
-   is a live subscription that streams until commit; on a committed Entry
-   it is one-shot. A Mirror declares its demand as **pending pulls**
+7. A **pull** *(bound)* fetches withheld content: on a live form it is a live
+   subscription that streams until the entry seals; on a sealed Entry it is
+   one-shot. A Mirror declares its demand as **pending pulls**
    *(composed)*, drained by the pull loop.
 8. A **push** *(bound)* is daemon-initiated delivery: `replace` or `patch`
    frames, plus broadcasts.

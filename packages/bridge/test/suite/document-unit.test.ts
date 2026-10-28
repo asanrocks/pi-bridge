@@ -9,12 +9,13 @@ import {
 	type Entry,
 	filterPatchForSocket,
 	initFromEntries,
+	isEntrySealed,
 	type PatchOp,
-	reconcile,
 	resolveFieldPath,
 	setAtPath,
 	snapshotForWire,
 } from "../../src/core/index.ts";
+import { createDriver } from "./projection-driver.ts";
 
 // For tests: cast Entry to a loose shape for property access.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -119,15 +120,14 @@ describe("bash_execution entries", () => {
 		expect(doc.status.leafId).toBe("b1");
 	});
 
-	it("reconcile picks up a bashExecution message", () => {
-		let doc = emptyDoc();
-		const patch = reconcile(doc, [bashEntry]);
+	it("a refresh picks up a bashExecution message", () => {
+		const driver = createDriver(emptyDoc());
+		const patch = driver.refresh([bashEntry]);
 		expect(patch).not.toBeNull();
-		doc = applyPatch(doc, patch!.ops);
-		expect(lo(doc.entries.b1).kind).toBe("bash_execution");
+		expect(lo(driver.document.entries.b1).kind).toBe("bash_execution");
 	});
 
-	it("entry_appended projects live user bash (exit code, cancel, truncation, context exclusion)", () => {
+	it("entry_appended defers content to reconciliation (live user bash shape)", () => {
 		const failing = se("message", { id: "b2" });
 		(failing as unknown as Record<string, unknown>).message = bashMsg({
 			command: "false",
@@ -137,18 +137,20 @@ describe("bash_execution entries", () => {
 			fullOutputPath: "/tmp/pi-bash1.log",
 			excludeFromContext: true,
 		});
-		let doc = emptyDoc();
-		const patch = applyEvent(doc, { type: "entry_appended", entry: failing });
-		expect(patch).not.toBeNull();
-		doc = applyPatch(doc, patch!.ops);
-		const e = lo(doc.entries.b2);
+		const driver = createDriver(emptyDoc());
+		// An append is an invalidation hint: the entry is installed from pi's
+		// list, in file order, by the following refresh.
+		expect(applyEvent(driver.document, { type: "entry_appended", entry: failing })).toBeNull();
+		const patch = driver.refresh([failing]);
+		if (!patch) throw new Error("expected a patch");
+		const e = lo(driver.document.entries.b2);
 		expect(e.kind).toBe("bash_execution");
 		expect(e.exitCode).toBe(1);
 		expect(e.cancelled).toBe(false);
 		expect(e.truncated).toBe(true);
 		expect(e.fullOutputPath).toBe("/tmp/pi-bash1.log");
 		expect(e.excludeFromContext).toBe(true);
-		expect(doc.status.leafId).toBe("b2");
+		expect(driver.document.status.leafId).toBe("b2");
 	});
 });
 
@@ -164,6 +166,32 @@ describe("initFromEntries", () => {
 		expect(doc.status.model).toEqual({ provider: "", modelId: "" });
 		expect(doc.status.thinkingLevel).toBe("off");
 		expect(doc.status.isStreaming).toBe(false);
+	});
+
+	it("derives status by file position, not entry-map key order", () => {
+		// An all-digit entry id (~2% of 8-hex ids) enumerates before every string
+		// key in a JS object, so map key order is neither insertion nor file
+		// order. The latest entry must be selected by `ord`.
+		const info = (id: string, name: string): SessionEntry =>
+			({ type: "session_info", id, parentId: null, timestamp: "2024-01-01T00:00:00Z", name }) as SessionEntry;
+		const change = (id: string, modelId: string): SessionEntry =>
+			({
+				type: "model_change",
+				id,
+				parentId: null,
+				timestamp: "2024-01-01T00:00:00Z",
+				provider: "p",
+				modelId,
+			}) as SessionEntry;
+		const doc = initFromEntries([
+			info("abcdef01", "first"),
+			change("bbbb2222", "m1"),
+			info("12345678", "second"),
+			change("87654321", "m2"),
+		]);
+		expect(doc.status.leafId).toBe("87654321");
+		expect(doc.status.name).toBe("second");
+		expect(doc.status.model).toEqual({ provider: "p", modelId: "m2" });
 	});
 
 	it("projects user and assistant messages", () => {
@@ -425,63 +453,74 @@ describe("applyEvent", () => {
 	});
 
 	describe("message_start (user)", () => {
-		it("adds a pending:user entry", () => {
+		it("opens a live entry under the id pi reserved", () => {
 			let doc = emptyDoc();
 			const patch = applyEvent(doc, {
 				type: "message_start",
+				entryId: "u1",
 				message: msg("user", "hello"),
 			} as unknown as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			expect(doc.entries["pending:user:1"]).toBeDefined();
-			expect(lo(doc.entries["pending:user:1"]).kind).toBe("message");
-			expect(lo(doc.entries["pending:user:1"]).role).toBe("user");
+			expect(lo(doc.entries.u1).kind).toBe("message");
+			expect(lo(doc.entries.u1).role).toBe("user");
+			expect(isEntrySealed(doc.entries.u1!)).toBe(false);
 		});
 
-		it("increments ordinal for multiple user messages", () => {
+		it("keeps each user message under its own id", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("user", "first") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "u1",
+					message: msg("user", "first"),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("user", "second") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "u2",
+					message: msg("user", "second"),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			expect(doc.entries["pending:user:1"]).toBeDefined();
-			expect(doc.entries["pending:user:2"]).toBeDefined();
+			expect(doc.entries.u1).toBeDefined();
+			expect(doc.entries.u2).toBeDefined();
 		});
 	});
 
 	describe("message_start (assistant)", () => {
-		it("adds a pending:message skeleton", () => {
+		it("opens an assistant live form under the reserved id", () => {
 			let doc = emptyDoc();
 			const patch = applyEvent(doc, {
 				type: "message_start",
+				entryId: "a1",
 				message: msg("assistant", ""),
 			} as unknown as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			const entry = lo(doc.entries["pending:message"]);
+			const entry = lo(doc.entries.a1);
 			expect(entry).toBeDefined();
 			expect(entry.kind).toBe("message");
 			expect(entry.role).toBe("assistant");
 			// Content is empty array in the skeleton
-			expect(lo(doc.entries["pending:message"]).content).toEqual([]);
+			expect(lo(doc.entries.a1).content).toEqual([]);
 		});
 	});
 
 	describe("message_update (streaming deltas)", () => {
 		it("text_start → text_delta → text_end", () => {
 			let doc = emptyDoc();
-			// Setup pending:message
+			// Setup the assistant live form
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("assistant", "") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "a1",
+					message: msg("assistant", ""),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			// text_start
@@ -489,6 +528,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "text_start",
 						contentIndex: 0,
@@ -497,7 +537,7 @@ describe("applyEvent", () => {
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			const content0 = lo(doc.entries["pending:message"]).content[0];
+			const content0 = lo(doc.entries.a1).content[0];
 			expect(content0.type).toBe("text");
 			expect((content0 as { text: string }).text).toBe("");
 
@@ -506,6 +546,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "text_delta",
 						contentIndex: 0,
@@ -514,13 +555,14 @@ describe("applyEvent", () => {
 					},
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			expect((lo(doc.entries["pending:message"]).content[0] as { text: string | null }).text).toBe("Hello");
+			expect((lo(doc.entries.a1).content[0] as { text: string | null }).text).toBe("Hello");
 
 			// More delta
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "text_delta",
 						contentIndex: 0,
@@ -529,13 +571,14 @@ describe("applyEvent", () => {
 					},
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			expect((lo(doc.entries["pending:message"]).content[0] as { text: string | null }).text).toBe("Hello World");
+			expect((lo(doc.entries.a1).content[0] as { text: string | null }).text).toBe("Hello World");
 
 			// text_end (authoritative final)
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "text_end",
 						contentIndex: 0,
@@ -544,21 +587,25 @@ describe("applyEvent", () => {
 					},
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			expect((lo(doc.entries["pending:message"]).content[0] as { text: string | null }).text).toBe("Hello World!");
+			expect((lo(doc.entries.a1).content[0] as { text: string | null }).text).toBe("Hello World!");
 		});
 
 		it("thinking_start → thinking_delta → thinking_end", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("assistant", "") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "a1",
+					message: msg("assistant", ""),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "thinking_start",
 						contentIndex: 0,
@@ -567,13 +614,14 @@ describe("applyEvent", () => {
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			expect(lo(doc.entries["pending:message"]).content[0].type).toBe("thinking");
-			expect((lo(doc.entries["pending:message"]).content[0] as { thinking: string | null }).thinking).toBeNull();
+			expect(lo(doc.entries.a1).content[0].type).toBe("thinking");
+			expect((lo(doc.entries.a1).content[0] as { thinking: string | null }).thinking).toBeNull();
 
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "thinking_delta",
 						contentIndex: 0,
@@ -582,15 +630,18 @@ describe("applyEvent", () => {
 					},
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			expect((lo(doc.entries["pending:message"]).content[0] as { thinking: string | null }).thinking).toBe("Hmm");
+			expect((lo(doc.entries.a1).content[0] as { thinking: string | null }).thinking).toBe("Hmm");
 		});
 
 		it("toolcall_start → toolcall_delta → toolcall_end", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("assistant", "") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "a1",
+					message: msg("assistant", ""),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			// toolcall_start with a partial message that has the tool call block.
@@ -616,6 +667,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "toolcall_start",
 						contentIndex: 0,
@@ -624,7 +676,7 @@ describe("applyEvent", () => {
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			const tc = lo(doc.entries["pending:message"]).content[0];
+			const tc = lo(doc.entries.a1).content[0];
 			expect(tc.type).toBe("toolCall");
 			expect((tc as { id: string }).id).toBe("tc1");
 			expect((tc as { name: string }).name).toBe("read");
@@ -640,6 +692,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "toolcall_delta",
 						contentIndex: 0,
@@ -648,7 +701,7 @@ describe("applyEvent", () => {
 					},
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			expect((lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments).toEqual({
+			expect((lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments).toEqual({
 				path: "/x",
 			});
 
@@ -657,6 +710,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: {
 						type: "toolcall_end",
 						contentIndex: 0,
@@ -666,7 +720,7 @@ describe("applyEvent", () => {
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			const finalTc = lo(doc.entries["pending:message"]).content[0];
+			const finalTc = lo(doc.entries.a1).content[0];
 			expect(finalTc.type).toBe("toolCall");
 			expect((finalTc as { id: string }).id).toBe("tc1");
 			expect((finalTc as { name: string }).name).toBe("read");
@@ -772,8 +826,11 @@ describe("applyEvent", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("assistant", "") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "a1",
+					message: msg("assistant", ""),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			const partialBase = {
@@ -802,10 +859,11 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: partialStart },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			const args1 = (lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments;
+			const args1 = (lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments;
 			expect(args1).toEqual({});
 
 			// toolcall_delta 1: arguments.path = "/src" (add new key)
@@ -817,10 +875,11 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: partialDelta1 },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			const args2 = (lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments;
+			const args2 = (lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments;
 			expect(args2).toEqual({ path: "/src" });
 
 			// toolcall_delta 2: arguments.path appends "/main.ts"
@@ -832,10 +891,11 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: partialDelta2 },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			const args3 = (lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments;
+			const args3 = (lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments;
 			expect(args3).toEqual({ path: "/src/main.ts" });
 
 			// toolcall_delta 3: arguments.content starts streaming
@@ -854,10 +914,11 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: partialDelta3 },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			const args4 = (lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments;
+			const args4 = (lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments;
 			expect(args4).toEqual({ path: "/src/main.ts", content: "The qui" });
 
 			// toolcall_delta 4: content appends
@@ -876,10 +937,11 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: partialDelta4 },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
-			const args5 = (lo(doc.entries["pending:message"]).content[0] as { arguments: unknown }).arguments;
+			const args5 = (lo(doc.entries.a1).content[0] as { arguments: unknown }).arguments;
 			expect(args5).toEqual({ path: "/src/main.ts", content: "The quick brown" });
 		});
 	});
@@ -889,12 +951,16 @@ describe("applyEvent", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
 				doc,
-				applyEvent(doc, { type: "message_start", message: msg("assistant", "") } as unknown as AgentSessionEvent)!
-					.ops,
+				applyEvent(doc, {
+					type: "message_start",
+					entryId: "a1",
+					message: msg("assistant", ""),
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			const patch = applyEvent(doc, {
 				type: "message_end",
+				entryId: "a1",
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "Hi" }],
@@ -915,12 +981,12 @@ describe("applyEvent", () => {
 			} as unknown as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			const e = lo(doc.entries["pending:message"]) as Extract<Entry, { kind: "message" }>;
+			const e = lo(doc.entries.a1) as Extract<Entry, { kind: "message" }>;
 			expect(e.api).toBe("anthropic");
 			expect(e.stopReason).toBe("stop");
 			expect(e.usage).toBeDefined();
 			expect(e.usage!.totalTokens).toBe(15);
-			expect(doc.status.leafId).toBe("pending:message");
+			expect(doc.status.leafId).toBe("a1");
 		});
 
 		it("returns null for no-op events", () => {
@@ -933,9 +999,9 @@ describe("applyEvent", () => {
 			expect(patch).toBeNull();
 		});
 
-		it("updates leafId to tool result provisional for toolResult role", () => {
+		it("updates leafId to the tool result's own entry for toolResult role", () => {
 			let doc = emptyDoc();
-			// Add a tool result provisional
+			// Add the tool result's live form under the id pi reserved for it.
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
@@ -943,11 +1009,13 @@ describe("applyEvent", () => {
 					toolCallId: "tc1",
 					toolName: "read",
 					args: {},
-				} as AgentSessionEvent)!.ops,
+					entryId: "tr1",
+				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			const patch = applyEvent(doc, {
 				type: "message_end",
+				entryId: "tr1",
 				message: {
 					role: "toolResult",
 					toolCallId: "tc1",
@@ -959,22 +1027,23 @@ describe("applyEvent", () => {
 			} as unknown as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			expect(doc.status.leafId).toBe("pending:tc1");
+			expect(doc.status.leafId).toBe("tr1");
 		});
 
-		it("updates leafId to user provisional for user role", () => {
+		it("updates leafId to the user entry's own id for user role", () => {
 			let doc = emptyDoc();
-			// Add user message provisonal
 			doc = applyPatch(
 				doc,
 				applyEvent(doc, {
 					type: "message_start",
+					entryId: "u1",
 					message: msg("user", "hello"),
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
 			const patch = applyEvent(doc, {
 				type: "message_end",
+				entryId: "u1",
 				message: {
 					role: "user",
 					content: "hello",
@@ -983,7 +1052,7 @@ describe("applyEvent", () => {
 			} as unknown as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			expect(doc.status.leafId).toBe("pending:user:1");
+			expect(doc.status.leafId).toBe("u1");
 		});
 	});
 
@@ -992,13 +1061,14 @@ describe("applyEvent", () => {
 			let doc = emptyDoc();
 			const patch = applyEvent(doc, {
 				type: "tool_execution_start",
+				entryId: "tr1",
 				toolCallId: "tc1",
 				toolName: "read",
 				args: { path: "/x" },
 			} as AgentSessionEvent);
 			doc = applyPatch(doc, patch!.ops);
 
-			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
+			const e = lo(doc.entries.tr1) as Extract<Entry, { kind: "tool_result" }>;
 			expect(e.kind).toBe("tool_result");
 			expect(e.toolCallId).toBe("tc1");
 			expect(e.toolName).toBe("read");
@@ -1013,6 +1083,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_start",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					args: {},
@@ -1023,6 +1094,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_update",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					args: {},
@@ -1030,7 +1102,7 @@ describe("applyEvent", () => {
 				} as unknown as AgentSessionEvent)!.ops,
 			);
 
-			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
+			const e = lo(doc.entries.tr1) as Extract<Entry, { kind: "tool_result" }>;
 			expect(e.content).toBeDefined();
 			expect(e.details).toBeDefined();
 		});
@@ -1041,6 +1113,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_start",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					args: {},
@@ -1051,6 +1124,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_end",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					result: { content: [{ type: "text", text: "final" }], details: {} },
@@ -1058,7 +1132,7 @@ describe("applyEvent", () => {
 				} as AgentSessionEvent)!.ops,
 			);
 
-			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
+			const e = lo(doc.entries.tr1) as Extract<Entry, { kind: "tool_result" }>;
 			expect(e.isError).toBe(true);
 		});
 
@@ -1068,6 +1142,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_start",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					args: {},
@@ -1078,6 +1153,7 @@ describe("applyEvent", () => {
 				doc,
 				applyEvent(doc, {
 					type: "tool_execution_end",
+					entryId: "tr1",
 					toolCallId: "tc1",
 					toolName: "read",
 					result: { content: [], details: {} },
@@ -1086,31 +1162,31 @@ describe("applyEvent", () => {
 				} as AgentSessionEvent)!.ops,
 			);
 
-			const e = lo(doc.entries["pending:tc1"]) as Extract<Entry, { kind: "tool_result" }>;
+			const e = lo(doc.entries.tr1) as Extract<Entry, { kind: "tool_result" }>;
 			expect(e.durationMs).toBe(1500);
 		});
 	});
 
 	describe("entry_appended (custom entries)", () => {
-		it("adds the projected entry with real id", () => {
-			let doc = emptyDoc();
-			const patch = applyEvent(doc, {
-				type: "entry_appended",
-				entry: {
-					type: "custom",
-					id: "cu1",
-					parentId: null,
-					timestamp: "t",
-					customType: "my-plugin",
-					data: { key: 1 },
-				},
-			} as AgentSessionEvent);
-			doc = applyPatch(doc, patch!.ops);
+		it("is a hint: the refresh installs the entry with its real id and position", () => {
+			const driver = createDriver(emptyDoc());
+			const entry = {
+				type: "custom",
+				id: "cu1",
+				parentId: null,
+				timestamp: "t",
+				customType: "my-plugin",
+				data: { key: 1 },
+			} as unknown as SessionEntry;
+			expect(applyEvent(driver.document, { type: "entry_appended", entry } as AgentSessionEvent)).toBeNull();
 
-			expect(doc.entries.cu1).toBeDefined();
-			expect(doc.entries.cu1.kind).toBe("custom");
-			expect((doc.entries.cu1 as Extract<Entry, { kind: "custom" }>).customType).toBe("my-plugin");
-			expect(doc.status.leafId).toBe("cu1");
+			const patch = driver.refresh([entry]);
+			if (!patch) throw new Error("expected a patch");
+
+			expect(driver.document.entries.cu1).toBeDefined();
+			expect(driver.document.entries.cu1.kind).toBe("custom");
+			expect((driver.document.entries.cu1 as Extract<Entry, { kind: "custom" }>).customType).toBe("my-plugin");
+			expect(driver.document.status.leafId).toBe("cu1");
 		});
 	});
 
@@ -1160,61 +1236,52 @@ describe("applyEvent", () => {
 });
 
 // ---------------------------------------------------------------------------
-// reconcile — provisional rename, silent entries, status drift
+// refresh boundary — seal in place, silent entries, canonical values
 // ---------------------------------------------------------------------------
 
-describe("reconcile", () => {
-	it("renames provisional assistant message to real id", () => {
-		let doc = emptyDoc();
-		// Simulate streaming: add pending:message
-		doc = applyPatch(doc, [
-			{
-				op: "add",
-				path: "/entries/pending:message",
-				value: {
-					kind: "message",
-					role: "assistant",
-					id: "pending:message",
-					parentId: null,
-					timestamp: "",
-					content: [],
-				},
+describe("refresh boundary", () => {
+	it("seals a live assistant message in place, installing the persisted form", () => {
+		// The live form and the persisted entry share one id: the refresh
+		// replaces the entry, it never renames it.
+		const driver = createDriver(emptyDoc());
+		driver.applyEvent({
+			type: "message_start",
+			entryId: "a1",
+			message: {
+				role: "assistant",
+				content: [],
+				api: "anthropic",
+				provider: "anthropic",
+				model: "claude",
+				timestamp: 0,
 			},
-		]);
+		} as unknown as AgentSessionEvent);
 
 		const piEntries: SessionEntry[] = [
-			se("message", { id: "real-msg-1", role: "assistant", parentId: "parent1", timestamp: "2024-01-01T00:00:00Z" }),
+			se("message", { id: "a1", role: "assistant", parentId: "parent1", timestamp: "2024-01-01T00:00:00Z" }),
 		];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		const patch = driver.refresh(piEntries);
+		expect(patch!.ops.some((op) => op.op === "move")).toBe(false);
 
-		expect(doc.entries["pending:message"]).toBeUndefined();
-		expect(doc.entries["real-msg-1"]).toBeDefined();
-		expect(lo(doc.entries["real-msg-1"]).id).toBe("real-msg-1");
-		expect(lo(doc.entries["real-msg-1"]).parentId).toBe("parent1");
-		expect(lo(doc.entries["real-msg-1"]).timestamp).toBe("2024-01-01T00:00:00Z");
+		const doc = driver.document;
+		expect(doc.entries.a1).toBeDefined();
+		expect(lo(doc.entries.a1).id).toBe("a1");
+		expect(lo(doc.entries.a1).parentId).toBe("parent1");
+		expect(lo(doc.entries.a1).timestamp).toBe("2024-01-01T00:00:00Z");
+		expect(isEntrySealed(doc.entries.a1!)).toBe(true);
+		expect(doc.entries.a1!.ord).toBe(0);
 	});
 
-	it("renames provisional tool result by toolCallId", () => {
-		let doc = emptyDoc();
-		doc = applyPatch(doc, [
-			{
-				op: "add",
-				path: "/entries/pending:tc1",
-				value: {
-					kind: "tool_result",
-					id: "pending:tc1",
-					parentId: null,
-					timestamp: "",
-					toolCallId: "tc1",
-					toolName: "read",
-					content: null,
-					details: null,
-					isError: false,
-				},
-			},
-		]);
+	it("seals a live tool result in place and installs its content", () => {
+		const driver = createDriver(emptyDoc());
+		driver.applyEvent({
+			type: "tool_execution_start",
+			entryId: "tr1",
+			toolCallId: "tc1",
+			toolName: "read",
+			args: {},
+		} as unknown as AgentSessionEvent);
 
 		const piEntries: SessionEntry[] = [
 			{
@@ -1233,42 +1300,40 @@ describe("reconcile", () => {
 			},
 		] as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
+		const doc = driver.document;
 
-		expect(doc.entries["pending:tc1"]).toBeUndefined();
 		expect(doc.entries.tr1).toBeDefined();
 		expect(doc.entries.tr1.kind).toBe("tool_result");
-		// Invariant 7: seal backfills lazy fields the stream left null from the
-		// durable entry — content from pi, absent details normalized to {}.
+		// The persisted form is authoritative: content arrives with it, and
+		// absent details are normalized rather than left null.
 		expect(lo(doc.entries.tr1).content).toEqual([{ type: "text", text: "ok" }]);
 		expect(lo(doc.entries.tr1).details).toEqual({});
+		expect(isEntrySealed(doc.entries.tr1!)).toBe(true);
 	});
 
-	it("backfills null thinking and arguments on sealed assistant message (abort before *_end)", () => {
-		let doc = emptyDoc();
-		doc = applyPatch(doc, [
-			{
-				op: "add",
-				path: "/entries/pending:message",
-				value: {
-					kind: "message",
-					role: "assistant",
-					id: "pending:message",
-					parentId: null,
-					timestamp: "",
-					content: [
-						{ type: "thinking", thinking: null },
-						{ type: "toolCall", id: "", name: "", arguments: null },
-					],
-				},
+	it("replaces an unfinished form with the persisted one on repair", () => {
+		// A missed seal leaves streamed content under a real id. The refresh
+		// installs the complete persisted entry rather than marking the live form
+		// authoritative.
+		const driver = createDriver(emptyDoc());
+		driver.applyEvent({
+			type: "message_start",
+			entryId: "a1",
+			message: {
+				role: "assistant",
+				content: [],
+				api: "anthropic",
+				provider: "anthropic",
+				model: "claude",
+				timestamp: 0,
 			},
-		]);
+		} as unknown as AgentSessionEvent);
 
 		const piEntries: SessionEntry[] = [
 			{
 				type: "message",
-				id: "m1",
+				id: "a1",
 				parentId: "p1",
 				timestamp: "t",
 				message: {
@@ -1282,20 +1347,21 @@ describe("reconcile", () => {
 			},
 		] as unknown as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
+		const doc = driver.document;
 
-		const content = lo(doc.entries.m1).content as Array<Record<string, unknown>>;
+		const content = lo(doc.entries.a1).content as Array<Record<string, unknown>>;
 		expect(content[0].thinking).toBe("partial thought");
 		expect(content[1].arguments).toEqual({ command: "ls" });
+		expect(isEntrySealed(doc.entries.a1!)).toBe(true);
 	});
 
 	it("discovers silent entries (model_change)", () => {
-		let doc = emptyDoc();
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [se("model_change", { id: "mc1", provider: "anthropic", modelId: "claude" })];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
+		const doc = driver.document;
 
 		expect(doc.entries.mc1).toBeDefined();
 		expect(doc.entries.mc1.kind).toBe("model_change");
@@ -1303,18 +1369,18 @@ describe("reconcile", () => {
 	});
 
 	it("discovers silent entries (thinking_level_change)", () => {
-		let doc = emptyDoc();
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [se("thinking_level_change", { id: "t1", thinkingLevel: "high" })];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
+		const doc = driver.document;
 
 		expect(doc.entries.t1).toBeDefined();
 		expect(doc.entries.t1.kind).toBe("thinking_level_change");
 	});
 
 	it("discovers silent entries (compaction)", () => {
-		let doc = emptyDoc();
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [
 			{
 				type: "compaction",
@@ -1327,103 +1393,74 @@ describe("reconcile", () => {
 			},
 		] as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
 
-		expect(doc.entries.c1).toBeDefined();
-		expect(doc.entries.c1.kind).toBe("compaction");
+		expect(driver.document.entries.c1).toBeDefined();
+		expect(driver.document.entries.c1.kind).toBe("compaction");
 	});
 
 	it("discovers silent entries (label)", () => {
-		let doc = emptyDoc();
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [
 			{ type: "label", id: "l1", parentId: null, timestamp: "t", targetId: "m1", label: "star" },
 		] as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
 
-		expect(doc.entries.l1).toBeDefined();
-		expect(doc.entries.l1.kind).toBe("label");
+		expect(driver.document.entries.l1).toBeDefined();
+		expect(driver.document.entries.l1.kind).toBe("label");
 	});
 
 	it("discovers silent entries (session_info)", () => {
-		let doc = emptyDoc();
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [
 			{ type: "session_info", id: "s1", parentId: null, timestamp: "t", name: "My Session" },
 		] as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
 
-		expect(doc.entries.s1).toBeDefined();
-		expect(doc.entries.s1.kind).toBe("session_info");
+		expect(driver.document.entries.s1).toBeDefined();
+		expect(driver.document.entries.s1.kind).toBe("session_info");
 	});
 
-	it("skips entries already in document (custom via entry_appended)", () => {
-		let doc = emptyDoc();
-		// entry_appended already added it
-		doc = setAtPath(doc, "/entries/cu1", {
-			kind: "custom",
-			id: "cu1",
-			parentId: null,
-			timestamp: "t",
-			customType: "my-plugin",
-			data: null,
-		});
-
+	it("an unchanged refresh emits nothing for a sealed entry", () => {
+		const driver = createDriver(emptyDoc());
 		const piEntries: SessionEntry[] = [
 			{ type: "custom", id: "cu1", parentId: null, timestamp: "t", customType: "my-plugin", data: {} },
 		] as SessionEntry[];
 
-		const patch = reconcile(doc, piEntries);
+		const patch = driver.refresh(piEntries);
 		expect(patch).not.toBeNull();
-		// ADR 09: the known entry is ord-less (entry_appended path), so
-		// reconcile assigns its file position, plus the leafId update.
+		// The install carries the file position and the leaf selection.
 		const ops = patch!.ops;
-		expect(ops.length).toBe(2);
-		expect(ops[0]).toEqual({ op: "replace", path: "/entries/cu1/ord", value: 0 });
-		expect(ops[1]).toEqual({ op: "replace", path: "/status/leafId", value: "cu1" });
+		expect(ops.some((o) => o.op === "add" && o.path === "/entries/cu1")).toBe(true);
+		expect(ops).toContainEqual({ op: "replace", path: "/status/leafId", value: "cu1" });
+		expect(driver.document.entries.cu1?.ord).toBe(0);
+
+		// A second refresh over the same list is a no-op.
+		expect(driver.refresh(piEntries)).toBeNull();
 	});
 
-	it("repairs status drift (model, thinkingLevel)", () => {
-		let doc = emptyDoc();
-		doc = setAtPath(doc, "/status/model", { provider: "x", modelId: "old-model" });
-		doc = setAtPath(doc, "/status/thinkingLevel", "low");
-
-		const patch = reconcile(doc, [], { model: { provider: "x", modelId: "new-model" }, thinkingLevel: "high" });
-		doc = applyPatch(doc, patch!.ops);
-
-		expect(doc.status.model).toEqual({ provider: "x", modelId: "new-model" });
-		expect(doc.status.thinkingLevel).toBe("high");
-	});
+	// Status drift repair (model, thinkingLevel, context usage) is owned by the
+	// Manager's refresh boundary, not the core projection — pinned by the
+	// manager verbs suite.
 
 	it("updates leafId from pi entries", () => {
-		let doc = emptyDoc();
-		doc = setAtPath(doc, "/status/leafId", "old");
+		const driver = createDriver(emptyDoc());
 
 		const piEntries: SessionEntry[] = [
 			se("message", { id: "m1", role: "user" }),
 			se("message", { id: "m2", role: "assistant" }),
 		];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		driver.refresh(piEntries);
 
-		expect(doc.status.leafId).toBe("m2");
-	});
-
-	it("returns null when nothing changed", () => {
-		const doc = emptyDoc();
-		const patch = reconcile(doc, []);
-		expect(patch).toBeNull();
+		expect(driver.document.status.leafId).toBe("m2");
 	});
 
 	// ADR 09 invariant 2: the canonical document holds real values —
-	// reconcile must NOT strip lazy fields from discovered entries.
+	// the refresh must NOT strip lazy fields from discovered entries.
 	it("discovered entries keep real lazy values (canonical invariant)", () => {
-		let doc = emptyDoc();
-
 		const piEntries: SessionEntry[] = [
 			{
 				type: "message",
@@ -1460,8 +1497,9 @@ describe("reconcile", () => {
 			} as unknown as SessionEntry,
 		];
 
-		const patch = reconcile(doc, piEntries);
-		doc = applyPatch(doc, patch!.ops);
+		const driver = createDriver(emptyDoc());
+		driver.refresh(piEntries);
+		const doc = driver.document;
 
 		const a1 = lo(doc.entries.a1);
 		expect(a1.content[0].thinking).toBe("deep thought");

@@ -18,8 +18,8 @@ interface Document {
 }
 ```
 
-A document transition is immutable. `applyEvent` and `reconcile` return a
-`Patch`; `applyPatch` applies the ordered operations with structural sharing
+A document transition is immutable. `applyEvent`, `refresh`, and `settle`
+return a `Patch`; `applyPatch` applies the ordered operations with structural sharing
 and returns a new root. Untouched objects retain their references. A non-empty
 patch always changes the root, and applying a patch is atomic from the
 client's point of view: the mirror renders only after all operations in the
@@ -36,7 +36,7 @@ is in flight. Pinned models is not Document state: it is one daemon-global list 
 from pi's global `enabledModels` and delivered by `getDaemonInfo` and the
 `pinned_models_changed` push (ADR 15). Status fields derived from entries are
 recomputed by the pure document functions; live model and context state can
-also be supplied by the host during reconcile.
+also be supplied by the host at its refresh boundary.
 
 The server's document is full fidelity. A client mirror is never authoritative
 and is replaced by the next initial-sync snapshot after reconnect or a failed
@@ -52,16 +52,26 @@ interface EntryBase {
   id: string;
   parentId: string | null;
   timestamp: string;
+  isSealed?: boolean;
   ord?: number;
 }
 ```
 
-Committed entries have their durable id, parent, and timestamp. In-flight
-entries use a provisional `id`; their identity and metadata are completed at
-seal. `ord`, when present, is the zero-based position in the complete
-`SessionManager.getEntries()` list. It is assigned only while that ordered
-list is available, never by `applyEvent`, and is absent on provisional
-entries. Its sync and cache meaning is specified in [sync.md](sync.md).
+`id` is stable from the entry's first event through persistence and reopen;
+it is never renamed or reused. `isSealed` is the lifecycle fact: `false` while
+the entry is the live, not-yet-persisted form, `true` once the authoritative
+persisted representation has been installed. Absent means sealed, so records
+written before the field existed stay authoritative. Execution state (running,
+completed, failed, aborted) is independent of sealing: a tool can finish
+before its entry seals.
+
+`ord`, when present, is the zero-based position in the complete
+`SessionManager.getEntries()` list. Sealing assigns it together with
+`isSealed: true`; `applyEvent` never invents it. It is also the only order
+authority over the entry map: an all-digit entry id enumerates before every
+string key in a JavaScript object, so map key order is neither insertion nor
+file order, and derivations that need "the latest entry" select by `ord`.
+Its sync and cache meaning is specified in [sync.md](sync.md).
 
 The union has exactly these thirteen variants:
 
@@ -110,44 +120,62 @@ system message's `sections` is lazy the same way.
 
 ## Events, reconciliation, and seal
 
-`applyEvent(doc, event)` handles the live event phase. It creates provisional
-entries in `entries`, updates status, and emits ordinary JSON-patch operations
-for streamed content:
+Two halves meet in the document.
 
-- `pending:message` is the assistant message for the current turn.
-- `pending:user:<n>` is a one-based ordinal for each in-flight user message.
-- `pending:<toolCallId>` is the tool result for a tool call.
+`applyEvent(doc, event)` is the live half. It opens the form of the item in
+flight under the id pi reserved for it (`isSealed: false`), streams content
+into it, and updates status. Streaming text and thinking use `append`; partial
+tool-call arguments use granular object and array diffs, with `append` for
+string suffixes. Tool execution updates replace partial content or details. A
+live event never writes an entry that already sealed: a delayed stream cannot
+overwrite persisted content. Every event for a persisted item carries the
+reserved `entryId`; one without it is dropped rather than addressed under an
+invented identity, because a fabricated id can never be sealed and its entry
+would never settle away. The one exception is a nested tool call
+(`parentToolCallId`), which owns no entry at all: its outcome is recorded on
+the result of the call that issued it.
 
-The provisional names are derived from the current document. They are not a
-second pending collection and do not require a mapping table. Streaming text
-and thinking use `append`; partial tool-call arguments use granular object and
-array diffs, with `append` for string suffixes. Tool execution updates replace
-partial content or details. An `entry_appended` event already carries the
-real id and is added directly.
+`createEntryProjection` is the authoritative half, and the only entry
+lifecycle: `refresh(snapshot)` installs pi's appended suffix, and `settle()`
+removes live forms that never persisted. For every entry a refresh installs,
+the persisted projection replaces whatever the document had under that id —
+content, parent, timestamp, `isSealed: true`, and the file `ord` — or is added
+when no event announced it (silent appends such as a label). A wholesale list
+replacement (a fork or reload, observed as a version change) re-reads from
+zero and reassigns every position. There is no pairing step and no identity
+move: an entry's id is its identity, so sealing is a replacement, not a
+rename.
 
-Pi persists ordinary user, assistant, and tool-result messages at
-`message_end`, before the bridge has a durable id available in its event
-handler. The document therefore keeps the provisional entry until a later
-settle boundary. The host runs `reconcile(doc, piEntries, options)` after
-`turn_end` and `agent_settled`, and also after idle-state changes that need
-silent entries or status repaired.
+`SessionManager.readEntries(from)` is the read boundary the host uses: one
+synchronous snapshot of the appended suffix, the next position, the selected
+leaf, and a version that changes when the ordered list is replaced wholesale.
+The host reads it before attach, after events, after its own commands, and at
+settle boundaries, so an event payload is never treated as proof that an entry
+exists.
 
-`reconcile` walks the complete durable list by index. For an existing entry it
-ensures `ord` is correct. For a durable entry paired with a provisional it
-emits one atomic rename: `move` to the durable id, metadata updates, lazy
-backfill from the durable entry when streaming left a field null, and the new
-`ord`. This is the seal transition. A discovered earlier hole can assign
-positions to already-known later entries in the same patch. Durable entries
-with no provisional are added from the file projection. Status leaf, name,
-model, thinking level, context usage, and aggregate stats are repaired in the
-same reconcile result when needed.
-
-The host's `turn_end` and `agent_settled` processing applies the event patch,
-then the reconcile patch, then notifies settled listeners. This ordering makes
-the seal and its status changes visible as complete patch transactions. Idle
-`setModel`, `setThinkingLevel`, and `renameSession` paths reconcile without
-waiting for another turn; `navigate` changes `status.leafId` directly so it
-does not reset a chosen branch position.
+Status leaf, name, model, thinking level, context usage, and aggregate stats
+are repaired in the same patch as the entries. A live form may extend the
+leaf while it streams — but only while its parent chain reaches pi's
+selected leaf or one of its ancestors: a live form parented onto a sealed
+entry of another branch is not the selected continuation. When the run
+settles, live forms with no persisted entry are removed and the leaf returns
+to pi's. Aggregate stats describe the rendered branch, so they are re-derived
+whenever an entry is installed or the selection moves — a branch switch with
+no append still changes the path the totals describe. The session name is
+re-derived when an installed suffix carries a `session_info` entry, so a
+reopened session's title and a silent rename publish without their own event
+(the rename event lands after the append and sets the same value). Idle
+`setModel`, `setThinkingLevel`, and `renameSession` paths refresh without
+waiting for another turn; `navigate` goes through the same refresh boundary
+so the leaf, the branch statistics, and the recovery kind all describe the
+newly selected branch. A refresh that finds nothing new installs nothing
+and stays O(live forms): the host refreshes after every event, so copying or
+enumerating the entry map there would put history-sized work on the token
+cadence — and a refresh that installs a suffix copies the entry map once for
+the whole suffix, never per entry, so a bootstrap-sized install stays linear.
+Selected ancestry is cached across unchanged refreshes, including
+while a live entry streams; a leaf change or entry-list version change
+invalidates it.
 
 Cancellation finalizes state. The host clears the steer queue before awaiting
 `session.abort()`, preventing queued steering text from starting a new turn
@@ -174,9 +202,9 @@ tool names and ids, entry metadata, status, and scoped models are eager.
 The canonical document holds real lazy values. Wire snapshots and unsubscribed
 patches use `null`; `filterPatchForSocket` also sanitizes lazy fields embedded
 inside an entry-root or content-block `add`/`replace` value. A connection's
-`pull` request returns the current requested values. Pulling a provisional
-entry registers a live subscription for later patches on that path; pulling a
-committed entry is one-shot because it cannot change. The client mirror
+`pull` request returns the current requested values. Pulling a live form
+registers a live subscription for later patches on that path; pulling a sealed
+entry is one-shot because it cannot change. The client mirror
 requests only paths still null and merges pull replies through the same
 immutable path update mechanism.
 
