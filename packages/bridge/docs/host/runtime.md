@@ -220,15 +220,35 @@ The daemon can also use `push` on a Connection for registry broadcasts.
 
 ## Activation Registry
 
-The Daemon starts with Projects but no Activations. It maintains:
+`src/host/activation-registry.ts` owns the whole live-Activation lifetime —
+one state machine, in one module:
 
-- an Activation registry keyed by daemon-local activation id;
-- an address index keyed by `(projectId, stem)`;
-- pending activation promises keyed by the same address;
-- the `sessionId` ownership index; and
-- the Connection-to-Activation attachment index.
+```text
+absent -> creating -> live -> collecting -> absent
+```
 
-These registries are implementation state and never cross the wire.
+It maintains the Activation records (keyed by daemon-local id), the address
+index keyed by `(projectId, stem)`, pending-creation promises keyed by the
+same address, the `sessionId` ownership index, and the Connection-to-Activation
+attachment index. These are implementation state and never cross the wire. The
+Daemon supplies the Manager factory, the idle-collection delays, and the
+broadcast hooks (settlement, streaming transitions, registration/collection);
+it holds no Activation state of its own.
+
+Shutdown is a terminal state. `dispose()` sets the flag and clears every
+index in one synchronous block — so a record is either in the drain's
+snapshot or its registration is refused — then drains: in-flight creation
+promises are awaited (their registration refuses and disposes the Manager the
+factory produced), in-flight collections are awaited, and every remaining
+Manager is disposed exactly once. Fresh-session creation is tracked too
+(`runCreation`): it builds a Manager whose address does not exist until the
+file is allocated, so it cannot ride the per-address pending map, but the
+drain awaits the whole Manager-owning operation — including the disposal a
+refused registration performs inside it. After the flag, no admission acts:
+`reserve` and `register` refuse, `attach` refuses, `collect` and `armGc` are
+no-ops (the drain owns those records). A factory that completes after
+shutdown can therefore neither register an Activation, leak a Manager, nor
+outlive the drain's return.
 
 Opening an address is resolve-or-create. An existing non-collecting Activation
 is reused and its idle timer is cancelled. An in-flight creation is shared by
@@ -236,8 +256,18 @@ other opens for the same address. A collecting Activation is awaited and the
 address is retried after disposal, which prevents a GC race from creating a
 second Manager. Otherwise the daemon resolves the contained stem, creates a
 Manager through the injected factory, checks the header `sessionId` owner, and
-registers a new Activation. The Connection is then attached to that Manager
+registers a new Activation. Reserving and attaching are one registry
+operation: a close that lands between them makes the open re-reserve instead
+of attaching a collected record, and the registry refuses to attach a
+collecting record outright. The Connection is then attached to that Manager
 with its optional cursor.
+
+`closeSession` and `archiveSession` see the same address state an open does:
+both first wait out a creation in flight for the address
+(`awaitSettled`), because acting on the registered state alone could report
+"not active" — or move the session file — while a Manager for that address is
+still being constructed, and the completing creation would then register
+against an address whose lifetime had already been decided.
 
 An Activation never serves another Session. Several Connections may share one
 Activation, while each Connection has at most one attachment. Attaching a
@@ -264,21 +294,22 @@ bookkeeping, and broadcasts the resulting active-session snapshot. Collection
 never deletes a Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
-normalizes and resolves the Project address, requires an active non-collecting
-Activation, and immediately uses the same collect/dispose path regardless of
-attached Connections, streaming state, or idle policy. It then refreshes the
-Project's first session page. The current host protocol does not emit a
-`session_closed` push: attached sockets are not actively notified or detached
-by this operation, and a client must reconnect or navigate to obtain a fresh
-attachment. No `session_closed` frame is part of the implemented
-`ServerPushMessage` set.
+normalizes and resolves the Project address, waits out a creation in flight
+for it, requires an active non-collecting Activation, and immediately uses
+the same collect/dispose path regardless of attached Connections, streaming
+state, or idle policy. It then refreshes the Project's first session page.
+The current host protocol does not emit a `session_closed` push: attached
+sockets are not actively notified or detached by this operation, and a client
+must reconnect or navigate to obtain a fresh attachment. No `session_closed`
+frame is part of the implemented `ServerPushMessage` set.
 
 `archiveSession(projectId, stem)` closes a Session, then moves its file under
-the reserved `.archive` prefix of the Project's session directory. The close
-is unconditional and uses the same collect/dispose path as `closeSession`
-when an Activation exists; a dormant Session has none, so only the move
-happens. The move follows disposal because disposal finalizes an in-flight
-turn, which can create or advance the file. An archived Session is neither
+the reserved `.archive` prefix of the Project's session directory. It first
+waits out a creation in flight for the address, then closes — unconditionally,
+using the same collect/dispose path as `closeSession` when an Activation
+exists; a dormant Session has none, so only the move happens. The move follows
+disposal because disposal finalizes an in-flight turn, which can create or
+advance the file. An archived Session is neither
 discovered nor addressable: the scanner and the startup `sessionId` conflict
 scan skip the prefix, and `normalizeStem` rejects it. The verb refreshes the
 Project's first page; when it had an Activation, the active-session snapshot
@@ -374,7 +405,11 @@ state the reply does not carry, so the display ignores it while the session
 runs at the override. Pinned models is one daemon-global concept (ADR 15): a project-level
 `.pi/settings.json` `enabledModels` override is not reflected, and the
 `setModelPinned` verb writes the same global list (broadcasting
-`pinned_models_changed`).
+`pinned_models_changed`). The verb is a read-modify-write over that list, so
+its mutations are serialized daemon-wide — one at a time, in arrival order,
+across every Connection — or two concurrent pins would each read the
+pre-mutation list and the later flush would silently drop the earlier
+update.
 
 ### Files and repository detail
 
