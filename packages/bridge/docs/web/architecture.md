@@ -353,9 +353,13 @@ session state and writes the Project route, because the address no longer
 resolves or an unflushed Session disappeared with the daemon.
 
 `devConsole.ts` hooks browser `console.log`, `console.warn`, and
-`console.error` only when daemon information reports development mode. It
-relays JSON-safe arguments through the `console` RPC while preserving the
-original console call.
+`console.error` only when daemon information reports development mode. The
+hooks are installed once per page and repointed at the current client: a
+reconnect re-hooks rather than nests, so each line is relayed exactly once,
+through the client that owns the connection — never once per connection the
+page ever had, through dead sockets. It relays JSON-safe arguments through
+the `console` RPC while preserving the original console call, and restores
+the original methods when the connection closes or the app unmounts.
 
 ### RPC and candidates
 
