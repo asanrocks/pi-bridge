@@ -5,22 +5,19 @@
 /* Overlay toggle row — shared by the fullscreen overlay (close glyph) and the
    hover-peek drawer (hamburger, pins the rail open). Docked LEFT at the
    TopBar hamburger's position, so the same screen corner always toggles
-   the sidebar. */
+   the sidebar: the band's own padding plus the control box is that position,
+   not arithmetic restated here. */
 .overlayHeader {
 	display: flex;
 	justify-content: flex-start;
-	/* 6px top + (8px padding + 4px margin) left place the 36×36 button at
-	   (12, 6) — exactly the TopBar hamburger's box — so the corner button
-	   never shifts a pixel between states. */
-	padding: 6px 8px 0;
+	padding: var(--topbar-pad-y) var(--topbar-pad-x) 0;
 }
 
-/* The corner toggle matches the TopBar hamburger's button size (36×36,
-   .topBarBtn), not the 32×32 pane-header action (.sidebarAddBtn). */
+/* The corner toggle takes the TopBar's own box (--control-box, .topBarBtn), not
+   the pane-header action's smaller one (.sidebarAddBtn). */
 .overlayHeader .sidebarAddBtn {
-	margin-left: 4px;
-	width: 36px;
-	height: 36px;
+	width: var(--control-box);
+	height: var(--control-box);
 }
 
 /* Edge-reveal strip, fullscreen overlay, and the peek drawer container are
@@ -30,7 +27,7 @@
 	overflow-y: auto;
 	/* Horizontal inset so row fills are rounded blocks that never butt
 	   against the pane edge — the alignment anchor for the whole tree. */
-	padding: 2px 6px;
+	padding: 2px var(--pane-inset);
 }
 
 /* ── Folder tree ─────────────────────────────────────────────────────────
@@ -40,11 +37,14 @@
    the horizontal inset) and scrolls there. */
 
 /* Folder row group: the fold button (chevron + name — one target) plus the
-   new-session button. */
+   new-session button. The action gap on the right puts that button in the
+   pane's one action column, the same slot the section header's actions and each
+   session row's menu occupy; previously this was the only control outside it. */
 .sidebarFolderRowGroup {
 	display: flex;
 	align-items: stretch;
 	width: 100%;
+	padding-right: var(--action-gap);
 }
 
 /* Fold button: chevron + name, one click target. Toggling is its only job —
@@ -88,8 +88,8 @@
 	composes: ghost from "../../render/buttons.module.css";
 	flex-shrink: 0;
 	align-self: center;
-	width: 24px;
-	height: 24px;
+	width: var(--control-box-xs);
+	height: var(--control-box-xs);
 }
 
 /* Fold caret: right (folded), diagonal (active rows only — children exist but
@@ -115,22 +115,16 @@
 	color: var(--color-muted-foreground);
 }
 
-/* Failed folder load: same slot, but clickable to retry. */
+/* Failed folder load: same slot, but clickable to retry — a text verb in a row,
+   so the ghost tier carries its states. */
 .sidebarFolderRetry {
+	composes: ghost from "../../render/buttons.module.css";
+	justify-content: flex-start;
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
 	color: var(--color-secondary);
-	background: none;
-	border: none;
-	cursor: pointer;
 	text-align: left;
-	user-select: none;
-}
-
-.sidebarFolderRetry:hover {
-	color: var(--color-foreground);
-	background: var(--color-muted);
 }
 
 /* The only full-strength element in the tree: inset + rounded so the fill
@@ -142,7 +136,7 @@
 	gap: 6px;
 	width: 100%;
 	text-align: left;
-	padding: 6px 10px;
+	padding: 6px var(--action-col);
 	cursor: pointer;
 	font-size: var(--fs-md);
 	font-family: inherit;
@@ -176,18 +170,20 @@
 	position: relative;
 }
 
-/* Row-menu (hamburger) button — revealed on row hover / keyboard focus,
-   overlaying the timestamp slot. Solid muted background matches the row's
-   hover surface so the time beneath doesn't bleed through. pointer-events
-   track visibility so a hidden button never swallows row clicks. */
+/* Row-menu button — revealed on row hover / keyboard focus, in the slot the
+   timestamp leaves. The meta yields to it (see .sidebarItemTime below) rather
+   than sitting under a fill: the button is a control box and the timestamp is
+   wider than that, so no background could cover it, and a fill only made the
+   overlap visible. pointer-events track visibility so a hidden button never
+   swallows row clicks. */
 .sidebarMenuBtn {
 	composes: ghost from "../../render/buttons.module.css";
 	position: absolute;
-	right: 4px;
+	right: var(--action-gap);
 	top: 50%;
 	transform: translateY(-50%);
-	width: 24px;
-	height: 24px;
+	width: var(--control-box-xs);
+	height: var(--control-box-xs);
 	opacity: 0;
 	pointer-events: none;
 }
@@ -210,7 +206,7 @@
 	/* Touch targets: rows sit below the minimum at desktop density, so the
 	   overlay drawer pays in vertical space. */
 	.sidebarItem {
-		padding: 9px 32px 9px 10px;
+		padding: 9px var(--control-box-sm) 9px var(--action-col);
 	}
 
 	.sidebarFolderRow {
@@ -284,6 +280,12 @@ difference between them. */
 	white-space: nowrap;
 	flex: 1;
 	min-width: 0;
+	/* Truncation fades instead of stopping at a hard ellipsis: the row's right
+	   edge is where the action appears, so a crisp cut there reads as a
+	   collision. A short name never reaches the fade, so nothing moves.
+	   `currentColor` rather than a pigment: a mask reads the alpha channel, so the
+	   ink's own hue is irrelevant and the token boundary stays intact. */
+	mask-image: linear-gradient(to right, currentColor calc(100% - 12px), transparent);
 }
 
 .sidebarItemTime {
@@ -291,28 +293,35 @@ difference between them. */
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
 	margin-left: 8px;
+	transition: opacity var(--dur-fast) ease;
 }
 
-/* Load-more row: same quiet language as .sidebarFolderMsg (sentence-case,
-   small, muted) but interactive — hover darkens like a row. */
+/* One thing at a time in the trailing slot: the timestamp at rest, the menu
+   button on hover or focus. The time keeps its space (it is flex-shrink: 0 and
+   only opacity changes), so revealing the action never reflows the name — the
+   row hands the slot over in place instead of stacking the two. Scoped to hover
+   inputs: on touch the button is always visible in its own reserved slot (see
+   the `hover: none` block), so there is nothing to yield. */
+@media (hover: hover) {
+	.sidebarItemWrap:hover .sidebarItemTime,
+	.sidebarItemWrap:focus-within .sidebarItemTime {
+		opacity: 0;
+	}
+}
+
+/* Load-more control: the ghost tier's own example. Small, muted, sentence-case,
+   full-width — the tier brings the states, so no hover fill is restated here. */
 .sidebarLoadMore {
-	display: block;
+	composes: ghost from "../../render/buttons.module.css";
+	display: flex;
 	width: 100%;
+	justify-content: flex-start;
 	text-align: left;
 	margin-top: 2px;
 	padding: 4px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
 	color: var(--color-muted-foreground);
-	background: none;
-	border: none;
-	cursor: pointer;
-	user-select: none;
-}
-
-.sidebarLoadMore:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
 }
 
 /* Fold-all toggle: the section header's label doubles as the button that
@@ -346,17 +355,16 @@ difference between them. */
 /* Section header: bold uppercase, flush. No separator line — sections
    break by a generous gap above (suppressed on the first, which sits at
    the sidebar top). Gap > group gap > row gap carries the hierarchy.
-   user-select: none — label + action buttons are pane chrome. Left
-   padding matches the folder rows' chevron column: the header sits
-   outside .sidebarList (no 6px inset), so 10px here puts its 12px
-   chevron exactly where the folder chevrons start, and the label text
-   lands on the folder names' text column. */
+   user-select: none — label + action buttons are pane chrome. Horizontal
+   padding is the action column: the header sits outside .sidebarList (no pane
+   inset), so one number puts its 12px chevron where the folder chevrons start
+   and lands the label on the folder names' text column. */
 .sidebarSectionHeader {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	margin-top: 16px;
-	padding: 4px 10px;
+	padding: 4px var(--action-col);
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	color: var(--color-muted-foreground);
@@ -370,13 +378,13 @@ difference between them. */
 	margin-top: 6px;
 }
 
-/* Pane header action control (32×32 ghost slot) — shared chrome across
-   panes: this +, the instance-list button next to it, Launcher .addBtn,
+/* Pane header action control (the rail/fullscreen header slot) — shared chrome
+   across panes: this +, the instance-list button next to it, Launcher .addBtn,
    HistoryPane .closeBtn. */
 .sidebarAddBtn {
 	composes: ghost from "../../render/buttons.module.css";
-	width: 32px;
-	height: 32px;
+	width: var(--control-box-sm);
+	height: var(--control-box-sm);
 }
 
 /* Liveness indicator on a session row: green when the session is active,

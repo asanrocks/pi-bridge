@@ -119,3 +119,54 @@
 		cursor: default;
 	}
 }
+
+/* ============================================================================
+   Outlined and filled — the other two text tiers, declared here for the same
+   reason as the ghost: a tier is a mechanism, so a feature composes it instead
+   of restating its states.
+
+   `outlined` is deliberately narrow. It exists for a text verb whose label
+   cannot become a glyph and that sits inside a container already carrying
+   chrome, where an unbordered word reads as a continuation of the container's
+   text rather than an action on it. Every text verb getting a border flattens
+   the transcript: a 3:1 boundary on each of six to eight verbs outranks the tool
+   rows and error lines that carry the actual meaning.
+
+   `filled` is the surface's primary command and nothing else — Send, Stop, a
+   dialog's confirm, the compare menu's Apply, a down-state Retry. Box and symbol
+   agree on weight (Send and Stop are also transport solids); everything else is
+   a ghost.
+   ========================================================================= */
+
+@layer control {
+	.outlined {
+		composes: ghost;
+		border: 1px solid var(--color-border-control);
+	}
+
+	.filled {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 1px solid transparent;
+		border-radius: var(--radius-sm);
+		background: var(--color-accent);
+		color: var(--color-on-accent);
+		cursor: pointer;
+		user-select: none;
+	}
+
+	@media (hover: hover) {
+		.filled:hover {
+			background: var(--color-accent-hover);
+			border-color: var(--color-accent-hover);
+		}
+	}
+
+	.filled:disabled {
+		background: var(--color-accent);
+		color: var(--color-on-accent);
+		opacity: 0.4;
+		cursor: default;
+	}
+}

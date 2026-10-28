@@ -242,8 +242,11 @@
 	border: 1px solid var(--color-border);
 }
 
-/* Floats over the thumbnail, so it is the one ghost control that keeps a disc:
-   the thing beneath it is an image, not a row surface. */
+/* Floats on the thumbnail's corner, over an image rather than a row surface, so
+   it is the one control whose boundary must hold against arbitrary luminance:
+   a 1px ring at the control level (3:1 on anything) instead of the chip's
+   half-pixel, and no shadow — a drop shadow says nothing against a photograph.
+   It deliberately hangs off the corner; nothing between it and the card clips. */
 .attachRemove {
 	position: absolute;
 	top: -8px;
@@ -251,14 +254,15 @@
 	width: 24px;
 	height: 24px;
 	padding: 0;
+	border: 1px solid var(--color-border-control);
 	border-radius: var(--radius-sm);
-	background: var(--color-muted);
+	background: var(--color-surface-raised);
 	color: var(--color-secondary);
 	cursor: pointer;
 }
 
 .attachRemove:hover {
-	background: var(--color-border);
+	background: var(--color-muted);
 	color: var(--color-foreground);
 }
 
@@ -645,12 +649,7 @@
 }
 
 .composerSendBtn {
-	background: var(--color-accent);
-	color: var(--color-on-accent);
-}
-
-.composerSendBtn:hover {
-	background: var(--color-accent-hover);
+	composes: filled from "../../render/buttons.module.css";
 }
 
 .composerSendBtn:disabled {
@@ -658,13 +657,18 @@
 	cursor: not-allowed;
 }
 
+/* Stop is the same filled tier carrying the interrupt's own hue: a destructive
+   command at the surface's edge, not a second tier. */
 .composerStopBtn {
+	composes: filled from "../../render/buttons.module.css";
 	background: var(--color-error);
-	color: var(--color-on-accent);
 }
 
-.composerStopBtn:hover {
-	background: var(--color-error-hover);
+@media (hover: hover) {
+	.composerStopBtn:hover {
+		background: var(--color-error-hover);
+		border-color: var(--color-error-hover);
+	}
 }
 
 /* ── Path completion dropdown ─────────────────────────────────────────── */

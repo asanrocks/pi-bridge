@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDownIcon } from "../../render/icons.tsx";
+import { useAnchorName } from "../../render/useAnchorName.ts";
 import type { DiffStateOption } from "./diffStates.ts";
 import styles from "./FileBrowser.module.css";
 
@@ -36,27 +37,29 @@ export function StatePicker({
 	onOpenChange?: (open: boolean) => void;
 }) {
 	const buttonRef = useRef<HTMLButtonElement>(null);
-	const [anchor, setAnchor] = useState<DOMRect | null>(null);
+	const [open, setOpen] = useState(false);
+	// Position is CSS (see .pickerMenu): the trigger is named while the list exists.
+	useAnchorName(open ? buttonRef.current : null, "--pi-state");
 	const options = allowWorktree ? states : states.filter((s) => s.value !== "worktree");
 	const current = states.find((s) => s.value === value);
 	const label = current?.label ?? value.slice(0, 8);
 
 	useEffect(() => {
-		onOpenChange?.(anchor !== null);
-	}, [anchor, onOpenChange]);
+		onOpenChange?.(open);
+	}, [open, onOpenChange]);
 
 	// Capture phase: the browser's own Escape listener is on the document in
 	// the bubble phase, so stopping here closes the menu without the view.
 	useEffect(() => {
-		if (anchor === null) return;
+		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return;
 			e.stopPropagation();
-			setAnchor(null);
+			setOpen(false);
 		};
 		document.addEventListener("keydown", onKey, true);
 		return () => document.removeEventListener("keydown", onKey, true);
-	}, [anchor]);
+	}, [open]);
 
 	return (
 		<>
@@ -64,31 +67,23 @@ export function StatePicker({
 				ref={buttonRef}
 				type="button"
 				className={`${styles.stateChip} ${styles.stateChipBtn}${value === "worktree" ? ` ${styles.stateChipWorktree}` : ""}${className ? ` ${className}` : ""}`}
-				onClick={() => setAnchor(buttonRef.current?.getBoundingClientRect() ?? null)}
+				onClick={() => setOpen((v) => !v)}
 				aria-haspopup="listbox"
-				aria-expanded={anchor !== null}
+				aria-expanded={open}
 				title={title}
 			>
 				<span className={styles.stateChipLabel}>{label}</span>
 				<ChevronDownIcon size={12} />
 			</button>
-			{anchor && (
+			{open && (
 				<>
 					<button
 						type="button"
 						aria-label="Close state list"
 						className={styles.pickerOverlay}
-						onClick={() => setAnchor(null)}
+						onClick={() => setOpen(false)}
 					/>
-					<div
-						role="listbox"
-						className={styles.pickerMenu}
-						style={{
-							position: "fixed",
-							top: anchor.bottom + 4,
-							left: Math.max(8, Math.min(anchor.left, window.innerWidth - 320)),
-						}}
-					>
+					<div role="listbox" className={styles.pickerMenu}>
 						{options.map((option) => (
 							<button
 								key={option.value}
@@ -98,7 +93,7 @@ export function StatePicker({
 								data-active={option.value === value || undefined}
 								className={styles.pickerOption}
 								onClick={() => {
-									setAnchor(null);
+									setOpen(false);
 									if (option.value !== value) onPick(option.value);
 								}}
 							>

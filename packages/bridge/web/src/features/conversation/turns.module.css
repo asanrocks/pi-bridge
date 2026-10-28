@@ -467,15 +467,20 @@
 	flex-shrink: 0;
 }
 
-/* Ghost in the error hue — same shape language as the composer's secondary
-   controls. */
+/* Outlined text control — the named tier for a text verb that cannot become an
+   icon and would otherwise have nothing marking it. `.recoveryBtn` is the case
+   the tier exists for: it sits beside `.errorLine`, which is itself a container
+   (6% error tint plus a 2px left rule), so an unbordered verb there reads as a
+   continuation of the error text rather than an action on it. Kept to the
+   lightest compliant boundary (`--color-border-control`) so the action does not
+   compete with the message describing the failure. */
 .recoveryBtn {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: outlined from "../../render/buttons.module.css";
 	color: var(--color-error);
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	font-family: inherit;
-	padding: 3px 10px;
+	padding: 5px 12px;
 	min-height: 28px;
 	flex-shrink: 0;
 	white-space: nowrap;

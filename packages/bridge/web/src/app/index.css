@@ -70,6 +70,12 @@
   --color-muted: #e8e4dc;                 /* tertiary surface, hovers, code-bg base */
   --color-muted-foreground: #6a6a6a;      /* meta, timestamps, group headers (WCAG AA) */
   --color-border: #d4cfc7;                /* hairlines */
+  /* The boundary of a *control*, as opposed to a hairline between surfaces: it
+     is what defines the control's extent, so WCAG 1.4.11's 3:1 non-text rule
+     applies and --color-border (1.47:1 on the page) cannot carry it. Sized to
+     3.18:1 on the page and 3.35:1 on the raised composer — the lightest warm
+     grey that clears both, so an outlined control stays the quiet tier. */
+  --color-border-control: #918c82;
   --color-secondary: #5a5a5a;             /* secondary text (WCAG AA; darker than muted for hierarchy) */
   --color-primary: var(--color-foreground);        /* streamdown: primary actions */
   --color-card: var(--color-sidebar);              /* streamdown: card surface */
@@ -246,6 +252,7 @@
     --color-muted: #2a2720;               /* tertiary surface, hovers, code base */
     --color-muted-foreground: #9a9285;    /* meta (5.8:1 page, 5.2:1 chrome) */
     --color-border: #3a352c;              /* hairlines (1.47:1, as in light) */
+    --color-border-control: #7a7468;      /* control boundary (3.86:1 page, 3.50:1 raised) */
     --color-secondary: #b5aea1;           /* secondary text (8.1:1 on page) */
     --color-code-bg: #221f1a;             /* inline code background (warm tint) */
 
@@ -348,6 +355,22 @@ body {
 	   follow the theme; the dark block below flips it. */
 	color-scheme: light;
 	--topbar-h: 48px;
+	/* ── Shell coordinates ────────────────────────────────────────────────
+	   The frame's named numbers. Each is a relationship the shell modules used
+	   to restate: one action column (a list's inset plus an action slot's gap),
+	   one control box on the TopBar band, one box per header. Five hand-derived
+	   copies of one x-coordinate is what let the corner controls drift between
+	   states, so the numbers live here and the modules consume them;
+	   check-bridge-styling-tokens.mjs holds the modules to these names. */
+	--pane-inset: 6px;      /* a pane list's horizontal inset — the tree's anchor */
+	--action-gap: 4px;      /* an action slot's inset from its container's edge */
+	--action-col: calc(var(--pane-inset) + var(--action-gap)); /* where in-pane actions end */
+	--control-box: 36px;    /* the TopBar band's control: buttons, badge, peek action */
+	--control-box-sm: 32px; /* a pane header's action outside the band */
+	--control-box-xs: 24px; /* a row's action: the row menu, a folder's new session */
+	--topbar-pad-x: 12px;
+	--topbar-pad-y: 6px;
+	--topbar-row: calc(var(--topbar-h) - 2 * var(--topbar-pad-y));
 	--sidebar-w: 0px;
 	--history-w: 0px;
 	--composer-h: 64px;

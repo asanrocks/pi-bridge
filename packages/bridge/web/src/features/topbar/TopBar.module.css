@@ -12,7 +12,7 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 6px 12px;
+	padding: var(--topbar-pad-y) var(--topbar-pad-x);
 	background: var(--color-sidebar);
 	border-bottom: 1px solid var(--color-border);
 }
@@ -52,21 +52,28 @@
 
 .topBarBtn {
 	composes: ghost from "../../render/buttons.module.css";
-	width: 36px;
-	height: 36px;
+	width: var(--control-box);
+	height: var(--control-box);
 }
 
 /* Dirty-now badge — the count of files differing from HEAD. A quiet ghost chip
    on the TopBar, hidden while the tree is clean, so it reads as an ambient
    state light rather than permanent chrome. A value control (the count), so it
-   carries its own muted hue instead of the control ink. */
+   carries its own muted hue instead of the control ink.
+
+   Same 36px box and radius as the .topBarBtn controls beside it: at its old 4px
+   vertical padding it was a ~24px chip, and a short pill next to two square
+   buttons read as a different class of control — a badge rather than the git
+   toggle it is. Width stays content-driven because it holds a value, so the
+   height and the corners are what make it a sibling. */
 .changesBadge {
 	composes: ghost from "../../render/buttons.module.css";
 	gap: 2px;
+	height: var(--topbar-row);
 	color: var(--color-muted-foreground);
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	padding: 4px 8px;
+	padding: 0 8px;
 	white-space: nowrap;
 }
 

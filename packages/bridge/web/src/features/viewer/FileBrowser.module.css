@@ -37,22 +37,17 @@
 
 /* The tree scope is named by its own label: clicking it switches between the
    full tree and the changed-files tree, so no header button is spent on it. */
+/* Tree scope toggle: a text control naming which file set is shown, so the ghost
+   tier carries its states (hover ink, and the engaged fill for `data-on`). */
 .treeScope {
-	background: none;
-	border: none;
-	padding: 0;
-	color: var(--color-muted-foreground);
-	font: inherit;
-	cursor: pointer;
+	composes: ghost from "../../render/buttons.module.css";
+	justify-content: flex-start;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.treeScope:hover,
-.treeScope[data-on] {
-	color: var(--color-foreground);
+	color: var(--color-muted-foreground);
+	font: inherit;
 }
 
 .tree {
@@ -333,22 +328,13 @@
 }
 
 .compareApply {
+	composes: filled from "../../render/buttons.module.css";
 	display: block;
 	width: calc(100% - 16px);
 	margin: 2px 8px 6px;
 	padding: 5px 8px;
-	background: var(--color-accent);
-	border: 1px solid var(--color-accent);
-	border-radius: var(--radius-sm);
-	color: var(--color-on-accent);
 	font-size: var(--fs-sm);
 	font-weight: 500;
-	cursor: pointer;
-}
-
-.compareApply:hover:not(:disabled) {
-	background: var(--color-accent-hover);
-	border-color: var(--color-accent-hover);
 }
 
 .compareApply:disabled {
@@ -406,7 +392,19 @@
 	margin: 0;
 }
 
+/* Positioned from the trigger's anchor name (StatePicker names it while the
+   list exists): the panel hangs under the chip, flips when that would run it
+   off the viewport, and clamps its width — the arithmetic the component used to
+   do with the trigger's rect. The side is physical because `<anchor-side>` has
+   no `inline-start`: `anchor(inline-start)` is dropped and the panel falls back
+   to its static inline position. */
 .pickerMenu {
+	position: fixed;
+	position-anchor: --pi-state;
+	top: calc(anchor(bottom) + 4px);
+	left: anchor(left);
+	width: min(320px, calc(100vw - 16px));
+	position-try-fallbacks: flip-inline, flip-block;
 	z-index: 2;
 	min-width: 240px;
 	max-width: min(340px, calc(100vw - 16px));
