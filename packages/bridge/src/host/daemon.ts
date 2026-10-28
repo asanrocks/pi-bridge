@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { createServer, type Server as HttpServer, type ServerResponse } from "node:http";
@@ -27,13 +26,12 @@ import type {
 	ModelInfo,
 	ModelRef,
 	PinnedModelInfo,
-	PrefixCursor,
 	ProjectInfo,
 	SessionInfo,
 	SessionListCursor,
-	SessionRef,
 	SnapshotFile,
 } from "../core/index.ts";
+import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
@@ -112,22 +110,11 @@ interface FileMeta {
 	messageCount?: number;
 }
 
-interface Activation {
-	id: string;
-	ref: SessionRef;
-	manager: Manager;
-	/** Attached Connections. GC is gated on this being empty. */
-	connections: Set<Connection>;
-	gcTimer: ReturnType<typeof setTimeout> | null;
-	collecting: Promise<void> | null;
-	lastStreaming: boolean;
-}
-
 interface ScanEntry {
 	stem: string;
 	abs: string;
 	sortTimeMs: number;
-	active?: Activation;
+	active?: ActivationRecord;
 }
 
 export class Daemon {
@@ -139,11 +126,10 @@ export class Daemon {
 	 * reported by `getDaemonInfo` for the Project home's Pinned group. */
 	private globalSettings: SettingsManager | null = null;
 	private connections = new Set<Connection>();
-	private activations = new Map<string, Activation>();
-	private activationByAddress = new Map<string, string>();
-	private pendingActivations = new Map<string, Promise<Activation>>();
-	private sessionOwnerById = new Map<string, { projectId: string; stem: string }>();
-	private connectionActivation = new Map<Connection, Activation>();
+	/** The one owner of live-Activation state (creation, attachment, GC,
+	 * collection, and the session-id ownership index). Constructed in start();
+	 * null before it, so a failed startup can still be disposed. */
+	private registry: ActivationRegistry | null = null;
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
 	private port: number | undefined;
@@ -169,6 +155,12 @@ export class Daemon {
 
 	/** Per-file mtime cache: only re-read session files whose mtime changed. */
 	private sessionMetaCache = new Map<string, { mtimeMs: number; meta: FileMeta }>();
+	/** Serialized daemon-global settings mutations. `setModelPinned` is a
+	 * read-modify-write over the global `enabledModels` scope: two concurrent
+	 * pin writes each read the pre-write list, and the later flush silently
+	 * drops the earlier update. Mutations run one at a time, in arrival
+	 * order, across every Connection. */
+	private settingsMutationChain: Promise<void> = Promise.resolve();
 
 	async start(options: DaemonOptions = {}): Promise<void> {
 		// pi-core is always offline in the bridge: the daemon owns no background
@@ -233,6 +225,29 @@ export class Daemon {
 			options.modelRuntime ?? (await ModelRuntime.create({ authPath: join(this.agentDir, "auth.json") }));
 		this.managerFactory = options.managerFactory ?? createManager;
 
+		// The registry owns Activation lifetime; the daemon keeps only the
+		// pushes and the Manager factory. Constructed before the server so no
+		// socket can arrive first.
+		this.registry = new ActivationRegistry({
+			createManager: (project, _stem, abs) =>
+				this.managerFactory({
+					cwd: project.cwd,
+					agentDir: this.agentDir,
+					modelRuntime: this.modelRuntime,
+					sessionPath: abs,
+				}),
+			idleGcMs: this.idleGcMs,
+			unflushedIdleGcMs: this.unflushedIdleGcMs,
+			onSettled: (ref) => {
+				// The first settle after newSession flushes the file — rescan so
+				// the session moves to mtime ordering and its metadata appears.
+				this.broadcastSessionsChanged(ref.projectId);
+				this.broadcastActiveSessions();
+			},
+			onStreamingChange: () => this.broadcastActiveSessions(),
+			onRegistryChange: () => this.broadcastActiveSessions(),
+		});
+
 		// Load extensions onto the daemon's modelRuntime so they are visible
 		// in getDaemonInfo before any session is activated.
 		await this.loadExtensions();
@@ -255,24 +270,7 @@ export class Daemon {
 			this.logger.dispose();
 			this.logger = null;
 		}
-		const managers: Manager[] = [];
-		const pendingCollections: Promise<void>[] = [];
-		for (const a of this.activations.values()) {
-			if (a.gcTimer) clearTimeout(a.gcTimer);
-			// A mid-collection activation already owns its disposal; awaiting it
-			// avoids a concurrent double-dispose, then it drops out of the map.
-			if (a.collecting) pendingCollections.push(a.collecting);
-			else managers.push(a.manager);
-		}
-		this.activations.clear();
-		this.activationByAddress.clear();
-		this.pendingActivations.clear();
-		this.sessionOwnerById.clear();
-		this.connectionActivation.clear();
-		await Promise.all(pendingCollections);
-		for (const mgr of managers) {
-			await mgr.dispose();
-		}
+		if (this.registry) await this.registry.dispose();
 	}
 
 	/**
@@ -373,12 +371,8 @@ export class Daemon {
 			byStem.set(stem, { stem, abs: real, sortTimeMs: st.mtimeMs });
 		}
 
-		for (const activation of this.activations.values()) {
+		for (const activation of this.registry!.live()) {
 			if (activation.ref.projectId !== project.id) continue;
-			// A collecting activation is mid-disposal: it is no longer active, but
-			// its address stays reserved (see maybeCollect). A durable file still
-			// appears through the disk scan above; an unflushed one disappears.
-			if (activation.collecting !== null) continue;
 			const abs = activation.manager.sessionFile;
 			let sortTimeMs = Date.parse(activation.manager.createdAt);
 			if (existsSync(abs)) {
@@ -430,8 +424,7 @@ export class Daemon {
 	/** Global active/streaming snapshot over the activation registry. */
 	listActiveSessions(): SessionInfo[] {
 		const out: SessionInfo[] = [];
-		for (const activation of this.activations.values()) {
-			if (activation.collecting !== null) continue;
+		for (const activation of this.registry!.live()) {
 			const project = this.projects.get(activation.ref.projectId);
 			if (!project) continue;
 			const abs = activation.manager.sessionFile;
@@ -497,191 +490,6 @@ export class Daemon {
 		const meta = parseSessionFile(filePath);
 		if (meta) this.sessionMetaCache.set(filePath, { mtimeMs, meta });
 		return meta;
-	}
-
-	// ── Activation lifecycle (ADR 11) ─────────────────────────────────────
-
-	/**
-	 * Reserve the activation for `(projectId, stem)`: an existing live
-	 * activation (cancelling its GC timer), an in-flight creation, or a new
-	 * activation. A collecting activation is awaited and the reservation
-	 * retried, so a GC racing an open never disposes a reattached session.
-	 */
-	private async reserveActivation(project: ProjectConfig, stem: string, abs: string): Promise<Activation> {
-		const key = addressKey(project.id, stem);
-		for (;;) {
-			const existingId = this.activationByAddress.get(key);
-			if (existingId !== undefined) {
-				const activation = this.activations.get(existingId);
-				if (activation && activation.collecting === null) {
-					this.cancelGc(activation);
-					return activation;
-				}
-				if (activation?.collecting) {
-					await activation.collecting;
-					continue;
-				}
-			}
-			const pending = this.pendingActivations.get(key);
-			if (pending) return pending;
-
-			const promise = this.createActivation(project, stem, abs, key);
-			this.pendingActivations.set(key, promise);
-			try {
-				return await promise;
-			} finally {
-				this.pendingActivations.delete(key);
-			}
-		}
-	}
-
-	private async createActivation(project: ProjectConfig, stem: string, abs: string, key: string): Promise<Activation> {
-		if (!existsSync(abs)) throw new Error(`No such session: ${stem}`);
-		const manager = await this.managerFactory({
-			cwd: project.cwd,
-			agentDir: this.agentDir,
-			modelRuntime: this.modelRuntime,
-			sessionPath: abs,
-		});
-		const sessionId = manager.liveSessionId;
-		const owner = this.sessionOwnerById.get(sessionId);
-		if (owner && (owner.projectId !== project.id || owner.stem !== stem)) {
-			await manager.dispose();
-			throw new Error(`Session id is already addressed as ${owner.projectId}/${owner.stem}`);
-		}
-		return this.registerActivation(manager, { projectId: project.id, sessionId, stem }, key);
-	}
-
-	private registerActivation(manager: Manager, ref: SessionRef, key: string): Activation {
-		const activation: Activation = {
-			id: randomUUID(),
-			ref,
-			manager,
-			connections: new Set(),
-			gcTimer: null,
-			collecting: null,
-			lastStreaming: manager.document.status.isStreaming,
-		};
-		this.activations.set(activation.id, activation);
-		this.activationByAddress.set(key, activation.id);
-		this.sessionOwnerById.set(ref.sessionId, { projectId: ref.projectId, stem: ref.stem });
-
-		manager.onSettled(() => {
-			// The first settle after newSession flushes the file — rescan so the
-			// session moves to mtime ordering and its metadata appears.
-			this.broadcastSessionsChanged(ref.projectId);
-			this.broadcastActiveSessions();
-		});
-		manager.onPatch(() => {
-			const streaming = manager.document.status.isStreaming;
-			if (streaming !== activation.lastStreaming) {
-				activation.lastStreaming = streaming;
-				this.broadcastActiveSessions();
-			}
-		});
-
-		this.broadcastActiveSessions();
-		return activation;
-	}
-
-	/**
-	 * Idle collection. The eligibility check and the disposal share the
-	 * activation's `collecting` reservation, so a concurrent `openSession`
-	 * cannot dispose an activation it has just reattached.
-	 */
-	private armGc(activation: Activation): void {
-		if (activation.gcTimer !== null || activation.collecting !== null) return;
-		if (activation.connections.size > 0) return;
-		const durable = existsSync(activation.manager.sessionFile);
-		const empty = Object.keys(activation.manager.document.entries).length === 0;
-		const delay = durable || empty ? this.idleGcMs : this.unflushedIdleGcMs;
-		activation.gcTimer = setTimeout(() => {
-			activation.gcTimer = null;
-			void this.maybeCollect(activation);
-		}, delay);
-	}
-
-	private cancelGc(activation: Activation): void {
-		if (activation.gcTimer !== null) {
-			clearTimeout(activation.gcTimer);
-			activation.gcTimer = null;
-		}
-	}
-
-	private async maybeCollect(activation: Activation): Promise<void> {
-		if (activation.collecting !== null || activation.connections.size > 0) return;
-		const status = activation.manager.document.status;
-		if (status.isStreaming || status.isCompacting) {
-			this.armGc(activation);
-			return;
-		}
-		await this.collectActivation(activation);
-	}
-
-	/** Dispose `activation` under its `collecting` reservation. Shared by idle
-	 * GC (via maybeCollect, after eligibility checks) and the explicit
-	 * closeSession verb (no eligibility checks — a close is a user-initiated
-	 * kill, so streaming state and attachments do not defer it). */
-	private async collectActivation(activation: Activation): Promise<void> {
-		if (activation.collecting !== null) {
-			await activation.collecting;
-			return;
-		}
-		this.cancelGc(activation);
-		activation.collecting = this.disposeActivation(activation).finally(() => {
-			activation.collecting = null;
-			this.broadcastActiveSessions();
-		});
-		await activation.collecting;
-	}
-
-	private async disposeActivation(activation: Activation): Promise<void> {
-		// Dispose first, then release the address. Releasing it before disposal
-		// would let a concurrent openSession create a second activation for a
-		// session whose first Manager is still shutting down, violating the
-		// ADR 11 exclusivity invariant. The address (and its pending-open
-		// promise) stays reserved for the whole disposal.
-		await activation.manager.dispose();
-		this.activations.delete(activation.id);
-		const key = addressKey(activation.ref.projectId, activation.ref.stem);
-		if (this.activationByAddress.get(key) === activation.id) this.activationByAddress.delete(key);
-		const owner = this.sessionOwnerById.get(activation.ref.sessionId);
-		if (owner && owner.projectId === activation.ref.projectId && owner.stem === activation.ref.stem) {
-			this.sessionOwnerById.delete(activation.ref.sessionId);
-		}
-		// Sever the Connection→activation mappings so a later detach/release on
-		// a still-attached Connection cannot arm GC on the disposed activation.
-		// The Connections keep their last-received document (ADR 11 defers a
-		// per-attachment death push) until they navigate or reconnect.
-		for (const conn of activation.connections) {
-			this.connectionActivation.delete(conn);
-		}
-		activation.connections.clear();
-	}
-
-	private attachConnection(conn: Connection, activation: Activation, cursor: PrefixCursor | null): void {
-		// A socket that closed while its openSession/newSession RPC was in
-		// flight: the close handler already ran (and released nothing — the
-		// connection was not yet attached), so attaching now would pin the
-		// activation forever with an unreleasable Connection. Arm GC instead;
-		// the orphaned activation collects on the normal idle path.
-		if (conn.isDisposed) {
-			this.armGc(activation);
-			return;
-		}
-		this.releaseConnection(conn);
-		conn.attach(activation.manager, activation.ref, cursor);
-		activation.connections.add(conn);
-		this.connectionActivation.set(conn, activation);
-		this.cancelGc(activation);
-	}
-
-	private releaseConnection(conn: Connection): void {
-		const activation = this.connectionActivation.get(conn);
-		if (!activation) return;
-		this.connectionActivation.delete(conn);
-		activation.connections.delete(conn);
-		if (activation.connections.size === 0) this.armGc(activation);
 	}
 
 	// ── Broadcasts ────────────────────────────────────────────────────────
@@ -755,8 +563,9 @@ export class Daemon {
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
 				const normalized = normalizeStem(stem);
 				const abs = resolveStemPath(project.sessionDir, normalized);
-				const activation = await this.reserveActivation(project, normalized, abs);
-				this.attachConnection(conn, activation, cursor ?? null);
+				// Reserve and attach as one registry operation: a close that lands
+				// between them re-reserves instead of pinning a disposed Manager.
+				const activation = await this.registry!.open(conn, project, normalized, abs, cursor ?? null);
 				return { ok: true, session: activation.ref };
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
@@ -768,59 +577,69 @@ export class Daemon {
 			try {
 				const project = this.projects.get(projectId);
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
-				const manager = await this.managerFactory({
-					cwd: project.cwd,
-					agentDir: this.agentDir,
-					modelRuntime: this.modelRuntime,
-				});
-				let stem: string;
-				try {
-					stem = stemFromSessionPath(project.sessionDir, manager.sessionFile);
-				} catch (err) {
-					await manager.dispose();
-					throw err;
-				}
-				const key = addressKey(projectId, stem);
-				if (this.activationByAddress.has(key)) {
-					await manager.dispose();
-					throw new Error(`Session already active: ${stem}`);
-				}
-				const activation = this.registerActivation(
-					manager,
-					{ projectId, sessionId: manager.liveSessionId, stem },
-					key,
-				);
-				// Pre-session choices from the Project home (ADR 12 slice): apply the
-				// picked model and thinking level, then admit the first prompt (with
-				// its attachments) before the attach — the client's initial sync
-				// carries the in-flight turn on the chosen model, and no empty
-				// session exists while the user types. A refused admission or
-				// unknown model (no model, no auth) disposes the fresh activation —
-				// nothing empty survives to idle-collect later. Patches streamed
-				// between admission and attach are covered by the initial sync (the
-				// Document is canonical).
-				try {
-					if (model) {
-						await manager.setModel(model.provider, model.modelId);
-						// A model pick without an explicit level must resolve like a fresh
-						// session on the picked model — the level the Project home
-						// displayed. `setModel` would otherwise re-derive the level as
-						// `perModel ?? settings default ?? current`, where `current` is the
-						// placeholder default model's already-clamped level (the session
-						// was created on it) — leaking that model's clamp (e.g. a default
-						// model that runs `medium` as `high`) into the picked model.
-						if (thinkingLevel === undefined) {
-							const level = this.requestedThinkingLevel(projectId, model.provider, model.modelId);
-							await manager.setThinkingLevel(level);
-						}
+				// The whole Manager-owning phase — creation, registration, and the
+				// pre-attach choices — runs as one registry-tracked creation, so a
+				// factory that completes after shutdown began is disposed inside the
+				// operation the shutdown drain awaits. Fresh-session creation has no
+				// address key until the Manager allocated its file, so it cannot ride
+				// the per-address pending map opens use.
+				const activation = await this.registry!.runCreation(async () => {
+					const manager = await this.managerFactory({
+						cwd: project.cwd,
+						agentDir: this.agentDir,
+						modelRuntime: this.modelRuntime,
+					});
+					let stem: string;
+					try {
+						stem = stemFromSessionPath(project.sessionDir, manager.sessionFile);
+					} catch (err) {
+						await manager.dispose();
+						throw err;
 					}
-					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
-					await manager.promptAdmitted(text, images);
-				} catch (err) {
-					await this.collectActivation(activation);
-					throw err;
-				}
-				this.attachConnection(conn, activation, null);
+					if (this.registry!.byAddressAny(projectId, stem) !== undefined) {
+						await manager.dispose();
+						throw new Error(`Session already active: ${stem}`);
+					}
+					const record = await this.registry!.register(manager, {
+						projectId,
+						sessionId: manager.liveSessionId,
+						stem,
+					});
+					// Pre-session choices from the Project home (ADR 12 slice): apply the
+					// picked model and thinking level, then admit the first prompt (with
+					// its attachments) before the attach — the client's initial sync
+					// carries the in-flight turn on the chosen model, and no empty
+					// session exists while the user types. A refused admission or
+					// unknown model (no model, no auth) disposes the fresh activation —
+					// nothing empty survives to idle-collect later. Patches streamed
+					// between admission and attach are covered by the initial sync (the
+					// Document is canonical).
+					try {
+						if (model) {
+							await manager.setModel(model.provider, model.modelId);
+							// A model pick without an explicit level must resolve like a fresh
+							// session on the picked model — the level the Project home
+							// displayed. `setModel` would otherwise re-derive the level as
+							// `perModel ?? settings default ?? current`, where `current` is the
+							// placeholder default model's already-clamped level (the session
+							// was created on it) — leaking that model's clamp (e.g. a default
+							// model that runs `medium` as `high`) into the picked model.
+							if (thinkingLevel === undefined) {
+								const level = this.requestedThinkingLevel(projectId, model.provider, model.modelId);
+								await manager.setThinkingLevel(level);
+							}
+						}
+						if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
+						await manager.promptAdmitted(text, images);
+					} catch (err) {
+						// Registry-owned disposal: a no-op once shutdown began, because
+						// the drain already owns the record it snapshotted.
+						await this.registry!.collect(record);
+						throw err;
+					}
+					return record;
+				});
+				this.registry!.attach(conn, activation, null);
 				return { ok: true, session: activation.ref };
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
@@ -828,7 +647,7 @@ export class Daemon {
 		},
 
 		detach: (conn) => {
-			this.releaseConnection(conn);
+			this.registry!.release(conn);
 			conn.detach();
 		},
 
@@ -837,12 +656,15 @@ export class Daemon {
 				const project = this.projects.get(projectId);
 				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
 				const normalized = normalizeStem(stem);
-				const activationId = this.activationByAddress.get(addressKey(projectId, normalized));
-				const activation = activationId !== undefined ? this.activations.get(activationId) : undefined;
+				// Wait out a creation in flight for the address: the Activation it is
+				// building is the one this kill must reach, and reporting "not
+				// active" while a Manager is still being constructed would leave the
+				// address live right after a successful close.
+				const activation = await this.registry!.awaitSettled(projectId, normalized);
 				if (!activation || activation.collecting !== null) {
 					return { ok: false, error: `Session is not active: ${normalized}` };
 				}
-				await this.collectActivation(activation);
+				await this.registry!.collect(activation);
 				// Refresh the Project's first page everywhere: the kill's flush
 				// (and an unflushed session's disappearance) reorders history.
 				this.broadcastSessionsChanged(projectId);
@@ -859,16 +681,18 @@ export class Daemon {
 				// Rejects the archive prefix itself, so an archived stem can never be
 				// re-addressed (see ARCHIVE_DIR).
 				const normalized = normalizeStem(stem);
+				// Wait out a creation in flight for the address before closing and
+				// moving the file: the completing creation would otherwise register a
+				// Manager for an address whose file had already been archived.
+				const activation = await this.registry!.awaitSettled(projectId, normalized);
 				// Close first, unconditionally: disposal finalizes an in-flight turn,
 				// which can create or advance the file, so the move must follow it.
 				// A dormant session has no activation — the close is then a no-op and
 				// only the move remains.
-				const activationId = this.activationByAddress.get(addressKey(projectId, normalized));
-				const activation = activationId !== undefined ? this.activations.get(activationId) : undefined;
-				if (activation) await this.collectActivation(activation);
+				if (activation) await this.registry!.collect(activation);
 				archiveStemFile(project.sessionDir, normalized);
 				// The row leaves the history pages. A live session's row already left
-				// the active snapshot via collectActivation's broadcast.
+				// the active snapshot via the registry's collection broadcast.
 				this.broadcastSessionsChanged(projectId);
 				return { ok: true };
 			} catch (err) {
@@ -947,23 +771,34 @@ export class Daemon {
 			};
 		},
 
-		setModelPinned: async (provider: string, modelId: string, pinned: boolean) => {
-			const settings = this.globalSettings;
-			if (!settings) throw new Error("No global settings available");
-			// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
-			// same way on save), then add or remove this one model.
-			const patterns = settings.getGlobalSettings().enabledModels ?? [];
-			const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
-			const key = `${provider}/${modelId}`;
-			const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
-			const next = pinned
-				? ids.some((id) => id.toLowerCase() === key.toLowerCase())
-					? ids
-					: [...ids, key]
-				: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
-			settings.setEnabledModels(next.length > 0 ? next : undefined);
-			await settings.flush();
-			await this.broadcastPinnedModels();
+		setModelPinned: (provider: string, modelId: string, pinned: boolean) => {
+			// One mutation at a time, in arrival order, across every Connection —
+			// see settingsMutationChain. The chain swallows rejections so a failed
+			// mutation cannot stall later ones; the caller still sees the error.
+			const run = async (): Promise<void> => {
+				const settings = this.globalSettings;
+				if (!settings) throw new Error("No global settings available");
+				// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
+				// same way on save), then add or remove this one model.
+				const patterns = settings.getGlobalSettings().enabledModels ?? [];
+				const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
+				const key = `${provider}/${modelId}`;
+				const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
+				const next = pinned
+					? ids.some((id) => id.toLowerCase() === key.toLowerCase())
+						? ids
+						: [...ids, key]
+					: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
+				settings.setEnabledModels(next.length > 0 ? next : undefined);
+				await settings.flush();
+				await this.broadcastPinnedModels();
+			};
+			const done = this.settingsMutationChain.then(run, run);
+			this.settingsMutationChain = done.then(
+				() => {},
+				() => {},
+			);
+			return done;
 		},
 	};
 
@@ -1100,7 +935,7 @@ export class Daemon {
 			this.connections.add(conn);
 
 			ws.on("close", () => {
-				this.releaseConnection(conn);
+				this.registry!.release(conn);
 				conn.dispose();
 				this.connections.delete(conn);
 			});
@@ -1137,12 +972,6 @@ export class Daemon {
 			});
 		}
 	}
-}
-
-// ── Session address key ──────────────────────────────────────────────────
-
-function addressKey(projectId: string, stem: string): string {
-	return `${projectId}\0${stem}`;
 }
 
 // ── Lightweight session file parser (avoids SessionManager.list re-read) ─

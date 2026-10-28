@@ -596,6 +596,47 @@ describe("daemon: projects", () => {
 		ws.close();
 	});
 
+	it("concurrent pins from two connections do not lose updates", async () => {
+		// setModelPinned is a read-modify-write over the daemon-global scope:
+		// two connections pinning different models concurrently must both land,
+		// in arrival order — the later write must read the earlier one's list,
+		// not the pre-mutation snapshot.
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws1 = await openClient(port);
+		const frames1 = collectFrames(ws1);
+		const ws2 = await openClient(port);
+		const frames2 = collectFrames(ws2);
+
+		const id1 = send(ws1, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: true });
+		const id2 = send(ws2, { verb: "setModelPinned", provider: "faux", modelId: "faux-2", pinned: true });
+		expect((await waitForReply(frames1, id1)).ok).toBe(true);
+		expect((await waitForReply(frames2, id2)).ok).toBe(true);
+
+		const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")) as {
+			enabledModels?: string[];
+		};
+		expect((saved.enabledModels ?? []).slice().sort()).toEqual(["faux/faux-1", "faux/faux-2"]);
+
+		// The converged broadcast carries both pins (each mutation broadcasts
+		// to every connection; the last one is the converged list).
+		const converged = await waitFor(
+			frames2,
+			(f) =>
+				f.kind === "pinned_models_changed" &&
+				(f.pinnedModels as Array<{ id: string }>)
+					.map((m) => m.id)
+					.sort()
+					.join(",") === "faux-1,faux-2",
+		);
+		expect(converged).toBeDefined();
+
+		ws1.close();
+		ws2.close();
+	});
+
 	it("unpinning the last model clears the global scope", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		mkdirSync(agentDir, { recursive: true });
@@ -1116,6 +1157,146 @@ describe("daemon: session activation", () => {
 
 		ws.close();
 	});
+
+	// ── shutdown drain ──────────────────────────────────────────────────
+
+	it("a manager factory that completes after shutdown can neither register an activation nor leak its manager", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let releaseFactory: () => void = () => {};
+		const factoryGate = new Promise<void>((resolve) => {
+			releaseFactory = resolve;
+		});
+		const stubRef: { current: StubManager | null } = { current: null };
+		let factoryCalls = 0;
+		const { port, daemon } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				factoryCalls++;
+				await factoryGate;
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "durable-shutdown");
+
+		const ws = await openClient(port);
+		send(ws, { verb: "openSession", projectId, stem });
+		// The creation is in flight (the factory is gated).
+		await settle();
+		expect(factoryCalls).toBe(1);
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+
+		ws.close();
+		// Shutdown while the factory is still pending: the drain parks on the
+		// in-flight creation instead of clearing the registry and returning.
+		const disposePromise = daemon.dispose();
+		await settle(100);
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+
+		// The factory completes after shutdown. The registration must be
+		// refused — nothing appears in the active snapshot — and the Manager
+		// it produced must be disposed, not leaked.
+		releaseFactory();
+		await disposePromise;
+		await settle();
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(stubRef.current?.handles.disposed()).toBe(true);
+
+		// Idempotent: the afterEach drain runs dispose again.
+		await expect(daemon.dispose()).resolves.toBeUndefined();
+	}, 10000);
+
+	it("a fresh-session factory that completes after shutdown is disposed inside the drain", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let releaseFactory: () => void = () => {};
+		const factoryGate = new Promise<void>((resolve) => {
+			releaseFactory = resolve;
+		});
+		const stubRef: { current: StubManager | null } = { current: null };
+		const { port, daemon } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				await factoryGate;
+				const stub = makeStubManager(opts ?? {});
+				stubRef.current = stub;
+				const original = stub.manager;
+				// A disposal that takes real time: before the fix, register refused
+				// with a fire-and-forget disposal, so the drain returned while the
+				// late Manager was still shutting down.
+				return {
+					...original,
+					dispose: async () => {
+						await new Promise((r) => setTimeout(r, 30));
+						await original.dispose();
+					},
+				} as Manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+
+		const ws = await openClient(port);
+		send(ws, { verb: "newSession", projectId, text: "hello" });
+		await settle();
+		// The fresh-session creation is in flight (the factory is gated) and
+		// has no address yet — there is nothing in the active snapshot for the
+		// drain to see.
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+
+		ws.close();
+		const disposePromise = daemon.dispose();
+		await settle(100);
+
+		// The factory completes after shutdown: the tracked creation disposes
+		// the Manager it produced, and the drain cannot return before that
+		// disposal finishes.
+		releaseFactory();
+		await disposePromise;
+		expect(stubRef.current?.handles.disposed()).toBe(true);
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+	}, 10000);
+
+	it("dispose disposes every live manager exactly once and admits nothing afterwards", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const disposals: string[] = [];
+		const { port, daemon } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				const stub = makeStubManager(opts ?? {});
+				const original = stub.manager;
+				const counting = {
+					...original,
+					dispose: async () => {
+						disposals.push(stub.sessionId);
+						await original.dispose();
+					},
+				} as Manager;
+				stubs.set(stub.sessionId, stub);
+				return counting;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem1 = writeSessionFile(a, agentDir, "drain-1");
+		const stem2 = writeSessionFile(a, agentDir, "drain-2");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem2 }))).ok).toBe(true);
+		expect(daemon.listActiveSessions()).toHaveLength(2);
+
+		ws.close();
+		await daemon.dispose();
+		await daemon.dispose();
+
+		expect(disposals).toHaveLength(2);
+		expect(new Set(disposals).size).toBe(2);
+		expect(daemon.listActiveSessions()).toHaveLength(0);
+	}, 10000);
 });
 
 describe("daemon: idle GC", () => {
@@ -1493,6 +1674,115 @@ describe("daemon: closeSession", () => {
 		killer.close();
 		victim.close();
 	});
+
+	it("waits for a pending activation creation instead of reporting not-active", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let releaseFactory: () => void = () => {};
+		const factoryGate = new Promise<void>((resolve) => {
+			releaseFactory = resolve;
+		});
+		const created: StubManager[] = [];
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				await factoryGate;
+				const stub = makeStubManager(opts ?? {});
+				created.push(stub);
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "kill-pending");
+
+		const opener = await openClient(port);
+		const openerFrames = collectFrames(opener);
+		const openId = send(opener, { verb: "openSession", projectId, stem });
+		await settle();
+		// The creation is in flight (the factory is gated); the close arrives
+		// now. Before the fix it saw no registered activation and answered
+		// "not active" immediately, leaving the address live right after a
+		// successful close.
+		const closer = await openClient(port);
+		const closerFrames = collectFrames(closer);
+		const closeId = send(closer, { verb: "closeSession", projectId, stem });
+		await settle(100);
+		expect(closerFrames.find((f) => (f as Record<string, unknown>).id === closeId)).toBeUndefined();
+
+		releaseFactory();
+		// Whichever order the two continuations resume in, the kill reaches the
+		// activation the creation built: the close succeeds, the Manager is
+		// disposed, and a racing open either attaches before the kill or
+		// re-reserves a fresh activation afterwards.
+		expect((await waitForReply(openerFrames, openId)).ok).toBe(true);
+		const closeReply = await waitForReply(closerFrames, closeId);
+		expect(closeReply.ok).toBe(true);
+		expect(created[0].handles.disposed()).toBe(true);
+
+		opener.close();
+		closer.close();
+	}, 10000);
+
+	it("re-reserves an open that loses the race with a completing close", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let releaseDispose: () => void = () => {};
+		const disposeGate = new Promise<void>((resolve) => {
+			releaseDispose = resolve;
+		});
+		let factoryCalls = 0;
+		let disposeCalls = 0;
+		const created: StubManager[] = [];
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				factoryCalls++;
+				const stub = makeStubManager(opts ?? {});
+				created.push(stub);
+				const original = stub.manager;
+				// Gate the first disposal only: the close parks mid-collection, so
+				// the racing open must wait the collection out and re-reserve.
+				const gated = {
+					...original,
+					dispose: async () => {
+						disposeCalls++;
+						if (disposeCalls === 1) await disposeGate;
+						await original.dispose();
+					},
+				} as Manager;
+				return gated;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "kill-race");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const openId = send(ws, { verb: "openSession", projectId, stem });
+		expect((await waitForReply(frames, openId)).ok).toBe(true);
+
+		// The close collects the live activation; its disposal is gated, so the
+		// close parks mid-collection with the address still reserved.
+		const closeId = send(ws, { verb: "closeSession", projectId, stem });
+		await settle();
+		// The open arrives while the collection holds the address: it must not
+		// attach the collecting record — it waits the collection out.
+		const reopenId = send(ws, { verb: "openSession", projectId, stem });
+		await settle(100);
+		expect(frames.find((f) => (f as Record<string, unknown>).id === closeId)).toBeUndefined();
+		expect(frames.find((f) => (f as Record<string, unknown>).id === reopenId)).toBeUndefined();
+
+		releaseDispose();
+		expect((await waitForReply(frames, closeId)).ok).toBe(true);
+		// The collection released the address, so the waiting open re-reserved:
+		// a fresh Manager is built and attached, not the disposed one.
+		expect((await waitForReply(frames, reopenId)).ok).toBe(true);
+		expect(factoryCalls).toBe(2);
+		expect(created[0].handles.disposed()).toBe(true);
+		expect(created[1].handles.events()).toContain("attach");
+
+		ws.close();
+	}, 10000);
 });
 
 describe("daemon: archiveSession", () => {
@@ -1592,6 +1882,54 @@ describe("daemon: archiveSession", () => {
 
 		ws.close();
 	});
+
+	it("waits for a pending activation creation, then disposes and moves the file", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		let releaseFactory: () => void = () => {};
+		const factoryGate = new Promise<void>((resolve) => {
+			releaseFactory = resolve;
+		});
+		const created: StubManager[] = [];
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: async (opts) => {
+				await factoryGate;
+				const stub = makeStubManager(opts ?? {});
+				created.push(stub);
+				return stub.manager;
+			},
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "arch-pending");
+		const dir = sessionDirFor(a, agentDir);
+
+		const opener = await openClient(port);
+		const openerFrames = collectFrames(opener);
+		const openId = send(opener, { verb: "openSession", projectId, stem });
+		await settle();
+		// The creation is in flight; the archive arrives now. Before the fix it
+		// saw no registered activation, moved the file immediately, and the
+		// completing creation registered a Manager for an archived address.
+		const archiver = await openClient(port);
+		const archiverFrames = collectFrames(archiver);
+		const archiveId = send(archiver, { verb: "archiveSession", projectId, stem });
+		await settle(100);
+		expect(archiverFrames.find((f) => (f as Record<string, unknown>).id === archiveId)).toBeUndefined();
+		// The move waits with the verb: the file is still at its address.
+		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(true);
+
+		releaseFactory();
+		expect((await waitForReply(openerFrames, openId)).ok).toBe(true);
+		expect((await waitForReply(archiverFrames, archiveId)).ok).toBe(true);
+		// The creation's activation was disposed and the file moved after it.
+		expect(created[0].handles.disposed()).toBe(true);
+		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(false);
+		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+
+		opener.close();
+		archiver.close();
+	}, 10000);
 
 	it("never discovers an archived file and excludes it from the startup id-conflict scan", async () => {
 		const { agentDir, a } = makeProjectRoots();
