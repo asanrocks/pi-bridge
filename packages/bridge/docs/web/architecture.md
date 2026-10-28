@@ -78,6 +78,12 @@ The protocol slice contains:
 - `document`, the current Document root;
 - `activeSessionId`, taken from the address-bearing initial-sync frame. It is
   the durable Session cache key from ADR 09, not the URL address;
+- `docRevision`, the document revision, published with the document as one
+  store write. The wire pipeline publishes the mirror's monotonic revision
+  (advanced by wholesale replaces and same-id entry-root replacements);
+  publishers outside the mirror — cache restore, cache seeding — advance the
+  store's own counter, so every publication moves the revision. It covers
+  content changes the structural projection key cannot see;
 - `currentProjectId` and `currentStem`, the address currently represented by
   the tab. A null stem is the Project home and a null Project is the launcher;
 - `connection`, a discriminated `ConnectionState`. Its wording and severity
@@ -156,18 +162,18 @@ connection and event paths.
 
 `src/viewmodel/` is the pure projection boundary from a Document to renderable
 data. `useViewModel` selects the Document, model catalog, current stem,
-`pullTick`, and the UI slice's rendered-leaf override, then memoizes
-`computeViewModel` using `viewModelCacheKey`. Its cache key combines the leaf
-path identity, streaming text/thinking lengths, relevant status fields, the
-current stem, the pull tick, the override, and the model catalog identity.
-The stem matters even when two Documents are structurally equal; the pull tick
-matters when lazy values arrive without a new path shape; the override matters
+`pullTick`, the document revision, and the UI slice's rendered-leaf override,
+then memoizes `computeViewModel` using `viewModelCacheKey`. Its cache key
+combines the leaf path identity, streaming text/thinking lengths, relevant
+status fields, the current stem, the pull tick, the revision, the override,
+and the model catalog identity. The stem matters even when two Documents are
+structurally equal; the pull tick matters when lazy values arrive without a
+new path shape; the revision matters because a same-id entry-root replacement
+can change content the structural keys never read; the override matters
 so peek and un-peek re-project over an unchanged Document (null and absent
 override share one key — they resolve identically); the catalog matters
 because the context percentage is computed against each model's context
-window. Structural identity cannot see a same-id content replacement — the
-pipeline bumps the pull tick when the mirror counts one — so re-projection
-is gated on the tick, not on the key alone.
+window.
 
 The projection first walks the effective leaf — the rendered-leaf override
 when it resolves to a known entry, `status.leafId` otherwise — through
@@ -300,10 +306,15 @@ cache updates:
   their timers, so a coalesced status write would only land at the resume
   flush, with a stale `document.hidden` read, losing the turn-completion
   notification that observes the streaming→idle transition at store level;
-  a live patch that replaces an entry root the mirror already held also bumps
-  `pullTick` — a same-id content replacement is invisible to the structural
-  ViewModel cache key, so re-projection is gated on the mirror's count of
-  replacements rather than on the key;
+- every flush publishes the mirror's document together with its monotonic
+  revision as one store write — the two values always describe the same
+  mirror snapshot. The revision is advanced by a same-id entry-root
+  replacement (sealing in place, an authoritative rewrite) or a wholesale
+  replace, and is a declared projection input: structural identity cannot see
+  that content changed, so re-projection is gated on the published revision,
+  not on a side channel. Publishers outside the mirror (cache restore,
+  cache seeding) call the same publication action and advance the store's
+  own counter, so their same-shape replacements re-project too;
 - a replace is an immediate flush barrier;
 - live deltas use `planCacheWrites` against a per-session `cacheBase`, writing
   sealed, ordered cache records through the IndexedDB adapter;
@@ -460,6 +471,22 @@ A successful non-null value resets the retry delay to one second and bumps
 schedule a retry-driven bump with a one-second doubling delay capped at 30
 seconds. Reconnect replace pushes also bump `pullTick`, so visible lazy fields
 register again against the repaired mirror.
+
+A reply is admitted only while it still describes the current view. A
+reconnect replaces the global client, so a reply arriving on the old socket
+is dropped — the dead client's mirror is not a publication source. A session
+switch on the same socket replaces the mirror wholesale, and entry ids are
+unique per session, so a reply whose entry ids are gone addressed the previous
+session; writing it would auto-create the paths and fabricate those entries
+inside the successor document. A reply is also a *read of the moment the
+request left*, so it may only fill a field that is still unfetched, in the
+entry form it was issued for: a seal replaces the streamed entry under the
+same id with persisted content, and a live patch may already have delivered
+newer content (streamed appends) than the reply carries. Both are older than
+what the mirror holds, and nothing later would repair a value the newer
+publication already superseded. Dropped replies schedule no retry: the
+revision or patch that superseded them triggered its own re-projection, and
+the visible fields re-register on their own.
 
 ## Browser Persistence
 

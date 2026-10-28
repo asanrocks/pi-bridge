@@ -59,6 +59,15 @@ export interface ProtocolSlice {
 	 * initial-sync frames or the boot-time local restore; live patches do not
 	 * repeat it. Null when not attached or the session has no id yet. */
 	activeSessionId: string | null;
+	/** Monotonic revision of `document`: the wire pipeline publishes the
+	 * mirror's revision with each flush (wholesale replaces and same-id
+	 * entry-root replacements — content changes the structural ViewModel cache
+	 * key cannot see); publishers that replace the document outside the mirror
+	 * (cache restore, cache seeding) advance the counter by one, so every
+	 * publication pairs the document with a revision that changed. The
+	 * projection cache compares against the previous key only, so the two
+	 * counters can never produce a false hit. */
+	docRevision: number;
 	connection: ConnectionState;
 
 	// Attachment state — the address this tab is watching (ADR 11)
@@ -143,7 +152,12 @@ export interface ProtocolSlice {
 		visibleModels: string[],
 	) => void;
 	setDevMode: (mode: boolean) => void;
-	applyReplace: (doc: Document) => void;
+	/** Publish the document as one store write. `revision` is the
+	 * publisher's document revision (the mirror's, for the wire pipeline);
+	 * omitted, the store advances its own counter — a document must never be
+	 * published without its revision moving too, or a same-shape replacement
+	 * could hit a stale ViewModel cache entry. */
+	applyReplace: (doc: Document, revision?: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +219,7 @@ function clearedSessionState() {
 export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlice> = (set) => ({
 	document: emptyDocument(),
 	activeSessionId: null,
+	docRevision: 0,
 	connection: { kind: "connecting" },
 	currentProjectId: null,
 	currentStem: null,
@@ -299,5 +314,9 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	setDevMode: (devMode) => set({ devMode }),
 
-	applyReplace: (document) => set({ document }),
+	applyReplace: (document, revision) =>
+		set((s) => ({
+			document,
+			docRevision: revision !== undefined ? revision : s.docRevision + 1,
+		})),
 });

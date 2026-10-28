@@ -894,9 +894,11 @@ export function leafTextKey(doc: Document, viewLeafId?: string | null): string {
  * plus the status fields that gate re-projection on non-structural state
  * changes, plus the external inputs that are not part of the Document
  * (`scope` — the current session stem, so a session switch re-projects even
- * onto an identical document; `pullTick`, so lazy-pull ingests and content
- * rewrites re-project; and `modelsKey` — the model catalogue identity, since
- * the context percentage is computed against each model's context window).
+ * onto an identical document; `pullTick`, so lazy-pull ingests re-project;
+ * `modelsKey` — the model catalogue identity, since the context percentage
+ * is computed against each model's context window; and `docRevision` — the
+ * mirror revision, which advances on wholesale replaces and same-id
+ * entry-root replacements whose content the structural keys cannot see).
  * `viewLeafId` is the rendered-leaf override (web peek): it must be in the key
  * or a peek/un-peek over an unchanged document would hit a stale cache entry.
  * Keeping this beside leafPathKey/leafStreamingKey means a new input that
@@ -909,6 +911,7 @@ export function viewModelCacheKey(
 	pullTick: number,
 	viewLeafId?: string | null,
 	modelsKey?: string,
+	docRevision?: number,
 ): string {
 	const status = doc.status;
 	return [
@@ -927,6 +930,7 @@ export function viewModelCacheKey(
 		// never empty strings, so "" unambiguously means "following live".
 		viewLeafId ?? "",
 		modelsKey ?? "",
+		String(docRevision ?? 0),
 	].join("::");
 }
 
