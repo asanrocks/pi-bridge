@@ -390,12 +390,24 @@ export interface PinnedModelsChangedMessage {
 	pinnedModels: PinnedModelInfo[];
 }
 
+/** The live runtime behind an attached Session ended (closeSession or
+ * archiveSession). Every Connection attached to that address is detached
+ * before the frame is sent, so a session command that arrives afterwards
+ * fails with "no session attached" instead of reaching a disposed runtime.
+ * A client viewing the closed Session lands on its Project home. */
+export interface SessionClosedMessage {
+	kind: "session_closed";
+	projectId: string;
+	stem: string;
+}
+
 export type ServerPushMessage =
 	| ReplaceMessage
 	| PatchMessage
 	| SessionsChangedMessage
 	| ActiveSessionsChangedMessage
-	| PinnedModelsChangedMessage;
+	| PinnedModelsChangedMessage
+	| SessionClosedMessage;
 
 // ── RPC (client → server, with `id`) ─────────────────────────────────────
 

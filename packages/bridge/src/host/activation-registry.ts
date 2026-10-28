@@ -377,10 +377,22 @@ export class ActivationRegistry {
 		}
 		// Sever the Connection→activation mappings so a later detach/release on
 		// a still-attached Connection cannot arm GC on the disposed activation.
-		// The Connections keep their last-received document (ADR 11 defers a
-		// per-attachment death push) until they navigate or reconnect.
+		// Terminal ownership: a closed Activation must not leave a Connection
+		// holding its (now disposed) Manager. `detach` severs the Manager handle
+		// and the attachment fields, so a session command that arrives afterwards
+		// fails with "no session attached" instead of reaching a disposed runtime,
+		// and the `session_closed` frame tells the client the runtime is gone —
+		// without it a view can stall until a reconnect re-resolves the address.
+		// Sent after disposal, so the flush's final patches land on the socket
+		// first, and before the close reply (collect resolves with this loop).
 		for (const conn of record.connections) {
 			this.connectionActivation.delete(conn);
+			conn.detach();
+			conn.push({
+				kind: "session_closed",
+				projectId: record.ref.projectId,
+				stem: record.ref.stem,
+			});
 		}
 		record.connections.clear();
 	}

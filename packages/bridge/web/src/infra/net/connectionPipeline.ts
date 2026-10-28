@@ -164,6 +164,22 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			return;
 		}
 
+		// Terminal ownership (host): the live runtime behind an address ended
+		// (closeSession/archiveSession) and the server has already severed this
+		// connection's attachment, so the document on screen can never progress
+		// again. When it names the rendered Session, land on the Project home
+		// like a failed open — the route, the address, and the session identity
+		// all go, and a later command cannot reach a disposed runtime. A close of
+		// some other Session changes nothing here: the list pushes cover it.
+		if (push.kind === "session_closed") {
+			const s = store.getState();
+			if (s.currentProjectId === push.projectId && s.currentStem === push.stem) {
+				s.clearCurrentSession(push.projectId);
+				writeRoute({ kind: "project", projectId: push.projectId });
+			}
+			return;
+		}
+
 		// replace: flush barrier + cache repair (ADR 09). The mirror already
 		// holds the snapshot. A replace always carries the session ref
 		// (ADR 11) — it is an initial sync.

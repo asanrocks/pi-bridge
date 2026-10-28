@@ -33,6 +33,7 @@ and rejects exactly once, so a failed request leaves nothing pending.
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
 | `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
+| `session_closed` | `{ projectId, stem }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
 `replace` always carries a `SessionRef`. A `patch` carries a `SessionRef` only
 when it is the initial-sync delta selected by cursor validation. A live patch
@@ -45,10 +46,12 @@ the client address; `sessionId` is the durable cache and activation key. A
 separate total-order cursor for Project history pagination and is not a
 Document prefix cursor.
 
-A push is unsolicited. `sessions_changed`, `active_sessions_changed` and
-`pinned_models_changed` do not alter the Document mirror. The connection sends session-list pushes to every
+A push is unsolicited. `sessions_changed`, `active_sessions_changed`,
+`pinned_models_changed`, and `session_closed` do not alter the Document
+mirror. The connection sends session-list pushes to every
 socket; the web client updates the relevant Project page or global active
-snapshot.
+snapshot, and a `session_closed` for the rendered Session ends that view
+without touching the mirror.
 
 ## RPC verb contracts
 
@@ -72,8 +75,8 @@ state channel.
 | `openSession` | Project plus `stem`; reattaches this Connection | `{ ok: true, session: SessionRef }`. The initial `replace` or cursor patch is pushed before the reply. An optional `PrefixCursor` selects the delta path. |
 | `newSession` | Project; first prompt text is required | `{ ok: true, session: SessionRef }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn. Refused admission leaves no empty live Session. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
-| `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. |
-| `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Fails when no durable file exists to move. |
+| `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. Every Connection attached to the address is detached and receives a `session_closed` push — after the disposal's final patches, before this reply. |
+| `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Attached Connections are detached and receive a `session_closed` push, as with `closeSession`. Fails when no durable file exists to move. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
 | `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
 | `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, pinnedModels, visibleModels, thinkingLevels, devMode }`; no attachment and no Document push. `pinnedModels` is the resolved daemon-global pinned list (not Document state, ADR 15); `visibleModels` is the resolved `provider/modelId` key list of the picker's normal tier. |

@@ -5,7 +5,7 @@
 // flush — the turn-completion notification (observed at store level by
 // useStatusNotifications) depends on seeing the transition at arrival.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient, PatchOp, ServerPushMessage } from "../../../../src/core/index.ts";
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
@@ -129,5 +129,66 @@ describe("connectionPipeline live-patch flush policy", () => {
 		expect(getStore().getState().document).toBe(replaced);
 		expect(getStore().getState().docRevision).toBe(mirror.revision);
 		expect(getStore().getState().pullTick).toBe(pullBefore);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// session_closed — terminal ownership from the host. The live runtime behind
+// an address ended; the server already severed the attachment.
+// ---------------------------------------------------------------------------
+
+describe("connectionPipeline session_closed handling", () => {
+	const g = globalThis as unknown as { window?: unknown };
+	let pipeline: ConnectionPipeline | null = null;
+	let replaceState: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		stubDom();
+		// writeRoute reads window.location and writes history — stub both, as
+		// no other test in this file routes.
+		replaceState = vi.fn();
+		g.window = { location: { pathname: "/proj/stem" }, history: { replaceState } };
+		getStore().setState({
+			currentProjectId: "proj",
+			currentStem: "stem",
+			activeSessionId: "s1",
+			renderLeafId: null,
+		});
+	});
+
+	afterEach(() => {
+		pipeline?.cleanup();
+		pipeline = null;
+		delete g.window;
+		getStore().setState({ currentProjectId: null, currentStem: null, activeSessionId: null });
+	});
+
+	it("lands on the Project home when the closed Session is the rendered one", () => {
+		const { client } = fakeClient();
+		pipeline = createConnectionPipeline(client);
+
+		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "stem" });
+
+		// The document can never progress again: the address, the durable
+		// session id, and the route all go, retaining the Project to land on
+		// its home (the same boundary a failed open uses).
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(replaceState).toHaveBeenCalledWith(null, "", "/proj");
+	});
+
+	it("ignores a close of some other Session", () => {
+		const { client } = fakeClient();
+		pipeline = createConnectionPipeline(client);
+
+		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "other" });
+		pipeline.onPush({ kind: "session_closed", projectId: "other", stem: "stem" });
+
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("stem");
+		expect(s.activeSessionId).toBe("s1");
+		expect(replaceState).not.toHaveBeenCalled();
 	});
 });

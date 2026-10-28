@@ -326,6 +326,12 @@ The pipeline handles registry pushes without touching the Document. A
 `sessions_changed` push refreshes an already loaded Project page and records
 address identities; it does not fetch a collapsed page. An
 `active_sessions_changed` push replaces the global active-session snapshot.
+A `session_closed` push names an address whose live runtime ended on the
+host (`closeSession`/`archiveSession`); when it names the rendered Session,
+the server has already severed the attachment, so the pipeline clears to the
+Project home through the same boundary a failed open uses — the document on
+screen can never progress again, and a later command cannot reach a disposed
+runtime. A close of some other Session is ignored: the list pushes cover it.
 
 An address-bearing `replace` or initial-sync `patch` establishes
 `activeSessionId`, `currentProjectId`, `currentStem`, the address index entry,

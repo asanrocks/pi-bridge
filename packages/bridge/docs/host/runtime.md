@@ -289,19 +289,25 @@ are injectable for tests, not client configuration.
 The timer callback rechecks attachment and streaming state under the same
 `collecting` reservation used by `openSession`. Collection calls the shared
 Manager disposal path, keeps the address reserved through async disposal,
-removes the Activation and Session ownership indexes, clears Connection
-bookkeeping, and broadcasts the resulting active-session snapshot. Collection
-never deletes a Session file.
+removes the Activation and Session ownership indexes, detaches every attached
+Connection and sends each a `session_closed` push (the terminal ownership
+boundary below), and broadcasts the resulting active-session snapshot.
+Collection never deletes a Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
 normalizes and resolves the Project address, waits out a creation in flight
 for it, requires an active non-collecting Activation, and immediately uses
 the same collect/dispose path regardless of attached Connections, streaming
 state, or idle policy. It then refreshes the Project's first session page.
-The current host protocol does not emit a `session_closed` push: attached
-sockets are not actively notified or detached by this operation, and a client
-must reconnect or navigate to obtain a fresh attachment. No `session_closed`
-frame is part of the implemented `ServerPushMessage` set.
+Collection is also the terminal ownership boundary: every Connection
+attached to the address is detached — its Manager handle and attachment
+fields are severed — and each receives a `session_closed` push
+(`projectId`, `stem`) after the disposal's final patches and before the close
+reply. A session command that arrives afterwards fails with `no session
+attached` instead of reaching a disposed runtime, and a client rendering the
+closed Session lands on its Project home. Idle collection never has an
+attached Connection to notify, and daemon shutdown skips the frame (the
+sockets are closing with the process).
 
 `archiveSession(projectId, stem)` closes a Session, then moves its file under
 the reserved `.archive` prefix of the Project's session directory. It first
@@ -313,7 +319,8 @@ advance the file. An archived Session is neither
 discovered nor addressable: the scanner and the startup `sessionId` conflict
 scan skip the prefix, and `normalizeStem` rejects it. The verb refreshes the
 Project's first page; when it had an Activation, the active-session snapshot
-broadcast from collection covers that side. A missing durable file (a fresh
+broadcast from collection covers that side, and its attached Connections are
+detached and notified exactly as `closeSession` does. A missing durable file (a fresh
 Session whose first turn never flushed) is an error reply — the close still
 happened, but nothing was archived.
 

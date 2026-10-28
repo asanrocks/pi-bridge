@@ -343,8 +343,11 @@ there is no corresponding Node-only import gate.
 
 Session changes are broadcast across tabs through `active_sessions_changed`
 and Project-scoped `sessions_changed`; static Project configuration has no
-project-list push. An Activation that dies while attached has no dedicated
-failure push, so its Connection can stall until reconnect resolves the address.
+project-list push. When a live runtime is closed out from under attached
+clients (`closeSession`, `archiveSession`), they are detached and receive a
+`session_closed` push naming the address, so a view never stalls waiting for
+a runtime that no longer exists; idle collection has no attached Connection
+to notify.
 The transcript supports variant paging on user messages only.
 
 ## 10. Documentation map

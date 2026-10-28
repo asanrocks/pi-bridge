@@ -1675,6 +1675,53 @@ describe("daemon: closeSession", () => {
 		victim.close();
 	});
 
+	it("detaches attached connections and pushes session_closed before the close reply", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "kill-notify");
+
+		const killer = await openClient(port);
+		const killerFrames = collectFrames(killer);
+		expect((await waitForReply(killerFrames, send(killer, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		const victim = await openClient(port);
+		const victimFrames = collectFrames(victim);
+		expect((await waitForReply(victimFrames, send(victim, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+
+		const closeId = send(killer, { verb: "closeSession", projectId, stem });
+		const closed = (await waitForPush(victimFrames, "session_closed")) as {
+			projectId?: string;
+			stem?: string;
+		};
+		expect(closed.projectId).toBe(projectId);
+		expect(closed.stem).toBe(stem);
+
+		// The killer is detached and notified too, and the terminal frame
+		// precedes the close reply the killer is waiting on.
+		await waitForPush(killerFrames, "session_closed");
+		const idxClosed = killerFrames.findIndex((f) => (f as Record<string, unknown>).kind === "session_closed");
+		const idxReply = killerFrames.findIndex((f) => (f as Record<string, unknown>).id === closeId);
+		expect(idxClosed).toBeGreaterThanOrEqual(0);
+		expect(idxClosed).toBeLessThan(idxReply);
+
+		// The attachment is severed server-side: a session command from the
+		// victim fails deterministically instead of reaching the disposed
+		// Manager, and the victim can still navigate elsewhere afterwards.
+		const promptReply = (await waitForReply(
+			victimFrames,
+			send(victim, { verb: "prompt", text: "late" }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(promptReply.ok).toBe(false);
+		expect(promptReply.error).toContain("no session attached");
+		const other = writeSessionFile(a, agentDir, "kill-notify-2");
+		expect((await waitForReply(victimFrames, send(victim, { verb: "openSession", projectId, stem: other }))).ok).toBe(
+			true,
+		);
+
+		killer.close();
+		victim.close();
+	});
+
 	it("waits for a pending activation creation instead of reporting not-active", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		let releaseFactory: () => void = () => {};
@@ -1848,6 +1895,41 @@ describe("daemon: archiveSession", () => {
 		);
 
 		ws.close();
+	});
+
+	it("pushes session_closed to a connection attached to the archived session", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "arch-notify");
+
+		const viewer = await openClient(port);
+		const viewerFrames = collectFrames(viewer);
+		expect((await waitForReply(viewerFrames, send(viewer, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+
+		// The archive comes from another socket; the attached viewer must learn
+		// the runtime ended, not discover it on its next command.
+		const archiver = await openClient(port);
+		const archiverFrames = collectFrames(archiver);
+		expect((await waitForReply(archiverFrames, send(archiver, { verb: "archiveSession", projectId, stem }))).ok).toBe(
+			true,
+		);
+
+		const closed = (await waitForPush(viewerFrames, "session_closed")) as {
+			projectId?: string;
+			stem?: string;
+		};
+		expect(closed.projectId).toBe(projectId);
+		expect(closed.stem).toBe(stem);
+		const late = (await waitForReply(
+			viewerFrames,
+			send(viewer, { verb: "renameSession", name: "x" }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(late.ok).toBe(false);
+		expect(late.error).toContain("no session attached");
+
+		viewer.close();
+		archiver.close();
 	});
 
 	it("closes an unflushed session and reports that there was no file to archive", async () => {
