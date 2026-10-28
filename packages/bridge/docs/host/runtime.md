@@ -203,7 +203,11 @@ transitions cannot each decide which Manager ends up attached, and the reply
 the client trusts describes the same operation as the attachment the server
 keeps. A disposed Connection refuses admission: a transition that arrives
 after the socket closed, or that reaches its turn after it, replies with an
-error instead of attaching something nothing would ever release.
+error instead of attaching something nothing would ever release. The
+serialization and that refusal are one `LifecycleScope`
+(`src/host/lifecycle-scope.ts`): disposal closes it synchronously — queued
+transitions answer `connection closed` — and drains one still in flight
+before the Connection is gone.
 `closeSession` and `archiveSession` change Activation state, not this
 Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listActiveSessions`,
 `getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,

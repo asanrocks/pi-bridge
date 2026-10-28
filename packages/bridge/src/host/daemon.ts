@@ -37,6 +37,7 @@ import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection, type DaemonVerbs } from "./connection.ts";
 import embeddedAssets from "./embedded-assets.ts";
+import { createLifecycleScope } from "./lifecycle-scope.ts";
 import { TrafficLogger } from "./logger.ts";
 import { createManager, type Manager } from "./manager.ts";
 import { resolveVisibleModelKeys } from "./model-visibility.ts";
@@ -155,12 +156,13 @@ export class Daemon {
 
 	/** Per-file mtime cache: only re-read session files whose mtime changed. */
 	private sessionMetaCache = new Map<string, { mtimeMs: number; meta: FileMeta }>();
-	/** Serialized daemon-global settings mutations. `setModelPinned` is a
-	 * read-modify-write over the global `enabledModels` scope: two concurrent
-	 * pin writes each read the pre-write list, and the later flush silently
-	 * drops the earlier update. Mutations run one at a time, in arrival
-	 * order, across every Connection. */
-	private settingsMutationChain: Promise<void> = Promise.resolve();
+	/** Serialized daemon-global settings mutations (see setModelPinned):
+	 * `setModelPinned` is a read-modify-write over the global `enabledModels`
+	 * scope, so two concurrent pin writes each read the pre-write list and
+	 * the later flush silently drops the earlier update. Mutations run one at
+	 * a time, in arrival order, across every Connection; the scope's chain
+	 * swallows rejections so a failed mutation cannot stall later ones. */
+	private settingsMutations = createLifecycleScope();
 
 	async start(options: DaemonOptions = {}): Promise<void> {
 		// pi-core is always offline in the bridge: the daemon owns no background
@@ -271,6 +273,9 @@ export class Daemon {
 			this.logger = null;
 		}
 		if (this.registry) await this.registry.dispose();
+		// Refuse further settings mutations and wait out an in-flight flush, so
+		// a disposed daemon has no write landing after dispose() returns.
+		await this.settingsMutations.close();
 	}
 
 	/**
@@ -773,9 +778,10 @@ export class Daemon {
 
 		setModelPinned: (provider: string, modelId: string, pinned: boolean) => {
 			// One mutation at a time, in arrival order, across every Connection —
-			// see settingsMutationChain. The chain swallows rejections so a failed
-			// mutation cannot stall later ones; the caller still sees the error.
-			const run = async (): Promise<void> => {
+			// see settingsMutations. The scope's chain swallows rejections so a
+			// failed mutation cannot stall later ones; the caller still sees the
+			// error reply.
+			return this.settingsMutations.run(async (): Promise<void> => {
 				const settings = this.globalSettings;
 				if (!settings) throw new Error("No global settings available");
 				// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
@@ -792,13 +798,7 @@ export class Daemon {
 				settings.setEnabledModels(next.length > 0 ? next : undefined);
 				await settings.flush();
 				await this.broadcastPinnedModels();
-			};
-			const done = this.settingsMutationChain.then(run, run);
-			this.settingsMutationChain = done.then(
-				() => {},
-				() => {},
-			);
-			return done;
+			});
 		},
 	};
 

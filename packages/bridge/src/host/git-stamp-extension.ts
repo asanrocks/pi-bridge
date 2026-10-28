@@ -19,6 +19,7 @@ import {
 	parseGitStampEntry,
 	sameGitIdentity,
 } from "../core/git-stamp.ts";
+import { createLifecycleScope } from "./lifecycle-scope.ts";
 
 // ============================================================================
 // Git process runner (injectable seam)
@@ -181,14 +182,12 @@ export function createGitStampExtensionWithTrigger(deps: Partial<GitStampDeps> =
 	};
 
 	const factory: ExtensionFactory = (pi) => {
-		// Serialized observations. Each task must recover before the chain
-		// continues, so one failed observation cannot block later ones.
-		let queue: Promise<void> = Promise.resolve();
-		const enqueue = (anchor: GitStampAnchor, ctx: GitStampObserveContext): Promise<void> => {
-			const task = queue.then(() => observe(anchor, ctx));
-			queue = task;
-			return task;
-		};
+		// Serialized observations through the shared scope: one at a time, in
+		// observation order, and one failure never wedges the next (the scope's
+		// chain swallows rejections; `observe` itself also recovers).
+		const observations = createLifecycleScope();
+		const enqueue = (anchor: GitStampAnchor, ctx: GitStampObserveContext): Promise<void> =>
+			observations.run(() => observe(anchor, ctx));
 		boundEnqueue = enqueue;
 
 		const observe = async (anchor: GitStampAnchor, ctx: GitStampObserveContext): Promise<void> => {

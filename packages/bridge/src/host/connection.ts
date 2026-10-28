@@ -47,6 +47,7 @@ import {
 	type Patch,
 	resolveFieldPath,
 } from "../core/index.ts";
+import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
 
@@ -168,8 +169,10 @@ export class Connection {
 	private _attachedManager: Manager | null = null;
 	private _attachedSession: SessionRef | null = null;
 	private _disposed = false;
-	/** Serialized attachment-changing transitions (see runTransition). */
-	private transitionChain: Promise<void> = Promise.resolve();
+	/** Serialized attachment-changing transitions (see runTransition),
+	 * drained at disposal so a transition still in flight when the socket
+	 * closed settles before the Connection is gone. */
+	private transitions = createLifecycleScope();
 
 	constructor(ws: WebSocket, daemonVerbs: DaemonVerbs, logger: TrafficLogger | null, devMode: boolean) {
 		this.ws = ws;
@@ -243,6 +246,10 @@ export class Connection {
 
 	dispose(): void {
 		this._disposed = true;
+		// Drain the transition chain: one still in flight settles (the registry
+		// already refuses to attach a disposed Connection), and queued ones are
+		// refused rather than run — the socket is gone, so nothing is replied.
+		void this.transitions.close();
 		this.detach();
 	}
 
@@ -266,18 +273,25 @@ export class Connection {
 	 * ever release.
 	 */
 	private runTransition(id: string, op: () => Promise<void>): void {
-		const attempt = async (): Promise<void> => {
-			if (this._disposed) {
+		void this.transitions
+			.run(async () => {
+				if (this._disposed) {
+					this.sendReply(id, false, "connection closed");
+					return;
+				}
+				try {
+					await op();
+				} catch (err) {
+					this.sendReply(id, false, (err as Error).message);
+				}
+			})
+			.catch(() => {
+				// Refused by the scope after dispose: reply exactly as the
+				// in-flight check above does. The socket is normally gone with
+				// the disposal (send then no-ops), but a transition that queued
+				// behind disposal must not hang its caller without an answer.
 				this.sendReply(id, false, "connection closed");
-				return;
-			}
-			try {
-				await op();
-			} catch (err) {
-				this.sendReply(id, false, (err as Error).message);
-			}
-		};
-		this.transitionChain = this.transitionChain.then(attempt, attempt);
+			});
 	}
 
 	/**
