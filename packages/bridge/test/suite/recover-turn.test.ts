@@ -112,10 +112,12 @@ function stampEntry(id: string): Entry {
 function chainDoc(...entries: Entry[]): Document {
 	const map: Record<string, Entry> = {};
 	let prev: string | null = null;
-	for (const entry of entries) {
-		map[entry.id] = { ...entry, parentId: prev };
+	entries.forEach((entry, i) => {
+		// Sealed entries carry their file position: derivation selects the leaf
+		// by `ord`, never by map key order.
+		map[entry.id] = { ...entry, parentId: prev, ord: i };
 		prev = entry.id;
-	}
+	});
 	const status = deriveStatus(map);
 	return { status, entries: map };
 }

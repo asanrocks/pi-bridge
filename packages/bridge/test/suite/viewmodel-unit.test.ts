@@ -863,10 +863,10 @@ describe("tool result join", () => {
 		}
 	});
 
-	it("tool with provisional result entry (tool_execution_start) shows running", () => {
-		// A provisional tool_result (pending: prefix) is created at
-		// tool_execution_start, before tool_execution_end seals it. The
-		// action is running, not done.
+	it("tool with an unsealed result entry (tool_execution_start) shows running", () => {
+		// The result entry's live form is created at tool_execution_start under
+		// the id pi reserved for it, and stays unsealed until its persisted form
+		// arrives. Execution state follows the seal, not the id's spelling.
 		const doc = emptyDoc();
 		doc.entries["a1"] = {
 			kind: "message",
@@ -876,24 +876,25 @@ describe("tool result join", () => {
 			role: "assistant",
 			content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: '{"command":"sleep 5"}' }],
 		} as unknown as Document["entries"][string];
-		doc.entries["pending:tc1"] = {
+		doc.entries["r1"] = {
 			kind: "tool_result",
-			id: "pending:tc1",
+			id: "r1",
 			parentId: "a1",
 			timestamp: "",
+			isSealed: false,
 			toolCallId: "tc1",
 			toolName: "bash",
 			content: [{ type: "text", text: "" }],
 			details: null,
 			isError: false,
 		} as unknown as Document["entries"][string];
-		doc.status.leafId = "pending:tc1";
+		doc.status.leafId = "r1";
 
 		const vm = computeViewModel({ document: doc, models: [] });
 		const a = vm.turns[0];
 		if (a.kind === "assistant" && a.blocks[0].blockType === "tool") {
 			expect(a.blocks[0].status).toBe("running");
-			expect(a.blocks[0].result?.entryId).toBe("pending:tc1");
+			expect(a.blocks[0].result?.entryId).toBe("r1");
 		}
 	});
 });

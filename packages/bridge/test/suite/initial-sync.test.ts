@@ -9,11 +9,12 @@ import {
 	computeCursor,
 	type Document,
 	initFromEntries,
-	reconcile,
+	isEntrySealed,
 	type SessionRef,
 	seedDocument,
 	validateCursor,
 } from "../../src/core/index.ts";
+import { createDriver, type ProjectionDriver } from "./projection-driver.ts";
 
 /** Synthetic session address for the initial-sync frames. */
 const REF: SessionRef = { projectId: "p", sessionId: "s", stem: "2026-01-01_s" };
@@ -79,33 +80,51 @@ function labelEntry(id: string, targetId: string): SessionEntry {
 	return se("label", { id, targetId, label: "pinned" });
 }
 
-/** A canonical Document mid-turn: committed prefix + in-flight provisionals. */
-function midTurnDoc(): { doc: Document; piEntries: SessionEntry[] } {
+function emptyDoc(): Document {
+	return {
+		status: {
+			leafId: null,
+			name: "",
+			model: { provider: "", modelId: "" },
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+			contextUsage: null,
+			pendingSteer: [],
+		},
+		entries: {},
+	};
+}
+
+/** A canonical Document mid-turn: committed prefix plus the live forms of the
+ * entries the turn is streaming under the ids pi reserved for them. */
+function midTurnDoc(): { doc: Document; piEntries: SessionEntry[]; driver: ProjectionDriver } {
 	const committed = [userEntry("a"), userEntry("b", "a")];
-	let doc = initFromEntries(committed);
-	const userStarted = applyEvent(doc, {
+	const driver = createDriver(emptyDoc());
+	if (!driver.refresh(committed)) throw new Error("expected a bootstrap patch");
+	const userStarted = driver.applyEvent({
 		type: "message_start",
+		entryId: "u3",
 		message: { role: "user", content: "steering note", timestamp: 0 },
-	} as AgentSessionEvent);
+	} as unknown as AgentSessionEvent);
 	if (!userStarted) throw new Error("expected a patch");
-	doc = applyPatch(doc, userStarted.ops);
-	const assistantStarted = applyEvent(doc, {
+	const assistantStarted = driver.applyEvent({
 		type: "message_start",
+		entryId: "a2",
 		message: { role: "assistant", content: [], api: "anthropic", provider: "anthropic", model: "claude" },
 	} as unknown as AgentSessionEvent);
 	if (!assistantStarted) throw new Error("expected a patch");
-	doc = applyPatch(doc, assistantStarted.ops);
 
-	// pi persists the user message at message_end; the bridge holds it as
-	// pending:user:1 until the turn-end reconcile.
+	// pi persists the user message at message_end, under the id it streamed as.
 	const piEntries = [...committed, userEntry("u3", "b")];
-	return { doc, piEntries };
+	return { doc: driver.document, piEntries, driver };
 }
 
 function committedRecords(sessionId: string, doc: Document): CacheEntryRecord[] {
 	const records: CacheEntryRecord[] = [];
 	for (const [id, entry] of Object.entries(doc.entries)) {
-		if (id.startsWith("pending:")) continue;
+		if (!isEntrySealed(entry)) continue;
 		if (entry.ord === undefined) continue;
 		records.push({ sessionId, ord: entry.ord, entryId: id, entry });
 	}
@@ -145,7 +164,7 @@ describe("validateCursor", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildInitialSync: full replacement", () => {
-	it("sends every committed entry with ord, lazy fields null, plus provisionals, status, and scoped models", () => {
+	it("sends every committed entry with ord, lazy fields null, plus live forms, status, and scoped models", () => {
 		const { doc, piEntries } = midTurnDoc();
 		const frame = buildInitialSync(doc, piEntries, REF, null);
 		expect(frame.kind).toBe("replace");
@@ -155,36 +174,34 @@ describe("buildInitialSync: full replacement", () => {
 		const entries = frame.document.entries;
 		expect(entries.a?.ord).toBe(0);
 		expect(entries.b?.ord).toBe(1);
-		// The committed user message pairs with pending:user:1 — excluded.
-		expect(entries.u3).toBeUndefined();
-		expect(entries["pending:user:1"]).toBeDefined();
-		expect(entries["pending:message"]).toBeDefined();
+		// The committed user message travels as its persisted form; the
+		// assistant is still live, under the id it will keep.
+		expect(entries.u3?.ord).toBe(2);
+		expect(entries.a2).toBeDefined();
+		expect(isEntrySealed(entries.a2!)).toBe(false);
 		expect(frame.document.status).toEqual(doc.status);
 	});
 
 	it("keeps prior committed assistant messages when a new turn is in flight", () => {
-		// Regression: findProvisional pairs ANY assistant piEntry with the
-		// pending:message singleton by existence. Consulting it for entries the
-		// Document already holds dropped every previously committed assistant
-		// message from a mid-turn replace — and the cache gap it produced
-		// degraded every later attach to a replace that still dropped them.
+		// A mid-turn replace must never drop an earlier committed assistant
+		// message: the live form of the current reply is a different identity.
 		const settled = [userEntry("a"), assistantEntry("a1", "a"), userEntry("b", "a1")];
 		let doc = initFromEntries(settled);
-		// A real turn: the user message starts the turn (pending:user:1, committed
-		// in the file at message_end), then the assistant reply streams.
 		const userStarted = applyEvent(doc, {
 			type: "message_start",
+			entryId: "u3",
 			message: { role: "user", content: "next question", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
 		if (!userStarted) throw new Error("expected a patch");
 		doc = applyPatch(doc, userStarted.ops);
 		const started = applyEvent(doc, {
 			type: "message_start",
+			entryId: "a2",
 			message: { role: "assistant", content: [], api: "anthropic", provider: "anthropic", model: "claude" },
 		} as unknown as AgentSessionEvent);
 		if (!started) throw new Error("expected a patch");
 		doc = applyPatch(doc, started.ops);
-		expect(doc.entries["pending:message"]).toBeDefined();
+		expect(doc.entries.a2).toBeDefined();
 
 		// The current turn's user message is committed in the file mid-turn.
 		const piEntries = [...settled, userEntry("u3", "b")];
@@ -192,8 +209,9 @@ describe("buildInitialSync: full replacement", () => {
 		if (frame.kind !== "replace") throw new Error("expected replace");
 		expect(frame.document.entries.a1?.ord).toBe(1);
 		expect(frame.document.entries.b?.ord).toBe(2);
-		expect(frame.document.entries.u3).toBeUndefined();
-		expect(frame.document.entries["pending:message"]).toBeDefined();
+		expect(frame.document.entries.u3?.ord).toBe(3);
+		expect(frame.document.entries.a2).toBeDefined();
+		expect(isEntrySealed(frame.document.entries.a2!)).toBe(false);
 	});
 
 	it("includes silently-appended entries the canonical Document does not know yet", () => {
@@ -253,9 +271,10 @@ describe("buildInitialSync: delta patch", () => {
 		// Committed conversation in both the Document and the file, with a
 		// suffix beyond a two-entry cached prefix.
 		const piEntries = [userEntry("a"), userEntry("b", "a"), labelEntry("l1", "b"), userEntry("c", "l1")];
-		const doc = initFromEntries([userEntry("a"), userEntry("b", "a")]);
-		const sealed = reconcile(doc, piEntries);
-		return sealed ? applyPatch(doc, sealed.ops) : doc;
+		const driver = createDriver(emptyDoc());
+		driver.refresh(piEntries.slice(0, 2));
+		driver.refresh(piEntries);
+		return driver.document;
 	}
 
 	it("sends only the committed suffix plus status and scoped models", () => {
@@ -275,17 +294,17 @@ describe("buildInitialSync: delta patch", () => {
 		expect(frame.ops).toContainEqual({ op: "replace", path: "/status", value: doc.status });
 	});
 
-	it("includes provisional skeletons during a mid-turn reconnect", () => {
+	it("includes the live form plus the committed suffix during a mid-turn reconnect", () => {
 		const { doc, piEntries } = midTurnDoc();
 		const frame = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
 		expect(frame.kind).toBe("patch");
 		if (frame.kind !== "patch") return;
 		const addPaths = frame.ops.filter((o) => o.op === "add").map((o) => o.path);
-		// The committed u3 pairs with pending:user:1 — the provisional is sent,
-		// not the committed entry.
-		expect(addPaths).toContain("/entries/pending:user:1");
-		expect(addPaths).toContain("/entries/pending:message");
-		expect(addPaths).not.toContain("/entries/u3");
+		// The persisted user message is part of the committed suffix; the
+		// assistant is still live, addressed by the id it will keep.
+		expect(addPaths).toContain("/entries/u3");
+		expect(addPaths).toContain("/entries/a2");
+		expect(addPaths.some((path) => path.includes("pending:"))).toBe(false);
 	});
 
 	it("is never a compact single-append frame", () => {
@@ -352,12 +371,14 @@ describe("initial sync convergence", () => {
 		let doc = initFromEntries(settled);
 		const userStarted = applyEvent(doc, {
 			type: "message_start",
+			entryId: "u3",
 			message: { role: "user", content: "next question", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
 		if (!userStarted) throw new Error("expected a patch");
 		doc = applyPatch(doc, userStarted.ops);
 		const started = applyEvent(doc, {
 			type: "message_start",
+			entryId: "a2",
 			message: { role: "assistant", content: [], api: "anthropic", provider: "anthropic", model: "claude" },
 		} as unknown as AgentSessionEvent);
 		if (!started) throw new Error("expected a patch");
@@ -369,9 +390,9 @@ describe("initial sync convergence", () => {
 		expect(full.document.entries.a1?.ord).toBe(1);
 
 		const records = committedRecords("s", full.document);
-		expect(records.map((r) => r.entryId)).toEqual(["a", "a1", "b"]);
+		expect(records.map((r) => r.entryId)).toEqual(["a", "a1", "b", "u3"]);
 		const cursor = computeCursor(records);
-		expect(cursor).toEqual({ sessionId: "s", lastKnownId: "b", entryCount: 3 });
+		expect(cursor).toEqual({ sessionId: "s", lastKnownId: "u3", entryCount: 4 });
 
 		const delta = buildInitialSync(doc, piEntries, REF, cursor);
 		if (delta.kind !== "patch") throw new Error("expected patch");
@@ -393,12 +414,13 @@ describe("initial sync convergence", () => {
 	});
 
 	it("settles the in-flight turn and keeps cached ords contiguous", () => {
-		const { doc, piEntries } = midTurnDoc();
-		// Attach mid-turn: u3 is excluded (paired), so cached records are
-		// a(0), b(1) — contiguous, cursor valid. After the turn settles, the
-		// seal assigns u3 ord 2 and the next snapshot's records stay contiguous.
-		const settled = reconcile(doc, [...piEntries, userEntry("c4", "u3")]);
-		const doc2 = settled ? applyPatch(doc, settled.ops) : doc;
+		const { piEntries, driver } = midTurnDoc();
+		// Attach mid-turn: the persisted user message is part of the committed
+		// prefix, so cached records are a(0), b(1), u3(2) — contiguous and the
+		// cursor stays valid. After the turn settles, the refresh assigns the
+		// assistant its position and the next snapshot's records stay contiguous.
+		driver.refresh([...piEntries, userEntry("c4", "u3")]);
+		const doc2 = driver.document;
 		const full = buildInitialSync(doc2, [...piEntries, userEntry("c4", "u3")], REF, null);
 		if (full.kind !== "replace") throw new Error("expected replace");
 

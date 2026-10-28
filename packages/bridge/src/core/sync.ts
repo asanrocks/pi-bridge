@@ -6,19 +6,14 @@
 // prefix cursor is valid, otherwise a full replace snapshot. Both frames
 // carries the session reference.
 //
-// Mid-turn pairing rule: pi persists every user/assistant/toolResult message
-// at message_end, while the canonical Document holds those entries as
-// `pending:*` provisionals until the turn-end reconcile seals them. A
-// committed pi entry that still pairs with a provisional is therefore
-// represented by that provisional — sending both would double-render, and
-// omitting the provisional would break the later seal `move` (the mirror
-// must hold the provisional for the move to relocate). Such committed
-// entries are excluded until sealed; they receive `ord` and become cacheable
-// at the next reconcile or initial sync.
+// Identity rule: pi reserves a message's entry id before it is visible, so a
+// mid-turn Document and the persisted entry list agree on the same key. There
+// is no pairing step: a persisted entry is preferred over the live form of the
+// same id, and an entry pi has not stored yet travels as its live form.
 // ============================================================================
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { findProvisional, stripLazyFields, toEntry } from "./document.ts";
+import { projectEntry, stripLazyFields } from "./document.ts";
 import type {
 	Document,
 	Entry,
@@ -29,6 +24,7 @@ import type {
 	ReplaceMessage,
 	SessionRef,
 } from "./types.ts";
+import { isEntrySealed } from "./types.ts";
 
 /**
  * Server-side cursor check (ADR 09 §Prefix Cursor). Catches a wrong session,
@@ -53,28 +49,22 @@ function collectCommitted(doc: Document, piEntries: SessionEntry[]): CommittedPr
 	const out: CommittedProjection[] = [];
 	for (let i = 0; i < piEntries.length; i++) {
 		const piEntry = piEntries[i];
-		// Pairing applies only to entries the canonical Document does not
-		// already hold. findProvisional's assistant branch pairs by existence of
-		// the pending:message singleton, not correspondence — consulting it for
-		// known entries would drop every previously committed assistant message
-		// during a mid-turn attach (and cost O(n²) in the user branch).
-		if (doc.entries[piEntry.id] === undefined && findProvisional(doc.entries, piEntries, piEntry)) {
-			continue; // still in-flight
-		}
-		// Prefer the canonical entry (streaming-enriched); fall back to the
-		// file projection — this also discovers silently-appended entries
-		// (e.g. setLabel) that no event has delivered yet.
-		const base = doc.entries[piEntry.id] ?? toEntry(piEntry);
-		out.push({ id: piEntry.id, ord: i, value: stripLazyFields({ ...base, ord: i } as Entry) });
+		// The file is authoritative for an entry it holds. A sealed entry is
+		// already that projection; an unsealed one is a live form, so sending it
+		// would advertise a file position for content the Session has replaced.
+		// This also discovers silently-appended entries (e.g. setLabel).
+		const existing = doc.entries[piEntry.id];
+		const base = existing !== undefined && isEntrySealed(existing) ? existing : projectEntry(piEntry, i);
+		out.push({ id: piEntry.id, ord: i, value: stripLazyFields(base) });
 	}
 	return out;
 }
 
-/** Provisional entries with lazy fields stripped, never cached, no ord. */
+/** Live forms with lazy fields stripped: never cached, no ord. */
 function collectProvisional(doc: Document): Array<[string, Entry]> {
 	const out: Array<[string, Entry]> = [];
 	for (const [id, entry] of Object.entries(doc.entries)) {
-		if (id.startsWith("pending:")) out.push([id, stripLazyFields(entry)]);
+		if (!isEntrySealed(entry)) out.push([id, stripLazyFields(entry)]);
 	}
 	return out;
 }
@@ -99,8 +89,10 @@ export function buildInitialSync(
 		for (const committed of collectCommitted(doc, piEntries)) {
 			entries[committed.id] = committed.value;
 		}
+		// A live form whose entry arrived is already represented by the committed
+		// projection; only genuinely in-flight entries are added here.
 		for (const [id, value] of collectProvisional(doc)) {
-			entries[id] = value;
+			entries[id] ??= value;
 		}
 		return {
 			kind: "replace",
@@ -110,12 +102,15 @@ export function buildInitialSync(
 	}
 
 	const ops: PatchOp[] = [];
+	const committedIds = new Set<string>();
 	for (const committed of collectCommitted(doc, piEntries)) {
+		committedIds.add(committed.id);
 		if (committed.ord >= cursor.entryCount) {
 			ops.push({ op: "add", path: `/entries/${committed.id}`, value: committed.value as unknown as JsonValue });
 		}
 	}
 	for (const [id, value] of collectProvisional(doc)) {
+		if (committedIds.has(id)) continue;
 		ops.push({ op: "add", path: `/entries/${id}`, value: value as unknown as JsonValue });
 	}
 	ops.push({ op: "replace", path: "/status", value: doc.status as unknown as JsonValue });

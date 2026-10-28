@@ -73,26 +73,11 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 
 	const flush = (cacheMode: "delta" | "skip" = "delta") => {
 		cancelPending();
-		const ops = pendingOps;
 		pendingOps = null;
 		// Frozen pipeline: a dead or superseded connection must not write
 		// its (frozen) mirror into the store.
 		if (disposed) return;
 		const store = getStore();
-		if (ops) {
-			for (const op of ops) {
-				if (op.op === "move" && "from" in op && "path" in op) {
-					const from = (op as { from: string }).from;
-					const to = (op as { path: string }).path;
-					const oldId = extractEntryId(from);
-					const newId = extractEntryId(to);
-					if (oldId && newId && oldId !== newId) {
-						store.getState().migrateExpandKeys(oldId, newId);
-						store.getState().migrateFocusedTurnId(oldId, newId);
-					}
-				}
-			}
-		}
 		const after = client.mirror.document;
 		store.getState().applyReplace(after);
 		// Write-through (ADR 09): persist committed-entry deltas under the
@@ -142,6 +127,11 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	};
 
 	// ── Push handler ───────────────────────────────────────────────────
+	// Entry-root replacements seen as of the last push: an authoritative
+	// replacement can change content the projection reads but the structural
+	// cache key does not (same ids, same lengths), so the store re-projects.
+	let lastRewrites = client.mirror.rewrites;
+
 	const onPush = (push: ServerPushMessage) => {
 		if (disposed) return;
 		const store = getStore();
@@ -241,6 +231,14 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			for (const op of push.ops) pendingOps.push(op);
 			if (push.ops.some((op) => op.path.startsWith("/status"))) flush();
 			else scheduleFlush();
+			// A live patch replaced an entry the mirror already held (sealing in
+			// place, or an authoritative rewrite). The flush publishes the
+			// document; this bump makes the projection re-run — the structural
+			// cache key cannot see a same-id content change.
+			if (client.mirror.rewrites !== lastRewrites) {
+				lastRewrites = client.mirror.rewrites;
+				store.getState().bumpPullTick();
+			}
 		}
 	};
 
@@ -255,9 +253,4 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			pendingOps = null;
 		},
 	};
-}
-
-function extractEntryId(path: string): string | null {
-	const match = path.match(/^\/entries\/([^/]+)/);
-	return match ? match[1] : null;
 }

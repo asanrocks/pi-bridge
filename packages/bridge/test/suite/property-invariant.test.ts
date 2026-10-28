@@ -3,14 +3,14 @@
  *
  * Verified invariants:
  *
- * I1. Committed entries are immutable — only provisionals change.
- * I2. Domain validity after each Patch: committed entries have id/parentId/timestamp;
+ * I1. Committed entries are immutable — only unsealed live forms change.
+ * I2. Domain validity after each Patch: sealed entries have id/parentId/timestamp;
  *     leafId points to an existing entry or null.
  * I3. Parent chain integrity: every child references an existing parent.
- * I4. Provisionals are never removed, only renamed (move).
- * I5. Turn-scoped ordinals: within a turn, pending:user:<n> are
- *     sequential from 1; none remain after seal.
- * I6. Reconcile idempotency: calling reconcile twice with same inputs
+ * I4. Identity is stable: an entry keeps its id from its first event, so
+ *     sealing installs content in place and never renames.
+ * I5. Seal lifecycle: a persisted entry is sealed with its file position.
+ * I6. Refresh idempotency: refreshing twice over the same entry list
  *     is a no-op.
  * I7. initFromEntries produces domain-valid output with no provisionals.
  * I8. Patch atomicity: all ops in a Patch are delivered together.
@@ -18,7 +18,16 @@
 
 import type { AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { applyEvent, applyPatch, type Document, initFromEntries, reconcile, setAtPath } from "../../src/core/index.ts";
+import {
+	applyEvent,
+	applyPatch,
+	type Document,
+	initFromEntries,
+	isEntrySealed,
+	type Patch,
+	setAtPath,
+} from "../../src/core/index.ts";
+import { createDriver } from "./projection-driver.ts";
 
 // ==========================================================================
 // Test helpers — produce valid SessionEntry objects with all required fields
@@ -71,8 +80,9 @@ function emptyDoc(): Document {
 	};
 }
 
-function isProvisional(id: string): boolean {
-	return id.startsWith("pending:");
+/** True for an entry that is still a live, not-yet-persisted form. */
+function isProvisional(entry: { isSealed?: boolean }): boolean {
+	return entry.isSealed === false;
 }
 
 // ==========================================================================
@@ -109,7 +119,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 function checkDomainValidity(doc: Document): string[] {
 	const violations: string[] = [];
 	for (const [id, entry] of Object.entries(doc.entries)) {
-		if (!isProvisional(id)) {
+		if (!isProvisional(entry)) {
 			if (!entry.id) violations.push(`I2: ${id} missing id`);
 			if (entry.parentId === undefined) {
 				violations.push(`I2: ${id} missing parentId`);
@@ -133,7 +143,7 @@ function checkCommittedImmutability(
 ): string[] {
 	const violations: string[] = [];
 	for (const id of Object.keys(next.entries)) {
-		if (isProvisional(id)) continue;
+		if (isProvisional(next.entries[id]!)) continue;
 		const pe = prev.entries[id];
 		const ne = next.entries[id];
 		if (pe && !deepEqual(pe, ne)) {
@@ -173,7 +183,7 @@ describe("property-based invariants (ADR 02)", () => {
 					content: [{ type: "text", text: "hi" }],
 				}),
 			]);
-			expect(Object.keys(doc.entries).every((id) => !isProvisional(id))).toBe(true);
+			expect(Object.values(doc.entries).every((entry) => !isProvisional(entry))).toBe(true);
 			expect(checkDomainValidity(doc)).toEqual([]);
 		});
 
@@ -197,38 +207,37 @@ describe("property-based invariants (ADR 02)", () => {
 		});
 	});
 
-	// ── I6: Reconcile idempotency ──────────────────────────────────────────
+	// ── I6: Refresh idempotency ──────────────────────────────────────────
 
-	describe("I6: reconcile idempotency", () => {
-		it("second reconcile is no-op for silent entries", () => {
-			let doc = emptyDoc();
+	describe("I6: refresh idempotency", () => {
+		it("second refresh over the same list is a no-op for silent entries", () => {
+			const driver = createDriver(emptyDoc());
 			const piEntries: SessionEntry[] = [
 				mkSessionEntry({ type: "model_change", id: "mc1", provider: "a", modelId: "c" }),
 			];
-			const p1 = reconcile(doc, piEntries);
+			const p1 = driver.refresh(piEntries);
 			expect(p1).not.toBeNull();
-			doc = applyPatch(doc, p1!.ops);
 
-			const p2 = reconcile(doc, piEntries);
+			const p2 = driver.refresh(piEntries);
 			expect(p2).toBeNull();
 		});
 
-		it("second reconcile is no-op after rename", () => {
-			let doc = emptyDoc();
-			doc = applyPatch(doc, [
-				{
-					op: "add",
-					path: "/entries/pending:message",
-					value: {
-						kind: "message",
-						role: "assistant",
-						id: "pending:message",
-						parentId: null,
-						timestamp: "",
-						content: [],
-					},
+		it("second refresh is a no-op after sealing in place", () => {
+			const driver = createDriver(emptyDoc());
+			driver.applyEvent({
+				type: "message_start",
+				entryId: "real-1",
+				message: {
+					role: "assistant",
+					content: [],
+					api: "x",
+					provider: "x",
+					model: "x",
+					stopReason: null,
+					usage: null,
+					timestamp: 0,
 				},
-			]);
+			} as unknown as AgentSessionEvent);
 
 			const piEntries: SessionEntry[] = [
 				mkSessionEntry({
@@ -240,11 +249,10 @@ describe("property-based invariants (ADR 02)", () => {
 					content: [],
 				}),
 			];
-			const p1 = reconcile(doc, piEntries);
+			const p1 = driver.refresh(piEntries);
 			expect(p1).not.toBeNull();
-			doc = applyPatch(doc, p1!.ops);
 
-			const p2 = reconcile(doc, piEntries);
+			const p2 = driver.refresh(piEntries);
 			expect(p2).toBeNull();
 		});
 	});
@@ -376,55 +384,55 @@ describe("property-based invariants (ADR 02)", () => {
 
 	// ── I5: Ordinal correctness ────────────────────────────────────────────
 
-	describe("I5: user message ordinals", () => {
-		it("ordinals within a turn are sequential from 1", () => {
+	describe("I5: identity and seal lifecycle", () => {
+		it("each live message keeps the id it started under", () => {
 			let doc = emptyDoc();
 
-			const ev = (role: string, text: string) =>
+			const ev = (id: string, role: string, text: string) =>
 				({
 					type: "message_start",
+					entryId: id,
 					message: { role, content: text, timestamp: 0 },
 				}) as unknown as AgentSessionEvent;
 
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "a"))!.ops);
-			expect(doc.entries["pending:user:1"]).toBeDefined();
+			doc = applyPatch(doc, applyEvent(doc, ev("u1", "user", "a"))!.ops);
+			doc = applyPatch(doc, applyEvent(doc, ev("u2", "user", "b"))!.ops);
 
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "b"))!.ops);
-			expect(doc.entries["pending:user:2"]).toBeDefined();
-
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "c"))!.ops);
-			expect(doc.entries["pending:user:3"]).toBeDefined();
-
-			expect(doc.entries["pending:user:1"]).toBeDefined();
-			expect(doc.entries["pending:user:2"]).toBeDefined();
-			expect(doc.entries["pending:user:3"]).toBeDefined();
+			expect(doc.entries.u1).toBeDefined();
+			expect(doc.entries.u2).toBeDefined();
+			// No synthetic ordinal names: the id is the identity.
+			expect(Object.keys(doc.entries).sort()).toEqual(["u1", "u2"]);
 		});
 
-		it("ordinals reset after seal", () => {
-			let doc = emptyDoc();
+		it("sealing installs the entry and its file position", () => {
+			const driver = createDriver(emptyDoc());
 
-			const ev = (role: string, text: string) =>
+			const ev = (id: string, role: string, text: string) =>
 				({
 					type: "message_start",
+					entryId: id,
 					message: { role, content: text, timestamp: 0 },
 				}) as unknown as AgentSessionEvent;
 
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "a"))!.ops);
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "b"))!.ops);
+			driver.applyEvent(ev("u1", "user", "a"));
+			driver.applyEvent(ev("u2", "user", "b"));
 
-			// Seal
 			const piEntries: SessionEntry[] = [
 				mkSessionEntry({ type: "message", id: "u1", role: "user", parentId: null }),
 				mkSessionEntry({ type: "message", id: "u2", role: "user", parentId: null }),
 			];
-			doc = applyPatch(doc, reconcile(doc, piEntries)!.ops);
+			driver.refresh(piEntries);
+			const doc = driver.document;
 
-			expect(doc.entries["pending:user:1"]).toBeUndefined();
-			expect(doc.entries["pending:user:2"]).toBeUndefined();
+			expect(isEntrySealed(doc.entries.u1!)).toBe(true);
+			expect(isEntrySealed(doc.entries.u2!)).toBe(true);
+			expect(doc.entries.u1?.ord).toBe(0);
+			expect(doc.entries.u2?.ord).toBe(1);
 
-			// New turn — ordinal resets
-			doc = applyPatch(doc, applyEvent(doc, ev("user", "c"))!.ops);
-			expect(doc.entries["pending:user:1"]).toBeDefined();
+			// A later live form is independent of the sealed pair.
+			driver.applyEvent(ev("u3", "user", "c"));
+			expect(isEntrySealed(driver.document.entries.u3!)).toBe(false);
+			expect(driver.document.entries.u3?.ord).toBeUndefined();
 		});
 	});
 
@@ -432,31 +440,25 @@ describe("property-based invariants (ADR 02)", () => {
 
 	describe("I3: parent chain integrity", () => {
 		it("valid parent chain passes check", () => {
-			let doc = emptyDoc();
-			doc = setAtPath(doc, "/entries/parent1", {
-				kind: "message",
-				role: "user",
-				id: "parent1",
-				parentId: null,
-				timestamp: "t",
-				content: [],
-			});
-			doc = applyPatch(doc, [
-				{
-					op: "add",
-					path: "/entries/pending:message",
-					value: {
-						kind: "message",
-						role: "assistant",
-						id: "pending:message",
-						parentId: null,
-						timestamp: "",
-						content: [],
-					},
+			const driver = createDriver(emptyDoc());
+			driver.refresh([mkSessionEntry({ type: "message", id: "parent1", role: "user", parentId: null })]);
+			driver.applyEvent({
+				type: "message_start",
+				entryId: "child1",
+				message: {
+					role: "assistant",
+					content: [],
+					api: "x",
+					provider: "x",
+					model: "x",
+					stopReason: null,
+					usage: null,
+					timestamp: 0,
 				},
-			]);
+			} as unknown as AgentSessionEvent);
 
 			const piEntries: SessionEntry[] = [
+				mkSessionEntry({ type: "message", id: "parent1", role: "user", parentId: null }),
 				mkSessionEntry({
 					type: "message",
 					id: "child1",
@@ -466,26 +468,12 @@ describe("property-based invariants (ADR 02)", () => {
 					content: [],
 				}),
 			];
-			doc = applyPatch(doc, reconcile(doc, piEntries)!.ops);
-			expect(checkDomainValidity(doc)).toEqual([]);
+			driver.refresh(piEntries);
+			expect(checkDomainValidity(driver.document)).toEqual([]);
 		});
 
 		it("broken parent chain is detected", () => {
-			let doc = emptyDoc();
-			doc = applyPatch(doc, [
-				{
-					op: "add",
-					path: "/entries/pending:message",
-					value: {
-						kind: "message",
-						role: "assistant",
-						id: "pending:message",
-						parentId: null,
-						timestamp: "",
-						content: [],
-					},
-				},
-			]);
+			const driver = createDriver(emptyDoc());
 
 			const piEntries: SessionEntry[] = [
 				mkSessionEntry({
@@ -497,8 +485,8 @@ describe("property-based invariants (ADR 02)", () => {
 					content: [],
 				}),
 			];
-			doc = applyPatch(doc, reconcile(doc, piEntries)!.ops);
-			const v = checkDomainValidity(doc);
+			driver.refresh(piEntries);
+			const v = checkDomainValidity(driver.document);
 			expect(v.length).toBeGreaterThan(0);
 			expect(v[0]).toContain("parent");
 		});
@@ -507,39 +495,29 @@ describe("property-based invariants (ADR 02)", () => {
 	// ── I8: Patch atomicity ────────────────────────────────────────────────
 
 	describe("I8: patch atomicity", () => {
-		it("reconcile groups multiple renames into one Patch", () => {
-			let doc = emptyDoc();
-			doc = applyPatch(doc, [
-				{
-					op: "add",
-					path: "/entries/pending:message",
-					value: {
-						kind: "message",
-						role: "assistant",
-						id: "pending:message",
-						parentId: null,
-						timestamp: "",
-						content: [],
-					},
+		it("one refresh seals multiple entries in one Patch", () => {
+			const driver = createDriver(emptyDoc());
+			driver.applyEvent({
+				type: "message_start",
+				entryId: "a1",
+				message: {
+					role: "assistant",
+					content: [],
+					api: "x",
+					provider: "x",
+					model: "x",
+					stopReason: null,
+					usage: null,
+					timestamp: 0,
 				},
-			]);
-			doc = applyPatch(doc, [
-				{
-					op: "add",
-					path: "/entries/pending:tc-x",
-					value: {
-						kind: "tool_result",
-						id: "pending:tc-x",
-						parentId: null,
-						timestamp: "",
-						toolCallId: "tc-x",
-						toolName: "r",
-						content: null,
-						details: null,
-						isError: false,
-					},
-				},
-			]);
+			} as unknown as AgentSessionEvent);
+			driver.applyEvent({
+				type: "tool_execution_start",
+				entryId: "tr1",
+				toolCallId: "tc-x",
+				toolName: "r",
+				args: {},
+			} as AgentSessionEvent);
 
 			const piEntries: SessionEntry[] = [
 				mkSessionEntry({
@@ -562,10 +540,12 @@ describe("property-based invariants (ADR 02)", () => {
 					content: [],
 				}),
 			];
-			const patch = reconcile(doc, piEntries);
+			const patch = driver.refresh(piEntries);
 			expect(patch).not.toBeNull();
-			const moves = patch!.ops.filter((o) => o.op === "move");
-			expect(moves.length).toBe(2);
+			// One patch installs both persisted forms, and neither is a rename.
+			expect(patch!.ops.some((o) => o.op === "move")).toBe(false);
+			const installed = patch!.ops.filter((o) => o.op === "add" && /^\/entries\/[^/]+$/.test(o.path));
+			expect(installed.length).toBe(2);
 		});
 	});
 
@@ -608,6 +588,7 @@ describe("property-based invariants (ADR 02)", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_start",
+					entryId: "a1",
 					message: {
 						role: "assistant",
 						content: [],
@@ -626,6 +607,7 @@ describe("property-based invariants (ADR 02)", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: {} },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
@@ -635,6 +617,7 @@ describe("property-based invariants (ADR 02)", () => {
 				doc,
 				applyEvent(doc, {
 					type: "message_update",
+					entryId: "a1",
 					assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "x", partial: {} },
 				} as unknown as AgentSessionEvent)!.ops,
 			);
@@ -745,34 +728,49 @@ describe("property-based invariants (ADR 02)", () => {
 	// ── I1-I5: Fuzzing ─────────────────────────────────────────────────────
 
 	describe("I1-I5: fuzzing", () => {
-		function makeMsgEv(role: string, text: string): AgentSessionEvent {
+		// Every lifecycle event carries the id pi reserved for the entry, so the
+		// harness mirrors what a producer does rather than inventing names.
+		function makeMsgEv(role: string, text: string, entryId: string): AgentSessionEvent {
 			return {
 				type: "message_start",
+				entryId,
 				message: { role, content: text, timestamp: 0 },
 			} as unknown as AgentSessionEvent;
 		}
-		function makeMsgEnd(role: string, text: string, extra?: Record<string, unknown>): AgentSessionEvent {
+		function makeMsgEnd(
+			role: string,
+			text: string,
+			entryId: string,
+			extra?: Record<string, unknown>,
+		): AgentSessionEvent {
 			const base: Record<string, unknown> = {
 				role,
 				content: role === "assistant" ? [{ type: "text", text }] : text,
 				timestamp: 0,
 			};
 			if (extra) Object.assign(base, extra);
-			return { type: "message_end", message: base } as unknown as AgentSessionEvent;
+			return { type: "message_end", entryId, message: base } as unknown as AgentSessionEvent;
 		}
-		function makeToolStart(tcId: string, name: string): AgentSessionEvent {
-			return { type: "tool_execution_start", toolCallId: tcId, toolName: name, args: {} } as AgentSessionEvent;
+		function makeToolStart(tcId: string, name: string, entryId: string): AgentSessionEvent {
+			return {
+				type: "tool_execution_start",
+				entryId,
+				toolCallId: tcId,
+				toolName: name,
+				args: {},
+			} as AgentSessionEvent;
 		}
-		function makeToolEnd(tcId: string, name: string, isErr: boolean): AgentSessionEvent {
+		function makeToolEnd(tcId: string, name: string, isErr: boolean, entryId: string): AgentSessionEvent {
 			return {
 				type: "tool_execution_end",
+				entryId,
 				toolCallId: tcId,
 				toolName: name,
 				result: { content: [{ type: "text", text: `out-${tcId}` }], details: {} },
 				isError: isErr,
 			} as AgentSessionEvent;
 		}
-		function makeUpdate(type: string, ci: number, val: unknown): AgentSessionEvent {
+		function makeUpdate(type: string, ci: number, val: unknown, entryId: string): AgentSessionEvent {
 			const base = {
 				type,
 				contentIndex: ci,
@@ -788,46 +786,56 @@ describe("property-based invariants (ADR 02)", () => {
 				},
 			};
 			if (type.endsWith("_start")) {
-				return { type: "message_update", assistantMessageEvent: base } as unknown as AgentSessionEvent;
+				return { type: "message_update", entryId, assistantMessageEvent: base } as unknown as AgentSessionEvent;
 			}
 			if (type.endsWith("_delta")) {
 				return {
 					type: "message_update",
+					entryId,
 					assistantMessageEvent: { ...base, delta: val },
 				} as unknown as AgentSessionEvent;
 			}
 			if (type.endsWith("_end") && type.startsWith("text")) {
 				return {
 					type: "message_update",
+					entryId,
 					assistantMessageEvent: { ...base, content: val },
 				} as unknown as AgentSessionEvent;
 			}
 			if (type.endsWith("_end") && type.startsWith("toolcall")) {
 				return {
 					type: "message_update",
+					entryId,
 					assistantMessageEvent: { ...base, toolCall: val },
 				} as unknown as AgentSessionEvent;
 			}
 			return {
 				type: "message_update",
+				entryId,
 				assistantMessageEvent: { ...base, thinking: val, content: val },
 			} as unknown as AgentSessionEvent;
 		}
 
 		for (let seed = 0; seed < 30; seed++) {
 			it(`seed ${seed} — invariants hold through random turn`, () => {
-				let doc = emptyDoc();
+				const driver = createDriver(emptyDoc());
 				const violations: string[] = [];
 
-				function apply(patch: ReturnType<typeof applyEvent | typeof reconcile>) {
-					if (!patch) return;
-					const prev = doc;
-					doc = applyPatch(doc, patch.ops);
-					// ADR 08 I4: root reference flips on every non-empty patch
-					if (doc === prev) {
-						violations.push("I4: root reference did not flip after applyPatch");
+				/** Run one projection step, checking the ADR 08 I4 root flip. */
+				function step(patch: Patch | null, prev: Document): void {
+					if (patch === null) return;
+					if (driver.document === prev) {
+						violations.push("I4: root reference did not flip after an applied patch");
 					}
 				}
+				const event = (ev: AgentSessionEvent) => {
+					const prev = driver.document;
+					step(driver.applyEvent(ev), prev);
+				};
+				const refresh = (list: SessionEntry[]) => {
+					const prev = driver.document;
+					step(driver.refresh(list), prev);
+				};
 
 				const rng = mulberry32(seed);
 				const addTextBlocks = (rng() * 3) | 0;
@@ -836,97 +844,97 @@ describe("property-based invariants (ADR 02)", () => {
 				const addToolResults = (rng() * 3) | 0;
 				const includeUser = seed % 3 !== 0;
 
+				// The authoritative list grows as pi persists items.
+				const piEntries: SessionEntry[] = [];
+
 				// Optional user
 				if (includeUser) {
-					apply(applyEvent(doc, makeMsgEv("user", "fuzz-msg")));
-					apply(applyEvent(doc, makeMsgEnd("user", "fuzz-msg")));
+					event(makeMsgEv("user", "fuzz-msg", `u-${seed}`));
+					event(makeMsgEnd("user", "fuzz-msg", `u-${seed}`));
+					piEntries.push(mkSessionEntry({ type: "message", id: `u-${seed}`, role: "user", parentId: null }));
+					// pi persists the user message before the assistant starts.
+					refresh(piEntries);
 				}
 
 				// Assistant
-				apply(
-					applyEvent(doc, {
-						type: "message_start",
-						message: {
-							role: "assistant",
-							content: [],
-							api: "test",
-							provider: "test",
-							model: "test",
-							stopReason: "",
-							usage: null,
-							timestamp: 0,
-						},
-					} as unknown as AgentSessionEvent),
-				);
+				event({
+					type: "message_start",
+					entryId: `a-${seed}`,
+					message: {
+						role: "assistant",
+						content: [],
+						api: "test",
+						provider: "test",
+						model: "test",
+						stopReason: "",
+						usage: null,
+						timestamp: 0,
+					},
+				} as unknown as AgentSessionEvent);
 
 				let ci = 0;
 				for (let t = 0; t < addTextBlocks; t++) {
 					const idx = ci++;
-					apply(applyEvent(doc, makeUpdate("text_start", idx, null)));
+					event(makeUpdate("text_start", idx, null, `a-${seed}`));
 					let full = "";
 					for (let d = 0; d < 1 + ((rng() * 3) | 0); d++) {
 						const chunk = "xyz".slice(0, 1 + ((rng() * 3) | 0));
 						full += chunk;
-						apply(applyEvent(doc, makeUpdate("text_delta", idx, chunk)));
+						event(makeUpdate("text_delta", idx, chunk, `a-${seed}`));
 					}
-					apply(applyEvent(doc, makeUpdate("text_end", idx, full)));
+					event(makeUpdate("text_end", idx, full, `a-${seed}`));
 				}
 				for (let t = 0; t < addThinkingBlocks; t++) {
 					const idx = ci++;
-					apply(applyEvent(doc, makeUpdate("thinking_start", idx, null)));
+					event(makeUpdate("thinking_start", idx, null, `a-${seed}`));
 					const chunk = `think-${seed}-${t}`;
-					apply(applyEvent(doc, makeUpdate("thinking_delta", idx, chunk)));
-					apply(applyEvent(doc, makeUpdate("thinking_end", idx, chunk)));
+					event(makeUpdate("thinking_delta", idx, chunk, `a-${seed}`));
+					event(makeUpdate("thinking_end", idx, chunk, `a-${seed}`));
 				}
 				for (let t = 0; t < addToolBlocks; t++) {
 					const idx = ci++;
-					apply(applyEvent(doc, makeUpdate("toolcall_start", idx, null)));
+					event(makeUpdate("toolcall_start", idx, null, `a-${seed}`));
 					const args = `{"s":${seed},"t":${t}}`;
-					apply(applyEvent(doc, makeUpdate("toolcall_delta", idx, args)));
-					apply(
-						applyEvent(
-							doc,
-							makeUpdate("toolcall_end", idx, {
+					event(makeUpdate("toolcall_delta", idx, args, `a-${seed}`));
+					event(
+						makeUpdate(
+							"toolcall_end",
+							idx,
+							{
 								id: `tc-${seed}-${t}`,
 								name: "fuzz",
 								arguments: { s: seed, t },
-							}),
+							},
+							`a-${seed}`,
 						),
 					);
 				}
 
-				apply(
-					applyEvent(
-						doc,
-						makeMsgEnd("assistant", "final", {
-							api: "test",
-							provider: "test",
-							model: "test",
-							stopReason: "stop",
-							usage: {
-								input: 1,
-								output: 2,
-								cacheRead: 0,
-								cacheWrite: 0,
-								totalTokens: 3,
-								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-							},
-						}),
-					),
+				event(
+					makeMsgEnd("assistant", "final", `a-${seed}`, {
+						api: "test",
+						provider: "test",
+						model: "test",
+						stopReason: "stop",
+						usage: {
+							input: 1,
+							output: 2,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 3,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+					}),
 				);
 
 				// Tool results
 				for (let t = 0; t < addToolResults; t++) {
 					const tcId = `tc-${seed}-${t}`;
-					apply(applyEvent(doc, makeToolStart(tcId, "fuzz")));
-					apply(applyEvent(doc, makeToolEnd(tcId, "fuzz", false)));
+					event(makeToolStart(tcId, "fuzz", `tr-${seed}-${t}`));
+					event(makeToolEnd(tcId, "fuzz", false, `tr-${seed}-${t}`));
 				}
 
-				// Build matching pi entries for seal
-				const piEntries: SessionEntry[] = [];
-				if (includeUser) {
-					piEntries.push(mkSessionEntry({ type: "message", id: `u-${seed}`, role: "user", parentId: null }));
-				}
+				// The seal: the persisted assistant carries its own content.
 				piEntries.push(
 					mkSessionEntry({
 						type: "message",
@@ -954,40 +962,42 @@ describe("property-based invariants (ADR 02)", () => {
 				}
 
 				// Seal
-				apply(reconcile(doc, piEntries));
-				apply(applyEvent(doc, { type: "agent_settled" } as AgentSessionEvent));
+				refresh(piEntries);
+				event({ type: "agent_settled" } as AgentSessionEvent);
 
-				// ADR 08 I5: structural sharing — capture committed entry refs before final reconcile
-				const committedIds = Object.keys(doc.entries).filter((id) => !id.startsWith("pending:"));
+				// ADR 08 I5: structural sharing — capture committed entry refs
+				// before an idempotent second refresh.
+				const committedIds = Object.keys(driver.document.entries).filter((id) =>
+					isEntrySealed(driver.document.entries[id]!),
+				);
 				const snapBefore: Record<string, unknown> = {};
-				for (const id of committedIds) snapBefore[id] = doc.entries[id];
+				for (const id of committedIds) snapBefore[id] = driver.document.entries[id];
 
-				apply(reconcile(doc, piEntries));
+				if (driver.refresh(piEntries) !== null) violations.push("I6: second refresh was not a no-op");
 
-				// Entries not touched by the final reconcile keep their reference
+				// Entries not touched by the final refresh keep their reference
 				for (const id of committedIds) {
-					if (doc.entries[id] !== snapBefore[id]) {
+					if (driver.document.entries[id] !== snapBefore[id]) {
 						violations.push(`I5: committed entry ${id} reference changed without being touched`);
 					}
 				}
 
 				// Verify invariants
 				// I2, I3: domain validity
-				const dv = checkDomainValidity(doc);
+				const dv = checkDomainValidity(driver.document);
 				if (dv.length > 0) violations.push(...dv.map((v) => `I2/I3: ${v}`));
 
-				// I4: no provisionals remain for this turn
-				for (const id of Object.keys(doc.entries)) {
-					if (id.startsWith("pending:user:") || id === "pending:message" || id.startsWith("pending:tc-")) {
-						violations.push(`I4: lingering provisional ${id} after seal`);
-					}
+				// I4: every entry kept the id it started under — no synthetic
+				// identity exists alongside a persisted entry.
+				for (const id of Object.keys(driver.document.entries)) {
+					if (id.startsWith("pending:")) violations.push(`I4: synthetic identity ${id} after seal`);
 				}
 
-				// I5: ordinal correctness — no pending:user entries remain
-				for (const id of Object.keys(doc.entries)) {
-					if (id.startsWith("pending:user:")) {
-						violations.push(`I5: pending:user ordinal not cleaned up: ${id}`);
-					}
+				// I5: a persisted entry is sealed and carries its file position.
+				for (let i = 0; i < piEntries.length; i++) {
+					const id = piEntries[i]!.id;
+					if (!isEntrySealed(driver.document.entries[id]!)) violations.push(`I5: ${id} not sealed`);
+					if (driver.document.entries[id]?.ord !== i) violations.push(`I5: ${id} ord mismatch`);
 				}
 
 				expect(violations, `seed=${seed}`).toEqual([]);

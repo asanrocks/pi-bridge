@@ -80,8 +80,10 @@ const PREVIEW_MAX = 80;
  *
  * A label is a user-defined bookmark set from pi's TUI tree selector
  * (`SessionManager.appendLabelChange`); it never enters LLM context. The
- * fold is chronological last-write-wins — the same rule as pi's
+ * fold is last-write-wins in file order — the same rule as pi's
  * SessionManager — and an empty/undefined label clears the target's label.
+ * `ord` is the order authority: a set and its clear can share a timestamp,
+ * and entry ids are random, so timestamp/id tiebreaks would reverse them.
  * The map holds every target; callers decide which targets they render
  * (both surfaces here render user messages only — labels on other entry
  * kinds are resolved but never looked up, best-effort by construction).
@@ -92,7 +94,11 @@ export function resolveLabels(entries: Record<string, Entry>): Map<string, strin
 		if (e.kind === "label") labelEntries.push(e);
 	}
 	if (labelEntries.length === 0) return new Map();
-	labelEntries.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
+	labelEntries.sort((a, b) => {
+		if (a.ord !== undefined && b.ord !== undefined && a.ord !== b.ord) return a.ord - b.ord;
+		const byTimestamp = a.timestamp.localeCompare(b.timestamp);
+		return byTimestamp !== 0 ? byTimestamp : a.id.localeCompare(b.id);
+	});
 	const labels = new Map<string, string>();
 	for (const e of labelEntries) {
 		if (e.label) labels.set(e.targetId, e.label);

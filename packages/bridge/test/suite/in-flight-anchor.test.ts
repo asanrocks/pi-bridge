@@ -122,9 +122,12 @@ describe("in-flight tool anchor", () => {
 			document: { status: { inFlightTools?: Record<string, number> }; entries: Record<string, unknown> };
 		};
 		expect(snapshot.document.status.inFlightTools?.[toolCallId]).toBeGreaterThanOrEqual(25);
-		// The provisional entry travels in the same snapshot, so the client can
-		// associate the anchor with the running tool.
-		expect(snapshot.document.entries[`pending:${toolCallId}`]).toBeDefined();
+		// The tool-result entry's live form travels in the same snapshot, so the
+		// client can associate the anchor with the running tool.
+		const liveResult = Object.values(snapshot.document.entries).find(
+			(entry) => (entry as { kind?: string; toolCallId?: string }).kind === "tool_result",
+		);
+		expect(liveResult).toBeDefined();
 		releaseTool();
 	});
 });

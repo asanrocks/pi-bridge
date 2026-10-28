@@ -29,9 +29,13 @@ function stubDom(): void {
 
 // The pipeline reads client.mirror.document at flush time (the real
 // BridgeClient has already applied the patch to the mirror before onPush
-// fires), so the fake just swaps the mirror document between pushes.
-function fakeClient(): { client: BridgeClient; mirror: { document: ReturnType<typeof initFromEntries> } } {
-	const mirror = { document: initFromEntries([]) };
+// fires), so the fake swaps the mirror document between pushes and bumps
+// `rewrites` the way DocumentMirror does when a patch replaces an entry root.
+function fakeClient(): {
+	client: BridgeClient;
+	mirror: { document: ReturnType<typeof initFromEntries>; rewrites: number };
+} {
+	const mirror = { document: initFromEntries([]), rewrites: 0 };
 	return { client: { mirror } as unknown as BridgeClient, mirror };
 }
 
@@ -91,5 +95,26 @@ describe("connectionPipeline live-patch flush policy", () => {
 		// previous document until the coalescing flush fires.
 		expect(getStore().getState().document).not.toBe(next);
 		expect(g.requestAnimationFrame).toHaveBeenCalled();
+	});
+
+	it("bumps pullTick when a live patch replaces an entry root", () => {
+		// A same-id content replacement can be invisible to the structural
+		// ViewModel cache key (same ids, same lengths), so the pipeline must
+		// re-project on the mirror's rewrite signal rather than the key.
+		stubDom();
+		const { client, mirror } = fakeClient();
+		pipeline = createConnectionPipeline(client);
+		const next = initFromEntries([]);
+		mirror.document = next;
+
+		const before = getStore().getState().pullTick;
+		// An ordinary append-only patch does not bump.
+		pipeline.onPush(patch([{ op: "append", path: "/entries/e1/content/0/text", value: "hi" }]));
+		expect(getStore().getState().pullTick).toBe(before);
+
+		// The mirror counted a replacement (sealing in place, or a rewrite).
+		mirror.rewrites += 1;
+		pipeline.onPush(patch([{ op: "add", path: "/entries/e1", value: {} }]));
+		expect(getStore().getState().pullTick).toBe(before + 1);
 	});
 });

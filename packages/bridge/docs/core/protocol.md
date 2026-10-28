@@ -57,9 +57,9 @@ state channel.
 | `prompt` | Attached Session | `{ ok: true }` after the prompt call is accepted/completed by the Manager; streaming and settle patches follow. Optional images are bounded by the host wire limits. |
 | `abort` | Attached Session | `{ ok: true }` after abort and its finalization; final document patches precede the reply. |
 | `discardSteer` | Attached Session | `{ ok: true }`; the queue-clear `status.pendingSteer` patch is the effect. |
-| `setModel` | Attached Session | `{ ok: true }`; the Manager reconciles the model and any silent entry while idle. Invalid models fail. |
+| `setModel` | Attached Session | `{ ok: true }`; the Manager refreshes status and any silent entry while idle. Invalid models fail. |
 | `setModelPinned` | Daemon-global (ADR 15) | `{ ok: true }` after the global `enabledModels` scope is updated and flushed. The new resolved list follows as a `pinned_models_changed` push. |
-| `setThinkingLevel` | Attached Session | `{ ok: true }`; status and any silent entry are reconciled. Invalid levels fail. |
+| `setThinkingLevel` | Attached Session | `{ ok: true }`; status and any silent entry are refreshed. Invalid levels fail. |
 | `renameSession` | Attached Session | `{ ok: true }`; the session name change and Project session-list refresh are pushed. |
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
 | `pull` | Attached Session and this Connection's subscription set | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become live subscriptions; committed paths are one-shot. |
@@ -100,8 +100,9 @@ bridge operation `append`:
 
 `append` concatenates its string value to the string at `path`. It is used for
 streamed text, thinking, and growing string leaves in partial tool arguments.
-`move` is used to seal a provisional entry under its durable id. All operations
-in one `Patch` are applied in order as one mirror transaction. JSON Pointer
+`move` relocates a value; sealing does not use it, because an entry's id is
+stable from its first event. All operations in one `Patch` are applied in order
+as one mirror transaction. JSON Pointer
 paths use the standard `~1` and `~0` escaping.
 
 The host filters lazy paths per Connection before sending a live patch. It
@@ -114,8 +115,8 @@ field to the client.
 The initial-sync contract is cursor-aware:
 
 - A valid `PrefixCursor` produces one multi-operation `patch` with a `session`
-  reference. It adds the missing committed suffix, current provisional
-  skeletons, and full `status`.
+  reference. It adds the missing persisted suffix, current live forms, and full
+  `status`.
 - An absent or invalid cursor produces one `replace` with a `session` reference
   and the complete initial-sync projection.
 

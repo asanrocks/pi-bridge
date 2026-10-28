@@ -29,10 +29,16 @@ export function useViewModel(): ViewModel {
 	// Rendered-leaf override (peek). `null` follows the live leaf; the key
 	// includes it, so peek/un-peek over an unchanged document re-projects.
 	const renderLeafId = useStore((s) => s.renderLeafId);
+	// The catalogue is a projection input (context percentage is computed
+	// against each model's context window), so its identity is in the key.
+	const modelsKey = useMemo(
+		() => models.map((m) => `${m.provider}/${m.id}:${m.contextWindow ?? 0}`).join(","),
+		[models],
+	);
 
 	const cacheRef = useRef<{ key: string; vm: ViewModel } | null>(null);
 	return useMemo(() => {
-		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId);
+		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId, modelsKey);
 		if (cacheRef.current?.key === key) {
 			return cacheRef.current.vm;
 		}
@@ -45,5 +51,5 @@ export function useViewModel(): ViewModel {
 		const vm = computeViewModel({ document: doc, models, viewLeafId: renderLeafId }, prevVm);
 		cacheRef.current = { key, vm };
 		return vm;
-	}, [doc, models, scope, pullTick, renderLeafId]);
+	}, [doc, models, scope, pullTick, renderLeafId, modelsKey]);
 }

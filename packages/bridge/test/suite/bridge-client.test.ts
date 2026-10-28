@@ -145,6 +145,49 @@ describe("BridgeClient", () => {
 		expect(client.mirror.document.status.model).toEqual({ provider: "anthropic", modelId: "claude" });
 	});
 
+	it("counts an entry-root replacement, not a new entry", () => {
+		// An `add` on `/entries/<id>` for an id the mirror already held is an
+		// authoritative replacement: structural identity (paths, lengths) cannot
+		// see the content change, so consumers gate re-projection on `rewrites`.
+		const { client, transport } = makeClient();
+
+		const emptyStatus = {
+			leafId: null,
+			name: "",
+			model: { provider: "", modelId: "" },
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+		};
+		const entry = (text: string): Record<string, unknown> => ({
+			kind: "message",
+			id: "e1",
+			parentId: null,
+			timestamp: "t",
+			role: "assistant",
+			content: [{ type: "text", text }],
+		});
+
+		transport.inject({ kind: "replace", document: { status: emptyStatus, entries: { e1: entry("streamed") } } });
+		expect(client.mirror.rewrites).toBe(0);
+
+		// A block-level update inside the entry is not a replacement.
+		transport.inject({
+			kind: "patch",
+			ops: [{ op: "replace", path: "/entries/e1/content/0/text", value: "more" }],
+		});
+		expect(client.mirror.rewrites).toBe(0);
+
+		// Sealing in place — an entry-root add on an existing id — is one.
+		transport.inject({ kind: "patch", ops: [{ op: "add", path: "/entries/e1", value: entry("final") }] });
+		expect(client.mirror.rewrites).toBe(1);
+
+		// A genuinely new entry is not.
+		transport.inject({ kind: "patch", ops: [{ op: "add", path: "/entries/e2", value: entry("new") }] });
+		expect(client.mirror.rewrites).toBe(1);
+	});
+
 	it("fires onPush callback for push frames", () => {
 		const { client, transport } = makeClient();
 

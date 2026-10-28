@@ -1,19 +1,18 @@
 /**
- * Integration tests for logic paths: user-ordinal matching via applyEvent+reconcile,
- * and filterPatchForSocket via realistic op sequences.
+ * Integration tests for logic paths: concurrent live identities under the
+ * entry projection, and filterPatchForSocket via realistic op sequences.
  */
 
 import type { AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
-	applyEvent,
-	applyPatch,
 	type Document,
 	filterPatchForSocket,
+	isEntrySealed,
 	isLazyFieldPath,
 	type PatchOp,
-	reconcile,
 } from "../../src/core/index.ts";
+import { createDriver } from "./projection-driver.ts";
 
 function emptyDoc(): Document {
 	return {
@@ -32,41 +31,36 @@ function emptyDoc(): Document {
 	};
 }
 
-describe("user ordinal matching (production applyEvent + reconcile)", () => {
-	it("sequential ordinals for concurrent steered user messages", () => {
-		let doc = emptyDoc();
+describe("entry identity under the projection (production applyEvent + refresh)", () => {
+	it("keeps concurrent steered user messages under their own ids", () => {
+		const driver = createDriver(emptyDoc());
 
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
+		for (const [text, id] of [
+			["msg 1", "u1"],
+			["msg 2", "u2"],
+		] as const) {
+			driver.applyEvent({
 				type: "message_start",
-				message: { role: "user", content: "msg 1", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
-				type: "message_start",
-				message: { role: "user", content: "msg 2", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
+				entryId: id,
+				message: { role: "user", content: text, timestamp: 0 },
+			} as unknown as AgentSessionEvent);
+		}
+		for (const [text, id] of [
+			["msg 1", "u1"],
+			["msg 2", "u2"],
+		] as const) {
+			driver.applyEvent({
 				type: "message_end",
-				message: { role: "user", content: "msg 1", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
-				type: "message_end",
-				message: { role: "user", content: "msg 2", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
+				entryId: id,
+				message: { role: "user", content: text, timestamp: 0 },
+			} as unknown as AgentSessionEvent);
+		}
 
-		expect(doc.entries["pending:user:1"]).toBeDefined();
-		expect(doc.entries["pending:user:2"]).toBeDefined();
+		// Two live forms, two identities — no ordinal is assigned to either.
+		expect(driver.document.entries.u1).toBeDefined();
+		expect(driver.document.entries.u2).toBeDefined();
+		expect(driver.document.entries.u1!.ord).toBeUndefined();
+		expect(driver.document.entries.u2!.ord).toBeUndefined();
 
 		const piEntries: SessionEntry[] = [
 			{
@@ -84,31 +78,23 @@ describe("user ordinal matching (production applyEvent + reconcile)", () => {
 				message: { role: "user", content: "msg 2", timestamp: 0 },
 			} as SessionEntry,
 		];
-		doc = applyPatch(doc, reconcile(doc, piEntries)!.ops);
+		driver.refresh(piEntries);
 
-		expect(doc.entries["pending:user:1"]).toBeUndefined();
-		expect(doc.entries["pending:user:2"]).toBeUndefined();
-		expect(doc.entries.u1).toBeDefined();
-		expect(doc.entries.u2).toBeDefined();
+		// Sealing installs the persisted form under the same ids.
+		expect(isEntrySealed(driver.document.entries.u1!)).toBe(true);
+		expect(isEntrySealed(driver.document.entries.u2!)).toBe(true);
+		expect(driver.document.entries.u1!.ord).toBe(0);
+		expect(driver.document.entries.u2!.ord).toBe(1);
 	});
 
-	it("ordinals reset between turns", () => {
-		let doc = emptyDoc();
+	it("a later live form is independent of earlier seals", () => {
+		const driver = createDriver(emptyDoc());
 
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
-				type: "message_start",
-				message: { role: "user", content: "t1-1", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
-				type: "message_start",
-				message: { role: "user", content: "t1-2", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
+		driver.applyEvent({
+			type: "message_start",
+			entryId: "t1-u1",
+			message: { role: "user", content: "t1-1", timestamp: 0 },
+		} as unknown as AgentSessionEvent);
 
 		const t1Entries: SessionEntry[] = [
 			{
@@ -118,28 +104,18 @@ describe("user ordinal matching (production applyEvent + reconcile)", () => {
 				timestamp: "t",
 				message: { role: "user", content: "t1-1", timestamp: 0 },
 			} as SessionEntry,
-			{
-				type: "message",
-				id: "t1-u2",
-				parentId: null,
-				timestamp: "t",
-				message: { role: "user", content: "t1-2", timestamp: 0 },
-			} as SessionEntry,
 		];
-		doc = applyPatch(doc, reconcile(doc, t1Entries)!.ops);
-		expect(doc.entries["pending:user:1"]).toBeUndefined();
-		expect(doc.entries["pending:user:2"]).toBeUndefined();
+		driver.refresh(t1Entries);
+		expect(isEntrySealed(driver.document.entries["t1-u1"]!)).toBe(true);
 
-		// Turn 2: ordinal resets
-		doc = applyPatch(
-			doc,
-			applyEvent(doc, {
-				type: "message_start",
-				message: { role: "user", content: "t2-1", timestamp: 0 },
-			} as unknown as AgentSessionEvent)!.ops,
-		);
-		expect(doc.entries["pending:user:1"]).toBeDefined();
-		expect(doc.entries["pending:user:2"]).toBeUndefined();
+		// Turn 2 opens a live form under its own id; nothing renumbers.
+		driver.applyEvent({
+			type: "message_start",
+			entryId: "t2-u1",
+			message: { role: "user", content: "t2-1", timestamp: 0 },
+		} as unknown as AgentSessionEvent);
+		expect(driver.document.entries["t2-u1"]).toBeDefined();
+		expect(isEntrySealed(driver.document.entries["t2-u1"]!)).toBe(false);
 	});
 });
 
@@ -205,7 +181,7 @@ describe("filterPatchForSocket (realistic op sequences)", () => {
 		expect(sub).toEqual(ops);
 	});
 
-	it("sanitizes lazy content embedded in entry-root add values (reconcile/entry_appended shape)", () => {
+	it("sanitizes lazy content embedded in entry-root add values (refresh shape)", () => {
 		const messageAdd = {
 			op: "add" as const,
 			path: "/entries/a1",

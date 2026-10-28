@@ -20,6 +20,7 @@ import type {
 	ReplaceMessage,
 	SessionRef,
 } from "../../src/core/index.ts";
+import { isEntrySealed } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from "../../src/host/index.ts";
 import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitFor, waitForFrame } from "./conn-helpers.ts";
@@ -47,7 +48,7 @@ class FrameCollector implements ConnectionHandle {
 /** Committed entries of an initial-sync document, in ord order. */
 function committedOf(doc: Document): Entry[] {
 	return Object.values(doc.entries)
-		.filter((e) => !e.id.startsWith("pending:") && e.ord !== undefined)
+		.filter((e) => isEntrySealed(e) && e.ord !== undefined)
 		.sort((a, b) => (a.ord ?? 0) - (b.ord ?? 0));
 }
 
@@ -130,6 +131,39 @@ describe("initial sync: attach", () => {
 		pairB.clientWs.close();
 	});
 
+	it("attach publishes a silently appended entry to already-attached clients", async () => {
+		// The attach refresh consumes silent appends (no event of their own), and
+		// the read position advances with the refresh — nothing would ever resend
+		// the entry. A client already attached must therefore receive the
+		// discovery as a patch; the new connection's initial sync is addressed to
+		// the new connection only.
+		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
+		harnesses.push(bh);
+
+		const ref = { projectId: "proj", sessionId: bh.manager.liveSessionId, stem: mockSessionRef.stem };
+		const first = new FrameCollector();
+		bh.manager.addConnection(first, ref);
+
+		// A silent append: no AgentSessionEvent fires for it.
+		const appended = bh.sessionManager.appendCustomEntry("silent", { note: true });
+		expect(bh.manager.document.entries[appended]).toBeUndefined(); // not yet discovered
+
+		const second = new FrameCollector();
+		bh.manager.addConnection(second, ref);
+
+		const initial = second.frames[0];
+		if (!initial || initial.kind !== "replace") throw new Error("expected a replace initial sync");
+		expect(initial.document.entries[appended]).toBeDefined();
+		expect(first.patches.some((p) => p.ops.some((op) => op.op === "add" && op.path === `/entries/${appended}`))).toBe(
+			true,
+		);
+		// The established client received exactly one initial sync — its own.
+		expect(first.frames).toHaveLength(1);
+
+		bh.manager.removeConnection(first);
+		bh.manager.removeConnection(second);
+	});
+
 	it("an invalid cursor (bad anchor) receives a full replacement", async () => {
 		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
 		harnesses.push(bh);
@@ -169,9 +203,15 @@ describe("initial sync: attach", () => {
 		// Snapshot of the pre-turn committed set (ids are immutable).
 		const bootstrapIds = new Set(committedNonSystemIds(firstReplace.document));
 
-		// Start a turn, wait until the assistant provisional exists.
+		// Start a turn, wait until the assistant's live form exists.
 		pair.clientWs.send(JSON.stringify({ id: "1", verb: "prompt", text: "go" }));
-		await waitFor(() => bh.manager.document.entries["pending:message"] !== undefined, 5000, "pending:message");
+		const liveAssistantId = () =>
+			Object.values(bh.manager.document.entries).find(
+				(entry) => entry.kind === "message" && entry.role === "assistant" && !isEntrySealed(entry),
+			)?.id;
+		await waitFor(() => liveAssistantId() !== undefined, 5000, "live assistant entry");
+		const inFlightId = liveAssistantId();
+		if (!inFlightId) throw new Error("expected a live assistant entry");
 
 		// A second connection attaching mid-term gets the provisional
 		// skeletons — later streaming appends target paths inside them.
@@ -182,14 +222,23 @@ describe("initial sync: attach", () => {
 
 		const frame = await waitForFrame(frames2, (f) => (f as { kind?: string }).kind === "replace");
 		const doc = (frame as { document: Document }).document;
-		expect(doc.entries["pending:message"]).toBeDefined();
-		expect(doc.entries["pending:user:1"]).toBeDefined();
+		// The in-flight assistant travels as its live form under the id it will
+		// keep, not as a provisional name of its own.
+		expect(doc.entries[inFlightId]).toBeDefined();
+		expect(isEntrySealed(doc.entries[inFlightId]!)).toBe(false);
+		// No synthetic identity exists: every entry in the frame is addressed by a
+		// persisted id, whether or not it has sealed yet.
+		expect(Object.keys(doc.entries).filter((id) => id.startsWith("pending:"))).toEqual([]);
 
-		// Mid-turn pairing: the frame's committed set is exactly the pre-turn
-		// committed set — the in-flight messages (committed in the file, held as
-		// provisionals) are represented by the pending skeletons, not duplicated.
+		// One entry per identity: the frame carries pi's committed set (which now
+		// includes the user message already persisted mid-turn) plus the live
+		// forms, and the live assistant is not repeated under a second id.
 		const frameIds = new Set(committedNonSystemIds(doc));
-		expect(frameIds).toEqual(bootstrapIds);
+		// Nothing the frame committed predates the snapshot, and the bootstrap set
+		// is still there: no committed entry was dropped by the live merge.
+		for (const id of bootstrapIds) expect(frameIds.has(id)).toBe(true);
+		// Every entry has one identity, so the live assistant is not repeated.
+		expect(Object.keys(doc.entries).length).toBe(new Set(Object.keys(doc.entries)).size);
 
 		pair.serverWs.close();
 		pair.clientWs.close();
@@ -263,6 +312,7 @@ describe("initial sync: subscription reset", () => {
 					id: "pending:message",
 					parentId: null,
 					timestamp: "",
+					isSealed: false,
 					role: "assistant",
 					content: [{ type: "thinking", thinking: "partial" }],
 				},

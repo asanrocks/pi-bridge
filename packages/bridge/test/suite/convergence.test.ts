@@ -4,23 +4,21 @@
  * patch stream (empty subscriptions) must hold the same document. With a
  * subscribed path, only that path may differ.
  *
- * Uses pure core functions (applyEvent/reconcile/filterPatchForSocket) with a
- * hand-scripted event stream — the same seam Connection uses in production.
+ * Drives the entry projection (applyEvent + refresh) with a hand-scripted
+ * event stream — the same seam the Manager uses in production.
  */
 
 import type { AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
-	applyEvent,
 	applyPatch,
 	type Document,
 	filterPatchForSocket,
-	initFromEntries,
 	type PatchOp,
-	reconcile,
 	snapshotForWire,
 } from "../../src/core/index.ts";
 import { deepEqual } from "./harness.ts";
+import { createDriver } from "./projection-driver.ts";
 
 // ── Fixture: one user entry, then an assistant turn with thinking + tool ──
 
@@ -72,16 +70,26 @@ function makePartial(content: Array<Record<string, unknown>>) {
 function turnEvents(): AgentSessionEvent[] {
 	return [
 		{ type: "agent_start" },
-		{ type: "message_start", message: { role: "assistant", content: [], timestamp: 1 } },
-		{ type: "message_update", assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } },
-		{ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Let " } },
-		{ type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "me think" } },
+		{ type: "message_start", entryId: "a1", message: { role: "assistant", content: [], timestamp: 1 } },
+		{ type: "message_update", entryId: "a1", assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } },
 		{
 			type: "message_update",
+			entryId: "a1",
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Let " },
+		},
+		{
+			type: "message_update",
+			entryId: "a1",
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "me think" },
+		},
+		{
+			type: "message_update",
+			entryId: "a1",
 			assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "Let me think" },
 		},
 		{
 			type: "message_update",
+			entryId: "a1",
 			assistantMessageEvent: {
 				type: "toolcall_start",
 				contentIndex: 1,
@@ -93,6 +101,7 @@ function turnEvents(): AgentSessionEvent[] {
 		},
 		{
 			type: "message_update",
+			entryId: "a1",
 			assistantMessageEvent: {
 				type: "toolcall_delta",
 				contentIndex: 1,
@@ -105,6 +114,7 @@ function turnEvents(): AgentSessionEvent[] {
 		},
 		{
 			type: "message_update",
+			entryId: "a1",
 			assistantMessageEvent: {
 				type: "toolcall_delta",
 				contentIndex: 1,
@@ -117,15 +127,17 @@ function turnEvents(): AgentSessionEvent[] {
 		},
 		{
 			type: "message_update",
+			entryId: "a1",
 			assistantMessageEvent: {
 				type: "toolcall_end",
 				contentIndex: 1,
 				toolCall: { id: "tc1", name: "read", arguments: { path: "/tmp/x" } },
 			},
 		},
-		{ type: "message_update", assistantMessageEvent: { type: "done" } },
+		{ type: "message_update", entryId: "a1", assistantMessageEvent: { type: "done" } },
 		{
 			type: "message_end",
+			entryId: "a1",
 			message: {
 				role: "assistant",
 				content: [],
@@ -140,32 +152,44 @@ function turnEvents(): AgentSessionEvent[] {
 	] as unknown as AgentSessionEvent[];
 }
 
+/** An empty document in the canonical status shape. */
+function emptyDoc(): Document {
+	return {
+		status: {
+			leafId: null,
+			name: "",
+			model: { provider: "", modelId: "" },
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+			contextUsage: null,
+			pendingSteer: [],
+		},
+		entries: {},
+	};
+}
+
 /**
- * Drive the canonical document through the turn (applyEvent per event,
- * reconcile at settle — same order as Manager.processEvent), collecting
- * emitted patches.
+ * Bootstrap the committed prefix (the user entry), then drive the canonical
+ * document through the turn: one patch per live event, the refresh at settle
+ * — the same order as Manager.processEvent. Collects every emitted patch.
  */
-function driveTurn(initial: Document): { final: Document; patches: PatchOp[][] } {
-	const patches: PatchOp[][] = [];
-	let doc = initial;
+function driveTurn(): { initial: Document; final: Document; patches: PatchOp[][] } {
+	const driver = createDriver(emptyDoc());
+	const bootstrap = driver.refresh([userEntry()]);
+	if (!bootstrap) throw new Error("expected a bootstrap patch");
+	const initial: Document = structuredClone(driver.document);
+	const patches: PatchOp[][] = [bootstrap.ops];
 	for (const event of turnEvents()) {
-		const patch = applyEvent(doc, event);
-		if (patch) {
-			doc = applyPatch(doc, patch.ops);
-			patches.push(patch.ops);
-		}
+		const patch = driver.applyEvent(event);
+		if (patch) patches.push(patch.ops);
 		if ((event as { type: string }).type === "agent_settled") {
-			const recPatch = reconcile(doc, [userEntry(), assistantEntry()], {
-				model: { provider: "faux", modelId: "faux-1" },
-				thinkingLevel: "off",
-			});
-			if (recPatch) {
-				doc = applyPatch(doc, recPatch.ops);
-				patches.push(recPatch.ops);
-			}
+			const recPatch = driver.refresh([userEntry(), assistantEntry()]);
+			if (recPatch) patches.push(recPatch.ops);
 		}
 	}
-	return { final: doc, patches };
+	return { initial, final: driver.document, patches };
 }
 
 /** Replay patch stream through the socket filter into a client document. */
@@ -223,8 +247,7 @@ function assertDocsEqual(a: Document, b: Document, label: string): void {
 
 describe("convergence (ADR 09 invariant 1)", () => {
 	it("snapshot client equals empty-subscription replay client", () => {
-		const initial = initFromEntries([userEntry()]);
-		const { final, patches } = driveTurn(initial);
+		const { initial, final, patches } = driveTurn();
 
 		const snapshotClient = snapshotForWire(final);
 		const replayClient = replayFiltered(snapshotForWire(initial), patches, new Set());
@@ -233,13 +256,13 @@ describe("convergence (ADR 09 invariant 1)", () => {
 	});
 
 	it("subscribed client differs only on the subscribed path", () => {
-		const initial = initFromEntries([userEntry()]);
-		const { final, patches } = driveTurn(initial);
+		const { initial, final, patches } = driveTurn();
 
-		const thinkingPath = "/entries/pending:message/content/0/thinking";
+		const thinkingPath = "/entries/a1/content/0/thinking";
 		const subscribedClient = replayFiltered(snapshotForWire(initial), patches, new Set([thinkingPath]));
 
-		// The subscribed client received the thinking stream — value survives the seal move
+		// The subscribed client received the thinking stream under the entry's
+		// own id — no identity move happens at the seal.
 		const a1 = subscribedClient.entries.a1;
 		expect(a1).toBeDefined();
 		if ("content" in a1 && Array.isArray(a1.content)) {
@@ -250,18 +273,18 @@ describe("convergence (ADR 09 invariant 1)", () => {
 		assertDocsEqual(snapshotForWire(final), nullThinking(subscribedClient), "subscribed, thinking nulled");
 	});
 
-	it("reconcile-discovered entries never carry lazy content into the canonical document's wire projection mismatch", () => {
-		// An entry discovered by reconcile with NO provisional (e.g. after navigate):
+	it("refresh-discovered entries never carry lazy content into the canonical document's wire projection mismatch", () => {
+		// An entry discovered by a refresh with NO provisional (e.g. after navigate):
 		// the canonical document must hold real values (invariant 2), while both
 		// wire paths (snapshot + filtered add op) must strip them identically.
-		const initial = initFromEntries([userEntry()]);
-		const recPatch = reconcile(initial, [userEntry(), assistantEntry()], {
-			model: { provider: "faux", modelId: "faux-1" },
-			thinkingLevel: "off",
-		});
+		const driver = createDriver(emptyDoc());
+		const bootstrap = driver.refresh([userEntry()]);
+		if (!bootstrap) throw new Error("expected a bootstrap patch");
+		const initial = structuredClone(driver.document);
+		const recPatch = driver.refresh([userEntry(), assistantEntry()]);
 		expect(recPatch).not.toBeNull();
 
-		const canonical = applyPatch(initial, recPatch!.ops);
+		const canonical = driver.document;
 
 		// Invariant 2: canonical holds real values
 		const a1 = canonical.entries.a1;
@@ -271,9 +294,9 @@ describe("convergence (ADR 09 invariant 1)", () => {
 			expect((a1.content[1] as { arguments: unknown }).arguments).toEqual({ path: "/tmp/x" });
 		}
 
-		// Convergence: snapshot equals filtered replay of the reconcile patch
+		// Convergence: snapshot equals filtered replay of the refresh patch
 		const snapshotClient = snapshotForWire(canonical);
 		const replayClient = replayFiltered(snapshotForWire(initial), [recPatch!.ops], new Set());
-		assertDocsEqual(snapshotClient, replayClient, "reconcile-discovered");
+		assertDocsEqual(snapshotClient, replayClient, "refresh-discovered");
 	});
 });

@@ -42,5 +42,4 @@ export function createClientStore() {
 export type { ComposerDraft } from "./composer.ts";
 export { selectDraftImages } from "./composer.ts";
 export type { ConnectionState, SessionFolderPage } from "./protocol.ts";
-export type { ExpandKeySets, Toast } from "./ui.ts";
-export { migrateExpandKeys } from "./ui.ts";
+export type { Toast } from "./ui.ts";

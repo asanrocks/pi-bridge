@@ -1,10 +1,28 @@
 import type { AgentSessionEvent, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { applyEvent, applyPatch, initFromEntries, reconcile } from "../../src/core/index.ts";
+import { applyEvent, type Document, initFromEntries, isEntrySealed } from "../../src/core/index.ts";
+import { createDriver } from "./projection-driver.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+function emptyDoc(): Document {
+	return {
+		status: {
+			leafId: null,
+			name: "",
+			model: { provider: "", modelId: "" },
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+			contextUsage: null,
+			pendingSteer: [],
+		},
+		entries: {},
+	};
+}
 
 function se(type: string, overrides: Record<string, unknown> = {}): SessionEntry {
 	if (type === "message") {
@@ -53,80 +71,74 @@ describe("ord: file position assignment", () => {
 		expect(doc.entries.c?.ord).toBe(2);
 	});
 
-	it("applyEvent entry_appended does not assign ord", () => {
-		let doc = initFromEntries([]);
-		const event = {
-			type: "entry_appended",
-			entry: labelEntry("L1", "x"),
-		} as AgentSessionEvent;
-		const patch = applyEvent(doc, event);
-		if (!patch) throw new Error("expected a patch");
-		doc = applyPatch(doc, patch.ops);
-		expect(doc.entries.L1).toBeDefined();
-		expect(doc.entries.L1?.ord).toBeUndefined();
+	it("an append installs nothing until the refresh assigns the position", () => {
+		const doc = initFromEntries([]);
+		const event = { type: "entry_appended", entry: labelEntry("L1", "x") } as AgentSessionEvent;
+		// An append is a hint; content and position arrive together from the file.
+		expect(applyEvent(doc, event)).toBeNull();
+		expect(doc.entries.L1).toBeUndefined();
 	});
 
-	it("reconcile discovers a silent hole and assigns positions to the hole and already-known later entries in one patch", () => {
-		// File order: a b [silent label] e5. The bridge learned e5 via
-		// entry_appended (no ord) before discovering the silent label — the
-		// ADR 09 ordering problem.
-		let doc = initFromEntries([userEntry("a"), userEntry("b")]);
-		const appended = applyEvent(doc, { type: "entry_appended", entry: userEntry("e5") } as AgentSessionEvent);
-		if (!appended) throw new Error("expected a patch");
-		doc = applyPatch(doc, appended.ops);
+	it("a refresh discovers a silent hole and positions it and the entries after it in one patch", () => {
+		// File order: a b [silent label] e5. The silent label has no event of its
+		// own; the refresh discovers it from the entry list and positions both it
+		// and the entry after it in one patch.
+		const driver = createDriver(emptyDoc());
+		driver.refresh([userEntry("a"), userEntry("b")]);
 
 		const piEntries = [userEntry("a"), userEntry("b"), labelEntry("silent", "a"), userEntry("e5")];
-		const patch = reconcile(doc, piEntries);
+		const patch = driver.refresh(piEntries);
 		if (!patch) throw new Error("expected a patch");
 
-		// One atomic patch: the hole is added with its ord, and the
-		// already-known later entry receives its position.
+		// One atomic patch: the silent entry is added with its ord, and the
+		// entry after it receives its position.
 		expect(hasOp(patch.ops, "add", "/entries/silent")).toBe(true);
-		expect(hasOp(patch.ops, "replace", "/entries/e5/ord")).toBe(true);
+		expect(hasOp(patch.ops, "add", "/entries/e5")).toBe(true);
 
-		const doc2 = applyPatch(doc, patch.ops);
-		expect(doc2.entries.silent?.ord).toBe(2);
-		expect(doc2.entries.e5?.ord).toBe(3);
+		expect(driver.document.entries.silent?.ord).toBe(2);
+		expect(driver.document.entries.e5?.ord).toBe(3);
 		// The add carries its ord in the op value.
 		const addOp = patch.ops.find((o) => o.path === "/entries/silent");
 		expect(addOp && "value" in addOp ? (addOp.value as { ord?: number }).ord : undefined).toBe(2);
 	});
 
-	it("reconcile ord assignment is idempotent", () => {
+	it("an unchanged refresh is a no-op for positions", () => {
 		const piEntries = [userEntry("a"), userEntry("b")];
-		const doc = initFromEntries(piEntries);
-		const patch = reconcile(doc, piEntries);
-		const ordOps = patch?.ops.filter((o) => o.path.endsWith("/ord")) ?? [];
-		expect(ordOps).toEqual([]);
+		const driver = createDriver(emptyDoc());
+		driver.refresh(piEntries);
+		expect(driver.refresh(piEntries)).toBeNull();
 	});
 
-	it("a seal move assigns ord to the committed entry", () => {
-		let doc = initFromEntries([]);
-		const started = applyEvent(doc, {
+	it("sealing installs ord and the sealed lifecycle together", () => {
+		const driver = createDriver(emptyDoc());
+		const started = driver.applyEvent({
 			type: "message_start",
+			entryId: "u1",
 			message: { role: "user", content: "hi", timestamp: 0 },
 		} as unknown as AgentSessionEvent);
 		if (!started) throw new Error("expected a patch");
-		doc = applyPatch(doc, started.ops);
-		expect(doc.entries["pending:user:1"]).toBeDefined();
+		expect(isEntrySealed(driver.document.entries.u1!)).toBe(false);
+		expect(driver.document.entries.u1?.ord).toBeUndefined();
 
-		const patch = reconcile(doc, [userEntry("u1")]);
+		const patch = driver.refresh([userEntry("u1")]);
 		if (!patch) throw new Error("expected a patch");
-		expect(hasOp(patch.ops, "move", "/entries/u1")).toBe(true);
-		expect(hasOp(patch.ops, "add", "/entries/u1/ord")).toBe(true);
+		// No identity move: the entry keeps its id and gains its file position.
+		expect(patch.ops.some((op) => op.op === "move")).toBe(false);
 
-		const doc2 = applyPatch(doc, patch.ops);
-		expect(doc2.entries.u1?.ord).toBe(0);
-		expect(doc2.entries["pending:user:1"]).toBeUndefined();
+		expect(driver.document.entries.u1?.ord).toBe(0);
+		expect(isEntrySealed(driver.document.entries.u1!)).toBe(true);
 	});
 
-	it("reconcile corrects an ord that no longer matches the file position", () => {
-		// Hand-edited history: the file was rewritten so a known entry now
-		// sits at a different position. reconcile must emit the correction.
-		const doc = initFromEntries([userEntry("a"), userEntry("b")]);
-		const piEntries = [userEntry("b"), userEntry("a")];
-		const patch = reconcile(doc, piEntries);
-		expect(hasOp(patch?.ops ?? [], "replace", "/entries/a/ord")).toBe(true);
-		expect(hasOp(patch?.ops ?? [], "replace", "/entries/b/ord")).toBe(true);
+	it("a wholesale rewrite reassigns positions from the new list", () => {
+		// A rewritten entry list (fork/reload) carries a new version, so the
+		// projection re-reads from zero: every position comes from the new
+		// list, whatever the old document held.
+		const driver = createDriver(emptyDoc());
+		driver.refresh([userEntry("a"), userEntry("b")]);
+
+		const patch = driver.rewrite([userEntry("b"), userEntry("a")]);
+		expect(patch).not.toBeNull();
+		expect(driver.document.entries.a?.ord).toBe(1);
+		expect(driver.document.entries.b?.ord).toBe(0);
 	});
 });

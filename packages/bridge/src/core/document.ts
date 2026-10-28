@@ -22,12 +22,12 @@ import {
 	type ContextUsage,
 	type Document,
 	type Entry,
+	isEntrySealed,
 	isLazyFieldPath,
 	type JsonValue,
 	type ModelRef,
 	type Patch,
 	type PatchOp,
-	type RecoverableTurnKind,
 	type RpcReply,
 	type ServerPushMessage,
 	type Stats,
@@ -306,6 +306,20 @@ function toCustomMessageEntry(entry: PiCustomMessageEntry): Entry {
 	};
 }
 
+/**
+ * Project a persisted SessionEntry as an authoritative bridge Entry: sealed,
+ * with its file position. This is the only way a stored entry becomes
+ * canonical, so sealing and `ord` cannot disagree.
+ */
+export function projectEntry(entry: SessionEntry, ord: number): Entry {
+	return { ...toEntry(entry), isSealed: true, ord } as Entry;
+}
+
+/** Aggregate usage/cost/message counts for one complete entry map and leaf. */
+export function deriveStatsForEntries(entries: Record<string, Entry>, leafId: string | null): Stats {
+	return deriveStats(entries, leafId);
+}
+
 export function toEntry(entry: SessionEntry): Entry {
 	if (entry.type === "message") {
 		const msg = entry.message;
@@ -400,47 +414,56 @@ export function deriveStatus(
 	};
 }
 
-function deriveLeafId(entries: Record<string, Entry>): string | null {
-	let last: string | null = null;
-	for (const id of Object.keys(entries)) {
-		if (!id.startsWith("pending:")) {
-			last = id;
-		}
+/** The sealed entry with the highest file position that `matches` accepts.
+ *
+ * `ord` is the only order authority over an entry map: JavaScript enumerates
+ * integer-like keys (an all-digit entry id, ~2% of 8-hex ids) before every
+ * string key, so a map's key order is neither insertion nor file order.
+ * "The latest entry" must be selected by `ord`, never by key position. */
+function latestByOrd(entries: Record<string, Entry>, matches: (entry: Entry) => boolean): Entry | null {
+	let latest: Entry | null = null;
+	for (const entry of Object.values(entries)) {
+		if (!isEntrySealed(entry) || entry.ord === undefined) continue;
+		if (!matches(entry)) continue;
+		if (latest === null || entry.ord > (latest.ord as number)) latest = entry;
 	}
-	return last;
+	return latest;
+}
+
+function deriveLeafId(entries: Record<string, Entry>): string | null {
+	return latestByOrd(entries, () => true)?.id ?? null;
 }
 
 function deriveModel(entries: Record<string, Entry>): ModelRef {
-	let ref: ModelRef = { provider: "", modelId: "" };
-	for (const id of Object.keys(entries)) {
-		const e = entries[id];
-		if (!id.startsWith("pending:") && e.kind === "model_change" && "modelId" in e) {
-			ref = { provider: e.provider, modelId: e.modelId };
-		}
+	const latest = latestByOrd(entries, (e) => e.kind === "model_change");
+	if (latest !== null && latest.kind === "model_change") {
+		return { provider: latest.provider, modelId: latest.modelId };
 	}
-	return ref;
+	return { provider: "", modelId: "" };
 }
 
 function deriveThinkingLevel(entries: Record<string, Entry>): string {
-	let level = "off";
-	for (const id of Object.keys(entries)) {
-		const e = entries[id];
-		if (!id.startsWith("pending:") && e.kind === "thinking_level_change" && "thinkingLevel" in e) {
-			level = e.thinkingLevel;
-		}
+	const latest = latestByOrd(entries, (e) => e.kind === "thinking_level_change");
+	if (latest !== null && latest.kind === "thinking_level_change") {
+		return latest.thinkingLevel;
 	}
-	return level;
+	return "off";
 }
 
 function deriveName(entries: Record<string, Entry>): string {
-	let name = "";
-	for (const id of Object.keys(entries)) {
-		const e = entries[id];
-		if (!id.startsWith("pending:") && e.kind === "session_info" && e.name !== undefined) {
-			name = e.name;
-		}
+	const latest = latestByOrd(entries, (e) => e.kind === "session_info" && e.name !== undefined);
+	if (latest !== null && latest.kind === "session_info") {
+		return latest.name ?? "";
 	}
-	return name;
+	return "";
+}
+
+/** The session name implied by a complete entry map: the latest sealed
+ * `session_info` by file position (an empty name clears). Exported for the
+ * entry projection, which installs authoritative entries and must publish a
+ * name the live session never announced — a reopened session's title. */
+export function deriveSessionName(entries: Record<string, Entry>): string {
+	return deriveName(entries);
 }
 
 function deriveStats(entries: Record<string, Entry>, leafId: string | null): Stats {
@@ -540,9 +563,9 @@ function deriveStats(entries: Record<string, Entry>, leafId: string | null): Sta
 export function initFromEntries(entries: SessionEntry[]): Document {
 	const entryMap: Record<string, Entry> = {};
 	for (let i = 0; i < entries.length; i++) {
-		const projected = toEntry(entries[i]);
-		// ADR 09: bootstrapped entries get their file position immediately.
-		projected.ord = i;
+		// ADR 09: bootstrapped entries are authoritative, so they are sealed and
+		// carry their file position immediately.
+		const projected = projectEntry(entries[i], i);
 		entryMap[entries[i].id] = projected;
 	}
 	return {
@@ -801,7 +824,7 @@ export function filterPatchForSocket(ops: PatchOp[], subscriptions: Set<string>)
 			continue;
 		}
 		// Non-lazy path: the op itself passes, but its value may embed lazy
-		// content (entry-root add from reconcile/entry_appended, block-level
+		// content (entry-root add from a refresh, block-level
 		// replace from toolcall_end). Strip unsubscribed lazy subfields.
 		if ((op.op === "add" || op.op === "replace") && op.value !== null && typeof op.value === "object") {
 			const sanitized = sanitizeOpValue(op.path, op.value as AnyRecord, subscriptions);
@@ -969,27 +992,25 @@ function singleAppendOp(msg: unknown): AppendOp | null {
 	return { op: "append", path: op.path, value: op.value };
 }
 
-// ---------------------------------------------------------------------------
-// Provisional naming
-// ---------------------------------------------------------------------------
-
-const PROVISIONAL_MESSAGE = "pending:message";
-const PROVISIONAL_USER_PREFIX = "pending:user:";
-const PROVISIONAL_TOOL_PREFIX = "pending:";
-
-function userOrdinal(entries: Record<string, Entry>): number {
-	let count = 0;
-	for (const id of Object.keys(entries)) {
-		if (id.startsWith(PROVISIONAL_USER_PREFIX)) count++;
-	}
-	return count + 1;
-}
-
 // ============================================================================
-// applyEvent — consume AgentSessionEvent, produce Patch
+// applyEvent — consume the session lifecycle, produce Patch
 // ============================================================================
 
-export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | null {
+/**
+ * A lifecycle event for an item pi persists carries the id it will be stored
+ * as — the identity pi reserved before the item became observable. A content
+ * event without that id violates the identity contract: it is dropped rather
+ * than addressed under an invented identity, because a fabricated id cannot
+ * be sealed (the persisted entry arrives under its own, different id) and the
+ * fabricated entry would never settle away. The one exception is a nested
+ * tool call (`parentToolCallId`), which legitimately owns no entry: its
+ * outcome is recorded on the result of the call that issued it.
+ */
+export type SessionLifecycleEvent = AgentSessionEvent & {
+	entryId?: string;
+};
+
+export function applyEvent(doc: Document, event: SessionLifecycleEvent): Patch | null {
 	const ops: PatchOp[] = [];
 
 	switch (event.type) {
@@ -1003,9 +1024,9 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 
 		case "message_start": {
 			const msg = event.message;
+			if (event.entryId === undefined) break;
+			const id = event.entryId;
 			if (msg.role === "user") {
-				const n = userOrdinal(doc.entries);
-				const id = `${PROVISIONAL_USER_PREFIX}${n}`;
 				ops.push({
 					op: "add",
 					path: `/entries/${id}`,
@@ -1014,17 +1035,18 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 			} else if (msg.role === "assistant") {
 				ops.push({
 					op: "add",
-					path: `/entries/${PROVISIONAL_MESSAGE}`,
-					value: assistantMessageSkeleton(doc.status.leafId, msg as unknown as AnyRecord),
+					path: `/entries/${id}`,
+					value: assistantMessageSkeleton(id, doc.status.leafId, msg as unknown as AnyRecord),
 				});
-				ops.push({ op: "replace", path: "/status/leafId", value: PROVISIONAL_MESSAGE });
+				ops.push({ op: "replace", path: "/status/leafId", value: id });
 			}
 			break;
 		}
 
 		case "message_update": {
+			if (event.entryId === undefined) break;
 			const ame = event.assistantMessageEvent;
-			const entryId = PROVISIONAL_MESSAGE;
+			const entryId = event.entryId;
 			const prefix = `/entries/${entryId}`;
 
 			switch (ame.type) {
@@ -1132,8 +1154,9 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 		case "message_end": {
 			const msg = event.message;
 			if (msg.role === "assistant") {
+				if (event.entryId === undefined) break;
 				const am = msg as unknown as AnyRecord;
-				const prefix = `/entries/${PROVISIONAL_MESSAGE}`;
+				const prefix = `/entries/${event.entryId}`;
 				ops.push({ op: "replace", path: `${prefix}/api`, value: am.api as string });
 				ops.push({ op: "replace", path: `${prefix}/provider`, value: am.provider as string });
 				ops.push({ op: "replace", path: `${prefix}/model`, value: am.model as string });
@@ -1147,20 +1170,21 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 				if (am.usage) ops.push({ op: "replace", path: `${prefix}/usage`, value: am.usage as JsonValue });
 				if (typeof am.durationMs === "number")
 					ops.push({ op: "replace", path: `${prefix}/durationMs`, value: am.durationMs });
-				ops.push({ op: "replace", path: "/status/leafId", value: PROVISIONAL_MESSAGE });
-			} else if (msg.role === "toolResult") {
-				const toolCallId = (msg as unknown as AnyRecord).toolCallId as string;
-				const toolId = findToolProvisional(doc.entries, toolCallId);
-				if (toolId) ops.push({ op: "replace", path: "/status/leafId", value: toolId });
-			} else {
-				const userId = findLatestUserProvisional(doc.entries);
-				if (userId) ops.push({ op: "replace", path: "/status/leafId", value: userId });
+				ops.push({ op: "replace", path: "/status/leafId", value: event.entryId });
+			} else if (event.entryId !== undefined && doc.entries[event.entryId]) {
+				// A user/system/tool-result message advances the leaf to its own
+				// entry. The id names it, so no lookup by role is needed.
+				ops.push({ op: "replace", path: "/status/leafId", value: event.entryId });
 			}
 			break;
 		}
 
 		case "tool_execution_start": {
-			const id = `${PROVISIONAL_TOOL_PREFIX}${event.toolCallId}`;
+			// A nested call (made through ctx.executeTool) owns no entry — its
+			// outcome is recorded on the result of the call that issued it.
+			if (event.parentToolCallId !== undefined) break;
+			if (event.entryId === undefined) break;
+			const id = event.entryId;
 			ops.push({
 				op: "add",
 				path: `/entries/${id}`,
@@ -1170,7 +1194,9 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 		}
 
 		case "tool_execution_update": {
-			const id = `${PROVISIONAL_TOOL_PREFIX}${event.toolCallId}`;
+			if (event.parentToolCallId !== undefined) break;
+			if (event.entryId === undefined) break;
+			const id = event.entryId;
 			const prefix = `/entries/${id}`;
 			if (event.partialResult?.content !== undefined) {
 				ops.push({ op: "replace", path: `${prefix}/content`, value: jsonValue(event.partialResult.content) });
@@ -1182,7 +1208,9 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 		}
 
 		case "tool_execution_end": {
-			const id = `${PROVISIONAL_TOOL_PREFIX}${event.toolCallId}`;
+			if (event.parentToolCallId !== undefined) break;
+			if (event.entryId === undefined) break;
+			const id = event.entryId;
 			const prefix = `/entries/${id}`;
 			if (event.result?.content !== undefined) {
 				const content = Array.isArray(event.result.content)
@@ -1211,12 +1239,11 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 			ops.push({ op: "replace", path: "/status/thinkingLevel", value: event.level });
 			break;
 
-		case "entry_appended": {
-			const entry = toEntry(event.entry);
-			ops.push({ op: "add", path: `/entries/${entry.id}`, value: entry as unknown as JsonValue });
-			ops.push({ op: "replace", path: "/status/leafId", value: entry.id });
+		case "entry_appended":
+			// An invalidation hint, not content: the entry is installed from pi's
+			// entry list by the following refresh, in file order. Applying the
+			// payload here would publish a child before the parent it names.
 			break;
-		}
 
 		case "session_info_changed": {
 			if (event.name !== undefined) {
@@ -1246,219 +1273,16 @@ export function applyEvent(doc: Document, event: AgentSessionEvent): Patch | nul
 }
 
 // ============================================================================
-// reconcile — diff getEntries() against Document, produce Patch
-// ============================================================================
-
-export interface ReconcileOptions {
-	name?: string;
-	model?: ModelRef;
-	thinkingLevel?: string;
-	contextUsage?: ContextUsage | null;
-	/** Broken-tail recovery kind of the leaf path's tail (ADR 16). Stamped only
-	 * when present — the caller (Manager) derives it at idle boundaries. */
-	recoverableTurn?: RecoverableTurnKind | null;
-}
-
-export function reconcile(doc: Document, piEntries: SessionEntry[], options?: ReconcileOptions): Patch | null {
-	const ops: PatchOp[] = [];
-
-	// Walk by index (ADR 09): ord is the file position, so already-known later
-	// entries must be visited to assign their ord when an earlier hole is
-	// discovered — the old `if (doc.entries[piEntry.id]) continue` skip could
-	// not do that.
-	for (let i = 0; i < piEntries.length; i++) {
-		const piEntry = piEntries[i];
-		const known = doc.entries[piEntry.id];
-		if (known) {
-			// Normally a no-op: ord is stable for one logical session. A diff
-			// means history was rewritten (hand-edit, fixture); correct it so
-			// mirrors converge.
-			if (known.ord !== i) {
-				ops.push({ op: "replace", path: `/entries/${piEntry.id}/ord`, value: i });
-			}
-			continue;
-		}
-
-		const provisional = findProvisional(doc.entries, piEntries, piEntry);
-		if (provisional) {
-			ops.push({ op: "move", from: `/entries/${provisional.id}`, path: `/entries/${piEntry.id}` });
-			ops.push({ op: "replace", path: `/entries/${piEntry.id}/id`, value: piEntry.id });
-			ops.push({ op: "add", path: `/entries/${piEntry.id}/parentId`, value: piEntry.parentId });
-			ops.push({ op: "add", path: `/entries/${piEntry.id}/timestamp`, value: piEntry.timestamp });
-			// Invariant 7 (architecture §7): committed entries never hold null
-			// lazy fields. Streaming skeletons start null and the filling events
-			// are conditional (absent tool details, abort before *_end), so the
-			// seal backfills any still-null lazy field from the durable pi
-			// entry — toEntry normalizes genuinely-absent values.
-			ops.push(...backfillLazyFields(doc.entries[provisional.id], piEntry));
-			// ADR 09: the sealed entry becomes cacheable — it now has ord.
-			ops.push({ op: "add", path: `/entries/${piEntry.id}/ord`, value: i });
-		} else {
-			// ADR 09 invariant 2: the canonical document holds real values.
-			// Lazy stripping happens only at the wire boundary
-			// (snapshotForWire + filterPatchForSocket).
-			const projected = toEntry(piEntry);
-			projected.ord = i;
-			ops.push({ op: "add", path: `/entries/${piEntry.id}`, value: projected as unknown as JsonValue });
-		}
-	}
-
-	const lastId = piEntries.length > 0 ? piEntries[piEntries.length - 1].id : null;
-	if ((doc.status.leafId ?? null) !== lastId) {
-		ops.push({ op: "replace", path: "/status/leafId", value: lastId });
-	}
-
-	if (options?.name !== undefined && doc.status.name !== options.name) {
-		ops.push({ op: "replace", path: "/status/name", value: options.name });
-	}
-	if (options?.model !== undefined) {
-		const cur = doc.status.model;
-		if (cur.provider !== options.model.provider || cur.modelId !== options.model.modelId) {
-			ops.push({ op: "replace", path: "/status/model", value: options.model as unknown as JsonValue });
-		}
-	}
-	if (options?.thinkingLevel !== undefined && doc.status.thinkingLevel !== options.thinkingLevel) {
-		ops.push({ op: "replace", path: "/status/thinkingLevel", value: options.thinkingLevel });
-	}
-	if ("contextUsage" in (options ?? {})) {
-		const newCU = (options as ReconcileOptions).contextUsage ?? null;
-		if (JSON.stringify(doc.status.contextUsage) !== JSON.stringify(newCU)) {
-			ops.push({ op: "replace" as const, path: "/status/contextUsage", value: newCU as unknown as JsonValue });
-		}
-	}
-
-	// ADR 16: stamp the host-derived recovery kind when the caller provided it.
-	if ("recoverableTurn" in (options ?? {})) {
-		const nextKind = (options as ReconcileOptions).recoverableTurn ?? null;
-		if ((doc.status.recoverableTurn ?? null) !== nextKind) {
-			ops.push({ op: "replace" as const, path: "/status/recoverableTurn", value: nextKind as unknown as JsonValue });
-		}
-	}
-
-	// ── Recompute aggregate stats after all reconcile ops ────────────
-	// deriveStats is only called during initFromEntries; reconcile must
-	// re-derive it so the rollup reflects newly-committed message usage
-	// and compaction boundaries.
-	//
-	// Build the effective entry map as it will look after reconcile ops
-	// are applied: committed entries from piEntries (preferring the
-	// streaming-enriched bridge projection when available), plus any
-	// provisional entries not yet committed.
-	const effectiveEntries: Record<string, Entry> = {};
-	for (const pe of piEntries) {
-		effectiveEntries[pe.id] = doc.entries[pe.id] ?? toEntry(pe);
-	}
-	for (const [id, entry] of Object.entries(doc.entries)) {
-		if (id.startsWith("pending:")) {
-			effectiveEntries[id] = entry;
-		}
-	}
-
-	const effectiveLeafId = piEntries.length > 0 ? piEntries[piEntries.length - 1].id : doc.status.leafId;
-	const newStats = deriveStats(effectiveEntries, effectiveLeafId);
-	if (JSON.stringify(newStats) !== JSON.stringify(doc.status.stats)) {
-		ops.push({ op: "replace", path: "/status/stats", value: newStats as unknown as JsonValue });
-	}
-
-	return ops.length > 0 ? { ops } : null;
-}
-
-/**
- * Replace ops for lazy fields the stream left null on a sealing provisional
- * entry (invariant 7). The durable pi entry is authoritative; block indices
- * align because streaming built the same content order. Type mismatches
- * (defensive) skip the block rather than guess.
- */
-function backfillLazyFields(prov: Entry, piEntry: SessionEntry): PatchOp[] {
-	const durable = toEntry(piEntry);
-	const prefix = `/entries/${piEntry.id}`;
-	const ops: PatchOp[] = [];
-
-	if (prov.kind === "tool_result" && durable.kind === "tool_result") {
-		if (prov.content === null) {
-			ops.push({ op: "replace", path: `${prefix}/content`, value: durable.content as unknown as JsonValue });
-		}
-		if (prov.details === null) {
-			ops.push({ op: "replace", path: `${prefix}/details`, value: durable.details });
-		}
-		return ops;
-	}
-
-	if (prov.kind === "message" && durable.kind === "message") {
-		for (let i = 0; i < prov.content.length; i++) {
-			const p = prov.content[i];
-			const d = durable.content[i];
-			if (!d || d.type !== p.type) continue;
-			if (p.type === "thinking" && p.thinking === null && d.type === "thinking") {
-				ops.push({ op: "replace", path: `${prefix}/content/${i}/thinking`, value: d.thinking });
-			}
-			if (p.type === "toolCall" && p.arguments === null && d.type === "toolCall") {
-				ops.push({ op: "replace", path: `${prefix}/content/${i}/arguments`, value: d.arguments });
-			}
-		}
-	}
-
-	return ops;
-}
-
-// ============================================================================
-// Provisional matching helpers
-// ============================================================================
-
-export function findProvisional(
-	entries: Record<string, Entry>,
-	piEntries: SessionEntry[],
-	piEntry: SessionEntry,
-): { id: string } | null {
-	if (piEntry.type !== "message") return null;
-
-	const msg = piEntry.message;
-	if (msg.role === "assistant") {
-		return entries[PROVISIONAL_MESSAGE] ? { id: PROVISIONAL_MESSAGE } : null;
-	}
-	if (msg.role === "toolResult") {
-		const toolCallId = (msg as unknown as AnyRecord).toolCallId as string;
-		const id = `${PROVISIONAL_TOOL_PREFIX}${toolCallId}`;
-		return entries[id] ? { id } : null;
-	}
-	if (msg.role === "user") {
-		let ordinal = 0;
-		for (const e of piEntries) {
-			if (e.type === "message" && (e.message as unknown as AnyRecord).role === "user") {
-				// Only count user messages not yet committed in the Document
-				if (!entries[e.id]) ordinal++;
-			}
-			if (e.id === piEntry.id) break;
-		}
-		const id = `${PROVISIONAL_USER_PREFIX}${ordinal}`;
-		return entries[id] ? { id } : null;
-	}
-	return null;
-}
-
-function findToolProvisional(entries: Record<string, Entry>, toolCallId: string): string | null {
-	const id = `${PROVISIONAL_TOOL_PREFIX}${toolCallId}`;
-	return entries[id] ? id : null;
-}
-
-function findLatestUserProvisional(entries: Record<string, Entry>): string | null {
-	let latest = "";
-	for (const id of Object.keys(entries)) {
-		if (id.startsWith(PROVISIONAL_USER_PREFIX)) latest = id;
-	}
-	return latest || null;
-}
-
-// ============================================================================
 // Skeleton factories (for applyEvent)
 // ============================================================================
 
-function assistantMessageSkeleton(parentId: string | null, msg: AnyRecord): JsonValue {
+function assistantMessageSkeleton(id: string, parentId: string | null, msg: AnyRecord): JsonValue {
 	return {
 		kind: "message",
-		id: PROVISIONAL_MESSAGE,
+		id,
 		parentId,
 		timestamp: "",
+		isSealed: false,
 		role: "assistant",
 		content: [],
 		api: msg.api,
@@ -1479,6 +1303,7 @@ function userMessageSkeleton(id: string, parentId: string | null, msg: AnyRecord
 		id,
 		parentId,
 		timestamp: "",
+		isSealed: false,
 		role: "user",
 		content:
 			typeof msg.content === "string"
@@ -1587,6 +1412,7 @@ function toolResultSkeleton(id: string, parentId: string | null, toolCallId: str
 		id,
 		parentId,
 		timestamp: "",
+		isSealed: false,
 		toolCallId,
 		toolName,
 		content: null,
