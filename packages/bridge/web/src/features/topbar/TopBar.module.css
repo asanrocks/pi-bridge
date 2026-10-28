@@ -51,45 +51,23 @@
 }
 
 .topBarBtn {
-	background: none;
-	border: 1px solid var(--color-border);
-	color: var(--color-secondary);
-	font-size: var(--fs-sm);
-	padding: 8px;
-	min-width: 36px;
-	min-height: 36px;
-	border-radius: var(--radius-sm);
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	user-select: none;
+	composes: ghost from "../../render/buttons.module.css";
+	width: 36px;
+	height: 36px;
 }
 
-.topBarBtn:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-secondary);
-}
-
-/* Dirty-now badge — the count of files differing from HEAD. A quiet chip on
-   the topBarBtn surface, hidden while the tree is clean, so it reads as an
-   ambient state light rather than permanent chrome. */
+/* Dirty-now badge — the count of files differing from HEAD. A quiet ghost chip
+   on the TopBar, hidden while the tree is clean, so it reads as an ambient
+   state light rather than permanent chrome. A value control (the count), so it
+   carries its own muted hue instead of the control ink. */
 .changesBadge {
-	background: none;
-	border: 1px solid var(--color-border);
+	composes: ghost from "../../render/buttons.module.css";
+	gap: 2px;
 	color: var(--color-muted-foreground);
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 4px 8px;
-	border-radius: var(--radius-sm);
-	display: inline-flex;
-	align-items: center;
 	white-space: nowrap;
-	cursor: pointer;
-}
-
-.changesBadge:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
 }
 
 /* Connection icon — shown only on down states. Icon-only broken-link button
@@ -105,15 +83,13 @@
 
 .connErr {
 	color: var(--color-error);
-	border-color: var(--color-error);
 }
 
-/* topBarBtn:hover would gray the red out on hover — re-assert the state
-   hue so the pointer never mutes a down-state signal. (The muted tone is
-   identical to the default hover and needs no override.) */
+/* .ghost:hover would gray the red out on hover — re-assert the state hue so the
+   pointer never mutes a down-state signal. (The muted tone is identical to the
+   default hover and needs no override.) */
 .connErr:hover {
 	color: var(--color-error);
-	border-color: var(--color-error);
 }
 
 @keyframes conn-reach {

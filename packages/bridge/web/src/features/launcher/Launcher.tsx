@@ -18,6 +18,7 @@ import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
+import { WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
@@ -49,7 +50,11 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	if (status) {
 		return (
 			<div className={styles.state}>
-				{status.phase === "failed" && <div className={styles.stateWarn}>⚠</div>}
+				{status.phase === "failed" && (
+					<div className={styles.stateWarn}>
+						<WarningIcon size={20} />
+					</div>
+				)}
 				<div className={styles.stateTitle}>{status.label}</div>
 				<div className={styles.stateSub}>{status.detail}</div>
 				{connection.kind !== "connecting" && (

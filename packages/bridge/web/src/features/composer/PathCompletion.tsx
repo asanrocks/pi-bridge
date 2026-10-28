@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { type CSSProperties, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FileIcon, FolderIcon } from "../../render/icons.tsx";
 import styles from "./ComposeCard.module.css";
 
 /** Keep in sync with `.completionDropdown`'s max-height. */
@@ -83,7 +84,9 @@ export const PathCompletion = memo(function PathCompletion({
 							onSelect(i);
 						}}
 					>
-						<span className={styles.completionIcon}>{item.isDirectory ? "📁" : "📄"}</span>
+						<span className={styles.completionIcon}>
+							{item.isDirectory ? <FolderIcon size={14} /> : <FileIcon size={14} />}
+						</span>
 						<span className={styles.completionLabel}>
 							{label}
 							{item.isDirectory ? "/" : ""}

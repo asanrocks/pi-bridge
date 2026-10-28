@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
 import { isModelSelected } from "../../../../src/viewmodel/index.ts";
+import { PinIcon } from "../../render/icons.tsx";
 import styles from "./ComposeCard.module.css";
 import { buildModelGroups, type ModelGroup } from "./modelGroups.ts";
 
@@ -26,22 +27,6 @@ function portalPosition(anchor: DOMRect): React.CSSProperties {
 	}
 	const maxHeight = Math.max(96, window.innerHeight - anchor.bottom - 12);
 	return { position: "fixed", top: anchor.bottom + 4, left, width: 320, maxHeight };
-}
-
-/** Push-pin glyph: filled = pinned, outline = unpinned. The glyph is state
- * only — hover styling lives on the button surface, never on the symbol. */
-function PinIcon({ filled }: { filled: boolean }) {
-	return (
-		<svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-			<path
-				d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"
-				fill={filled ? "currentColor" : "none"}
-				stroke="currentColor"
-				strokeWidth="1.5"
-				strokeLinejoin="round"
-			/>
-		</svg>
-	);
 }
 
 export function ModelPickerPortal({
@@ -154,11 +139,12 @@ export function ModelPickerPortal({
 					type="button"
 					className={`${styles.portalPin} ${isPinned ? styles.portalPinActive : ""}`}
 					tabIndex={-1}
+					aria-pressed={isPinned}
 					aria-label={isPinned ? `Unpin ${m.name}` : `Pin ${m.name}`}
 					title={isPinned ? "Unpin" : "Pin"}
 					onClick={() => onTogglePin(m.provider, m.id, !isPinned)}
 				>
-					<PinIcon filled={isPinned} />
+					<PinIcon size={14} filled={isPinned} />
 				</button>
 			</div>
 		);

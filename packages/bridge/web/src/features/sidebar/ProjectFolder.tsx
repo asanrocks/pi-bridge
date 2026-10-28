@@ -9,6 +9,7 @@
 import { memo, useEffect, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
+import { CaretIcon, PlusIcon } from "../../render/icons.tsx";
 import { SessionRow } from "./SessionRow.tsx";
 import styles from "./Sidebar.module.css";
 import { groupSessions } from "./timeUtils.ts";
@@ -77,14 +78,9 @@ export const ProjectFolder = memo(function ProjectFolder({
 
 	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
 
-	// Chevron mirrors the three states: right (folded), diagonal (active
-	// only), down (open). Base class carries color + transition.
-	const chevronVariant = showHistory
-		? styles.sidebarChevronOpen
-		: fold === "active" && hasActive
-			? styles.sidebarChevronMid
-			: "";
-	const chevronCls = [styles.sidebarChevron, chevronVariant].filter(Boolean).join(" ");
+	// The caret mirrors the three fold states — right (folded), diagonal (active
+	// only), down (open) — as the glyph's own direction, never a CSS rotation.
+	const caretDirection = showHistory ? "down" : fold === "active" && hasActive ? "diagonal" : "right";
 
 	return (
 		<div>
@@ -99,16 +95,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 					aria-expanded={showChildren}
 					title={project.cwd}
 				>
-					<svg
-						viewBox="0 0 16 16"
-						width="12"
-						height="12"
-						className={chevronCls}
-						fill="currentColor"
-						aria-hidden="true"
-					>
-						<path d="M6 3l5 5-5 5z" />
-					</svg>
+					<CaretIcon size={12} direction={caretDirection} className={styles.sidebarChevron} />
 					<span className={styles.sidebarItemName}>{project.id}</span>
 				</button>
 				<button
@@ -118,17 +105,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 					title={`New session — ${project.id}`}
 					aria-label={`New session in ${project.id}`}
 				>
-					<svg
-						viewBox="0 0 16 16"
-						width="12"
-						height="12"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.5"
-						aria-hidden="true"
-					>
-						<path d="M8 2.5v11M2.5 8h11" strokeLinecap="round" />
-					</svg>
+					<PlusIcon size={12} />
 				</button>
 			</div>
 			{showChildren && (

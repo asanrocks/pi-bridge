@@ -1,6 +1,6 @@
 // ============================================================================
 // FileBrowser — the one repository browser (ADR 14), in the FileViewer's
-// fullscreen portal role (mounted once in App; Escape / ✕ / backdrop close;
+// fullscreen portal role (mounted once in App; Escape / close control / backdrop;
 // read-only).
 //
 // Left: a file tree. Right: file content. One target (`BrowserTarget` in the
@@ -31,6 +31,7 @@ import { gitDiffRpc, listDirectoryRpc, readFileRpc } from "../../infra/net/useRp
 import { useStore } from "../../infra/state/store.tsx";
 import { useViewModel } from "../../infra/state/useViewModel.ts";
 import { FileContent } from "../../render/FileContent.tsx";
+import { CaretIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon } from "../../render/icons.tsx";
 import { extToLang } from "../conversation/tools/args.ts";
 import { DiffSections } from "../conversation/tools/DiffSections.tsx";
 import { browserHeading } from "./browserHeading.ts";
@@ -733,7 +734,7 @@ export const FileBrowser = memo(function FileBrowser() {
 						)}
 					</span>
 					<button type="button" className={viewerStyles.viewerClose} onClick={closeBrowser} aria-label="Close">
-						✕
+						<CloseIcon size={16} />
 					</button>
 				</div>
 				<div className={styles.browserBody}>
@@ -766,11 +767,12 @@ export const FileBrowser = memo(function FileBrowser() {
 								)}
 								<button
 									type="button"
-									className={styles.refreshBtn}
+									className={styles.fileIconBtn}
 									onClick={() => setTreeOpen(false)}
 									aria-label="Hide file tree"
+									title="Hide file tree"
 								>
-									Hide
+									<CloseIcon size={14} />
 								</button>
 							</div>
 							{directive.status === "error" && <div className={styles.note}>{directive.message}</div>}
@@ -818,13 +820,14 @@ export const FileBrowser = memo(function FileBrowser() {
 								)}
 								<button
 									type="button"
-									className={styles.refreshBtn}
+									className={styles.fileIconBtn}
 									data-on={expandAllLines || undefined}
 									aria-pressed={expandAllLines}
 									onClick={() => setExpandAllLines((v) => !v)}
-									title="Show the complete diff instead of three context lines"
+									aria-label={expandAllLines ? "Back to three context lines" : "Show the complete diff"}
+									title={expandAllLines ? "Back to three context lines" : "Show the complete diff"}
 								>
-									Expand all lines
+									{expandAllLines ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
 								</button>
 							</div>
 						)}
@@ -1028,7 +1031,9 @@ const FileSection = memo(function FileSection({
 					aria-expanded={open}
 					aria-label={`${open ? "Collapse" : "Expand"} diff for ${file.path}`}
 				>
-					<span className={styles.sectionTri}>{open ? "▾" : "▸"}</span>
+					<span className={styles.sectionTri}>
+						<CaretIcon size={12} direction={open ? "down" : "right"} />
+					</span>
 					<span className={styles.sectionPath}>
 						{file.oldPath && <span className={styles.sectionOldPath}>{file.oldPath}</span>}
 						{file.path}

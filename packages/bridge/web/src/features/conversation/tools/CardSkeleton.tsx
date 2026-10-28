@@ -8,7 +8,15 @@
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../../../infra/lib/clipboard.ts";
-import { CheckIcon, ChevronDownIcon, CopyIcon, EyeIcon, MarkdownIcon, WrapIcon } from "../../../render/icons.tsx";
+import {
+	CheckIcon,
+	ChevronDownIcon,
+	ChevronUpIcon,
+	CopyIcon,
+	EyeIcon,
+	MarkdownIcon,
+	WrapIcon,
+} from "../../../render/icons.tsx";
 import styles from "../actions.module.css";
 
 /**
@@ -164,7 +172,7 @@ export const CardControls = memo(function CardControls({
 					aria-label="Open in viewer"
 					title={`Open in viewer: ${viewPath}`}
 				>
-					<EyeIcon size={13} />
+					<EyeIcon size={14} />
 				</button>
 			)}
 			{copyText !== null && (
@@ -175,7 +183,7 @@ export const CardControls = memo(function CardControls({
 					aria-label="Copy content"
 					title={copied ? "Copied" : "Copy content"}
 				>
-					{copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+					{copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 				</button>
 			)}
 			{showWrap && (
@@ -188,7 +196,7 @@ export const CardControls = memo(function CardControls({
 					title="Toggle line wrap"
 					onClick={onToggleWrap}
 				>
-					<WrapIcon size={13} />
+					<WrapIcon size={14} />
 				</button>
 			)}
 			{showMarkdown && (
@@ -201,19 +209,18 @@ export const CardControls = memo(function CardControls({
 					title="Toggle markdown rendering"
 					onClick={onToggleMarkdown}
 				>
-					<MarkdownIcon size={13} />
+					<MarkdownIcon size={14} />
 				</button>
 			)}
 			{capped !== "none" && (
 				<button
 					type="button"
 					className={styles.cardCtrlBtn}
-					data-dir={capped === "uncapped" ? "up" : undefined}
 					aria-label={capped === "uncapped" ? "Collapse to cap" : "Show all"}
 					title={capped === "uncapped" ? "Collapse to cap" : "Show all"}
 					onClick={onToggleCap}
 				>
-					<ChevronDownIcon size={13} />
+					{capped === "uncapped" ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
 				</button>
 			)}
 		</div>

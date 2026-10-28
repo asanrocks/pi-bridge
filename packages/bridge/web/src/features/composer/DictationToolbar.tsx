@@ -11,7 +11,7 @@
 //   preparing       ● Starting the microphone          [discard]
 //   listening       ● Listening 0:07  [meter]          [keep] [discard]
 //   committing      ● Finishing
-//   polishing       ● Polishing                        [discard]
+//   polishing       ● Polishing                        [stop]
 //   polish failed   <the reason>          [undo?] [polish?] [record ●]
 //   no change       Nothing to polish …   [undo?] [polish?] [record ●]
 //
@@ -42,7 +42,7 @@
 
 import type { Dictation, DictationPhase } from "@earendil-works/pi-asr/dictation";
 import { memo, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { CheckIcon, CloseIcon, PolishIcon, RecordIcon, UndoIcon } from "../../render/icons.tsx";
+import { CheckIcon, CloseIcon, PolishIcon, RecordIcon, StopIcon, UndoIcon } from "../../render/icons.tsx";
 import styles from "./ComposeCard.module.css";
 import { DICTATION_TOOLBAR_ID } from "./DictationToggle.tsx";
 import type { PolishState } from "./textPolish.ts";
@@ -210,13 +210,13 @@ export const DictationToolbar = memo(function DictationToolbar({
 							<button
 								type="button"
 								className={styles.dictationAction}
-								data-action="discard"
+								data-action="stop"
 								onPointerDown={keepFocus}
 								onClick={onCancelPolish}
 								aria-label="Stop waiting for the polish"
 								title="Stop waiting for the polish"
 							>
-								<CloseIcon />
+								<StopIcon />
 							</button>
 						)}
 					</span>

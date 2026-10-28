@@ -61,7 +61,7 @@ export const TextBlockView = memo(function TextBlockView({
 					className={`${styles.toolbarBtn} ${styles.msgCopyBtn}`}
 					onClick={handleCopy}
 					aria-label={copied ? "Copied" : "Copy message"}
-					title="Copy message"
+					title={copied ? "Copied" : "Copy message"}
 				>
 					{copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 				</button>

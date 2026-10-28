@@ -26,6 +26,7 @@ import { useRpc } from "../../infra/net/useRpc.ts";
 import type { ClientStore } from "../../infra/state/store.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
+import { ChevronDownIcon } from "../../render/icons.tsx";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
 import cardStyles from "./ComposeCard.module.css";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -342,8 +343,8 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 				aria-label="Token usage breakdown"
 			>
 				{costLabel}
-				<span className={cardStyles.composerCostChevron} aria-hidden="true">
-					▾
+				<span className={cardStyles.composerCostChevron}>
+					<ChevronDownIcon size={12} />
 				</span>
 			</button>
 		</>

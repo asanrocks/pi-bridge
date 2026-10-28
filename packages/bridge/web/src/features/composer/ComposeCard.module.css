@@ -144,23 +144,18 @@
 .editHeaderLabel {
 }
 
+/* Cancel beside the edit header. A glyph, not the word: this card already draws
+   "abandon what is in here" as `CloseIcon` twice — the pending steers and an
+   attached image — so the word was the outlier in one surface. Square from the
+   24 step with the box ladder's negative margin, so the 24px hit rect leaves the
+   11px label beside it where it was. */
 .editCancelBtn {
-	background: transparent;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
-	color: var(--color-secondary);
-	font-size: var(--fs-xs);
-	font-family: inherit;
-	padding: 2px 8px;
-	cursor: pointer;
-	text-transform: none;
-	letter-spacing: 0;
-	font-weight: 400;
-}
-
-.editCancelBtn:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
+	composes: ghost from "../../render/buttons.module.css";
+	width: 24px;
+	height: 24px;
+	margin: -2px 0;
+	padding: 0;
+	flex-shrink: 0;
 }
 
 /* ── Pending-steer draft chips (shown above the textarea while queued) ── */
@@ -190,26 +185,11 @@
 }
 
 .steerClearBtn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 22px;
-	height: 22px;
-	padding: 0;
+	composes: ghost from "../../render/buttons.module.css";
+	width: 24px;
+	height: 24px;
 	margin-left: 2px;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	border: 1px solid var(--color-border);
-	color: var(--color-secondary);
-	font-size: var(--fs-md);
-	line-height: 1;
-	cursor: pointer;
 	flex-shrink: 0;
-}
-
-.steerClearBtn:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
 }
 
 /* ── Textarea ─────────────────────────────────────────────────────────── */
@@ -262,49 +242,31 @@
 	border: 1px solid var(--color-border);
 }
 
+/* Floats over the thumbnail, so it is the one ghost control that keeps a disc:
+   the thing beneath it is an image, not a row surface. */
 .attachRemove {
 	position: absolute;
-	top: -6px;
-	right: -6px;
-	width: 18px;
-	height: 18px;
+	top: -8px;
+	right: -8px;
+	width: 24px;
+	height: 24px;
 	padding: 0;
 	border-radius: var(--radius-sm);
 	background: var(--color-muted);
-	border: 1px solid var(--color-border);
 	color: var(--color-secondary);
-	font-size: var(--fs-sm);
-	line-height: 1;
 	cursor: pointer;
 }
 
 .attachRemove:hover {
 	background: var(--color-border);
+	color: var(--color-foreground);
 }
 
 .attachBtn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	composes: ghost from "../../render/buttons.module.css";
 	width: 28px;
 	height: 28px;
-	padding: 0;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	border: none;
-	font-size: var(--fs-md);
-	line-height: 1;
-	cursor: pointer;
 	flex-shrink: 0;
-}
-
-.attachBtn:disabled {
-	opacity: 0.4;
-	cursor: default;
-}
-
-.attachBtn:hover:not(:disabled) {
-	background: var(--color-muted);
 }
 
 /* ── Dictation (microphone + toolbar) ──────────────────────────────────
@@ -313,40 +275,16 @@
    phase colours — an expanded control reads as accent, and the toolbar says
    what the controller is doing (see DictationToolbar). */
 .dictationBtn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	composes: ghost from "../../render/buttons.module.css";
 	width: 28px;
 	height: 28px;
-	padding: 0;
-	border: none;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	color: var(--color-muted-foreground);
-	cursor: pointer;
-	transition:
-		color var(--dur-fast) ease,
-		background var(--dur-fast) ease;
 }
 
-/* Expanded: the toolbar it controls is on screen. It is not a recording state —
-   the toolbar owns that — so this is the only colour the button ever takes. */
-.dictationBtn[data-open] {
+/* Expanded: the toolbar it controls is on screen. The ghost spec's `data-on`
+   state carries the accent — it is not a recording state (the toolbar owns
+   that), so this is the only colour the button ever takes. */
+.dictationBtn[data-on] {
 	color: var(--color-accent);
-}
-
-/* Hover is a surface cue and nothing more: an expanded control keeps its accent
-   rather than being repainted as idle. Scoped to hover-capable inputs so a tap
-   does not leave the tint behind on touch (the app's idiom — .jumpToBottom). */
-@media (hover: hover) {
-	.dictationBtn:hover:not([data-open]) {
-		background: var(--color-muted);
-		color: var(--color-foreground);
-	}
-
-	.dictationBtn[data-open]:hover {
-		color: var(--color-accent-hover);
-	}
 }
 
 /* ── Dictation toolbar ────────────────────────────────────────────────
@@ -447,25 +385,9 @@
 }
 
 .dictationAction {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	composes: ghost from "../../render/buttons.module.css";
 	width: 28px;
 	height: 28px;
-	padding: 0;
-	border: none;
-	border-radius: var(--radius-sm);
-	background: transparent;
-	color: var(--color-muted-foreground);
-	cursor: pointer;
-	transition:
-		color var(--dur-fast) ease,
-		background var(--dur-fast) ease;
-}
-
-.dictationAction:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
 }
 
 /* The affirmative actions carry the accent the committing dot uses; discard
@@ -565,28 +487,17 @@
 /* ── Cost button (token-breakdown popover) — session ledger ────────────── */
 
 .composerCostBtn {
-	display: inline-flex;
-	align-items: center;
+	composes: ghost from "../../render/buttons.module.css";
 	gap: 3px;
-	background: transparent;
-	color: inherit;
-	border: none;
 	font: inherit;
+	color: var(--color-muted-foreground);
 	padding: 4px 6px;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
 	white-space: nowrap;
-	transition: background-color var(--dur-fast) ease;
-}
-
-.composerCostBtn:hover {
-	background: var(--color-muted);
 }
 
 .composerCostChevron {
+	display: inline-flex;
 	color: var(--color-muted-foreground);
-	font-size: var(--fs-xs);
-	line-height: 1;
 }
 
 .costPopover {
@@ -677,32 +588,17 @@
 
 /* ── Model picker button ──────────────────────────────────────────────── */
 
+/* A value control: the label is the model name, so the glyph budget is one
+   chevron and the words stay. */
 .composerModelBtn {
-	display: inline-flex;
-	align-items: center;
+	composes: ghost from "../../render/buttons.module.css";
 	gap: 4px;
-	/* Ghost: transparent by default, faint muted hover — the chevron +
-	   label carry the affordance, no boxed chip (Claude-style). */
-	background: transparent;
 	color: var(--color-foreground);
-	border: none;
 	font-size: var(--fs-sm);
 	font-family: inherit;
 	padding: 6px 10px;
 	min-height: 32px;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
 	white-space: nowrap;
-	transition: background-color var(--dur-fast) ease;
-}
-
-.composerModelBtn:hover {
-	background: var(--color-muted);
-}
-
-.composerModelBtn:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
 }
 
 .composerModelMuted {
@@ -723,23 +619,28 @@
 }
 
 .composerModelChevron {
+	display: inline-flex;
 	color: var(--color-muted-foreground);
-	font-size: var(--fs-xs);
-	line-height: 1;
 }
 
 /* ── Send / Stop ─────────────────────────────────────────────────────── */
 
+/* The composer's two filled controls — the primary commit and the interrupt —
+   and its only labelled-by-nothing pair: square, one glyph, no words, because
+   the transport solids carry the meaning (see design.md). The client's other
+   filled commands sit at their own surface edges (dialog confirm, compare
+   Apply, the down-state Retry). */
 .composerSendBtn,
 .composerStopBtn {
-	padding: 8px 16px;
-	min-height: 36px;
-	border-radius: var(--radius-md);
-	font-family: inherit;
-	font-size: var(--fs-md);
-	font-weight: 600;
-	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
 	border: none;
+	border-radius: var(--radius-md);
+	cursor: pointer;
 	flex-shrink: 0;
 }
 
@@ -805,8 +706,10 @@
 }
 
 .completionIcon {
-	font-size: var(--fs-md);
+	display: inline-flex;
+	align-items: center;
 	flex-shrink: 0;
+	color: var(--color-muted-foreground);
 }
 
 .completionLabel {
@@ -1057,16 +960,11 @@
    scannable. The box is reserved either way, so revealing a pin never shifts
    the row. */
 .portalPin {
+	composes: ghost from "../../render/buttons.module.css";
 	flex-shrink: 0;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	padding: 4px 10px 4px 8px;
-	border-radius: 4px;
-	color: var(--color-muted-foreground);
-	background: none;
-	border: none;
-	cursor: pointer;
+	width: 24px;
+	height: 24px;
+	margin: 0 6px;
 	opacity: 0;
 }
 
@@ -1076,18 +974,10 @@
 
 /* Declared after `.portalPin`, so equal specificity resolves to the pinned
    state and the pin stays visible without row hover. */
+/* Pinned rows keep their pin visible so the pinned set is scannable; the
+   pressed state (and the filled glyph) carries the rest. */
 .portalPinActive {
 	opacity: 1;
-	color: var(--color-accent);
-}
-
-.portalPin:hover {
-	color: var(--color-foreground);
-	background: var(--color-sidebar);
-}
-
-.portalPinActive:hover {
-	color: var(--color-accent);
 }
 
 /* One highlight surface for row hover and the keyboard cursor — `--color-muted`

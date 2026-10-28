@@ -48,7 +48,7 @@ export function FileContent({ path, content, language, truncated, lineNumbers, h
 						title="Toggle markdown preview"
 						onClick={toggleCardMarkdown}
 					>
-						<MarkdownIcon size={13} />
+						<MarkdownIcon size={14} />
 					</button>
 				) : (
 					<button
@@ -60,7 +60,7 @@ export function FileContent({ path, content, language, truncated, lineNumbers, h
 						title="Toggle line wrap"
 						onClick={toggleCardWrap}
 					>
-						<WrapIcon size={13} />
+						<WrapIcon size={14} />
 					</button>
 				)}
 			</div>

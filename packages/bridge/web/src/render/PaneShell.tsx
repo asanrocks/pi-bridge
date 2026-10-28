@@ -93,7 +93,7 @@ export const PaneShell = memo(function PaneShell({
 	hoverSignal: boolean;
 	/** The pane's header chrome, rendered at the top of every surface.
 	 *  One row per variant so the toggle affordance can differ (the
-	 *  sidebar's peek shows its pin, rail/fullscreen an ✕). */
+	 *  sidebar's peek shows its pin, rail/fullscreen the close control). */
 	renderHeader: (variant: PaneVariant, actions: PaneShellHeaderActions) => React.ReactNode;
 	/** The pane body, shared by every surface. A render function so picks
 	 *  inside the content can call dismissAfterPick. */

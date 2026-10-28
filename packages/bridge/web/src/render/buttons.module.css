@@ -1,0 +1,121 @@
+/* Cascade layer order — repeated in app/index.css, and it has to be in both.
+   A layer's priority is fixed by the first appearance of its name in the
+   *bundled* stylesheet, and this file is inlined into each consumer by
+   `composes`; those copies reach the CSS chunk BEFORE index.css does (the
+   served build opens with this file's first bytes, while `@layer base` and
+   `@layer utilities` land 190KB later). Declaring the order only in index.css
+   therefore registered `control` first, which made preflight's
+   `button { color: inherit; background-color: transparent }` outrank every
+   ghost rule — the ink went to the document colour and the hover fill
+   vanished. The statement is idempotent, so both carriers declare the full
+   list and whichever lands first wins; a statement that only appears after
+   some rules is too late. scripts/check-bridge-styling-tokens.mjs requires
+   this line in every file that opens a `control` layer.
+
+   `control` sits between `components` and `utilities`: a host's own (unlayered)
+   rule beats the shared control spec, the shared spec beats preflight, and a
+   utility class on a control still wins. `@layer` statements are the one
+   at-rule the spec allows before `@import`. */
+@layer theme, base, components, control, utilities;
+
+/* ============================================================================
+   Ghost control — the one spec for a chromeless icon button. See
+   docs/web/design.md, "Iconography and control surfaces".
+
+   Feature modules adopt it with
+   `composes: ghost from "../../render/buttons.module.css";`
+   so the reset and the states have one declaration site without leaking a
+   global utility class into index.css.
+
+   Everything sits in the `control` cascade layer on purpose. `composes` does
+   not link rules: the bundler inlines a copy of this module into every
+   consumer, so the copies land between — and after — host rules and the last
+   copy wins the plain-class cascade. That silently stripped host padding
+   (`.composerModelBtn`'s 6px 10px lost to this file's `padding: 0`) in the
+   production build while the dev server, which injects one copy first, looked
+   correct. Unlayered declarations beat layered ones whatever their order or
+   specificity, so a host always keeps its own box, hue, and disabled rule,
+   while a host that says nothing about a property inherits this spec.
+
+   The layer's *priority* is declared at the top of this file, not in
+   index.css — see that note.
+
+   The statement above is not decoration: without it `control` lands ahead of
+   Tailwind's `base`, and preflight's `button { color: inherit }` outranks the
+   ghost ink.
+
+   A control paints no border and no background at rest: its only ink is the
+   glyph. State lives in that ink plus one fill derived from it, because the
+   `--color-muted` surface token is 1.20:1 against the page tone — below the
+   threshold where a fill reads as a change. The fill's strength is
+   `--state-fill-alpha` rather than a literal, so the number has one home; see
+   that token's note in index.css for the contrast it is sized to.
+   ========================================================================= */
+
+@layer control {
+	.ghost {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0;
+		border: none;
+		border-radius: var(--radius-sm);
+		background: none;
+		color: var(--color-secondary);
+		cursor: pointer;
+		user-select: none;
+		transition:
+			color var(--dur-fast) ease-out,
+			background-color var(--dur-fast) ease-out;
+	}
+
+	/* One class selector per state, so a host's own single-class `:hover`
+	   override (`background: var(--color-surface-raised)` on a floating chip, an
+	   error hue on a recovery button) wins. Hover is scoped to hover-capable
+	   inputs so a tap never leaves the fill behind on touch. */
+	@media (hover: hover) {
+		.ghost:hover {
+			color: var(--color-foreground);
+			background: color-mix(in srgb, currentColor var(--state-fill-alpha), transparent);
+		}
+	}
+
+	.ghost:focus-visible {
+		color: var(--color-foreground);
+		background: color-mix(in srgb, currentColor var(--state-fill-alpha), transparent);
+	}
+
+	/* Two engaged states, one difference between them:
+	   - `aria-pressed` is state about the thing the control stands for (this
+	     row's pin is set). Ink only: the glyph already says it, and a chip
+	     behind every pinned row turns a column of state into a column of
+	     buttons.
+	   - `data-on` is a control that stays engaged (this toolbar's wrap is on).
+	     It takes the fill too, so the row reads as a pressed tool.
+	   Neither repaints on hover past its own hue. */
+	.ghost[aria-pressed="true"],
+	.ghost[data-on] {
+		color: var(--color-accent);
+	}
+
+	.ghost[data-on] {
+		background: color-mix(in srgb, currentColor var(--state-fill-alpha), transparent);
+	}
+
+	@media (hover: hover) {
+		.ghost[aria-pressed="true"]:hover,
+		.ghost[data-on]:hover {
+			color: var(--color-accent);
+		}
+	}
+
+	/* Disabled resets the fill *and* the ink: Chrome still matches `:hover` on a
+	   disabled button, so an ink-only reset leaves the hover hue behind under the
+	   opacity. */
+	.ghost:disabled {
+		color: var(--color-secondary);
+		background: none;
+		opacity: 0.4;
+		cursor: default;
+	}
+}

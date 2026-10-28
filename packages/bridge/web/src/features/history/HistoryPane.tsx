@@ -25,6 +25,7 @@ import { useZoomScale } from "../../infra/lib/zoom.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { resolveRenderLeafTarget, selectRenderDiverged } from "../../infra/state/ui.ts";
+import { ClockIcon, CloseIcon } from "../../render/icons.tsx";
 import { PaneShell } from "../../render/PaneShell.tsx";
 import type { PaneMode } from "../../render/usePaneMode.ts";
 import styles from "./HistoryPane.module.css";
@@ -118,7 +119,7 @@ export const HistoryPane = memo(function HistoryPane({
 			hoverSignal={historyHover}
 			renderHeader={(variant, actions) => (
 				// The peek's pin wears the pane's own clock glyph (the TopBar
-				// toggle's icon); rail/fullscreen carry the ✕ close.
+				// toggle's icon); rail/fullscreen carry the close glyph.
 				<HistoryHeader
 					onClose={variant === "peek" ? actions.pin : variant === "rail" ? actions.hide : actions.dismiss}
 					dock={variant === "peek"}
@@ -346,10 +347,9 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 });
 
 // ---------------------------------------------------------------------------
-// HistoryHeader — title + toggle. The action is variant-dependent (rail ✕
-// hides, fullscreen ✕ dismisses, peek clock pins the rail — the pane's own
-// TopBar glyph, the escape hatch from hover-only access); PaneShell passes
-// the resolved one. Matches the Sidebar's section-header chrome: a quiet
+// HistoryHeader — title + toggle. The action is variant-dependent (rail and
+// fullscreen close, peek's clock pins the rail — the pane's own TopBar glyph,
+// the escape hatch from hover-only access); PaneShell passes the resolved one. Matches the Sidebar's section-header chrome: a quiet
 // uppercase label with an action button in the right slot, no chrome bar /
 // border-bottom, so the two panes share a top-edge treatment.
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ const HistoryHeader = memo(function HistoryHeader({
 	dock: boolean;
 }) {
 	return (
-		<div className={styles.header}>
+		<div className={dock ? `${styles.header} ${styles.headerPeek}` : styles.header}>
 			<span className={styles.title}>History</span>
 			<button
 				type="button"
@@ -372,22 +372,7 @@ const HistoryHeader = memo(function HistoryHeader({
 				aria-label={dock ? "Open history pane" : "Close history"}
 				title={dock ? "Open history pane" : "Close history"}
 			>
-				{dock ? (
-					<svg
-						viewBox="0 0 24 24"
-						width="18"
-						height="18"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2"
-						aria-hidden="true"
-					>
-						<circle cx="12" cy="12" r="9" />
-						<path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
-					</svg>
-				) : (
-					"×"
-				)}
+				{dock ? <ClockIcon size={20} /> : <CloseIcon size={20} />}
 			</button>
 		</div>
 	);
