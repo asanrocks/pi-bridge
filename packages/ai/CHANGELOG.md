@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed the long-cache-retention unsupported-models set and its test still naming the OpenCode DeepSeek flash model by its pre-rename id (`deepseek-v4-flash`): upstream renamed it to `deepseek-v4.1-flash`, so a regenerated catalog no longer stamped `supportsLongCacheRetention: false` on it and the test's reference no longer type-checked.
 - Fixed Claude models that accept mid-conversation system messages rejecting a session with a 400 (`role 'system' must precede an 'assistant' message`) when a system update was followed by an assistant reply with nothing to send to Anthropic, such as an empty reply or another model's reasoning-only reply ([#11091](https://github.com/earendil-works/pi/issues/11091))
 - Fixed Claude models with mid-conversation effort failing with `Invalid effort level` on accounts whose organization caps effort below `high`, even at `low` or `medium` thinking, by sending a fixed `low` top-level effort ([#10063](https://github.com/earendil-works/pi/issues/10063))
 
