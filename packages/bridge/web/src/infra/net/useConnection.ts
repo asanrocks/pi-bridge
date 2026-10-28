@@ -22,7 +22,7 @@ import { getStore } from "../state/store.tsx";
 import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
-import { hookConsole } from "./devConsole.ts";
+import { hookConsole, unhookConsole } from "./devConsole.ts";
 import { resolveLatestSession } from "./latestSession.ts";
 import { flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
@@ -193,6 +193,10 @@ export function useConnection(): { retry: () => void } {
 			setGlobalClient(null);
 			clientRef.current?.disconnect();
 			clientRef.current = null;
+			// The console relay targets this connection's client; a reconnect
+			// re-hooks it (once — the hook never nests) when init reports dev
+			// mode again. Until then, nothing is relayed through a dead socket.
+			unhookConsole();
 
 			attemptRef.current += 1;
 			const attempt = attemptRef.current;
@@ -260,6 +264,7 @@ export function useConnection(): { retry: () => void } {
 			wsRef.current?.close();
 			clientRef.current?.disconnect();
 			setGlobalClient(null);
+			unhookConsole();
 		};
 	}, [connect]);
 

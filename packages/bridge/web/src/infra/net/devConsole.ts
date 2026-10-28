@@ -1,24 +1,50 @@
 // ============================================================================
 // devConsole — dev-mode console relay (--dev): hook console.* so browser
-// calls are forwarded to the server as `console` RPC frames. Re-hooked per
-// connection when the daemon reports devMode; the hooks wrap whatever
-// console holds at hook time.
+// calls are forwarded to the server as `console` RPC frames.
+//
+// The hooks are installed exactly once per page: re-hooking on reconnect
+// repoints the relay at the new client instead of nesting another wrapper
+// (nested wrappers would relay each line once per connection the page ever
+// had, through clients whose sockets are already dead). Unhook on connection
+// close or teardown restores the original methods.
 // ============================================================================
 
 import type { BridgeClient, JsonValue } from "../../../../src/core/index.ts";
 
+const LEVELS = ["log", "warn", "error"] as const;
+type Level = (typeof LEVELS)[number];
+
+let activeClient: BridgeClient | null = null;
+let originals: Record<Level, (...args: unknown[]) => void> | null = null;
+
+/**
+ * Point the relay at `client` and install the console hooks (once). Safe to
+ * call for every connection whose daemon reports dev mode.
+ */
 export function hookConsole(client: BridgeClient): void {
-	const levels = ["log", "warn", "error"] as const;
-	for (const level of levels) {
-		const original = console[level];
+	activeClient = client;
+	if (originals !== null) return;
+	originals = { log: console.log, warn: console.warn, error: console.error };
+	for (const level of LEVELS) {
 		console[level] = (...args: unknown[]) => {
-			original(...args);
-			client.console(
+			originals![level](...args);
+			activeClient?.console(
 				level,
 				args.map((a) => safeJsonValue(a)),
 			);
 		};
 	}
+}
+
+/**
+ * Restore the original console methods and drop the relay target. No-op when
+ * the hooks are not installed.
+ */
+export function unhookConsole(): void {
+	if (originals === null) return;
+	for (const level of LEVELS) console[level] = originals[level];
+	originals = null;
+	activeClient = null;
 }
 
 function safeJsonValue(v: unknown): JsonValue {
