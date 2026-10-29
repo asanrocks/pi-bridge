@@ -1,8 +1,8 @@
 // ============================================================================
 // sessionBoot unit tests — the local restore half of boot (`restoreLocalSession`).
-// The wire half (`openSessionAddress`) needs a client/transport and is covered
-// by the integration suites. The store is the module singleton from store.tsx;
-// each test resets the fields the restore reads and writes.
+// The wire half is the navigation reactor, covered by navigation.test.ts. The
+// store is the module singleton from store.tsx; each test resets the fields
+// the restore reads and writes.
 // ============================================================================
 
 import { beforeEach, describe, expect, it } from "vitest";
@@ -178,8 +178,8 @@ describe("restoreLocalSession", () => {
 	});
 
 	it("applies when the wire half staged the address but nothing rendered yet", async () => {
-		// openSessionAddress commits the address before its RPC resolves; the
-		// local restore may land in that window and must still paint.
+		// Navigation stages the address before its RPC resolves; the local
+		// restore may land in that window and must still paint.
 		getStore().setState({ currentProjectId: "proj", currentStem: "stem" });
 		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
 

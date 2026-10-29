@@ -121,6 +121,14 @@ and [core protocol](core/protocol.md).
    Manager, daemon verbs route to the Daemon, and `pull` is Connection-local.
    Each handler owns its asynchronous work and replies through the same
    Connection.
+7. A **lease** *(bound)* is a Connection's capability for one Activation
+   registration: it is the only path to that Session's runtime (commands and
+   observation), and it rejects once its registration ended. The registry
+   issues leases; it never hands out a Manager.
+8. A **reactor** *(bound)* is a serialized state machine over one lifetime:
+   typed messages are applied one at a time by a synchronous step, and
+   admitted effects return as ordinary messages carrying the epoch of the
+   message that admitted them.
 
 ## C. Document sync
 

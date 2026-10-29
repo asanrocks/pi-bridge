@@ -10,10 +10,10 @@
 // Promotion is atomic: the candidate becomes the mirror only when its
 // initial sync has applied.
 //
-// Module-level singleton (the client.ts pattern): useRpc initiates the
-// switch, useConnection's onPush consumes the frames. Only one switch may be
-// in flight — a second request while a candidate is pending is ignored
-// (serial-switch rule).
+// Module-level singleton (the client.ts pattern): navigation seeds the
+// candidate when a switch opens and is the only promoter — a superseded
+// open's candidate is discarded at its settle. Only one candidate exists at
+// a time; the serial-switch rule is navigation's epoch supersede.
 // ============================================================================
 
 import { applyPatch, type Document, type PatchOp } from "../../../../src/core/index.ts";

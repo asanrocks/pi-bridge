@@ -286,6 +286,11 @@ These are the load-bearing rules for changes across layers:
    no competing turn lifecycle.
 6. **A Manager serves exactly one Session.** An Activation is never rebound;
    Project/stem resolution and activation reservations enforce exclusivity.
+   A Connection reaches a Session only through a registry-issued lease, and
+   one SessionExecution owns the work admitted against that registration:
+   mutations serialize in admission order, turns/aborts/reads run immediately
+   but tracked, and its terminal `end` is the one disposal path — collection
+   and shutdown both go through it.
 7. **Lazy values exist only at the wire/cache boundary.** The canonical
    Document contains real values; null in a projection means not pulled.
 8. **Cancellation finalizes.** Aborted turns produce durable or pending error
@@ -303,11 +308,18 @@ These are the load-bearing rules for changes across layers:
     well as leaf operations, so filtered replay matches a fresh projection.
 14. **Wire frames have one owner.** BridgeClient and Connection construct the
     envelopes; feature code uses typed methods and push data.
-15. **The URL selects navigation.** The client does not maintain a competing
-    session navigation state machine; initial sync commits the resolved
-    Project/stem address.
+15. **The URL selects navigation.** The navigation reactor is the single
+    owner of browser Session selection: it stages, commits on the
+    address-bearing initial sync, and rolls back or falls back per
+    transition; no other module writes the current address, the session id,
+    the navigation route, or the candidate mirror.
 16. **The cache is disposable derived state.** Server validation and
     authoritative initial sync determine correctness, not IndexedDB contents.
+17. **Async work is admitted by a named owner.** Every asynchronous
+    transition belongs to a LifecycleScope, a reactor, or a SessionExecution;
+    a superseded or terminal owner ignores late completions instead of each
+    call site re-checking "is this still current?", and every owner drains
+    before its terminal state resolves.
 
 ## 8. Test design
 

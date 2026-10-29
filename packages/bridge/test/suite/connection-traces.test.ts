@@ -304,6 +304,53 @@ describe("Connection protocol traces", () => {
 		expect(pullReply.values[0].value).toBe("body-a");
 	});
 
+	it("a Session's full lifecycle crosses every owner exactly once", async () => {
+		const bundle = makeBundle();
+		// Connection 1 opens the address; Connection 2 joins the same
+		// Activation (shared registration, two leases).
+		const c1 = await connect(bundle, "life");
+		const c2 = await connect(bundle, "life");
+		const tm = bundle.managers.get("life")!;
+		expect(bundle.link.live()).toHaveLength(1);
+
+		// A turn runs on conn 1; conn 2 reads a lazy value while it streams.
+		c1.clientWs.send(JSON.stringify({ id: "p1", verb: "prompt", text: "hi" }));
+		await waitForCall(tm, "prompt");
+		c2.clientWs.send(
+			JSON.stringify({
+				id: "pull1",
+				verb: "pull",
+				requests: [{ entryId: "e1", fieldPath: "/entries/e1/content/0/text" }],
+			}),
+		);
+		const pullReply = (await replyFor(c2.frames, "pull1")) as { ok: boolean; values: unknown[] };
+		expect(pullReply.ok).toBe(true);
+		expect(pullReply.values.length).toBe(1);
+
+		// The close crosses the terminal boundary: the admitted turn settles
+		// (disposal aborts it), both leases end, both clients learn, and the
+		// runtime is disposed exactly once.
+		await bundle.link.collect(bundle.link.byAddressAny("proj", "life")!);
+		const promptReply = await replyFor(c1.frames, "p1");
+		expect(promptReply.ok).toBe(true);
+		await waitForFrame(c1.frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
+		await waitForFrame(c2.frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
+		expect(c1.conn.isAttached).toBe(false);
+		expect(c2.conn.isAttached).toBe(false);
+		expect(tm.disposeCalls()).toBe(1);
+
+		// A late command on either Connection is refused, not run.
+		c2.clientWs.send(JSON.stringify({ id: "p2", verb: "prompt", text: "late" }));
+		const late = await replyFor(c2.frames, "p2");
+		expect(late.ok).toBe(false);
+		expect(late.error).toBe("no session attached");
+
+		// Shutdown drains what remains: nothing registers afterwards and the
+		// drain awaits any in-flight creation.
+		await bundle.link.dispose();
+		expect(tm.disposeCalls()).toBe(1);
+	});
+
 	it("session_closed precedes the close reply on the closing Connection", async () => {
 		const bundle = makeBundle();
 		const { clientWs, frames } = await connect(bundle, "s4");
