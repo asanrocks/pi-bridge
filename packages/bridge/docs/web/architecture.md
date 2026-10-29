@@ -328,7 +328,7 @@ address identities; it does not fetch a collapsed page. An
 `active_sessions_changed` push replaces the global active-session snapshot.
 A `session_closed` push names an address whose live runtime ended on the
 host (`closeSession`/`archiveSession`); when it names the rendered Session,
-the server has already severed the attachment, so the pipeline clears to the
+the server has already severed the attachment, so navigation clears to the
 Project home through the same boundary a failed open uses — the document on
 screen can never progress again, and a later command cannot reach a disposed
 runtime. A close of some other Session is ignored: the list pushes cover it.
@@ -337,26 +337,58 @@ An address-bearing `replace` or initial-sync `patch` establishes
 `activeSessionId`, `currentProjectId`, `currentStem`, the address index entry,
 and the route. A normal live patch has no SessionRef and only advances the
 current mirror. The address-bearing frame is therefore the synchronization
-barrier at which the target session becomes authoritative. The RPC navigation
-wrapper may stage the requested address while the operation is in flight and
-restores the previous address on failure; the initial-sync handler reasserts
-the committed address and cache identity.
+barrier at which the target session becomes authoritative — and the commit at
+that barrier is the navigation reactor's, not the pipeline's: the pipeline
+publishes the document, the revision, and the cache records for the
+observation the reactor names.
 
-`sessionBoot.ts` is the two halves of boot. The local half,
-`restoreLocalSession`, runs at mount before the wire: it looks up the route's
-remembered `sessionId`, loads the cache records and status hint, and seeds
-the store document — quiescing the volatile status flags, because a cached
-mid-flight turn (streaming, compaction, pending steer) can never progress
-without the daemon — behind a race guard that never lets stale cache
-overwrite wire data. With no remembered id, no records, or a failed read it
-is a no-op and the address stays unclaimed, so the Launcher's down states
-show while connecting. The wire half, `openSessionAddress`, runs at initial
-connection and reconnect: it seeds the BridgeClient mirror — from the
-already-restored store document when present, else from the cache — derives a
-valid prefix cursor, and calls `openSession`. With no usable cache it opens
-without a cursor and receives a full replace. A failed open clears the
-session state and writes the Project route, because the address no longer
-resolves or an unflushed Session disappeared with the daemon.
+### Navigation
+
+`navigation.ts` is the one owner of browser Session selection. Opening a
+Session, showing a Project home, leaving to the Launcher, and resolving the
+`/@latest` alias are transitions of one state machine — built on the core
+reactor primitive — whose state is the committed view (`current`), at most one
+in-flight session transition (`pending`), and the most recently superseded
+target (`abandoned`). A transition captures its target when it starts; every
+continuation uses that capture instead of asking which view is active now, so
+an older operation can never publish into a newer one's view:
+
+- The step stages the target optimistically (address, and for user navigation
+  the route) and admits the open RPC as an effect carrying the message's
+  epoch. User navigation seeds a candidate mirror (`prepareSwitch`) and
+  restores the last committed view on failure; a boot (route-driven,
+  reconnect, or alias resolution) seeds the live mirror and store from the
+  cache and lands on the Project home on failure.
+- The address-bearing initial-sync frame returns as a `sync` message and
+  commits the view: address, durable id, address-index entry, route (the
+  alias view keeps the alias URL). A matching delta promotes the candidate
+  and re-bases the cache base on its pre-promotion document.
+- The RPC reply returns as a `settled` message. A completion whose epoch no
+  longer matches the pending transition is ignored with one comparison: a
+  superseded open commits nothing — its initial sync is dropped, its failure
+  does not roll back the successor — where the previous flow ignored new
+  switches while a candidate was pending and could roll back a view the wire
+  had already committed.
+- A `newSession` reply re-asserts its address through `created` (the
+  initial-sync push committed it first through the no-pending path), and the
+  host's `session_closed` push lands on the Project home when it names the
+  rendered Session.
+- `useRpc`'s address operations are thin wrappers over the transition
+  messages; `useConnection`'s boot path sends them with boot semantics. The
+  cache base lives here (both halves of navigation seed it); the pipeline
+  advances it on delta writes and the replace repair re-establishes it.
+
+`sessionBoot.ts` keeps the local half of boot, `restoreLocalSession`: at
+mount, before the wire, it looks up the route's remembered `sessionId`, loads
+the cache records and status hint, and seeds the store document — quiescing
+the volatile status flags, because a cached mid-flight turn (streaming,
+compaction, pending steer) can never progress without the daemon — behind a
+store-based race guard that never lets stale cache overwrite wire data. The
+guard reads exactly the invariants navigation maintains: the address is
+staged before the RPC resolves, and the durable session id lands only with
+the initial sync. With no remembered id, no records, or a failed read it is
+a no-op and the address stays unclaimed, so the Launcher's down states show
+while connecting.
 
 `devConsole.ts` hooks browser `console.log`, `console.warn`, and
 `console.error` only when daemon information reports development mode. The
@@ -451,12 +483,14 @@ instead of a toast.
 A session switch can have old-session patches in flight until the target's
 initial sync arrives. `prepareSwitch` seeds a candidate mirror when it has a
 valid cache cursor. `sessionCandidate.ts` stores at most one candidate keyed
-by `sessionId`; the target address-bearing patch is applied to that candidate
-and then promoted atomically. The old active mirror remains in service until
-promotion. A second switch is ignored while a candidate is pending, and RPC
-failure discards it. This keeps old teardown patches from being applied to the
-target session and makes cache write-through compare against the target seed,
-not the old Document.
+by `sessionId`; the navigation reactor applies the target address-bearing
+patch to that candidate and then promotes it atomically, and the superseded
+target's late sync is dropped instead of committed. The old active mirror
+remains in service until promotion. A newer transition supersedes an in-flight
+one (the serial-switch rule is now an epoch comparison, not an ignored
+request), and RPC failure discards the candidate. This keeps old teardown
+patches from being applied to the target session and makes cache write-through
+compare against the target seed, not the old Document.
 
 `sessionList.ts` converts a `listSessions` reply into a Project page and records
 the address-to-session identity for each row. The first page is ten rows; the
@@ -592,9 +626,8 @@ active snapshot already fetched by initialization; when none is live it
 falls back to the most recent durable Session across Projects (each Project's
 first `listSessions` row) and opens it, which activates it — only when no
 Session exists at all does it land on the launcher. While the alias view
-holds, the pipeline suppresses the route write on address-bearing initial-sync
-frames, so the URL keeps the alias form and the store holds the resolved
-address. Any explicit navigation (open, Project switch, detach, first prompt)
+holds, navigation suppresses the route write on the initial-sync commit, so
+the URL keeps the alias form and the store holds the resolved address. Any explicit navigation (open, Project switch, detach, first prompt)
 clears the alias view and commits a real URL; a reload re-resolves, possibly
 onto a newer session. The alias never enters the address index or the cache
 key.

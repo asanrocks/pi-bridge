@@ -8,14 +8,16 @@
 // The per-connection work lives in sibling modules:
 //   - connectionTransport — WebSocket adapter + reconnect backoff
 //   - connectionPipeline  — push ingestion, patch coalescing, ADR 09 cache
-//                           write-through/repair, candidate promotion
-//   - sessionBoot         — route-driven session open with cache seeding
+//                           write-through/repair
+//   - navigation          — the wire half of boot: route-driven opens, alias
+//                           resolution, initial-sync commit, fallbacks
+//   - sessionBoot         — cache-first local restore, before the wire
 //   - devConsole          — dev-mode console relay
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";
 import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../../src/core/index.ts";
-import { parseRoute, writeRoute } from "../lib/routes.ts";
+import { parseRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
@@ -23,10 +25,10 @@ import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole, unhookConsole } from "./devConsole.ts";
-import { resolveLatestSession } from "./latestSession.ts";
+import { navigationBoot, navigationBootLatest, navigationLauncher, navigationProject } from "./navigation.ts";
 import { flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
-import { openSessionAddress, restoreLocalSession } from "./sessionBoot.ts";
+import { restoreLocalSession } from "./sessionBoot.ts";
 
 // After this many failed reconnect attempts, state shifts to "unreachable".
 const UNREACHABLE_THRESHOLD = 5;
@@ -85,52 +87,28 @@ export function useConnection(): { retry: () => void } {
 			store.getState().resetSessionPages();
 
 			// Route-driven open (ADR 11). The URL is read at boot and after
-			// every reconnect; it is not a second live navigation machine.
+			// every reconnect; it is not a second live navigation machine. Each
+			// transition is the navigation reactor's: staging, the open RPC,
+			// the initial-sync commit, and the fallback all run there, so a
+			// reconnect superseding this connection's work is one epoch
+			// comparison inside the reactor instead of a per-await guard here.
 			const route = parseRoute(window.location.pathname);
-			// Explicit routes leave any alias view (ADR 13); the alias branch
-			// re-enters it below.
-			store.getState().setAddressViaAlias(false);
 			if (route.kind === "session") {
 				const known = (info.projects ?? []).some((p) => p.id === route.projectId);
-				if (!known) {
-					store.getState().clearCurrentSession();
-					writeRoute({ kind: "launcher" });
-				} else {
-					await openSessionAddress(client, route.projectId, route.stem, () => clientRef.current !== client);
-				}
+				if (known) await navigationBoot({ projectId: route.projectId, stem: route.stem });
+				else await navigationLauncher("boot");
 			} else if (route.kind === "alias") {
-				// ADR 13: resolve the alias once per boot/reconnect — the URL keeps
-				// the alias form while the store holds the resolved address. The
-				// target is the most recently active live session; with none live,
-				// the most recent durable session across Projects, which the open
-				// then activates.
-				const target =
-					route.alias === "latest"
-						? await resolveLatestSession(client, info.projects ?? [], activeSessions)
-						: null;
-				if (clientRef.current !== client) return;
-				if (!target) {
-					store.getState().clearCurrentSession();
-					writeRoute({ kind: "launcher" });
-				} else {
-					rememberAddress(target.projectId, target.stem, target.sessionId);
-					await openSessionAddress(client, target.projectId, target.stem, () => clientRef.current !== client, {
-						viaAlias: true,
-					});
-				}
+				// ADR 13: resolve the alias once per boot/reconnect — the URL
+				// keeps the alias form while the store holds the resolved
+				// address. No resolvable target lands on the Launcher.
+				if (route.alias === "latest") await navigationBootLatest();
+				else await navigationLauncher("boot");
 			} else if (route.kind === "project") {
 				const known = (info.projects ?? []).some((p) => p.id === route.projectId);
-				if (!known) {
-					store.getState().clearCurrentSession();
-					writeRoute({ kind: "launcher" });
-				} else {
-					// The home is compose-only — bind the address; its sessions are
-					// browsed from the sidebar, so there is no page fetch.
-					store.getState().setCurrentSession(route.projectId, null);
-				}
+				if (known) await navigationProject(route.projectId, "boot");
+				else await navigationLauncher("boot");
 			} else {
-				store.getState().clearCurrentSession();
-				writeRoute({ kind: "launcher" });
+				await navigationLauncher("boot");
 			}
 
 			if (clientRef.current !== client) return;

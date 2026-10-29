@@ -4,11 +4,13 @@
 //   - patch coalescing (store writes coalesced to one per animation frame
 //     while visible, ~1s while hidden),
 //   - the ADR 09 cache write-through (delta writes planned against the
-//     session's cache base) and the full-replace repair path,
-//   - session-candidate promotion for initial-sync deltas (ADR 09),
-//   - the store/route/identity updates on initial-sync frames.
-// After cleanup() the pipeline is frozen: a dead or superseded connection
-// never writes into the store or the cache.
+//     session's cache base) and the full-replace repair path.
+// Selection is the navigation reactor's (ADR 09/18's single-owner rule):
+// address-bearing initial-sync frames and session_closed pushes are forwarded
+// there (navigationInitialSync / navigationSessionClosed), and this module
+// publishes the document, the revision, and the cache records for the
+// observation the reactor names. After cleanup() the pipeline is frozen: a
+// dead or superseded connection never writes into the store or the cache.
 // ============================================================================
 
 import {
@@ -20,23 +22,10 @@ import {
 	type ServerPushMessage,
 	statusHintOfDocument,
 } from "../../../../src/core/index.ts";
-import { writeRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
-import { promoteSessionCandidate } from "./sessionCandidate.ts";
-
-// Last cache-written base per session (ADR 09): planCacheWrites only sees
-// "unchanged" when before/after share entry references, which holds only for
-// same-session documents evolved via applyPatch. Using the store's previous
-// document as `before` made every session switch rewrite the entire new
-// session — documents of different sessions share no references. Seeded at
-// attach/promotion, set by the replace repair path, advanced on every delta
-// write; a stale or failed write self-heals via the repair path. Module
-// scope: both the boot path (sessionBoot) and this pipeline write it, and
-// the tab has at most one live connection (staleness guards protect every
-// writer).
-export const cacheBase: { value: { sessionId: string; doc: Document } | null } = { value: null };
+import { cacheBase, navigationInitialSync, navigationSessionClosed } from "./navigation.ts";
 
 export interface ConnectionPipeline {
 	/** Push handler for BridgeClient.onPush. No-op after cleanup. */
@@ -172,11 +161,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// all go, and a later command cannot reach a disposed runtime. A close of
 		// some other Session changes nothing here: the list pushes cover it.
 		if (push.kind === "session_closed") {
-			const s = store.getState();
-			if (s.currentProjectId === push.projectId && s.currentStem === push.stem) {
-				s.clearCurrentSession(push.projectId);
-				writeRoute({ kind: "project", projectId: push.projectId });
-			}
+			navigationSessionClosed(push.projectId, push.stem);
 			return;
 		}
 
@@ -185,15 +170,11 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// (ADR 11) — it is an initial sync.
 		if (push.kind === "replace") {
 			flush("skip");
+			// The address, the identity, and the route are the navigation
+			// reactor's; this module publishes document and cache state for
+			// the observation it names.
+			navigationInitialSync(push.session, null);
 			const ref = push.session;
-			// Address first, then the id: setCurrentSession unbinds a stale id
-			// on an address change, so the pair must land in this order.
-			store.getState().setCurrentSession(ref.projectId, ref.stem);
-			store.getState().setActiveSessionId(ref.sessionId);
-			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-			if (!store.getState().addressViaAlias) {
-				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
-			}
 			const doc = client.mirror.document;
 			const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
 			// The repair rewrites the whole session by design — the snapshot
@@ -211,22 +192,11 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// the candidate and promote it atomically — the mirror's own
 		// application ran against the old-session base and is discarded.
 		if (push.kind === "patch" && push.session) {
-			const ref = push.session;
-			const promoted = promoteSessionCandidate(ref.sessionId, push.ops);
-			if (promoted) {
-				client.mirror.applyReplace(promoted.doc);
-				// The candidate was seeded from the cached records — its
-				// pre-promotion document IS the cache base, so the flush below
-				// persists only the delta's new entries.
-				cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
-			}
-			// Address first, then the id (see the replace handler).
-			store.getState().setCurrentSession(ref.projectId, ref.stem);
-			store.getState().setActiveSessionId(ref.sessionId);
-			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-			if (!store.getState().addressViaAlias) {
-				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
-			}
+			// Promotion and the address commit are the navigation reactor's
+			// (it owns the candidate and decides whether this frame commits);
+			// the flush below then publishes the document and writes the
+			// delta through under the committed session id.
+			navigationInitialSync(push.session, push.ops);
 			flush(); // barrier + delta write-through under the new session id
 			store.getState().bumpPullTick();
 			return;

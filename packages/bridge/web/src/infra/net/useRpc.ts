@@ -19,7 +19,6 @@ import type {
 	ListFilesReply,
 	ListSessionsReply,
 	ModelRef,
-	PrefixCursor,
 	ReadFileReply,
 	RpcReply,
 	SessionInfo,
@@ -28,15 +27,18 @@ import type {
 	SnapshotState,
 	TextPolishReply,
 } from "../../../../src/core/index.ts";
-import { projectPath, sessionPath, writeRoute } from "../lib/routes.ts";
+import { projectPath, sessionPath } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
-import { prepareSwitch } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
 import { selectRenderDiverged } from "../state/ui.ts";
 import { getGlobalClient } from "./client.ts";
-import { resolveLatestSession } from "./latestSession.ts";
-import { openSessionAddress } from "./sessionBoot.ts";
-import { discardSessionCandidate, sessionCandidatePending } from "./sessionCandidate.ts";
+import {
+	navigationCreated,
+	navigationLatest,
+	navigationLauncher,
+	navigationOpen,
+	navigationProject,
+} from "./navigation.ts";
 import { projectPageFromReply, SESSION_PAGE_SIZE } from "./sessionList.ts";
 
 // ---------------------------------------------------------------------------
@@ -122,57 +124,22 @@ export function useRpc() {
 	 * the client's in-flight treatment is the composer's own isBusy gate. */
 	const recoverTurn = useCallback(() => rpc(() => getGlobalClient()?.recoverTurn(), "recover turn failed"), []);
 
-	/** Resolve-or-activate a session by address and make it the current one. */
+	/** Resolve-or-activate a session by address and make it the current one.
+	 * The transition — optimistic staging, the candidate switch, the rollback
+	 * on failure — is the navigation reactor's; this wrapper reports the
+	 * outcome the way the rpc helper did. */
 	const openSession = useCallback(async (projectId: string, stem: string, sessionId?: string) => {
-		// Serial-switch rule (ADR 09): a second open while a candidate is
-		// pending would race the first promotion.
-		if (sessionCandidatePending()) return;
-		const store = getStore();
-		// An explicit open is a real navigation: it leaves the alias view and
-		// commits a real URL (ADR 13).
-		store.getState().setAddressViaAlias(false);
-		const previous = {
-			projectId: store.getState().currentProjectId,
-			stem: store.getState().currentStem,
-			sessionId: store.getState().activeSessionId,
-		};
-		// Optimistic address commit: the URL and header update before the
-		// initial-sync push lands.
-		store.getState().setCurrentSession(projectId, stem);
-		writeRoute({ kind: "session", projectId, stem });
-
-		let cursor: PrefixCursor | undefined;
-		if (sessionId) cursor = await prepareSwitch(sessionId);
-		const reply = await rpc(() => getGlobalClient()?.openSession(projectId, stem, cursor), "open session failed");
-		// The initial-sync push already promoted (or the open failed).
-		discardSessionCandidate();
-		if (!reply?.ok) {
-			// A failed open leaves the server's previous attachment untouched, so
-			// restore the previous address instead of clearing to the launcher —
-			// otherwise the client would show no session while the server keeps
-			// the old Manager attached (uncollectable, and a UI/route mismatch).
-			const { projectId: prevProjectId, stem: prevStem, sessionId: prevSessionId } = previous;
-			store.getState().setCurrentSession(prevProjectId, prevStem);
-			// Re-bind the previous session id too: the optimistic commit above
-			// unbound it, and without this the restored session's draft slot
-			// would stay gated (null key) until its next initial sync.
-			store.getState().setActiveSessionId(prevSessionId);
-			if (prevProjectId === null) writeRoute({ kind: "launcher" });
-			else if (prevStem === null) writeRoute({ kind: "project", projectId: prevProjectId });
-			else writeRoute({ kind: "session", projectId: prevProjectId, stem: prevStem });
-		}
+		if (!getGlobalClient()) return;
+		const result = await navigationOpen({ projectId, stem }, { sessionId });
+		if (!result.ok) rpcErrorToast(new Error(result.error ?? "open session failed"), "open session failed");
 	}, []);
 
-	/** Open a Project's home (compose-only) without a session attached. */
+	/** Open a Project's home (compose-only) without a session attached. The
+	 * detach-then-commit transition is the navigation reactor's. */
 	const openProject = useCallback(async (projectId: string) => {
-		const store = getStore();
-		if (store.getState().currentStem !== null) {
-			await rpc(() => getGlobalClient()?.detach(), "detach failed");
-			discardSessionCandidate();
-		}
-		store.getState().setAddressViaAlias(false);
-		store.getState().setCurrentSession(projectId, null);
-		writeRoute({ kind: "project", projectId });
+		if (!getGlobalClient()) return;
+		const result = await navigationProject(projectId);
+		if (!result.ok) rpcErrorToast(new Error(result.error ?? "detach failed"), "detach failed");
 	}, []);
 
 	/** Create a session in a Project by sending its first prompt. The prompt
@@ -189,12 +156,9 @@ export function useRpc() {
 			const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text, options), "new session failed");
 			if (reply?.ok) {
 				const ref = (reply as unknown as { session?: SessionRef }).session;
-				if (ref) {
-					rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-					getStore().getState().setAddressViaAlias(false);
-					getStore().getState().setCurrentSession(ref.projectId, ref.stem);
-					writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
-				}
+				// The initial-sync push already committed the address through
+				// navigation; the reply re-asserts it (idempotent).
+				if (ref) navigationCreated(ref);
 			}
 			return reply?.ok === true;
 		},
@@ -207,28 +171,17 @@ export function useRpc() {
 	 * navigation rewrites the URL to the real address; a reload re-resolves
 	 * the alias, possibly onto a newer session. */
 	const openLatest = useCallback(async () => {
-		if (sessionCandidatePending()) return;
-		const client = getGlobalClient();
-		if (!client) return;
-		const store = getStore();
-		const target = await resolveLatestSession(client, store.getState().projects, store.getState().activeSessions);
-		if (!target) return;
-		writeRoute({ kind: "alias", alias: "latest" });
-		try {
-			await openSessionAddress(client, target.projectId, target.stem, () => false, { viaAlias: true });
-		} catch (err) {
-			rpcErrorToast(err, "open latest failed");
-		}
+		if (!getGlobalClient()) return;
+		const result = await navigationLatest();
+		if (!result.ok) rpcErrorToast(new Error(result.error ?? "open latest failed"), "open latest failed");
 	}, []);
 
-	/** Back to the Launcher: unbind server-side, then clear local state. */
+	/** Back to the Launcher: unbind server-side (the commit is the
+	 * navigation reactor's, on a successful detach), then clear local state. */
 	const detach = useCallback(async () => {
-		const reply = await rpc(() => getGlobalClient()?.detach(), "detach failed");
-		if (reply?.ok) {
-			discardSessionCandidate();
-			getStore().getState().clearCurrentSession();
-			writeRoute({ kind: "launcher" });
-		}
+		if (!getGlobalClient()) return;
+		const result = await navigationLauncher();
+		if (!result.ok) rpcErrorToast(new Error(result.error ?? "detach failed"), "detach failed");
 	}, []);
 
 	/** Terminate a session's live instance (closeSession verb). Destructive
