@@ -61,6 +61,15 @@ the Document, when applicable, arrive as pushes before or independently of
 the reply. A reply is therefore acknowledgement or query data, not a second
 state channel.
 
+Every attached-session verb captures the Session lease it addresses at
+handler entry, before any await: a transition that completes while the
+command runs cannot retarget it, so the command executes against — and its
+reply reports on — the session that was attached when the request arrived,
+even if a switch has since moved the Connection elsewhere. Mutations
+(`setModel`, `setThinkingLevel`, `renameSession`, `setLabel`, `navigate`)
+enter the session's serialized mutation line; turns, aborts, and reads run
+immediately but tracked (see [host runtime](../host/runtime.md)).
+
 | Verb | Address / binding | Successful reply and effects |
 | --- | --- | --- |
 | `prompt` | Attached Session | `{ ok: true }` after the prompt call is accepted/completed by the Manager; streaming and settle patches follow. Optional images are bounded by the host wire limits. |

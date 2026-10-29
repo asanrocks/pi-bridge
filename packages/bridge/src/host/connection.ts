@@ -156,7 +156,18 @@ export interface DaemonVerbs {
 }
 
 // ============================================================================
-// Connection — owns one WebSocket, attached through at most one SessionLease
+// Connection — the serialized protocol actor for one WebSocket.
+//
+// It owns the socket, RPC correlation, its own attachment-transition line,
+// and the SessionLease that is its current attachment. It owns no Session
+// execution state: attached-session commands are issued through the lease
+// (captured at handler entry, before any await), and the two serialization
+// domains stay separate —
+//
+//   Connection transitions (openSession, newSession, detach): serialized
+//     among themselves, in arrival order (this.transitions).
+//   Session work (commands, mutations): serialized by the SessionExecution
+//     behind the lease; the Connection adds no ordering of its own.
 // ============================================================================
 
 export class Connection {
