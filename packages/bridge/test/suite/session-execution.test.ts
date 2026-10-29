@@ -133,6 +133,19 @@ describe("SessionExecution", () => {
 		expect(ended).toBe(true);
 	});
 
+	it("turns a synchronous operation throw into a rejected command", async () => {
+		// F6: `run` is a promise-shaped admission surface. An operation that
+		// fails before returning its promise must reject — escaping as a
+		// synchronous throw would bypass the tracked-work accounting and
+		// break callers that only handle rejections.
+		const execution = createSessionExecution(stubManager());
+		await expect(
+			execution.run(() => {
+				throw new Error("operation failed");
+			}),
+		).rejects.toThrow("operation failed");
+	});
+
 	it("a mutation admitted before end completes; one queued after rejects", async () => {
 		const manager = stubManager();
 		const execution = createSessionExecution(manager);

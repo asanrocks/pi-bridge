@@ -235,4 +235,37 @@ describe("Reactor", () => {
 		await tick();
 		expect(reactor.snapshot().committed).toBe(true);
 	});
+
+	it("a synchronous-throwing effect is reported and does not wedge close()", async () => {
+		// F1: the effect accounting is promise-shaped at the boundary. An effect
+		// whose `run` throws synchronously must decrement the in-flight count and
+		// reach onUnhandledEffectError exactly like an async rejection — leaving
+		// the count elevated would stick close() at "closing" forever and the
+		// effect bug would be silent.
+		const errors: unknown[] = [];
+		const reactor = createReactor<number, { kind: "start" }>({
+			initial: 0,
+			step: (state) => ({
+				state,
+				effects: [
+					{
+						run(): Promise<{ kind: "start" }> {
+							throw new Error("sync effect bug");
+						},
+					},
+				],
+			}),
+			onUnhandledEffectError: (error) => errors.push(error),
+		});
+		await reactor.send({ kind: "start" });
+		const closing = reactor.close();
+		// Gate on a timeout, not a sleep: close must win the race.
+		await Promise.race([
+			closing,
+			new Promise((_, reject) => setTimeout(() => reject(new Error("close wedged")), 300)),
+		]);
+		await closing;
+		expect(reactor.phase).toBe("closed");
+		expect(errors).toHaveLength(1);
+	});
 });

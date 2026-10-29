@@ -58,7 +58,16 @@ export function createSessionExecution(manager: Manager): SessionExecution {
 	return {
 		run<T>(operation: (session: Manager) => Promise<T>): Promise<T> {
 			if (ending) return Promise.reject(new Error("session is closed"));
-			const started = operation(manager);
+			let started: Promise<T>;
+			try {
+				// Normalize at the boundary: the admission surface is promise-shaped,
+				// so an operation that fails before returning its promise rejects
+				// instead of escaping as a synchronous throw (untracked) — the same
+				// idiom BridgeClient.call uses for a transport that throws in `send`.
+				started = Promise.resolve(operation(manager));
+			} catch (error) {
+				return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+			}
 			const settle = started.then(
 				() => undefined,
 				() => undefined,

@@ -131,17 +131,21 @@ export function createReactor<S, M>(options: ReactorOptions<S, M>): Reactor<S, M
 					item.resolve();
 					for (const effect of step.effects ?? []) {
 						effectsInFlight++;
-						void effect.run().then(
-							(completion) => {
+						// Normalize at the boundary: an effect whose `run` throws
+						// synchronously must not defeat the accounting — decrement and
+						// report it exactly like an async rejection, so `close()` still
+						// resolves and the bug is not silent.
+						void (async () => {
+							try {
+								const completion = await effect.run();
 								effectsInFlight--;
 								void enqueue(completion, true);
-							},
-							(error) => {
+							} catch (error) {
 								effectsInFlight--;
 								options.onUnhandledEffectError?.(error);
 								settleIfQuiet();
-							},
-						);
+							}
+						})();
 					}
 				} catch (error) {
 					// One failing step settles only its own sender; later
