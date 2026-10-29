@@ -210,19 +210,46 @@ describe("Navigation", () => {
 		expect(routeWritten()).toBe("/proj/a");
 	});
 
-	it("a superseded open commits nothing: its sync and its failure are ignored", async () => {
+	it("an open superseded before its prepare completes sends no RPC and settles superseded", async () => {
+		const fake = fakeClient();
+		const loadA = gate<{ records: CacheEntryRecord[]; hint: null }>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: (_projectId, stem) => `id-${stem}`,
+			loadSession: async (sessionId) => (sessionId === "id-a" ? loadA.promise : { records: [], hint: null }),
+		});
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
+		navigationInitialSync(REF_B, null);
+		expect((await openedB).ok).toBe(true);
+		// A's cache read lands after B committed: no RPC was admitted, nothing
+		// was seeded, and the caller learns the transition never ran —
+		// superseded by a newer intent, not failed.
+		loadA.open({ records: recordsFor("id-a"), hint: null });
+		const result = await openedA;
+		expect(result.superseded).toBe(true);
+		expect(result.ok).toBe(false);
+		expect(fake.openCalls.filter((c) => c.stem === "a")).toHaveLength(0);
+	});
+
+	it("an open superseded after its RPC was admitted commits nothing", async () => {
 		const fake = fakeClient();
 		resetNavigationForTests({ getClient: () => fake.client });
 
-		// Open A, then supersede it with B before either settles.
+		// A's prepare completes while it owns the view, so its RPC is admitted
+		// (already-admitted commands run to completion server-side).
 		const openA = gate<RpcReply>();
+		fake.openReplies.push(openA.promise);
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
+
+		// B supersedes A before A settles.
 		const openB = gate<RpcReply>();
-		fake.openReplies.push(openA.promise, openB.promise);
-		void navigationOpen({ projectId: "proj", stem: "a" });
+		fake.openReplies.push(openB.promise);
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
 
-		// The server serialized both transitions: A's initial sync arrives
-		// first and must commit nothing.
+		// The server serialized both transitions: A's initial sync arrives first
+		// and must commit nothing.
 		navigationInitialSync(REF_A, null);
 		expect(getStore().getState().activeSessionId).toBeNull();
 
@@ -237,6 +264,7 @@ describe("Navigation", () => {
 		const s = getStore().getState();
 		expect(s.currentStem).toBe("b");
 		expect(s.activeSessionId).toBe("id-b");
+		await openedA;
 	});
 
 	it("a boot failure lands on the Project home", async () => {
@@ -320,6 +348,8 @@ describe("Navigation", () => {
 		const openB = gate<RpcReply>();
 		fake.openReplies.push(openA.promise, openB.promise);
 		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		// A's RPC is admitted before B supersedes it.
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
 		openA.open({ ok: true, session: REF_A } as unknown as RpcReply);
 		openB.open({ ok: true, session: REF_B } as unknown as RpcReply);

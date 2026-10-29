@@ -318,7 +318,9 @@ These are the load-bearing rules for changes across layers:
 17. **Async work is admitted by a named owner.** Every asynchronous
     transition belongs to a LifecycleScope, a reactor, or a SessionExecution;
     a superseded or terminal owner ignores late completions instead of each
-    call site re-checking "is this still current?", and every owner drains
+    call site re-checking "is this still current?", admits no new externally
+    visible work once superseded (a stale completion is dropped, and a not-
+    yet-sent command is never sent), and every owner drains
     before its terminal state resolves. The owner inventory below is the
     checkable form: a new asynchronous site names its owner in the same
     table, and an owner with no terminal operation is a defect, not a style

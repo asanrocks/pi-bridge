@@ -127,11 +127,15 @@ export function useRpc() {
 	/** Resolve-or-activate a session by address and make it the current one.
 	 * The transition — optimistic staging, the candidate switch, the rollback
 	 * on failure — is the navigation reactor's; this wrapper reports the
-	 * outcome the way the rpc helper did. */
+	 * outcome the way the rpc helper did. A superseded transition is a silent
+	 * no-op (a newer intent owns the view — nothing failed), so it toasts
+	 * nothing. */
 	const openSession = useCallback(async (projectId: string, stem: string, sessionId?: string) => {
 		if (!getGlobalClient()) return;
 		const result = await navigationOpen({ projectId, stem }, { sessionId });
-		if (!result.ok) rpcErrorToast(new Error(result.error ?? "open session failed"), "open session failed");
+		if (!result.ok && !result.superseded) {
+			rpcErrorToast(new Error(result.error ?? "open session failed"), "open session failed");
+		}
 	}, []);
 
 	/** Open a Project's home (compose-only) without a session attached. The

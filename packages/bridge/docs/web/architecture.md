@@ -385,10 +385,15 @@ applies):
   step: user navigation seeds a candidate document when the records yield a
   cursor; a boot (route-driven, reconnect, or alias resolution) seeds the
   live mirror and store from the cache. A superseded transition's prepare
-  still sends its RPC — the server serialized the transitions and the reply
-  must settle — but seeds nothing, so a late cache read can never overwrite
-  the successor's candidate, mirror, or store. A transition cancelled by a
-  terminal close admits no RPC at all (the runtime it targeted is gone).
+  sends no RPC at all: the server serializes attachment transitions in
+  arrival order, so a late RPC from an abandoned intent could attach the
+  abandoned session after the successor's command ran, leaving the
+  connection attached to a session the UI no longer shows. Its caller
+  settles client-side (superseded — nothing ran, nothing failed), and no
+  settlement will arrive for it. An RPC admitted before the supersede runs
+  to completion server-side, and its sync and settlement commit nothing. A
+  transition cancelled by a terminal close admits no RPC either (the
+  runtime it targeted is gone).
 - The address-bearing initial-sync frame returns as a `sync` message and
   commits the view as one store write (`commitObservation`): address, durable
   id, document, revision, address-index entry, route (the alias view keeps
@@ -401,6 +406,13 @@ applies):
   committed view, or lands on the Project home — but only while the
   transition is still the newest intent; a superseded transition settles its
   caller and commits nothing.
+- The Project-home and Launcher transitions release the server-side
+  attachment from the staged intent, not the committed view alone: a pending
+  open may already have its RPC on the wire (admitted while it owned the
+  view), so the server can be attached — or about to attach — to a session
+  the committed view does not name. Reading only `current` left the server
+  attached to the pending open's session while the UI showed the Project
+  home; the detach decision reads `pending ?? current`.
 - The `/@latest` resolution returns as a completion carrying the epoch of
   the intent that started it, and is checked against the current intent
   before staging anything: a lookup that lands after a newer navigation

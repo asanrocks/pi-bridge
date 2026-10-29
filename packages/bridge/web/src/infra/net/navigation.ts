@@ -27,10 +27,17 @@
 // address optimistically and admits a value-only prepare effect; `prepared`
 // seeds in the step and admits the open RPC effect; the address-bearing
 // initial-sync frame returns as a `sync` message and commits the view; the
-// RPC reply returns as `openSettled` and confirms or rolls back. A superseded
-// prepare still sends its RPC — the server serialized the transitions and
-// the reply must settle — but seeds nothing, and its settlement commits
-// nothing. A transition cancelled by a terminal close admits no RPC at all.
+// RPC reply returns as `openSettled` and confirms or rolls back.
+//
+// Admission is gated by intent ownership, not just completion filtering: a
+// superseded prepare sends no RPC at all. The server serializes attachment
+// transitions in arrival order, so a late RPC from an abandoned intent could
+// attach the abandoned session after the successor's command ran — the
+// connection would end up attached to a session the UI no longer shows. The
+// superseded caller settles client-side (nothing ran, nothing failed); an
+// RPC admitted before the supersede runs to completion, and its settlement
+// commits nothing. A transition cancelled by a terminal close admits no RPC
+// either.
 //
 // Division of labor: navigation owns selection (address, route, session id,
 // the candidate's seeding and promotion, and the cache base it seeds); the
@@ -85,6 +92,10 @@ export interface NavigationTarget {
 export interface NavigationResult {
 	ok: boolean;
 	error?: string;
+	/** True when the transition was superseded by a newer intent before it
+	 * could send anything: nothing ran and nothing failed — the newer intent
+	 * owns the view. Callers treat it as a silent no-op, not an error. */
+	superseded?: boolean;
 }
 
 /** The cached prefix a prepare effect read for the transition's target.
@@ -565,12 +576,27 @@ function navigationStep(
 			// and the runtime it targeted is gone — no RPC, no seeding. Prune.
 			if (state.cancelled.delete(message.transition)) return { state };
 			const pending = state.pending;
-			const ownsTransition = pending !== null && pending.id === message.transition;
-			// Seeding happens only for the transition that still owns the view;
-			// a superseded transition's late cache read must never overwrite
-			// the successor's candidate, mirror, or store.
+			if (pending === null || pending.id !== message.transition || state.intentEpoch !== pending.intentEpoch) {
+				// Admission gate: a superseded transition sends nothing. The server
+				// serializes attachment transitions in arrival order, so a late open
+				// RPC from an abandoned intent could attach the abandoned session
+				// after the successor's command — the connection would end up
+				// attached to a session the UI no longer shows. The caller settles
+				// client-side: nothing ran, nothing failed. No RPC was admitted, so
+				// no settlement will arrive for it — the slot it still holds is
+				// cleared here.
+				const result: NavigationResult = { ok: false, error: "superseded", superseded: true };
+				message.reply?.(result);
+				if (pending !== null && pending.id === message.transition) {
+					return { state: { ...state, pending: null, candidate: null } };
+				}
+				return { state };
+			}
+			// The owner's cache read seeds before the RPC leaves: the candidate
+			// (navigate) or the live mirror and store (boot). A superseded
+			// transition's late cache read seeds nothing — the gate above returned.
 			let cursor: PrefixCursor | undefined;
-			if (ownsTransition && pending !== null && state.intentEpoch === pending.intentEpoch && message.seed !== null) {
+			if (message.seed !== null) {
 				const seed = message.seed;
 				cursor = computeCursor(seed.records) ?? undefined;
 				const store = getStore();
@@ -606,15 +632,11 @@ function navigationStep(
 				// The connection vanished mid-preparation: settle like a
 				// failed RPC (the caller learns the transition never ran).
 				message.reply?.(NOT_CONNECTED);
-				if (ownsTransition) return { state: settleOpen(state, pending, NOT_CONNECTED, undefined, deps) };
-				return { state };
+				return { state: settleOpen(state, pending, NOT_CONNECTED, undefined, deps) };
 			}
-			// The RPC runs even for a superseded transition: the server
-			// serialized the transitions and the reply must settle. Its
-			// settlement commits nothing (the openSettled owner check).
 			const cursorHint = cursor ?? (message.seed ? (computeCursor(message.seed.records) ?? undefined) : undefined);
 			return {
-				state: ownsTransition ? { ...state, pending: { ...pending, openEpoch: context.epoch } } : state,
+				state: { ...state, pending: { ...pending, openEpoch: context.epoch } },
 				effects: [openRpcEffect(client, message.view, cursorHint, message.transition, message.reply)],
 			};
 		}
@@ -640,9 +662,15 @@ function navigationStep(
 				if (message.boot) {
 					getStore().getState().clearCurrentSession();
 					writeRoute({ kind: "launcher" });
+					message.reply?.({ ok: true });
 					return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 				}
-				return { state }; // a user press with nothing to open: silent no-op
+				// A user press with nothing to open: a silent no-op — but the
+				// caller still settles (an await that never resolves would strand
+				// a gesture, and a boot that never resolves would stall
+				// useConnection's connected handoff).
+				message.reply?.({ ok: true });
+				return { state };
 			}
 			const view = { kind: "session", projectId: message.target.projectId, stem: message.target.stem } as const;
 			return stageOpen(
@@ -673,7 +701,13 @@ function navigationStep(
 					},
 				};
 			}
-			const wasSession = state.current.view.kind === "session";
+			// A pending open may already have its RPC on the wire (admitted while
+			// it owned the view), so the server can be attached — or about to
+			// attach — to a session the committed view does not name. The staged
+			// intent decides the detach, not the committed view alone: reading
+			// only `current` left the server attached to the pending open's
+			// session while the UI showed the Project home.
+			const wasSession = (state.pending ?? state.current).view.kind === "session";
 			const epoch = context.epoch;
 			const reply = message.reply;
 			const projectId = message.projectId;
