@@ -24,6 +24,7 @@ import type { PrefixCursor, SessionRef } from "../core/index.ts";
 import type { Connection } from "./connection.ts";
 import type { Manager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
+import { createSessionExecution, type SessionExecution } from "./session-execution.ts";
 import { createSessionLease, type SessionLease } from "./session-lease.ts";
 
 /** Address key: (projectId, stem) — the client-facing address of a Session. */
@@ -49,6 +50,10 @@ export interface ActivationRecord {
 	/** This registration's authorization identity (see above). */
 	authorization: ActivationAuthorization;
 	manager: Manager;
+	/** The work-admission owner for this registration's runtime: commands
+	 * admitted against the Manager run through it, and its terminal `end` is
+	 * the one disposal path (registry collection and shutdown both call it). */
+	execution: SessionExecution;
 	/** Attached Connections. GC is gated on this being empty. */
 	connections: Set<Connection>;
 	gcTimer: ReturnType<typeof setTimeout> | null;
@@ -252,6 +257,7 @@ export class ActivationRegistry {
 			ref,
 			authorization: { incarnation: this.options.incarnation, generation: ++this.generations },
 			manager,
+			execution: createSessionExecution(manager),
 			connections: new Set(),
 			gcTimer: null,
 			collecting: null,
@@ -303,10 +309,9 @@ export class ActivationRegistry {
 	 * runtime being torn down. */
 	private leaseFor(record: ActivationRecord): SessionLease {
 		return createSessionLease({
-			manager: record.manager,
+			execution: record.execution,
 			ref: record.ref,
 			authorization: record.authorization,
-			isValid: () => record.collecting === null && !this.disposed,
 		});
 	}
 
@@ -401,8 +406,10 @@ export class ActivationRegistry {
 		// would let a concurrent openSession create a second activation for a
 		// session whose first Manager is still shutting down, violating the
 		// ADR 11 exclusivity invariant. The address (and its pending-open
-		// promise) stays reserved for the whole disposal.
-		await record.manager.dispose();
+		// promise) stays reserved for the whole disposal. The execution's end
+		// rejects admission synchronously, drains the mutation line, disposes
+		// the runtime exactly once, and awaits the tracked work.
+		await record.execution.end();
 		this.records.delete(record.id);
 		const key = addressKey(record.ref.projectId, record.ref.stem);
 		if (this.byAddress.get(key) === record.id) this.byAddress.delete(key);
@@ -446,14 +453,14 @@ export class ActivationRegistry {
 	async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
-		const managers: Manager[] = [];
+		const executions: SessionExecution[] = [];
 		const draining: Promise<unknown>[] = [];
 		for (const record of this.records.values()) {
 			if (record.gcTimer) clearTimeout(record.gcTimer);
 			// A mid-collection activation already owns its disposal; awaiting it
 			// avoids a concurrent double-dispose, then it drops out of the map.
 			if (record.collecting) draining.push(record.collecting);
-			else managers.push(record.manager);
+			else executions.push(record.execution);
 		}
 		// In-flight creations: they settle (register refuses and disposes the
 		// Manager) before this returns, so nothing can appear after shutdown.
@@ -468,8 +475,8 @@ export class ActivationRegistry {
 		this.sessionOwnerById.clear();
 		this.connectionActivation.clear();
 		await Promise.allSettled(draining);
-		for (const mgr of managers) {
-			await mgr.dispose();
+		for (const execution of executions) {
+			await execution.end();
 		}
 	}
 }

@@ -185,6 +185,32 @@ switches to another Session. Git-stamp writing is enabled by default and can
 be disabled with `gitStamps: false`, primarily for tests. The complete stamp
 contract is in [git-stamps.md](git-stamps.md).
 
+## Session work admission
+
+`src/host/session-execution.ts` owns the order of the work admitted against
+one registration's runtime. Work arrives in two admission classes, and the
+classes exist because the bridge must not add a competing turn lifecycle
+(architecture invariant 5: pi's event loop is serial and the bridge observes
+it):
+
+- **Mutations** (`setModel`, `setThinkingLevel`, `renameSession`, `setLabel`,
+  `navigate`) are serialized among themselves — one at a time, in admission
+  order — so concurrent commands from different Connections get a
+  deterministic order. Mutations are quick and never await a turn, so the
+  line cannot deadlock behind streaming.
+- **Immediate work** (turns — `prompt`, `recoverTurn` — plus `abort`, and
+  reads — `pull`, `gitShow`'s cwd) runs without queueing: a Stop must reach a
+  streaming turn rather than wait behind it, and a read that queued behind a
+  turn would stall the live pulls the client issues while content streams.
+  Immediate work is tracked, so the terminal drain accounts for it.
+
+`end` is the terminal boundary: admission stops synchronously, queued
+mutations reject, the runtime is disposed exactly once (its disposal aborts
+and finalizes the in-flight turn, which settles the tracked work admitted
+against it), and every tracked operation is awaited before `end` resolves.
+Registry collection and daemon shutdown both end through it, so a Manager is
+disposed exactly once regardless of which path terminates it.
+
 ## Connection
 
 A Connection owns exactly one WebSocket. It starts detached and can be attached

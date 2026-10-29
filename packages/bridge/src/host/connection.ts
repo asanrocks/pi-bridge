@@ -357,14 +357,14 @@ export class Connection {
 				case "setModel": {
 					const lease = this.requireAttachment();
 					const m = msg as unknown as SetModelRequest;
-					await lease.command((session) => session.setModel(m.provider, m.model));
+					await lease.mutate((session) => session.setModel(m.provider, m.model));
 					this.sendReply(id, true);
 					break;
 				}
 				case "setThinkingLevel": {
 					const lease = this.requireAttachment();
 					const m = msg as unknown as SetThinkingLevelRequest;
-					await lease.command((session) => session.setThinkingLevel(m.level));
+					await lease.mutate((session) => session.setThinkingLevel(m.level));
 					this.sendReply(id, true);
 					break;
 				}
@@ -372,7 +372,7 @@ export class Connection {
 					const lease = this.requireAttachment();
 					const m = msg as unknown as RenameSessionRequest;
 					if (typeof m.name !== "string") throw new Error("Missing `name`");
-					await lease.command((session) => session.renameSession(m.name));
+					await lease.mutate((session) => session.renameSession(m.name));
 					this.sendReply(id, true);
 					// The refresh broadcast belongs to the command's target — read
 					// from the capture, never from the live attachment, which a
@@ -385,7 +385,7 @@ export class Connection {
 					const m = msg as unknown as SetLabelRequest;
 					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 					if (typeof m.label !== "string") throw new Error("Missing `label`");
-					await lease.command((session) => session.setLabel(m.entryId, m.label));
+					await lease.mutate((session) => session.setLabel(m.entryId, m.label));
 					this.sendReply(id, true);
 					break;
 				}
@@ -393,7 +393,7 @@ export class Connection {
 					const lease = this.requireAttachment();
 					const m = msg as unknown as NavigateRequest;
 					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					await lease.command((session) => session.navigate(m.entryId));
+					await lease.mutate((session) => session.navigate(m.entryId));
 					this.sendReply(id, true);
 					break;
 				}

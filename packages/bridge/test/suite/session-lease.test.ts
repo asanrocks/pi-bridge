@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import type { Document, SessionRef } from "../../src/core/index.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
+import { createSessionExecution } from "../../src/host/session-execution.ts";
 import { createSessionLease, issueDirectLease } from "../../src/host/session-lease.ts";
 
 function stubManager(): Manager & {
@@ -85,15 +86,16 @@ describe("SessionLease", () => {
 
 	it("rejects a command while the registration is invalid (mid-collection)", async () => {
 		const manager = stubManager();
-		let valid = true;
+		const execution = createSessionExecution(manager);
 		const lease = createSessionLease({
-			manager,
+			execution,
 			ref: { projectId: "p", sessionId: "s1", stem: "stem" },
 			authorization: { incarnation: "inc", generation: 1 },
-			isValid: () => valid,
 		});
 		await expect(lease.command(() => Promise.resolve("ok"))).resolves.toBe("ok");
-		valid = false;
+		// The terminal boundary stops admission synchronously — the registry
+		// reaches it when collection begins, before the runtime is disposed.
+		void execution.end();
 		await expect(lease.command(() => Promise.resolve("ok"))).rejects.toThrow("session is closed");
 	});
 
