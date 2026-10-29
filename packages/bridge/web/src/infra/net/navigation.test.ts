@@ -492,6 +492,74 @@ describe("Navigation", () => {
 		expect(routeWritten()).toBe("/proj");
 	});
 
+	it("a close cancels a pending open to that address: no RPC, settled caller, nothing commits", async () => {
+		// F3: the closed push crossed a transition in flight targeting the
+		// closed address. The caller must settle, the prepare must admit no
+		// RPC (the runtime it targeted is gone), and the view must not carry
+		// the optimistically staged address.
+		const fake = fakeClient();
+		const load = gate<{ records: CacheEntryRecord[]; hint: null }>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: () => "id-a",
+			loadSession: () => load.promise,
+		});
+		const opened = navigationOpen({ projectId: "proj", stem: "a" });
+		expect(getStore().getState().currentStem).toBe("a"); // staged
+
+		navigationSessionClosed("proj", "a");
+		const result = await opened;
+		expect(result.ok).toBe(false);
+		expect(result.error).toBe("session closed");
+		// The staged address went with the landing: the rendered Session's
+		// runtime ended, so the client shows the Project home.
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(routeWritten()).toBe("/proj");
+
+		// The cancelled transition's cache read resolves afterwards: its
+		// prepare admits no RPC (no server-side open of a dead session) and
+		// its late sync commits nothing.
+		load.open({ records: recordsFor("id-a"), hint: null });
+		await tick();
+		expect(fake.openCalls).toHaveLength(0);
+		navigationInitialSync(REF_A, null);
+		expect(getStore().getState().currentStem).toBeNull();
+	});
+
+	it("a close removes the dead session as a rollback target for an in-flight open", async () => {
+		// F3's visible failure: a transition in flight to C while its rollback
+		// target B was closed could "restore" the dead session on failure.
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		// Commit B: open, sync, settle.
+		const okB = gate<RpcReply>();
+		fake.openReplies.push(okB.promise);
+		const first = navigationOpen({ projectId: "proj", stem: "b" });
+		okB.open({ ok: true, session: REF_B } as unknown as RpcReply);
+		navigationInitialSync(REF_B, null);
+		await first;
+
+		// Open C (fails later); B dies while C is in flight.
+		const failC = gate<RpcReply>();
+		fake.openReplies.push(failC.promise);
+		const openedC = navigationOpen({ projectId: "proj", stem: "c" });
+		navigationSessionClosed("proj", "b");
+		failC.open({ id: "x", ok: false, error: "no such session" } as unknown as RpcReply);
+
+		const result = await openedC;
+		expect(result.ok).toBe(false);
+		// The rollback cannot restore the closed B: it lands on the Project
+		// home (the same boundary the close used), not the dead session.
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(routeWritten()).toBe("/proj");
+	});
+
 	it("Project home (navigate) commits after the detach and is not conditional on it", async () => {
 		const fake = fakeClient();
 		resetNavigationForTests({ getClient: () => fake.client });
