@@ -26,7 +26,7 @@ import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole, unhookConsole } from "./devConsole.ts";
 import { navigationBoot, navigationBootLatest, navigationLauncher, navigationProject } from "./navigation.ts";
-import { flushPullQueue } from "./pullLoop.ts";
+import { cancelPullRetry, flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
 import { restoreLocalSession } from "./sessionBoot.ts";
 
@@ -239,6 +239,7 @@ export function useConnection(): { retry: () => void } {
 			disposedRef.current = true;
 			setDrainer(null);
 			if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+			cancelPullRetry();
 			wsRef.current?.close();
 			clientRef.current?.disconnect();
 			setGlobalClient(null);

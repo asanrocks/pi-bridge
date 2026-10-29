@@ -25,6 +25,18 @@ function scheduleRetryBump(): void {
 	}, delay);
 }
 
+/** Terminal for the retry timer: clear it and reset the backoff. Called at
+ * connection teardown (useConnection's cleanup) — the timer belongs to the
+ * connection's lifetime, so it must not survive the socket it retried for
+ * (the reconnect's replace push re-registers visible pulls on its own). */
+export function cancelPullRetry(): void {
+	if (pullRetryTimer) {
+		clearTimeout(pullRetryTimer);
+		pullRetryTimer = null;
+	}
+	pullRetryDelay = 1000;
+}
+
 export async function flushPullQueue(): Promise<void> {
 	const client = getGlobalClient();
 	const pending = drainPullQueue();

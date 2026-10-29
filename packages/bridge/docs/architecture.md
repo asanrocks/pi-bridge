@@ -319,7 +319,30 @@ These are the load-bearing rules for changes across layers:
     transition belongs to a LifecycleScope, a reactor, or a SessionExecution;
     a superseded or terminal owner ignores late completions instead of each
     call site re-checking "is this still current?", and every owner drains
-    before its terminal state resolves.
+    before its terminal state resolves. The owner inventory below is the
+    checkable form: a new asynchronous site names its owner in the same
+    table, and an owner with no terminal operation is a defect, not a style
+    choice.
+
+### Async owner inventory
+
+Each asynchronous site names the owner that admits it; each owner names its
+terminal operation and its supersede rule. Effects inside a reactor are
+value-only (a step may read and write anything; an effect may only observe
+and return a message), so unordered writes are unrepresentable rather than
+guarded against.
+
+| Owner | Admits | Supersede rule | Terminal |
+| --- | --- | --- | --- |
+| Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution | Completion carries the admitting message's epoch; the step compares | `close()` — drains messages, effects, completions |
+| `SessionExecution` | Session commands against one registration | Commands capture the lease; admission rejects once `end` began | `end()` — disposes the runtime exactly once, drains tracked work |
+| `SessionLease` | One Connection's attachment | Released when the registration ends or the Connection detaches | `release()` — removes the observer, rejects commands |
+| `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
+| `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
+| `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` |
+| ActivationRegistry | Manager creation, collection, attachment | Address-keyed reservations; `ended` is terminal per record | `collect()`/`dispose()` — refusal, not re-entry |
+| Connection pipeline | Push ingestion, cache write-through, coalescing | `disposed` freezes writes; deltas gate on the committed session id | `cleanup()` — pending ops dropped, in-flight cache writes gated |
+| Pull loop | Lazy-value pulls | Reply admitted only for unchanged seal state and unfetched fields | `cancelPullRetry()` at teardown; reconnect replaces the client |
 
 ## 8. Test design
 

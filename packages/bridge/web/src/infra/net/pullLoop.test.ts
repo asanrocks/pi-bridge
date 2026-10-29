@@ -15,7 +15,7 @@ import {
 } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import { setGlobalClient } from "./client.ts";
-import { flushPullQueue } from "./pullLoop.ts";
+import { cancelPullRetry, flushPullQueue } from "./pullLoop.ts";
 import { drainPullQueue, enqueuePulls } from "./pullQueue.ts";
 
 /** Transport that holds every pull instead of answering, so the test decides
@@ -226,4 +226,32 @@ describe("pull loop stale-reply guards", () => {
 
 		expect(thinkingOf(client.mirror.document, "a1")).toBe("newer");
 	});
+
+	it("cancelPullRetry clears a scheduled retry: teardown owns the timer", async () => {
+		// A null reply (field not filled on an in-flight entry) schedules the
+		// capped backoff. The control case proves the timer really fires;
+		// the teardown case proves cancelPullRetry clears it.
+		const { client, transport } = makeClient();
+		setGlobalClient(client);
+		seed(client, docOf("a1"));
+
+		// Control: the scheduled retry bumps the tick after the delay.
+		enqueuePulls([{ entryId: "a1", fieldPath: THINKING("a1") }]);
+		const beforeControl = getStore().getState().pullTick;
+		let flushing = flushPullQueue();
+		transport.reply([{ entryId: "a1", fieldPath: THINKING("a1"), value: null }]);
+		await flushing;
+		await new Promise((resolve) => setTimeout(resolve, 1050));
+		expect(getStore().getState().pullTick).toBe(beforeControl + 1);
+
+		// Teardown: a newly scheduled retry never fires after the cancel.
+		enqueuePulls([{ entryId: "a1", fieldPath: THINKING("a1") }]);
+		const beforeCancel = getStore().getState().pullTick;
+		flushing = flushPullQueue();
+		transport.reply([{ entryId: "a1", fieldPath: THINKING("a1"), value: null }]);
+		await flushing;
+		cancelPullRetry();
+		await new Promise((resolve) => setTimeout(resolve, 1050));
+		expect(getStore().getState().pullTick).toBe(beforeCancel);
+	}, 10_000);
 });
