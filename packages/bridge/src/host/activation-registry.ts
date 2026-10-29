@@ -58,7 +58,9 @@ export interface ActivationRecord {
 	connections: Set<Connection>;
 	gcTimer: ReturnType<typeof setTimeout> | null;
 	/** In-flight disposal; null once it completes. Transient bookkeeping,
-	 * never a state: `ended` is the terminal fact. */
+	 * never a state: `ended` is the terminal fact, and this promise is the
+	 * join every later `collect` caller awaits — cleared only when the
+	 * disposal completed, so the join window is exactly its lifetime. */
 	collecting: Promise<void> | null;
 	/** Terminal: set synchronously when collection begins, never reset. A
 	 * stale handle holding this record is refused by `collect` (it owns
@@ -110,6 +112,12 @@ export class ActivationRegistry {
 	/** Terminal state: set synchronously at the top of dispose(), so no
 	 * admission can interleave with the drain. */
 	private disposed = false;
+	/** The memoized shutdown drain: a second `dispose()` joins the first
+	 * caller's drain instead of returning as if shutdown had finished —
+	 * `disposed` answers "has shutdown begun", this promise answers "has it
+	 * completed", and only the latter may gate follow-up work (moving a
+	 * session file, reporting a clean stop). */
+	private disposeDrain: Promise<void> | null = null;
 	private options: ActivationRegistryOptions;
 
 	constructor(options: ActivationRegistryOptions) {
@@ -400,6 +408,16 @@ export class ActivationRegistry {
 	 * kill, so streaming state and attachments do not defer it).
 	 */
 	async collect(record: ActivationRecord): Promise<void> {
+		// A disposal already in flight is joined, not re-entered: `collecting`
+		// is cleared only when the disposal completed, so awaiting it is
+		// exactly "wait until this record finished dying". Callers gate
+		// follow-up work on this (archiveSession moves the session file only
+		// after the Manager finished flushing), so an early return here would
+		// let them act on a runtime that is still tearing down.
+		if (record.collecting !== null) {
+			await record.collecting;
+			return;
+		}
 		// Records that existed when shutdown began are disposed by the drain;
 		// records registered after it are refused. Either way this call owns
 		// nothing, and acting would double-dispose.
@@ -410,10 +428,6 @@ export class ActivationRegistry {
 		// instead of re-entering disposal, so it can neither double-dispose the
 		// runtime nor release a newer registration's claims.
 		if (record.ended) return;
-		if (record.collecting !== null) {
-			await record.collecting;
-			return;
-		}
 		// The terminal fact is set synchronously, before any await: from here
 		// on, every liveness check refuses the record even while its disposal
 		// is still in flight.
@@ -469,7 +483,7 @@ export class ActivationRegistry {
 	}
 
 	/**
-	 * Stop serving and drain. Idempotent.
+	 * Stop serving and drain. Idempotent: every caller joins the same drain.
 	 *
 	 * The terminal flag is set and every index is cleared in one synchronous
 	 * block, so no admission can interleave with the snapshot: a record is
@@ -479,8 +493,8 @@ export class ActivationRegistry {
 	 * produced — so a factory that completes after shutdown can neither
 	 * register an Activation nor leak one.
 	 */
-	async dispose(): Promise<void> {
-		if (this.disposed) return;
+	dispose(): Promise<void> {
+		if (this.disposeDrain !== null) return this.disposeDrain;
 		this.disposed = true;
 		const executions: SessionExecution[] = [];
 		const draining: Promise<unknown>[] = [];
@@ -503,9 +517,12 @@ export class ActivationRegistry {
 		this.pending.clear();
 		this.sessionOwnerById.clear();
 		this.connectionActivation.clear();
-		await Promise.allSettled(draining);
-		for (const execution of executions) {
-			await execution.end();
-		}
+		this.disposeDrain = (async () => {
+			await Promise.allSettled(draining);
+			for (const execution of executions) {
+				await execution.end();
+			}
+		})();
+		return this.disposeDrain;
 	}
 }

@@ -308,14 +308,21 @@ refused — it owns nothing anymore, neither the address nor the durable-id
 claim — and can neither double-dispose the runtime nor release a newer
 registration's claims. The durable session id is released by record identity,
 not address fields, so only the registration that still holds a claim can
-drop it.
+drop it. Termination is also joinable: a `collect` call that finds a disposal
+already in flight awaits it (`collecting` is cleared only when the disposal
+completed), so every caller observes the same completion — `archiveSession`
+relies on this to move a session file only after its Manager finished
+dying, not merely after its death began.
 
 Shutdown is a terminal state. `dispose()` sets the flag and clears every
 index in one synchronous block — so a record is either in the drain's
 snapshot or its registration is refused — then drains: in-flight creation
 promises are awaited (their registration refuses and disposes the Manager the
 factory produced), in-flight collections are awaited, and every remaining
-Manager is disposed exactly once. Fresh-session creation is tracked too
+Manager is disposed exactly once. The drain is memoized: a second `dispose()`
+joins the first caller's promise instead of returning on the flag, so
+"shutdown completed" means the same thing to every caller. Fresh-session
+creation is tracked too
 (`runCreation`): it builds a Manager whose address does not exist until the
 file is allocated, so it cannot ride the per-address pending map, but the
 drain awaits the whole Manager-owning operation — including the disposal a

@@ -142,7 +142,12 @@ export function createReactor<S, M>(options: ReactorOptions<S, M>): Reactor<S, M
 								void enqueue(completion, true);
 							} catch (error) {
 								effectsInFlight--;
-								options.onUnhandledEffectError?.(error);
+								try {
+									options.onUnhandledEffectError?.(error);
+								} catch {
+									// The reporter itself failed: swallow it — the drain's
+									// soundness must not depend on the observer.
+								}
 								settleIfQuiet();
 							}
 						})();
