@@ -10,6 +10,7 @@ import type { BridgeClient, PatchOp, ServerPushMessage } from "../../../../src/c
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import { type ConnectionPipeline, createConnectionPipeline } from "./connectionPipeline.ts";
+import { resetNavigationForTests } from "./navigation.ts";
 
 // Node test env: the pipeline touches DOM scheduling APIs at creation
 // (document.addEventListener) and in scheduleFlush. Stub the minimum
@@ -129,6 +130,53 @@ describe("connectionPipeline live-patch flush policy", () => {
 		expect(getStore().getState().document).toBe(replaced);
 		expect(getStore().getState().docRevision).toBe(mirror.revision);
 		expect(getStore().getState().pullTick).toBe(pullBefore);
+	});
+
+	it("an address-bearing replace is never observed torn: the address, the id, the document, and the revision land in one store write", () => {
+		// G3: the replace path used to publish the new session's document
+		// before the address committed (and the delta path committed the
+		// address before the document), so a store subscriber could observe
+		// the new document under the old address or the reverse. The
+		// publication is now the navigation reactor's — one store write — and
+		// this subscriber asserts the pair is never torn.
+		stubDom();
+		const w = globalThis as unknown as { window?: unknown };
+		w.window = { location: { pathname: "/" }, history: { replaceState: vi.fn() } };
+		const { client, mirror } = fakeClient();
+		resetNavigationForTests({ getClient: () => client });
+		pipeline = createConnectionPipeline(client);
+
+		const observed: Array<{ stem: string | null; doc: unknown }> = [];
+		const unsubscribe = getStore().subscribe((s) => {
+			observed.push({ stem: s.currentStem, doc: s.document });
+		});
+		try {
+			const next = initFromEntries([]);
+			mirror.document = next;
+			mirror.revision += 1;
+
+			pipeline.onPush({
+				kind: "replace",
+				session: { projectId: "proj", sessionId: "s2", stem: "next" },
+				document: next,
+			});
+
+			const s = getStore().getState();
+			expect(s.currentStem).toBe("next");
+			expect(s.activeSessionId).toBe("s2");
+			expect(s.document).toBe(next);
+			// Every observation pairs an address with the document it belongs
+			// to: the new address only with the new document, any other
+			// address only with the old one — never a cross.
+			expect(observed.length).toBeGreaterThan(0);
+			for (const o of observed) {
+				if (o.stem === "next") expect(o.doc).toBe(next);
+				else expect(o.doc).not.toBe(next);
+			}
+		} finally {
+			unsubscribe();
+			delete w.window;
+		}
 	});
 });
 

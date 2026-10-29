@@ -91,10 +91,20 @@ function fakeClient(): FakeClient {
 	fake.detachReplies = [];
 	fake.applyReplaces = applyReplaces;
 	fake.openCalls = openCalls;
-	fake.client = {
-		mirror: {
-			applyReplace: (doc: Document) => applyReplaces.push(doc),
+	// A minimal DocumentMirror: `document`/`revision` are what navigation's
+	// atomic observation commit publishes, `applyReplace` is what seeding
+	// and promotion install.
+	const mirror = {
+		document: emptyDocument(),
+		revision: 0,
+		applyReplace(doc: Document) {
+			mirror.document = doc;
+			mirror.revision++;
+			applyReplaces.push(doc);
 		},
+	};
+	fake.client = {
+		mirror,
 		openSession: async (projectId: string, stem: string, cursor?: PrefixCursor) => {
 			openCalls.push({ projectId, stem, cursor });
 			const reply = fake.openReplies.shift();

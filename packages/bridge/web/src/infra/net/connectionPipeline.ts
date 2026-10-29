@@ -5,12 +5,14 @@
 //     while visible, ~1s while hidden),
 //   - the ADR 09 cache write-through (delta writes planned against the
 //     session's cache base) and the full-replace repair path.
-// Selection is the navigation reactor's (ADR 09/18's single-owner rule):
-// address-bearing initial-sync frames and session_closed pushes are forwarded
-// there (navigationInitialSync / navigationSessionClosed), and this module
-// publishes the document, the revision, and the cache records for the
-// observation the reactor names. After cleanup() the pipeline is frozen: a
-// dead or superseded connection never writes into the store or the cache.
+// Selection and the address-bearing publication are the navigation
+// reactor's (ADR 09/18's single-owner rule): initial-sync frames are
+// forwarded there (navigationInitialSync), and the reactor commits the
+// address, the session id, the document, and the revision as ONE store
+// write — this module never publishes a document it did not own the address
+// pairing for, so no subscriber can observe a new document under an old
+// address or the reverse. After cleanup() the pipeline is frozen: a dead or
+// superseded connection never writes into the store or the cache.
 // ============================================================================
 
 import {
@@ -60,7 +62,17 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		}
 	};
 
-	const flush = (cacheMode: "delta" | "skip" = "delta") => {
+	/** Initial-sync barrier: drop the old session's coalesced live ops and
+	 * publish nothing. The address-bearing publication is the navigation
+	 * reactor's — one store write for the address, the id, the document, and
+	 * the revision — so this module must not publish the (new-session)
+	 * document around it. */
+	const barrier = () => {
+		cancelPending();
+		pendingOps = null;
+	};
+
+	const flush = () => {
 		cancelPending();
 		pendingOps = null;
 		// Frozen pipeline: a dead or superseded connection must not write
@@ -72,23 +84,49 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// describe the same mirror snapshot, so a same-shape replacement can
 		// never pair new content with a stale revision (or vice versa).
 		store.getState().applyReplace(after, client.mirror.revision);
-		// Write-through (ADR 09): persist committed-entry deltas under the
-		// active session, planned against the session's cache base.
-		if (cacheMode === "delta") {
-			const sessionId = store.getState().activeSessionId;
-			if (sessionId) {
-				const baseDoc: Document =
-					cacheBase.value !== null && cacheBase.value.sessionId === sessionId
-						? cacheBase.value.doc
-						: { status: after.status, entries: {} };
-				const writes = planCacheWrites(sessionId, baseDoc, after);
-				cacheBase.value = { sessionId, doc: after };
-				if (writes.length > 0) {
-					void getEntryCache()
-						.then((cache) => cache.writeEntries(sessionId, writes))
-						.catch(() => {});
-				}
+		// Write-through (ADR 09) for the live patch just coalesced: persist
+		// committed-entry deltas under the active session, planned against
+		// the session's cache base.
+		const sessionId = store.getState().activeSessionId;
+		if (sessionId) {
+			const baseDoc: Document =
+				cacheBase.value !== null && cacheBase.value.sessionId === sessionId
+					? cacheBase.value.doc
+					: { status: after.status, entries: {} };
+			const writes = planCacheWrites(sessionId, baseDoc, after);
+			cacheBase.value = { sessionId, doc: after };
+			if (writes.length > 0) {
+				void getEntryCache()
+					.then((cache) => {
+						if (!disposed) return cache.writeEntries(sessionId, writes);
+					})
+					.catch(() => {});
 			}
+		}
+	};
+
+	/** Delta cache write-through under the committed observation: plans
+	 * against the session's cache base (the promotion installed it) and
+	 * writes only when the reactor committed this frame's session — a frame
+	 * the reactor ignored (superseded, abandoned, cancelled) published
+	 * nothing, and must not write through either. */
+	const writeThroughDelta = (ref: { sessionId: string }) => {
+		if (disposed) return;
+		const store = getStore();
+		if (store.getState().activeSessionId !== ref.sessionId) return;
+		const after = client.mirror.document;
+		const baseDoc: Document =
+			cacheBase.value !== null && cacheBase.value.sessionId === ref.sessionId
+				? cacheBase.value.doc
+				: { status: after.status, entries: {} };
+		const writes = planCacheWrites(ref.sessionId, baseDoc, after);
+		cacheBase.value = { sessionId: ref.sessionId, doc: after };
+		if (writes.length > 0) {
+			void getEntryCache()
+				.then((cache) => {
+					if (!disposed) return cache.writeEntries(ref.sessionId, writes);
+				})
+				.catch(() => {});
 		}
 	};
 
@@ -165,14 +203,16 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			return;
 		}
 
-		// replace: flush barrier + cache repair (ADR 09). The mirror already
-		// holds the snapshot. A replace always carries the session ref
-		// (ADR 11) — it is an initial sync.
+		// replace: initial-sync barrier + cache repair (ADR 09). The mirror
+		// already holds the snapshot. A replace always carries the session ref
+		// (ADR 11) — it is an initial sync, and its publication is the
+		// navigation reactor's: one store write for the address, the id, the
+		// document, and the revision. The repair rewrites the target session's
+		// cache wholesale with the server's authoritative snapshot — correct
+		// for that session id whether or not the reactor commits the frame
+		// as the rendered view.
 		if (push.kind === "replace") {
-			flush("skip");
-			// The address, the identity, and the route are the navigation
-			// reactor's; this module publishes document and cache state for
-			// the observation it names.
+			barrier();
 			navigationInitialSync(push.session, null);
 			const ref = push.session;
 			const doc = client.mirror.document;
@@ -181,23 +221,24 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			// becomes the new cache base.
 			cacheBase.value = { sessionId: ref.sessionId, doc };
 			void getEntryCache()
-				.then((cache) => cache.replaceSession(ref.sessionId, repairRecords, statusHintOfDocument(doc)))
+				.then((cache) => {
+					if (!disposed) return cache.replaceSession(ref.sessionId, repairRecords, statusHintOfDocument(doc));
+				})
 				.catch(() => {});
 			store.getState().bumpPullTick();
 			return;
 		}
 
 		// Initial-sync delta (ADR 09): a patch frame carrying `session`. If a
-		// candidate mirror is pending for that session, apply the delta to
-		// the candidate and promote it atomically — the mirror's own
-		// application ran against the old-session base and is discarded.
+		// candidate mirror is pending for that session, the reactor applies
+		// the delta to the candidate and promotes it atomically — the mirror's
+		// own application ran against the old-session base and is discarded.
+		// The reactor's commit publishes the observation (one store write);
+		// the delta write-through below runs only under that committed id.
 		if (push.kind === "patch" && push.session) {
-			// Promotion and the address commit are the navigation reactor's
-			// (it owns the candidate and decides whether this frame commits);
-			// the flush below then publishes the document and writes the
-			// delta through under the committed session id.
+			barrier();
 			navigationInitialSync(push.session, push.ops);
-			flush(); // barrier + delta write-through under the new session id
+			writeThroughDelta(push.session);
 			store.getState().bumpPullTick();
 			return;
 		}

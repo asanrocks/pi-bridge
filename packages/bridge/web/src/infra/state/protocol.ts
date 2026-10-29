@@ -15,6 +15,7 @@ import type {
 	ProjectInfo,
 	SessionInfo,
 	SessionListCursor,
+	SessionRef,
 } from "../../../../src/core/types.ts";
 import type { ComposerDraft } from "./composer.ts";
 import type { ClientStore } from "./store.ts";
@@ -158,6 +159,14 @@ export interface ProtocolSlice {
 	 * published without its revision moving too, or a same-shape replacement
 	 * could hit a stale ViewModel cache entry. */
 	applyReplace: (doc: Document, revision?: number) => void;
+	/** Commit an address-bearing observation as one store write: the
+	 * address, the durable session id, the document, and its revision all
+	 * become visible together, so no subscriber can observe a new document
+	 * under an old address or the reverse. Carries the side effects of
+	 * `setCurrentSession` and `setActiveSessionId` for an address/id change
+	 * (the file-viewer portals close on an address change; the peek pin
+	 * clears on a session-id change). */
+	commitObservation: (ref: SessionRef, doc: Document, revision?: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,4 +328,20 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			document,
 			docRevision: revision !== undefined ? revision : s.docRevision + 1,
 		})),
+
+	commitObservation: (ref, document, revision) =>
+		set((s) => {
+			const addressChanged = s.currentProjectId !== ref.projectId || s.currentStem !== ref.stem;
+			const idChanged = s.activeSessionId !== ref.sessionId;
+			if (!addressChanged && !idChanged && s.document === document) return s;
+			return {
+				currentProjectId: ref.projectId,
+				currentStem: ref.stem,
+				activeSessionId: ref.sessionId,
+				document,
+				docRevision: revision !== undefined ? revision : s.docRevision + 1,
+				browser: addressChanged ? null : s.browser,
+				renderLeafId: idChanged ? null : s.renderLeafId,
+			};
+		}),
 });

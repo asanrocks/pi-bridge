@@ -71,7 +71,13 @@ preference, with no stored preference and no state.
 store holds the current `Document` root, not the `DocumentMirror` object. A
 push is applied to the mirror by `BridgeClient`, then the resulting root is
 published through `applyReplace`; immutable root replacement gives selectors a
-stable change signal.
+stable change signal. An address-bearing publication goes through
+`commitObservation` instead: the address, the durable session id, the
+document, and its revision land in one store write, so a subscriber can never
+observe a document under an address it does not belong to (the address change
+also closes the viewer portals and a session-id change clears the peek pin —
+the side effects `setCurrentSession` and `setActiveSessionId` used to apply
+in separate writes).
 
 The protocol slice contains:
 
@@ -335,12 +341,18 @@ runtime. A close of some other Session is ignored: the list pushes cover it.
 
 An address-bearing `replace` or initial-sync `patch` establishes
 `activeSessionId`, `currentProjectId`, `currentStem`, the address index entry,
-and the route. A normal live patch has no SessionRef and only advances the
-current mirror. The address-bearing frame is therefore the synchronization
-barrier at which the target session becomes authoritative — and the commit at
-that barrier is the navigation reactor's, not the pipeline's: the pipeline
-publishes the document, the revision, and the cache records for the
-observation the reactor names.
+and the route — in ONE store write (`commitObservation`), together with the
+document and its revision, so no subscriber can observe a new document under
+an old address or the reverse. A normal live patch has no SessionRef and only
+advances the current mirror (the pipeline's coalesced flush). The
+address-bearing frame is therefore the synchronization barrier at which the
+target session becomes authoritative — and the whole publication at that
+barrier is the navigation reactor's, not the pipeline's: the pipeline drops
+its coalesced old-session ops (the barrier), forwards the frame, and then
+writes the cache records for the observation the reactor committed — the
+delta write-through runs only under the committed session id, so a frame the
+reactor ignored (superseded, abandoned, cancelled) publishes nothing and
+persists nothing.
 
 ### Navigation
 
@@ -378,11 +390,12 @@ applies):
   the successor's candidate, mirror, or store. A transition cancelled by a
   terminal close admits no RPC at all (the runtime it targeted is gone).
 - The address-bearing initial-sync frame returns as a `sync` message and
-  commits the view: address, durable id, address-index entry, route (the
-  alias view keeps the alias URL). A matching delta promotes the candidate
-  and re-bases the cache base on its pre-promotion document. A sync for a
-  superseded or cancelled transition commits nothing — the pending-owner and
-  intent-epoch comparisons, one each.
+  commits the view as one store write (`commitObservation`): address, durable
+  id, document, revision, address-index entry, route (the alias view keeps
+  the alias URL). A matching delta promotes the candidate and re-bases the
+  cache base on its pre-promotion document. A sync for a superseded or
+  cancelled transition commits nothing — the pending-owner and intent-epoch
+  comparisons, one each.
 - The RPC reply returns as an `openSettled` message. It confirms (defensively
   committing the ref the server already pushed), rolls back to the last
   committed view, or lands on the Project home — but only while the

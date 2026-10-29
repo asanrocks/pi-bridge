@@ -380,15 +380,24 @@ function sessionKey(view: NavigationView): string {
 	return view.kind === "session" ? `${view.projectId}/${view.stem}` : "";
 }
 
-/** Commit an address-bearing initial sync: address first, then the id
- * (`setCurrentSession` unbinds a stale id on an address change, so the pair
- * must land in this order), remember the address, and write the route unless
- * the alias view holds it (ADR 13). */
-function commitSessionAddress(ref: SessionRef): void {
-	const store = getStore();
-	store.getState().setCurrentSession(ref.projectId, ref.stem);
-	store.getState().setActiveSessionId(ref.sessionId);
+/** Commit an address-bearing initial sync as one store write: the address,
+ * the durable session id, the document, and its revision all become visible
+ * together (no subscriber observes a new document under an old address, or
+ * the reverse), the address is remembered, and the route is written unless
+ * the alias view holds it (ADR 13). The document is the mirror's — it holds
+ * the frame the pipeline just applied (promoted, for a delta). */
+function commitObservation(ref: SessionRef, deps: NavigationDeps): void {
+	const mirror = deps.getClient()?.mirror;
 	rememberAddress(ref.projectId, ref.stem, ref.sessionId);
+	const store = getStore();
+	if (mirror !== undefined) {
+		store.getState().commitObservation(ref, mirror.document, mirror.revision);
+	} else {
+		// No client (tests without a mirror): the address pair alone — the
+		// document will be published with the next frame.
+		store.getState().setCurrentSession(ref.projectId, ref.stem);
+		store.getState().setActiveSessionId(ref.sessionId);
+	}
 	if (!store.getState().addressViaAlias) {
 		writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
 	}
@@ -491,6 +500,7 @@ function settleOpen(
 	pending: PendingTransition,
 	result: NavigationResult,
 	ref: SessionRef | undefined,
+	deps: NavigationDeps,
 ): NavigationState {
 	let current = state.current;
 	let abandoned = state.abandoned;
@@ -498,7 +508,7 @@ function settleOpen(
 		if (result.ok) {
 			// The push precedes the reply, so the sync already committed;
 			// commit defensively only if it somehow did not.
-			if (!pending.synced && ref) commitSessionAddress(ref);
+			if (!pending.synced && ref) commitObservation(ref, deps);
 			current = { view: pending.view, sessionId: ref?.sessionId ?? state.current.sessionId };
 			// This address is live again: a stale abandoned marker for it
 			// must not swallow a later legitimate sync.
@@ -596,7 +606,7 @@ function navigationStep(
 				// The connection vanished mid-preparation: settle like a
 				// failed RPC (the caller learns the transition never ran).
 				message.reply?.(NOT_CONNECTED);
-				if (ownsTransition) return { state: settleOpen(state, pending, NOT_CONNECTED, undefined) };
+				if (ownsTransition) return { state: settleOpen(state, pending, NOT_CONNECTED, undefined, deps) };
 				return { state };
 			}
 			// The RPC runs even for a superseded transition: the server
@@ -713,7 +723,7 @@ function navigationStep(
 			// at cancel time; prune and commit nothing.
 			state.cancelled.delete(message.transition);
 			if (pending === null || pending.id !== message.transition) return { state };
-			return { state: settleOpen(state, pending, message.result, message.ref) };
+			return { state: settleOpen(state, pending, message.result, message.ref, deps) };
 		}
 
 		case "projectSettled": {
@@ -750,7 +760,7 @@ function navigationStep(
 			if (s.currentProjectId !== message.ref.projectId || s.currentStem !== message.ref.stem) {
 				return { state };
 			}
-			commitSessionAddress(message.ref);
+			commitObservation(message.ref, deps);
 			return {
 				state: {
 					...state,
@@ -832,7 +842,7 @@ function navigationStep(
 						cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
 					}
 				}
-				commitSessionAddress(ref);
+				commitObservation(ref, deps);
 				return {
 					state: {
 						...state,
@@ -852,7 +862,7 @@ function navigationStep(
 			if (state.abandoned !== null && state.abandoned.key === key && !reasserts) {
 				return { state };
 			}
-			commitSessionAddress(ref);
+			commitObservation(ref, deps);
 			return {
 				state: {
 					...state,
