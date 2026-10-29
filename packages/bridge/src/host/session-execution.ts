@@ -31,6 +31,10 @@ import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
 
 export interface SessionExecution {
+	/** True once `end` began: admission is refused and the terminal drain is
+	 * in flight or settled. A synchronous read for capability and registry
+	 * guards — `ending` is the terminal fact, set before any await. */
+	readonly ended: boolean;
 	/** Run immediate, tracked work: turns, aborts, reads. Never queues behind
 	 * a running command (pi is the serialization authority for turns; a read
 	 * must not stall behind one). Rejected once `end` began. */
@@ -56,6 +60,9 @@ export function createSessionExecution(manager: Manager): SessionExecution {
 	let ended: Promise<void> | undefined;
 
 	return {
+		get ended() {
+			return ending;
+		},
 		run<T>(operation: (session: Manager) => Promise<T>): Promise<T> {
 			if (ending) return Promise.reject(new Error("session is closed"));
 			let started: Promise<T>;

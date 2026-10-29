@@ -121,14 +121,24 @@ and [core protocol](core/protocol.md).
    Manager, daemon verbs route to the Daemon, and `pull` is Connection-local.
    Each handler owns its asynchronous work and replies through the same
    Connection.
-7. A **lease** *(bound)* is a Connection's capability for one Activation
-   registration: it is the only path to that Session's runtime (commands and
-   observation), and it rejects once its registration ended. The registry
-   issues leases; it never hands out a Manager.
+7. A **capability** *(bound)* is one client's handle for one Activation
+   registration: it is the only path to that Session's runtime — commands,
+   mutations, and observation registration — and it rejects once its
+   registration ended. The registry issues capabilities; it never hands out
+   a Manager. (The current code names this a *lease*,
+   `src/host/session-lease.ts`, with one observer per registration; ADR 19
+   generalizes it with independently releasable observations and a joinable
+   release.)
 8. A **reactor** *(bound)* is a serialized state machine over one lifetime:
    typed messages are applied one at a time by a synchronous step, and
    admitted effects return as ordinary messages carrying the epoch of the
    message that admitted them.
+9. An **actor** *(bound, after the actor model)* is one lifetime made one
+   owner: a reactor whose state names the resources the lifetime holds, where
+   every transition is one applied message and every asynchronous completion
+   returns as one. Its close is the terminal drain of state and resources
+   together. ADR 19 proposes the Session, Connection, and browser view actors
+   over these seam terms.
 
 ## C. Document sync
 
