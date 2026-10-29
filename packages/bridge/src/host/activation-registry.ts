@@ -24,6 +24,7 @@ import type { PrefixCursor, SessionRef } from "../core/index.ts";
 import type { Connection } from "./connection.ts";
 import type { Manager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
+import { createSessionLease, type SessionLease } from "./session-lease.ts";
 
 /** Address key: (projectId, stem) — the client-facing address of a Session. */
 export function addressKey(projectId: string, stem: string): string {
@@ -295,6 +296,20 @@ export class ActivationRegistry {
 	}
 	// ── Attachment ────────────────────────────────────────────────────────────
 
+	/** Issue the lease a Connection's attachment runs through. Validity is
+	 * the registration's: commands are admitted only while the record is
+	 * live (not collecting) and the registry has not begun shutdown, so a
+	 * command admitted during disposal is rejected before it reaches a
+	 * runtime being torn down. */
+	private leaseFor(record: ActivationRecord): SessionLease {
+		return createSessionLease({
+			manager: record.manager,
+			ref: record.ref,
+			authorization: record.authorization,
+			isValid: () => record.collecting === null && !this.disposed,
+		});
+	}
+
 	attach(conn: Connection, record: ActivationRecord, cursor: PrefixCursor | null): void {
 		if (this.disposed) throw new Error("daemon is shutting down");
 		// A collected record owns nothing anymore: attaching it would pin a
@@ -311,7 +326,7 @@ export class ActivationRegistry {
 			return;
 		}
 		this.release(conn);
-		conn.attach(record.manager, record.ref, cursor);
+		conn.attachLease(this.leaseFor(record), cursor);
 		record.connections.add(conn);
 		this.connectionActivation.set(conn, record);
 		this.cancelGc(record);

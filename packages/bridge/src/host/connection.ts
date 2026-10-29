@@ -49,7 +49,8 @@ import {
 } from "../core/index.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
-import type { ConnectionHandle, Manager } from "./manager.ts";
+import type { ConnectionHandle } from "./manager.ts";
+import type { SessionLease } from "./session-lease.ts";
 
 // ============================================================================
 // DaemonVerbs — the Connection → Daemon seam (ADR 11)
@@ -155,7 +156,7 @@ export interface DaemonVerbs {
 }
 
 // ============================================================================
-// Connection — owns one WebSocket, attached to at most one Manager
+// Connection — owns one WebSocket, attached through at most one SessionLease
 // ============================================================================
 
 export class Connection {
@@ -166,8 +167,9 @@ export class Connection {
 	private subscriptions = new Set<string>();
 	private codec = new CompactCodec();
 	private handle: ConnectionHandle;
-	private _attachedManager: Manager | null = null;
-	private _attachedSession: SessionRef | null = null;
+	/** The current attachment: a registry-issued lease, never the Session's
+	 * runtime itself. Raw Manager access is a type error by construction. */
+	private lease: SessionLease | null = null;
 	private _disposed = false;
 	/** Serialized attachment-changing transitions (see runTransition),
 	 * drained at disposal so a transition still in flight when the socket
@@ -211,13 +213,14 @@ export class Connection {
 
 	// ── Attachment state ──────────────────────────────────────────────────
 
-	get attachedManager(): Manager | null {
-		return this._attachedManager;
+	/** True while a Session lease is held. */
+	get isAttached(): boolean {
+		return this.lease !== null;
 	}
 
 	/** The address + identity of the attached session (ADR 11). */
 	get attachedSession(): SessionRef | null {
-		return this._attachedSession;
+		return this.lease?.ref ?? null;
 	}
 
 	/** True once the socket closed and the Connection was disposed. A disposed
@@ -227,21 +230,22 @@ export class Connection {
 		return this._disposed;
 	}
 
-	attach(manager: Manager, session: SessionRef, cursor?: PrefixCursor | null): void {
+	/** Accept a registry-issued lease as this Connection's attachment. The
+	 * codec is reset before the observer is installed, so the initial-sync
+	 * frame the installation emits cannot reuse a remembered append path
+	 * from the previous session (ADR 11). */
+	attachLease(lease: SessionLease, cursor: PrefixCursor | null): void {
 		this.detach();
-		this._attachedManager = manager;
-		this._attachedSession = session;
-		// A stale remembered append path must not survive an attach (ADR 11):
-		// initial-sync frames carry `session` and are never compacted.
+		this.lease = lease;
 		this.codec.reset();
-		manager.addConnection(this.handle, session, cursor ?? null);
+		lease.attachObserver(this.handle, cursor);
 	}
 
+	/** Release the current attachment: the lease removes its observer from
+	 * the runtime and ends; the activation stays alive for idle collection. */
 	detach(): void {
-		if (!this._attachedManager) return;
-		this._attachedManager.removeConnection(this.handle);
-		this._attachedManager = null;
-		this._attachedSession = null;
+		this.lease?.release();
+		this.lease = null;
 	}
 
 	dispose(): void {
@@ -300,9 +304,9 @@ export class Connection {
 	 * cannot retarget it: the command executes against, and reports on, the
 	 * session that was attached when the request arrived.
 	 */
-	private requireAttachment(): { manager: Manager; session: SessionRef } {
-		if (!this._attachedManager || !this._attachedSession) throw new Error("no session attached");
-		return { manager: this._attachedManager, session: this._attachedSession };
+	private requireAttachment(): SessionLease {
+		if (!this.lease) throw new Error("no session attached");
+		return this.lease;
 	}
 
 	private async handleMessage(msg: ClientMessage): Promise<void> {
@@ -312,7 +316,7 @@ export class Connection {
 			switch (verb) {
 				// ── Attached session verbs ─────────────────────────────────
 				case "prompt": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as PromptRequest;
 					if (typeof m.text !== "string") throw new Error("Missing `text`");
 					// Light shape validation: images are opaque base64 blobs relayed
@@ -334,70 +338,70 @@ export class Connection {
 					) {
 						throw new Error("Invalid `images`");
 					}
-					await target.manager.prompt(m.text, images);
+					await lease.command((session) => session.prompt(m.text, images));
 					this.sendReply(id, true);
 					break;
 				}
 				case "abort": {
-					const target = this.requireAttachment();
-					await target.manager.abort();
+					const lease = this.requireAttachment();
+					await lease.command((session) => session.abort());
 					this.sendReply(id, true);
 					break;
 				}
 				case "discardSteer": {
-					const target = this.requireAttachment();
-					await target.manager.discardSteer();
+					const lease = this.requireAttachment();
+					await lease.command((session) => session.discardSteer());
 					this.sendReply(id, true);
 					break;
 				}
 				case "setModel": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as SetModelRequest;
-					await target.manager.setModel(m.provider, m.model);
+					await lease.command((session) => session.setModel(m.provider, m.model));
 					this.sendReply(id, true);
 					break;
 				}
 				case "setThinkingLevel": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as SetThinkingLevelRequest;
-					await target.manager.setThinkingLevel(m.level);
+					await lease.command((session) => session.setThinkingLevel(m.level));
 					this.sendReply(id, true);
 					break;
 				}
 				case "renameSession": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as RenameSessionRequest;
 					if (typeof m.name !== "string") throw new Error("Missing `name`");
-					await target.manager.renameSession(m.name);
+					await lease.command((session) => session.renameSession(m.name));
 					this.sendReply(id, true);
 					// The refresh broadcast belongs to the command's target — read
 					// from the capture, never from the live attachment, which a
 					// transition completing during the rename may have moved.
-					this.daemonVerbs.sessionsChanged(target.session.projectId);
+					this.daemonVerbs.sessionsChanged(lease.ref.projectId);
 					break;
 				}
 				case "setLabel": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as SetLabelRequest;
 					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 					if (typeof m.label !== "string") throw new Error("Missing `label`");
-					await target.manager.setLabel(m.entryId, m.label);
+					await lease.command((session) => session.setLabel(m.entryId, m.label));
 					this.sendReply(id, true);
 					break;
 				}
 				case "navigate": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as NavigateRequest;
 					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					await target.manager.navigate(m.entryId);
+					await lease.command((session) => session.navigate(m.entryId));
 					this.sendReply(id, true);
 					break;
 				}
 				case "recoverTurn": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					// The Manager re-derives the boundary and refuses when the tail
 					// is not recoverable; `action` reports which repair ran.
-					const action = await target.manager.recoverTurn();
+					const action = await lease.command((session) => session.recoverTurn());
 					this.send({ id, ok: true, action: action as unknown as JsonValue });
 					break;
 				}
@@ -561,8 +565,8 @@ export class Connection {
 					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
 					// Requires an attachment: the recorded commit belongs to the
 					// attached session's repository, so its cwd is the query base.
-					const target = this.requireAttachment();
-					const result = await this.daemonVerbs.gitShow(m.commit, target.manager.cwd);
+					const lease = this.requireAttachment();
+					const result = await lease.command((session) => this.daemonVerbs.gitShow(m.commit, session.cwd));
 					this.send({ id, ok: true, ...result });
 					break;
 				}
@@ -594,21 +598,24 @@ export class Connection {
 
 				// ── Connection-local verb ──────────────────────────────────
 				case "pull": {
-					const target = this.requireAttachment();
+					const lease = this.requireAttachment();
 					const m = msg as unknown as PullRequest;
 					if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
-					const values: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
-					for (const req of m.requests) {
-						const entry = target.manager.document.entries[req.entryId];
-						if (!entry) continue;
-						const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
-						if (value !== undefined) {
-							values.push({ entryId: req.entryId, fieldPath: req.fieldPath, value: value as JsonValue });
-							if (!isEntrySealed(entry)) {
-								this.subscriptions.add(req.fieldPath);
+					const values = await lease.command((session) => {
+						const out: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
+						for (const req of m.requests) {
+							const entry = session.document.entries[req.entryId];
+							if (!entry) continue;
+							const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
+							if (value !== undefined) {
+								out.push({ entryId: req.entryId, fieldPath: req.fieldPath, value: value as JsonValue });
+								if (!isEntrySealed(entry)) {
+									this.subscriptions.add(req.fieldPath);
+								}
 							}
 						}
-					}
+						return Promise.resolve(out);
+					});
 					this.send({ id, ok: true, values });
 					break;
 				}

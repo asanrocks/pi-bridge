@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { WebSocket } from "ws";
 import type { Document } from "../../src/core/index.ts";
 import type { DaemonVerbs } from "../../src/host/connection.ts";
 import { Connection } from "../../src/host/connection.ts";
@@ -164,7 +165,7 @@ async function connectTo(
 	link: ExecutionLink,
 	bundle: StubBundle,
 	stem: string,
-): Promise<{ conn: Connection; frames: unknown[] }> {
+): Promise<{ conn: Connection; clientWs: WebSocket; frames: unknown[] }> {
 	const abs = writeSession(bundle, stem);
 	const { serverWs, clientWs } = await createWsPair();
 	// Wait for the client's open before returning: the test may end without a
@@ -177,7 +178,7 @@ async function connectTo(
 		clientWs.close();
 	});
 	await link.open(conn, bundle.project, stem, abs, null);
-	return { conn, frames };
+	return { conn, clientWs, frames };
 }
 
 // ---------------------------------------------------------------------------
@@ -212,18 +213,37 @@ describe("ExecutionLink (local)", () => {
 		const { link } = bundle;
 		const { conn, frames } = await connectTo(link, bundle, "term-1");
 		const record = link.byAddressAny("proj", "term-1")!;
-		expect(conn.attachedManager).not.toBeNull();
+		expect(conn.isAttached).toBe(true);
 
 		await link.collect(record);
 
 		// The terminal ownership boundary: the attachment is severed and the
 		// client learns the runtime ended.
-		expect(conn.attachedManager).toBeNull();
+		expect(conn.isAttached).toBe(false);
 		const closed = await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
 		expect((closed as Record<string, unknown>).stem).toBe("term-1");
 		expect((closed as Record<string, unknown>).projectId).toBe("proj");
 		// Live listings drop the address after collection.
 		expect(link.live().some((r) => r.ref.stem === "term-1")).toBe(false);
+	});
+
+	it("a session command after collection is refused, not run against the dead runtime", async () => {
+		const bundle = makeLink();
+		const { link } = bundle;
+		const { clientWs, frames } = await connectTo(link, bundle, "term-2");
+		const record = link.byAddressAny("proj", "term-2")!;
+
+		// A prompt RPC arrives after the terminal boundary: the lease the
+		// command would address is gone, so it fails loudly instead of
+		// reaching a disposed Manager.
+		await link.collect(record);
+		clientWs.send(JSON.stringify({ id: "rpc-1", verb: "prompt", text: "late" }));
+		const reply = (await waitForFrame(frames, (f) => (f as Record<string, unknown>).id === "rpc-1")) as Record<
+			string,
+			unknown
+		>;
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toBe("no session attached");
 	});
 
 	it("release detaches without disposing the activation", async () => {
@@ -233,7 +253,7 @@ describe("ExecutionLink (local)", () => {
 		const record = link.byAddressAny("proj", "rel-1")!;
 
 		link.release(conn);
-		expect(conn.attachedManager).toBeNull();
+		expect(conn.isAttached).toBe(false);
 		// Detach is not a kill: the activation stays live (for idle collection).
 		expect(link.live()).toContain(record);
 		expect((record.manager as unknown as { disposeCalls: () => number }).disposeCalls()).toBe(0);

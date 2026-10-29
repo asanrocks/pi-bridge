@@ -188,11 +188,21 @@ contract is in [git-stamps.md](git-stamps.md).
 ## Connection
 
 A Connection owns exactly one WebSocket. It starts detached and can be attached
-to at most one Manager and one `SessionRef` at a time. `attach` first detaches
-any current Manager, records the new Session reference, resets the
-connection-local `CompactCodec`, and asks the Manager for initial sync.
-`detach` removes the Manager handle and clears the attached Session reference.
-A socket close disposes the Connection and releases its daemon attachment.
+through at most one **Session lease** at a time: the Activation registry issues
+a `SessionLease` (`src/host/session-lease.ts`) for one registration, and it is
+the only path to the Session's runtime — the Connection never holds the
+Manager itself, so a command cannot be written that bypasses the registration's
+admission check. `attachLease` first releases the current lease (removing its
+observer from that runtime and ending its admission), records the new lease,
+resets the connection-local `CompactCodec`, and installs the lease's observer,
+which asks the Manager for initial sync. `detach` releases the lease without
+disposing the Activation. A lease rejects commands once its registration ended
+— collection, replacement, or daemon shutdown — including the mid-collection
+window before the terminal `session_closed` push. A command admitted before
+its registration ended still completes against the runtime it captured, so the
+reply the client trusts describes the session that was attached when the
+request arrived. A socket close disposes the Connection and releases its daemon
+attachment.
 
 The codec reset is part of attachment correctness: an append-compression path
 remembered for one Session must not be reused for another. Initial-sync frames
