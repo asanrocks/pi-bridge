@@ -38,6 +38,15 @@ export {
 } from "./git-stamp.ts";
 export type { EntryProjection, EntrySnapshot } from "./projection.ts";
 export { createEntryProjection } from "./projection.ts";
+export type {
+	Reactor,
+	ReactorEffect,
+	ReactorOptions,
+	ReactorPhase,
+	ReactorStep,
+	ReactorStepContext,
+} from "./reactor.ts";
+export { createReactor } from "./reactor.ts";
 export type { RecoverableTurnInfo } from "./recovery.ts";
 export { computeRecoverableTurn } from "./recovery.ts";
 export { buildInitialSync, validateCursor } from "./sync.ts";

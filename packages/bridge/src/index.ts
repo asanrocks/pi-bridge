@@ -110,6 +110,7 @@ export {
 	cacheRecordsOfDocument,
 	computeCursor,
 	computeRecoverableTurn,
+	createReactor,
 	DocumentMirror,
 	entryForCache,
 	filterPatchForSocket,

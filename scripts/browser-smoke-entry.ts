@@ -116,6 +116,7 @@ console.log(
 	typeof parseApplyPatch,
 	typeof computeViewModel,
 	typeof computeRecoverableTurn,
+	typeof createReactor,
 	typeof findNextModel,
 	typeof GIT_STAMP_CUSTOM_TYPE,
 	typeof parseCommitSubject,
