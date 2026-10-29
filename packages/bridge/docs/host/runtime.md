@@ -168,12 +168,14 @@ of `newSession`.
   is streaming or compacting, because branching swaps the LLM context under
   the in-flight turn (`agent.state.messages` is rebuilt from the new branch);
   the refresh that follows re-derives what the new selection describes.
-- `dispose` aborts and flushes the current runtime, unsubscribes from pi,
-  disposes the runtime, and then drains the git-stamp observation scope: the
-  bundle's `end()` stops admission synchronously and resolves only after every
-  queued observation settled, so no `git` spawn starts after disposal resolves
-  and a fire-and-forget trigger observation cannot outlive the runtime it
-  appends to.
+- `dispose` aborts and flushes the in-flight turn (a recovery continuation
+  included), unsubscribes from pi, then drains the git-stamp observation
+  scope *before* disposing the runtime: the bundle's `end()` stops admission
+  synchronously and resolves only after every queued observation settled, so
+  each drained observation appends to a live runtime, no `git` spawn starts
+  once teardown proceeds past the scope, and a fire-and-forget trigger
+  observation cannot outlive the runtime it appends to. Disposal is
+  idempotent and joinable — every caller observes the same teardown.
 
 `addConnection(handle, session, cursor?)` registers one Connection handle and
 synchronously emits exactly one initial-sync frame before later live patches.

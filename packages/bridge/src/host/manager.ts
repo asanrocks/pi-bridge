@@ -35,7 +35,7 @@ import {
 	setAtPath,
 } from "../core/index.ts";
 import { buildInterruptedToolsRelay } from "../core/recovery.ts";
-import { createGitStampExtensionWithTrigger, type GitStampTrigger } from "./git-stamp-extension.ts";
+import { createGitStampExtensionWithTrigger, type GitStampDeps, type GitStampTrigger } from "./git-stamp-extension.ts";
 
 // ============================================================================
 // Helpers
@@ -88,6 +88,10 @@ export interface CreateManagerOptions {
 	customTools?: ToolDefinition[];
 	/** Write git identity stamps (ADR 10). Default: true. Test seam. */
 	gitStamps?: boolean;
+	/** Overrides for the git-stamp observation deps (runner, timeout). Test
+	 * seam: a gated runner reproduces a slow git under load without one on
+	 * PATH. */
+	gitStampDeps?: Partial<GitStampDeps>;
 }
 
 /**
@@ -176,6 +180,11 @@ export interface Manager {
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
+	/** Finalize and tear down: the in-flight turn settles (client tabs see
+	 * the final patches), the git-stamp observation scope stops admitting and
+	 * drains (every admitted observation appends before the runtime goes),
+	 * then the runtime is disposed. Idempotent and joinable: every caller
+	 * observes the same teardown. */
 	dispose(): Promise<void>;
 }
 
@@ -204,7 +213,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
 	// for its lifetime (ADR 11), so the host trigger never rebinds.
-	const gitStampBundle = createGitStampExtensionWithTrigger();
+	const gitStampBundle = createGitStampExtensionWithTrigger(options.gitStampDeps);
 
 	// ADR 10 v2: host-side user-bash observations. The trigger enqueues into
 	// the extension's serialized stream; null until the runtime binds (the
@@ -445,6 +454,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// the Manager tracks the run itself, and abort/dispose await it before
 	// treating the session as settled.
 	let recoveryRun: Promise<void> | null = null;
+	// The memoized teardown (see dispose): null until the first call.
+	let disposed: Promise<void> | null = null;
 	const settleRecoveryRun = async (): Promise<void> => {
 		if (recoveryRun) await recoveryRun.catch(() => {});
 	};
@@ -715,26 +726,37 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			return "retry";
 		},
 
-		async dispose() {
-			// 1. Save: finalize + flush the in-flight turn — including a recovery
-			//    continuation, which session.abort()'s idle-wait cannot see
-			//    (ADR 16). Listeners are still attached, so client tabs see the
-			//    final patches before teardown.
-			await session.abort();
-			await settleRecoveryRun();
-			// 2. Unsubscribe from pi events.
-			if (unsubscribe) {
-				unsubscribe();
-				unsubscribe = null;
-			}
-			// 3. Tear down the pi runtime.
-			await runtime.dispose();
-			// 4. Drain the git-stamp observation scope: admission stopped, every
-			//    queued observation settled — no `git` spawn starts after this
-			//    resolves, and a fire-and-forget trigger observation cannot
-			//    outlive the runtime it appends to. A no-op when stamps were
-			//    never bound.
-			await gitStampBundle.end();
+		dispose(): Promise<void> {
+			// Idempotent and joinable: every caller observes the same teardown,
+			// so a direct dispose (the harness) and the registry's
+			// SessionExecution drain cannot interleave a second run through it.
+			if (disposed !== null) return disposed;
+			disposed = (async () => {
+				// 1. Save: finalize + flush the in-flight turn — including a
+				//    recovery continuation, which session.abort()'s idle-wait
+				//    cannot see (ADR 16). Listeners are still attached, so client
+				//    tabs see the final patches before teardown. Turn boundaries
+				//    may enqueue git-stamp observations; they are admitted before
+				//    the scope closes and drained below.
+				await session.abort();
+				await settleRecoveryRun();
+				// 2. Stop event-driven observations, then drain the observation
+				//    scope BEFORE the runtime goes: every observation the
+				//    finalization admitted is awaited here (its append lands on
+				//    a live runtime), and the closed scope plus the removed
+				//    subscription admit nothing afterwards — so no `git` spawn
+				//    starts once teardown proceeds past this point, and no append
+				//    reaches a runtime being torn down. A no-op when stamps were
+				//    never bound.
+				if (unsubscribe) {
+					unsubscribe();
+					unsubscribe = null;
+				}
+				await gitStampBundle.end();
+				// 3. Tear down the pi runtime.
+				await runtime.dispose();
+			})();
+			return disposed;
 		},
 	};
 

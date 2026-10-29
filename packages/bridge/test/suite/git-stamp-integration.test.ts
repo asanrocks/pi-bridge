@@ -6,9 +6,10 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Entry } from "../../src/core/index.ts";
 import { GIT_STAMP_CUSTOM_TYPE, parseGitStampEntry } from "../../src/core/index.ts";
+import type { GitRunner } from "../../src/host/git-stamp-extension.ts";
 import type { TurnVM } from "../../src/viewmodel/index.ts";
 import { computeViewModel } from "../../src/viewmodel/index.ts";
 import type { BridgeHarness } from "./harness.ts";
@@ -88,6 +89,64 @@ async function commit(h: BridgeHarness, message: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe("git identity stamps (integration)", () => {
+	it("dispose drains a running git observation before the runtime goes", async () => {
+		// The teardown order is the invariant: abort/finalize, stop admitting
+		// observations, drain the admitted ones (their appends land on a live
+		// runtime), then dispose the runtime. A gated runner reproduces a
+		// slow git without one on PATH.
+		let releaseObservation!: () => void;
+		const observed = new Promise<void>((resolve) => {
+			releaseObservation = resolve;
+		});
+		let runs = 0;
+		const runner: GitRunner = async (args) => {
+			runs += 1;
+			if (runs === 1) await observed; // hold the observation's first query
+			if (args[0] === "rev-parse") return { code: 0, stdout: `${"a1".repeat(20)}\n`, killed: false };
+			if (args[0] === "symbolic-ref") return { code: 0, stdout: "main\n", killed: false };
+			return { code: 0, stdout: "gated subject\n", killed: false };
+		};
+		const h = await createBridgeHarness({
+			fixturePath: FIXTURE_URL.pathname,
+			responses: [fauxAssistantMessage("ok")],
+			gitStamps: true,
+			gitStampRunner: runner,
+		});
+		harnesses.push(h);
+
+		// The user-bash boundary enqueues an observation; the gated runner
+		// holds its first git query.
+		await h.manager.executeBash("true");
+		await vi.waitFor(() => expect(runs).toBeGreaterThanOrEqual(1));
+
+		let disposed = false;
+		const disposing = h.manager.dispose().then(() => {
+			disposed = true;
+		});
+		await new Promise((r) => setTimeout(r, 30));
+		// The observation still runs: the runtime is not torn down beside it.
+		expect(disposed).toBe(false);
+
+		releaseObservation();
+		await disposing;
+		expect(disposed).toBe(true);
+		// The drained observation appended its stamp to the session before the
+		// runtime went — no append reached a disposed runtime. The bridge
+		// Document is not refreshed after the event subscription is gone, so
+		// assert on pi's authoritative entry list.
+		const appended = h.sessionManager
+			.getEntries()
+			.filter((e) => (e as { customType?: string }).customType === GIT_STAMP_CUSTOM_TYPE);
+		expect(appended).toHaveLength(1);
+
+		// No git spawn starts after dispose resolved, and a second dispose
+		// joins the first teardown instead of running it again.
+		const runsAfter = runs;
+		await h.manager.dispose();
+		await new Promise((r) => setTimeout(r, 30));
+		expect(runs).toBe(runsAfter);
+	});
+
 	const harnesses: BridgeHarness[] = [];
 	afterEach(() => {
 		while (harnesses.length) harnesses.pop()?.cleanup();

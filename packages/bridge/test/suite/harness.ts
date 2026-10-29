@@ -8,6 +8,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { AuthStorage, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { Document, Patch, PatchOp } from "../../src/core/index.ts";
 import { DocumentMirror, snapshotForWire } from "../../src/core/index.ts";
+import type { GitRunner } from "../../src/host/git-stamp-extension.ts";
 import { createManager, type Manager } from "../../src/host/index.ts";
 
 export interface BridgeHarnessOptions {
@@ -23,6 +24,9 @@ export interface BridgeHarnessOptions {
 	settings?: Record<string, unknown>;
 	/** Enable ADR 10 git identity stamps. Default: off (test seam). */
 	gitStamps?: boolean;
+	/** Override the stamp observation's git runner (test seam: a gated runner
+	 * reproduces a slow git without one on PATH). */
+	gitStampRunner?: GitRunner;
 	/** Run `git init` + an initial empty commit in tempCwd before creating
 	 * the Manager, so stamp tests observe a real repository. */
 	initGitRepo?: boolean;
@@ -113,6 +117,7 @@ export async function createBridgeHarness(opts: BridgeHarnessOptions): Promise<B
 		// Default off: existing fixtures observe a non-repo temp cwd, and the
 		// stamp observation would shift prompt-path timing for unrelated tests.
 		gitStamps: opts.gitStamps ?? false,
+		gitStampDeps: opts.gitStampRunner ? { runGit: opts.gitStampRunner } : undefined,
 	});
 
 	const patches: Patch[] = [];

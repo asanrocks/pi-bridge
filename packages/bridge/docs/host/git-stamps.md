@@ -203,11 +203,15 @@ The following invariants define the feature:
   card.
 - A stamp is context-inert and does not enter the LLM prompt.
 - Observation failures do not poison the serialized observation queue.
-- The observation scope is terminal: the Manager's `dispose()` closes it
-  (`GitStampExtensionBundle.end()`), stopping admission synchronously and
-  resolving only after every queued observation settled. No `git` spawn
-  starts after disposal resolves, and a fire-and-forget host trigger cannot
-  outlive the runtime it appends to.
+- The observation scope is terminal, and its teardown composes with the
+  runtime's: the Manager's `dispose()` first finalizes the in-flight turn
+  (whose boundaries may enqueue observations), then removes the event
+  subscription and closes the scope (`GitStampExtensionBundle.end()`) —
+  stopping admission synchronously and draining every admitted observation
+  before the pi runtime is disposed. Every drained observation appends to a
+  live runtime; no `git` spawn starts once teardown proceeds past the scope,
+  no append reaches a runtime being torn down, and a fire-and-forget host
+  trigger cannot outlive the runtime it appends to.
 - A stamp's relationship to nearby tools is positional and best effort; no
   causal claim is made, especially for parallel tools.
 - Stored commit ids and subjects are historical labels; automatic rendering
