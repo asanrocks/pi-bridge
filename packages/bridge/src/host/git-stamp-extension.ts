@@ -61,10 +61,16 @@ export interface GitStampTrigger {
 
 /** Factory + host-trigger pair. The trigger targets whichever session the
  * factory last bound to — each bind (initial and every rebind) creates a new
- * serialized queue, and the trigger is repointed at it. */
+ * serialized queue, and the trigger is repointed at it. `end` closes that
+ * queue's scope: admission stops synchronously and the caller resolves only
+ * after every queued observation settled — so no observation outlives the
+ * Manager that owns the bundle. */
 export interface GitStampExtensionBundle {
 	factory: ExtensionFactory;
 	trigger: GitStampTrigger;
+	/** Terminal: close the bound session's observation scope and drain it.
+	 * No-op when the factory never bound (stamps disabled). */
+	end(): Promise<void>;
 }
 
 function removeOneLineEnding(raw: string): string {
@@ -173,6 +179,10 @@ export function createGitStampExtensionWithTrigger(deps: Partial<GitStampDeps> =
 
 	// Set by each factory invocation (initial bind and every session rebind).
 	let boundEnqueue: ((anchor: GitStampAnchor, ctx: GitStampObserveContext) => Promise<void>) | null = null;
+	// The observation scope of the latest bind — `end` closes it, so the
+	// owning Manager's disposal drains queued observations instead of
+	// leaving them running past the runtime's lifetime.
+	let boundScope: ReturnType<typeof createLifecycleScope> | null = null;
 	const trigger: GitStampTrigger = {
 		observe(anchor, ctx) {
 			// Before the first bind there is no session to observe; observe()
@@ -186,6 +196,7 @@ export function createGitStampExtensionWithTrigger(deps: Partial<GitStampDeps> =
 		// observation order, and one failure never wedges the next (the scope's
 		// chain swallows rejections; `observe` itself also recovers).
 		const observations = createLifecycleScope();
+		boundScope = observations;
 		const enqueue = (anchor: GitStampAnchor, ctx: GitStampObserveContext): Promise<void> =>
 			observations.run(() => observe(anchor, ctx));
 		boundEnqueue = enqueue;
@@ -266,5 +277,9 @@ export function createGitStampExtensionWithTrigger(deps: Partial<GitStampDeps> =
 		});
 	};
 
-	return { factory, trigger };
+	return {
+		factory,
+		trigger,
+		end: () => boundScope?.close() ?? Promise.resolve(),
+	};
 }

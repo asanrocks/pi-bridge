@@ -270,8 +270,20 @@ export class Daemon {
 		return { port: addr.port, host: addr.address };
 	}
 
+	/** Stop serving and drain. Idempotent. The connection set is snapshotted
+	 * first: every Connection's transition drain is awaited after the server
+	 * stops, so an attachment transition still in flight when the socket
+	 * closed settles before the daemon's teardown returns — the runtime
+	 * doc's claim is now a fact the teardown enforces. */
 	async dispose(): Promise<void> {
+		const connections = [...this.connections];
 		await this.stopServer();
+		// Connection teardown: dispose is idempotent — the socket-close
+		// handler already started it for sockets that dropped — and resolves
+		// once each Connection's admitted transitions settled (a queued one
+		// is refused with "connection closed"; the registry refuses to attach
+		// a disposed Connection either way).
+		await Promise.allSettled(connections.map((conn) => conn.dispose()));
 		if (this.logger) {
 			this.logger.dispose();
 			this.logger = null;

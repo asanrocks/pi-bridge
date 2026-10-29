@@ -729,6 +729,12 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			}
 			// 3. Tear down the pi runtime.
 			await runtime.dispose();
+			// 4. Drain the git-stamp observation scope: admission stopped, every
+			//    queued observation settled — no `git` spawn starts after this
+			//    resolves, and a fire-and-forget trigger observation cannot
+			//    outlive the runtime it appends to. A no-op when stamps were
+			//    never bound.
+			await gitStampBundle.end();
 		},
 	};
 

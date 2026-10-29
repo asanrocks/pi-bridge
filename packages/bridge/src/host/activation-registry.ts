@@ -57,7 +57,14 @@ export interface ActivationRecord {
 	/** Attached Connections. GC is gated on this being empty. */
 	connections: Set<Connection>;
 	gcTimer: ReturnType<typeof setTimeout> | null;
+	/** In-flight disposal; null once it completes. Transient bookkeeping,
+	 * never a state: `ended` is the terminal fact. */
 	collecting: Promise<void> | null;
+	/** Terminal: set synchronously when collection begins, never reset. A
+	 * stale handle holding this record is refused by `collect` (it owns
+	 * nothing — not the address, not the durable-id claim), so it can
+	 * neither double-dispose nor release a newer registration's claims. */
+	ended: boolean;
 	lastStreaming: boolean;
 }
 
@@ -90,8 +97,11 @@ export class ActivationRegistry {
 	private byAddress = new Map<string, string>();
 	/** In-flight creation promises by address: concurrent opens share one. */
 	private pending = new Map<string, Promise<ActivationRecord>>();
-	/** The durable session id ownership index (ADR 11). */
-	private sessionOwnerById = new Map<string, { projectId: string; stem: string }>();
+	/** The durable session id ownership index (ADR 11): the claiming
+	 * registration's record id alongside its address, so a release is by
+	 * record identity — a stale record can never release a newer
+	 * registration's claim even when the address fields match. */
+	private sessionOwnerById = new Map<string, { recordId: string; projectId: string; stem: string }>();
 	/** The Connection → Activation attachment index. */
 	private connectionActivation = new Map<Connection, ActivationRecord>();
 	/** Monotonic registration counter: a generation is never reused within
@@ -118,7 +128,7 @@ export class ActivationRegistry {
 		const id = this.byAddress.get(addressKey(projectId, stem));
 		if (id === undefined) return undefined;
 		const record = this.records.get(id);
-		return record !== undefined && record.collecting === null ? record : undefined;
+		return record !== undefined && !record.ended && record.collecting === null ? record : undefined;
 	}
 
 	/** The Activation for an address, including one mid-collection. */
@@ -131,7 +141,7 @@ export class ActivationRegistry {
 	live(): ActivationRecord[] {
 		const out: ActivationRecord[] = [];
 		for (const record of this.records.values()) {
-			if (record.collecting === null) out.push(record);
+			if (!record.ended && record.collecting === null) out.push(record);
 		}
 		return out;
 	}
@@ -158,7 +168,7 @@ export class ActivationRegistry {
 			const existingId = this.byAddress.get(key);
 			if (existingId !== undefined) {
 				const record = this.records.get(existingId);
-				if (record && record.collecting === null) {
+				if (record && !record.ended && record.collecting === null) {
 					this.cancelGc(record);
 					return record;
 				}
@@ -220,7 +230,7 @@ export class ActivationRegistry {
 	): Promise<ActivationRecord> {
 		for (;;) {
 			const record = await this.reserve(project, stem, abs);
-			if (record.collecting !== null) continue;
+			if (record.ended) continue;
 			this.attach(conn, record, cursor);
 			return record;
 		}
@@ -261,11 +271,16 @@ export class ActivationRegistry {
 			connections: new Set(),
 			gcTimer: null,
 			collecting: null,
+			ended: false,
 			lastStreaming: manager.document.status.isStreaming,
 		};
 		this.records.set(record.id, record);
 		this.byAddress.set(addressKey(ref.projectId, ref.stem), record.id);
-		this.sessionOwnerById.set(ref.sessionId, { projectId: ref.projectId, stem: ref.stem });
+		this.sessionOwnerById.set(ref.sessionId, {
+			recordId: record.id,
+			projectId: ref.projectId,
+			stem: ref.stem,
+		});
 
 		manager.onSettled(() => this.options.onSettled(ref));
 		manager.onPatch(() => {
@@ -317,10 +332,10 @@ export class ActivationRegistry {
 
 	attach(conn: Connection, record: ActivationRecord, cursor: PrefixCursor | null): void {
 		if (this.disposed) throw new Error("daemon is shutting down");
-		// A collected record owns nothing anymore: attaching it would pin a
+		// An ended record owns nothing anymore: attaching it would pin a
 		// disposed Manager with a Connection nothing would release. Callers that
 		// can retry (open) re-reserve instead.
-		if (record.collecting !== null) throw new Error("session is closing");
+		if (record.ended) throw new Error("session is closing");
 		// A socket that closed while its openSession/newSession RPC was in
 		// flight: the close handler already ran (and released nothing — the
 		// connection was not yet attached), so attaching now would pin the
@@ -350,7 +365,7 @@ export class ActivationRegistry {
 
 	armGc(record: ActivationRecord): void {
 		if (this.disposed) return;
-		if (record.gcTimer !== null || record.collecting !== null) return;
+		if (record.ended || record.gcTimer !== null || record.collecting !== null) return;
 		if (record.connections.size > 0) return;
 		const durable = existsSync(record.manager.sessionFile);
 		const empty = Object.keys(record.manager.document.entries).length === 0;
@@ -369,7 +384,7 @@ export class ActivationRegistry {
 	}
 
 	private async maybeCollect(record: ActivationRecord): Promise<void> {
-		if (record.collecting !== null || record.connections.size > 0) return;
+		if (record.ended || record.collecting !== null || record.connections.size > 0) return;
 		const status = record.manager.document.status;
 		if (status.isStreaming || status.isCompacting) {
 			this.armGc(record);
@@ -389,10 +404,20 @@ export class ActivationRegistry {
 		// records registered after it are refused. Either way this call owns
 		// nothing, and acting would double-dispose.
 		if (this.disposed) return;
+		// Terminal: a record that already ended owns nothing — not the address,
+		// not the durable-id claim. A stale handle reaching here (a close that
+		// raced a GC, a caller holding a replaced registration) is refused
+		// instead of re-entering disposal, so it can neither double-dispose the
+		// runtime nor release a newer registration's claims.
+		if (record.ended) return;
 		if (record.collecting !== null) {
 			await record.collecting;
 			return;
 		}
+		// The terminal fact is set synchronously, before any await: from here
+		// on, every liveness check refuses the record even while its disposal
+		// is still in flight.
+		record.ended = true;
 		this.cancelGc(record);
 		record.collecting = this.disposeRecord(record).finally(() => {
 			record.collecting = null;
@@ -413,8 +438,12 @@ export class ActivationRegistry {
 		this.records.delete(record.id);
 		const key = addressKey(record.ref.projectId, record.ref.stem);
 		if (this.byAddress.get(key) === record.id) this.byAddress.delete(key);
+		// Released by record identity, not address fields: only the record
+		// that still holds the claim releases it, so a stale record (already
+		// ended, its disposal raced by a replacement registration) can never
+		// delete a newer registration's claim.
 		const owner = this.sessionOwnerById.get(record.ref.sessionId);
-		if (owner && owner.projectId === record.ref.projectId && owner.stem === record.ref.stem) {
+		if (owner && owner.recordId === record.id) {
 			this.sessionOwnerById.delete(record.ref.sessionId);
 		}
 		// Sever the Connection→activation mappings so a later detach/release on

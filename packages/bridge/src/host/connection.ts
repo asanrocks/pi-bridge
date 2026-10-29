@@ -259,13 +259,18 @@ export class Connection {
 		this.lease = null;
 	}
 
-	dispose(): void {
+	/** Release the current attachment and drain the transition chain.
+	 * Resolves once every admitted transition settled — the daemon's teardown
+	 * awaits this, so a transition still in flight when the socket closed
+	 * settles before the Connection is gone. Idempotent: the socket-close
+	 * handler and the teardown both call it, and every caller observes the
+	 * same drain. */
+	dispose(): Promise<void> {
 		this._disposed = true;
-		// Drain the transition chain: one still in flight settles (the registry
-		// already refuses to attach a disposed Connection), and queued ones are
-		// refused rather than run — the socket is gone, so nothing is replied.
-		void this.transitions.close();
 		this.detach();
+		// A queued transition is refused with "connection closed" rather than
+		// run — the socket is gone, so nothing is replied; the send no-ops.
+		return this.transitions.close();
 	}
 
 	/** Push a daemon-originated frame (sessions_changed / active_sessions_changed). */

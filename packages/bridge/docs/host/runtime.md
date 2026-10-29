@@ -168,8 +168,12 @@ of `newSession`.
   is streaming or compacting, because branching swaps the LLM context under
   the in-flight turn (`agent.state.messages` is rebuilt from the new branch);
   the refresh that follows re-derives what the new selection describes.
-- `dispose` aborts and flushes the current runtime, unsubscribes from pi, and
-  disposes the runtime.
+- `dispose` aborts and flushes the current runtime, unsubscribes from pi,
+  disposes the runtime, and then drains the git-stamp observation scope: the
+  bundle's `end()` stops admission synchronously and resolves only after every
+  queued observation settled, so no `git` spawn starts after disposal resolves
+  and a fire-and-forget trigger observation cannot outlive the runtime it
+  appends to.
 
 `addConnection(handle, session, cursor?)` registers one Connection handle and
 synchronously emits exactly one initial-sync frame before later live patches.
@@ -260,7 +264,10 @@ error instead of attaching something nothing would ever release. The
 serialization and that refusal are one `LifecycleScope`
 (`src/host/lifecycle-scope.ts`): disposal closes it synchronously — queued
 transitions answer `connection closed` — and drains one still in flight
-before the Connection is gone.
+before the Connection is gone. `dispose()` is that drain (idempotent, awaited
+by the daemon's teardown), so the sentence is enforced, not aspirational: the
+daemon snapshots the Connections, stops the server, and awaits each drain
+before it disposes Session execution.
 `closeSession` and `archiveSession` change Activation state, not this
 Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listActiveSessions`,
 `getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,
@@ -294,6 +301,14 @@ delays, the pre-clamp thinking-level read, and the broadcast hooks (settlement,
 streaming transitions, registration/collection); it holds no Activation state
 of its own. Each registration carries its authorization (`incarnation` +
 `generation`), assigned here and never reused within the incarnation.
+
+A record's collection is terminal: `ended` is set synchronously when
+collection begins and never reset, so a stale handle reaching `collect` is
+refused — it owns nothing anymore, neither the address nor the durable-id
+claim — and can neither double-dispose the runtime nor release a newer
+registration's claims. The durable session id is released by record identity,
+not address fields, so only the registration that still holds a claim can
+drop it.
 
 Shutdown is a terminal state. `dispose()` sets the flag and clears every
 index in one synchronous block — so a record is either in the drain's
