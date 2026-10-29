@@ -336,13 +336,14 @@ guarded against.
 
 | Owner | Admits | Supersede rule | Terminal |
 | --- | --- | --- | --- |
-| Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution | Completion carries the admitting message's epoch; the step compares | `close()` — drains messages, effects, completions |
+| Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution, creation transitions | Admission is gated by intent ownership: a superseded transition sends nothing and settles its caller; a completion carries the admitting message's epoch and the step compares; a creation's initial sync carries its operation id and commits only while its creation is the newest intent | `close()` — drains messages, effects, completions |
 | `SessionExecution` | Session commands against one registration | Commands capture the lease; admission rejects once `end` began | `end()` — disposes the runtime exactly once, drains tracked work |
 | `SessionLease` | One Connection's attachment | Released when the registration ends or the Connection detaches | `release()` — removes the observer, rejects commands |
 | `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
 | `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
-| `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` |
-| ActivationRegistry | Manager creation, collection, attachment | Address-keyed reservations; `ended` is terminal per record | `collect()`/`dispose()` — refusal, not re-entry |
+| `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` *before* the runtime is disposed, so every drained observation appends to a live runtime |
+| ActivationRegistry | Manager creation, collection, attachment | Address-keyed reservations; `ended` is terminal per record | `collect()`/`dispose()` — joinable: a second caller awaits the in-flight disposal / the memoized drain |
+| Manager teardown | Runtime disposal, observation-scope drain | — | `dispose()` — idempotent and joinable; the observation scope drains before the runtime goes |
 | Connection pipeline | Push ingestion, cache write-through, coalescing | `disposed` freezes writes; deltas gate on the committed session id | `cleanup()` — pending ops dropped, in-flight cache writes gated |
 | Pull loop | Lazy-value pulls | Reply admitted only for unchanged seal state and unfetched fields | `cancelPullRetry()` at teardown; reconnect replaces the client |
 
