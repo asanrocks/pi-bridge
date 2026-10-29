@@ -347,36 +347,66 @@ observation the reactor names.
 `navigation.ts` is the one owner of browser Session selection. Opening a
 Session, showing a Project home, leaving to the Launcher, and resolving the
 `/@latest` alias are transitions of one state machine — built on the core
-reactor primitive — whose state is the committed view (`current`), at most one
-in-flight session transition (`pending`), and the most recently superseded
-target (`abandoned`). A transition captures its target when it starts; every
-continuation uses that capture instead of asking which view is active now, so
-an older operation can never publish into a newer one's view:
+reactor primitive — whose state is the committed view (`current`), at most
+one in-flight session transition (`pending`), the candidate document seeded
+for that transition, the most recently superseded or closed target
+(`abandoned`), and the cancelled transitions. One authority rule governs
+the whole module:
 
-- The step stages the target optimistically (address, and for user navigation
-  the route) and admits the open RPC as an effect carrying the message's
-  epoch. User navigation seeds a candidate mirror (`prepareSwitch`) and
-  restores the last committed view on failure; a boot (route-driven,
-  reconnect, or alias resolution) seeds the live mirror and store from the
-  cache and lands on the Project home on failure.
+> A step may read and write anything; an effect may only observe and return
+> a message.
+
+Effects fetch — the target's cached prefix, the alias target, the open RPC,
+the detach RPC — and return their outcome as a completion message that
+settles the caller. Every mutation of store, mirror, candidate, cache base,
+route, or address happens in a step, where the epoch is available, so an
+unordered effect write is unrepresentable rather than guarded against.
+
+An opening transition is two-phase, because seeding must precede the RPC
+(the server pushes the initial-sync frame before the RPC reply, and the
+candidate or mirror must already hold the cached prefix when that frame
+applies):
+
+- The intent message stages the target optimistically (address, and for
+  user navigation the route) and admits a value-only prepare effect that
+  reads the target's cache records. The `prepared` completion seeds in the
+  step: user navigation seeds a candidate document when the records yield a
+  cursor; a boot (route-driven, reconnect, or alias resolution) seeds the
+  live mirror and store from the cache. A superseded transition's prepare
+  still sends its RPC — the server serialized the transitions and the reply
+  must settle — but seeds nothing, so a late cache read can never overwrite
+  the successor's candidate, mirror, or store. A transition cancelled by a
+  terminal close admits no RPC at all (the runtime it targeted is gone).
 - The address-bearing initial-sync frame returns as a `sync` message and
   commits the view: address, durable id, address-index entry, route (the
   alias view keeps the alias URL). A matching delta promotes the candidate
-  and re-bases the cache base on its pre-promotion document.
-- The RPC reply returns as a `settled` message. A completion whose epoch no
-  longer matches the pending transition is ignored with one comparison: a
-  superseded open commits nothing — its initial sync is dropped, its failure
-  does not roll back the successor — where the previous flow ignored new
-  switches while a candidate was pending and could roll back a view the wire
-  had already committed.
+  and re-bases the cache base on its pre-promotion document. A sync for a
+  superseded or cancelled transition commits nothing — the pending-owner and
+  intent-epoch comparisons, one each.
+- The RPC reply returns as an `openSettled` message. It confirms (defensively
+  committing the ref the server already pushed), rolls back to the last
+  committed view, or lands on the Project home — but only while the
+  transition is still the newest intent; a superseded transition settles its
+  caller and commits nothing.
+- The `/@latest` resolution returns as a completion carrying the epoch of
+  the intent that started it, and is checked against the current intent
+  before staging anything: a lookup that lands after a newer navigation
+  committed is a silent no-op — it cannot re-enter as a fresh intent and
+  override the successor, and a stale "nothing to open" answer cannot clear
+  a committed view.
 - A `newSession` reply re-asserts its address through `created` (the
-  initial-sync push committed it first through the no-pending path), and the
-  host's `session_closed` push lands on the Project home when it names the
-  rendered Session.
+  initial-sync push committed it first through the no-pending path; a newer
+  intent or an abandoned address blocks the re-assert). The host's
+  `session_closed` push cancels a pending transition targeting that address
+  (its caller settles, its prepare admits no RPC, its late sync and reply
+  commit nothing), removes that address as a rollback target for a
+  transition in flight to another session, and lands on the Project home
+  when it names the rendered Session.
 - `useRpc`'s address operations are thin wrappers over the transition
   messages; `useConnection`'s boot path sends them with boot semantics. The
-  cache base lives here (both halves of navigation seed it); the pipeline
-  advances it on delta writes and the replace repair re-establishes it.
+  cache base lives here (the boot seeding and the promotion both install
+  it); the pipeline advances it on delta writes and the replace repair
+  re-establishes it.
 
 `sessionBoot.ts` keeps the local half of boot, `restoreLocalSession`: at
 mount, before the wire, it looks up the route's remembered `sessionId`, loads
@@ -481,16 +511,17 @@ whenever the composer is connected, and it states every failure in the row
 instead of a toast.
 
 A session switch can have old-session patches in flight until the target's
-initial sync arrives. `prepareSwitch` seeds a candidate mirror when it has a
-valid cache cursor. `sessionCandidate.ts` stores at most one candidate keyed
-by `sessionId`; the navigation reactor applies the target address-bearing
-patch to that candidate and then promotes it atomically, and the superseded
-target's late sync is dropped instead of committed. The old active mirror
-remains in service until promotion. A newer transition supersedes an in-flight
-one (the serial-switch rule is now an epoch comparison, not an ignored
-request), and RPC failure discards the candidate. This keeps old teardown
-patches from being applied to the target session and makes cache write-through
-compare against the target seed, not the old Document.
+initial sync arrives. The candidate document is the navigation reactor's
+*transition state*: the `prepared` step stages it from the cache records the
+prepare effect read (only for the transition that still owns the view), and
+the promoting `sync` step consumes it atomically — `sessionCandidate.ts`
+holds the pure promotion function, keyed by `sessionId`, with no module
+state of its own. The old active mirror remains in service until promotion.
+A newer transition supersedes an in-flight one through the intent-epoch
+comparison; a superseded prepare seeds nothing; and settlement or a terminal
+close discards the candidate. This keeps old teardown patches from being
+applied to the target session and makes cache write-through compare against
+the target seed, not the old Document.
 
 `sessionList.ts` converts a `listSessions` reply into a Project page and records
 the address-to-session identity for each row. The first page is ten rows; the
@@ -588,9 +619,10 @@ among the withheld capabilities. `icons/` is a reserved Project id, because
 every top-level name of the build root is an asset path; the daemon rejects a
 colliding id at startup.
 
-`prepareSwitch` loads a target Session's records and status hint, derives a
-contiguous prefix cursor, and seeds the candidate mirror only when that cursor
-is valid. Otherwise the switch uses a full replace path.
+The switch's cache read is the navigation prepare effect: it loads a target
+Session's records and status hint, and the `prepared` step derives the
+contiguous prefix cursor and stages the candidate document from them (a
+cursor that does not validate means a full replace path).
 
 `draftPersistence.ts` persists only compose text, not edit drafts or image
 payloads. An attached Session uses `s:<sessionId>`; the Project home uses

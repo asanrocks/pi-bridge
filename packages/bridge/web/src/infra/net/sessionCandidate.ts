@@ -1,19 +1,20 @@
 // ============================================================================
-// sessionCandidate — the ADR 09 candidate mirror for live session switches.
+// sessionCandidate — the ADR 09 candidate document for a live session
+// switch, as pure functions.
 //
-// While an openSession/newSession RPC is in flight, the connection is
-// still subscribed to the old session: old-session patches (including
-// teardown finals) may arrive before the switch. The client therefore seeds
-// the target session into a candidate document instead of the active mirror;
-// old-session patches keep updating the active mirror, and the target
-// initial-sync frame (identified by its sessionId) updates the candidate.
-// Promotion is atomic: the candidate becomes the mirror only when its
-// initial sync has applied.
+// While an openSession RPC is in flight, the connection is still subscribed
+// to the old session: old-session patches (including teardown finals) may
+// arrive before the switch. The client therefore seeds the target session
+// into a candidate document instead of the active mirror; old-session
+// patches keep updating the active mirror, and the target initial-sync
+// frame (identified by its sessionId) applies to the candidate. Promotion
+// is atomic: the candidate becomes the mirror only when its initial sync
+// has applied.
 //
-// Module-level singleton (the client.ts pattern): navigation seeds the
-// candidate when a switch opens and is the only promoter — a superseded
-// open's candidate is discarded at its settle. Only one candidate exists at
-// a time; the serial-switch rule is navigation's epoch supersede.
+// The candidate itself is the navigation reactor's transition state — seeded
+// by the step of the opening transition (from message-carried cache records)
+// and consumed by the step of its promoting initial-sync frame. There is no
+// module-level registry: whoever seeds it is the step, by construction.
 // ============================================================================
 
 import { applyPatch, type Document, type PatchOp } from "../../../../src/core/index.ts";
@@ -23,36 +24,21 @@ export interface SessionCandidate {
 	doc: Document;
 }
 
-let candidate: SessionCandidate | null = null;
-
-/** Seed a candidate for a pending switch. */
-export function beginSessionCandidate(sessionId: string, doc: Document): void {
-	candidate = { sessionId, doc };
-}
-
-/** A switch is in flight — new switch requests must not start. */
-export function sessionCandidatePending(): boolean {
-	return candidate !== null;
-}
-
 /**
  * Apply an initial-sync delta patch to the candidate and promote it:
- * returns `{ before, doc }` when the frame's sessionId matches the pending
- * candidate (clearing it); null when no candidate is pending or the session
- * differs — the caller then treats the frame as a plain barrier. `before`
- * is the pre-promotion seed document; cache write-through must plan against
- * it (not the store's old-session document) so only the delta's new entries
- * are persisted — cross-session documents share no entry references.
+ * returns `{ before, doc }` when the frame's sessionId matches the
+ * candidate; null when it differs — the caller then treats the frame as a
+ * plain barrier. `before` is the pre-promotion seed document; cache
+ * write-through must plan against it (not the store's old-session document)
+ * so only the delta's new entries are persisted — cross-session documents
+ * share no entry references. Pure: consuming the candidate (nulling the
+ * transition's slot) is the caller's step.
  */
-export function promoteSessionCandidate(sessionId: string, ops: PatchOp[]): { before: Document; doc: Document } | null {
-	if (candidate === null || candidate.sessionId !== sessionId) return null;
-	const before = candidate.doc;
-	const doc = applyPatch(before, ops);
-	candidate = null;
-	return { before, doc };
-}
-
-/** Drop a pending candidate (RPC failure, no-op switch, instance exit). */
-export function discardSessionCandidate(): void {
-	candidate = null;
+export function promoteCandidate(
+	candidate: SessionCandidate,
+	sessionId: string,
+	ops: PatchOp[],
+): { before: Document; doc: Document } | null {
+	if (candidate.sessionId !== sessionId) return null;
+	return { before: candidate.doc, doc: applyPatch(candidate.doc, ops) };
 }

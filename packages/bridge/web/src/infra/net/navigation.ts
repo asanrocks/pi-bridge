@@ -8,16 +8,32 @@
 // operation can never publish into a newer one's view.
 //
 // The reactor (src/core/reactor.ts) is the mechanism: one serialized mailbox
-// over the navigation state. A step stages the target (optimistic address,
-// route) and admits the open RPC as an effect carrying the message's epoch;
-// the address-bearing initial-sync frame returns as a `sync` message and
-// commits the view; the RPC reply returns as a `settled` message and either
-// confirms or rolls back. A completion whose epoch no longer matches the
-// pending transition is ignored with one comparison — the superseded-open
-// race that previously needed a guard at every await.
+// over the navigation state. The authority rule is one sentence:
+//
+//   a step may read and write anything; an effect may only observe and
+//   return a message.
+//
+// Effects fetch — the target's cached prefix, the alias target, the open RPC,
+// the detach RPC — and return their outcome as a completion message that
+// settles the caller. Every mutation of store, mirror, candidate, cache
+// base, route, or address happens in a step, where the message's epoch is
+// available. A completion whose epoch no longer names the current intent or
+// the pending transition is ignored with one comparison.
+//
+// An opening transition is two-phase because seeding must precede the RPC:
+// the server pushes the initial-sync frame before the RPC reply, and the
+// candidate document (navigate) or the live mirror (boot) must already hold
+// the cached prefix when that frame applies. The intent message stages the
+// address optimistically and admits a value-only prepare effect; `prepared`
+// seeds in the step and admits the open RPC effect; the address-bearing
+// initial-sync frame returns as a `sync` message and commits the view; the
+// RPC reply returns as `openSettled` and confirms or rolls back. A superseded
+// prepare still sends its RPC — the server serialized the transitions and
+// the reply must settle — but seeds nothing, and its settlement commits
+// nothing. A transition cancelled by a terminal close admits no RPC at all.
 //
 // Division of labor: navigation owns selection (address, route, session id,
-// the candidate mirror's promotion, and the cache base it seeds); the
+// the candidate's seeding and promotion, and the cache base it seeds); the
 // connection pipeline owns document publication and cache write-through
 // mechanics; restoreLocalSession owns the cache-first paint and keeps its
 // own store-based race guard (navigation maintains exactly the store
@@ -35,14 +51,20 @@ import type {
 	SessionRef,
 	SessionStatusHint,
 } from "../../../../src/core/index.ts";
-import { computeCursor, createReactor, type Reactor, seedDocument } from "../../../../src/core/index.ts";
+import {
+	computeCursor,
+	createReactor,
+	type Reactor,
+	type ReactorEffect,
+	seedDocument,
+} from "../../../../src/core/index.ts";
 import { writeRoute } from "../lib/routes.ts";
 import { lookupSessionId, rememberAddress } from "../persist/addressIndex.ts";
-import { getEntryCache, prepareSwitch } from "../persist/entryCache.ts";
+import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
 import { resolveLatestSession } from "./latestSession.ts";
-import { discardSessionCandidate, promoteSessionCandidate } from "./sessionCandidate.ts";
+import { promoteCandidate, type SessionCandidate } from "./sessionCandidate.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,12 +87,33 @@ export interface NavigationResult {
 	error?: string;
 }
 
+/** The cached prefix a prepare effect read for the transition's target.
+ * Message-carried: the seeding step (not the effect) turns it into the
+ * candidate document or the mirror seed. */
+interface SessionSeed {
+	sessionId: string;
+	records: CacheEntryRecord[];
+	hint: SessionStatusHint | null;
+}
+
 interface PendingTransition {
-	epoch: number;
+	/** Identity for completion matching (`prepared`/`openSettled` name it). */
+	id: number;
+	/** Epoch of the intent message that staged this transition. The
+	 * transition may mutate the committed view only while it is still the
+	 * newest intent (`state.intentEpoch === intentEpoch`). */
+	intentEpoch: number;
+	/** Epoch of the `prepared` message that admitted the open RPC; null
+	 * while the prepare effect is still in flight. */
+	openEpoch: number | null;
 	view: NavigationView & { kind: "session" };
 	mode: "navigate" | "boot";
+	viaAlias: boolean;
 	/** The last committed view, restored when a navigate-mode open fails. */
 	previous: { view: NavigationView; sessionId: string | null };
+	/** Settles the caller when the transition's RPC settles (the effect
+	 * fires it; a cancel that lands first wins, later fires no-op). */
+	reply: Reply | undefined;
 	synced: boolean;
 }
 
@@ -80,15 +123,23 @@ interface NavigationState {
 	current: { view: NavigationView; sessionId: string | null };
 	/** At most one session-opening transition in flight. */
 	pending: PendingTransition | null;
-	/** The most recently superseded target: its initial sync may still arrive
-	 * (the server serialized both transitions), and it must not commit over
-	 * the successor. Server ordering means only the latest abandoned target
-	 * can still deliver. */
+	/** The candidate document seeded for the pending transition (ADR 09).
+	 * Transition state, written only by steps — seeded by `prepared`,
+	 * consumed by the promoting `sync`, discarded at settlement. */
+	candidate: SessionCandidate | null;
+	/** The most recently superseded or closed target whose late initial sync
+	 * may still arrive; it must not commit over the successor. Server
+	 * ordering means only the latest abandoned target can still deliver. */
 	abandoned: { key: string } | null;
 	/** The epoch of the last applied navigation intent (open, boot, latest,
-	 * project, launcher). Effect completions compare against it so a
-	 * superseded detach does not commit over a newer open. */
+	 * bootLatest, project, launcher). The newest intent owns view mutations:
+	 * every commit point compares against it. */
 	intentEpoch: number;
+	/** Transitions cancelled by a terminal close: the caller settled at
+	 * cancel time, and the transition's prepare must not admit an RPC (the
+	 * server runtime it targeted is gone). Pruned when the transition's own
+	 * completion arrives. */
+	cancelled: Set<number>;
 }
 
 type Reply = (result: NavigationResult) => void;
@@ -101,10 +152,15 @@ function errorMessage(value: unknown, fallback: string): string {
 	return typeof value === "string" && value !== "" ? value : fallback;
 }
 
+function errorText(error: unknown, fallback: string): string {
+	return error instanceof Error && error.message !== "" ? error.message : fallback;
+}
+
 type NavigationMessage =
 	// User navigation: sidebar, history, alias button. `mode` distinguishes
-	// the navigate staging (candidate switch, routes, rollback) from the boot
-	// staging (mirror seeding, project fallback); the /@latest flow boots.
+	// the navigate staging (candidate switch, rollback) from the boot
+	// staging (mirror seeding, Project-home fallback); the /@latest flow
+	// stages with boot semantics after its resolution.
 	| {
 			kind: "open";
 			view: NavigationView & { kind: "session" };
@@ -115,10 +171,30 @@ type NavigationMessage =
 	  }
 	// Route/reconnect-driven open (the URL already names the target).
 	| { kind: "boot"; view: NavigationView & { kind: "session" }; viaAlias?: boolean; reply?: Reply }
+	// Alias resolution (user press / boot-reconnect). The completion of the
+	// lookup effect: it carries the epoch of the intent that started it, so
+	// a resolution that lands after a newer intent commits nothing.
 	| { kind: "latest"; reply?: Reply }
 	| { kind: "bootLatest"; reply?: Reply }
+	| { kind: "latestResolved"; epoch: number; boot: boolean; target: SessionInfo | null; reply?: Reply }
+	// Cache-prepare completion: carries the transition it belongs to, the
+	// target it captured at staging, and the cached prefix it read. The step
+	// seeds (or, when superseded, seeds nothing) and admits the open RPC —
+	// the RPC runs for a superseded transition too, because the server
+	// serialized the transitions and the reply must settle.
+	| {
+			kind: "prepared";
+			transition: number;
+			view: NavigationView & { kind: "session" };
+			reply: Reply | undefined;
+			seed: SessionSeed | null;
+	  }
+	// The open RPC's completion.
+	| { kind: "openSettled"; transition: number; result: NavigationResult; ref?: SessionRef }
 	| { kind: "project"; projectId: string; mode: "navigate" | "boot"; reply?: Reply }
+	| { kind: "projectSettled"; epoch: number; projectId: string }
 	| { kind: "launcher"; mode: "navigate" | "boot"; reply?: Reply }
+	| { kind: "launcherSettled"; epoch: number; result: NavigationResult }
 	// A newSession reply committed its address (the initial-sync push already
 	// landed through the no-pending sync path; this re-asserts idempotently).
 	| { kind: "created"; ref: SessionRef }
@@ -126,20 +202,13 @@ type NavigationMessage =
 	| { kind: "closed"; projectId: string; stem: string }
 	// An address-bearing initial-sync frame (replace: ops null; cursor-aware
 	// delta: ops set). Delivered by the connection pipeline.
-	| { kind: "sync"; ref: SessionRef; ops: PatchOp[] | null }
-	// Effect completions.
-	| { kind: "openSettled"; epoch: number; result: NavigationResult; ref?: SessionRef }
-	| { kind: "projectSettled"; epoch: number; projectId: string }
-	| { kind: "launcherSettled"; epoch: number; result: NavigationResult }
-	| { kind: "cleared" }
-	| { kind: "noop" };
+	| { kind: "sync"; ref: SessionRef; ops: PatchOp[] | null };
 
 /** Injectable seams (tests supply fakes; production reads the globals). */
 export interface NavigationDeps {
 	getClient(): BridgeClient | null;
 	lookupSessionId(projectId: string, stem: string): string | undefined;
 	loadSession(sessionId: string): Promise<{ records: CacheEntryRecord[]; hint: SessionStatusHint | null }>;
-	prepareSwitch(sessionId: string): Promise<PrefixCursor | undefined>;
 	resolveLatest(client: BridgeClient): Promise<SessionInfo | null>;
 }
 
@@ -147,15 +216,14 @@ const defaultDeps: NavigationDeps = {
 	getClient: () => getGlobalClient(),
 	lookupSessionId,
 	loadSession: async (sessionId) => (await getEntryCache()).loadSession(sessionId),
-	prepareSwitch,
 	resolveLatest: (client) =>
 		resolveLatestSession(client, getStore().getState().projects, getStore().getState().activeSessions),
 };
 
 // ---------------------------------------------------------------------------
 // Cache base — the last cache-written document per session (ADR 09). Owned
-// here because both halves of navigation seed it: the boot effect seeds the
-// mirror's cache base, and promotion re-bases it on the candidate's
+// here because both halves of navigation seed it: the boot seeding installs
+// the mirror's cache base, and promotion re-bases it on the candidate's
 // pre-promotion document. The connection pipeline advances it on every delta
 // write and re-establishes it on the replace repair path.
 // ---------------------------------------------------------------------------
@@ -163,166 +231,131 @@ const defaultDeps: NavigationDeps = {
 export const cacheBase: { value: { sessionId: string; doc: Document } | null } = { value: null };
 
 // ---------------------------------------------------------------------------
-// Effects
+// Effects — value-only. Each observes and returns a completion message, and
+// settles its caller on every path (a promise resolves once, so a cancel
+// that settled the caller first makes the later fire a no-op). No effect
+// writes store, mirror, candidate, route, or address state.
 // ---------------------------------------------------------------------------
 
-/** The user-navigation open: seed a candidate mirror from the target's cache
- * (ADR 09 switch preparation), then send the openSession RPC. */
-function openEffect(
+/**
+ * The cache-prepare effect for an opening transition: read the target's
+ * cached prefix (records + status hint). Value-only — the seeding that uses
+ * this data happens in the `prepared` step, where the epoch is available.
+ */
+function prepareEffect(
 	view: NavigationView & { kind: "session" },
 	sessionIdHint: string | undefined,
-	epoch: number,
+	transition: number,
 	reply: Reply | undefined,
 	deps: NavigationDeps,
-): { run(): Promise<NavigationMessage> } {
+): ReactorEffect<NavigationMessage> {
 	return {
 		run: async () => {
-			const client = deps.getClient();
-			if (!client) return settleOpen(epoch, reply, { result: NOT_CONNECTED });
-			let cursor: PrefixCursor | undefined;
-			const sessionId = sessionIdHint ?? deps.lookupSessionId(view.projectId, view.stem);
-			if (sessionId) {
-				try {
-					cursor = await deps.prepareSwitch(sessionId);
-				} catch {
-					cursor = undefined;
+			try {
+				const sessionId = sessionIdHint ?? deps.lookupSessionId(view.projectId, view.stem);
+				let seed: SessionSeed | null = null;
+				if (sessionId) {
+					try {
+						const { records, hint } = await deps.loadSession(sessionId);
+						seed = { sessionId, records, hint };
+					} catch {
+						seed = null; // cache read failure: plain open, full replace
+					}
 				}
+				return { kind: "prepared", transition, view, reply, seed };
+			} catch (error) {
+				// Effect bug: settle the caller and fail the transition — the
+				// step rolls back or lands on the Project home.
+				const result: NavigationResult = { ok: false, error: errorText(error, "navigation failed") };
+				reply?.(result);
+				return { kind: "openSettled", transition, result };
 			}
-			return settleOpen(epoch, reply, await openRpc(client, view, cursor));
 		},
 	};
 }
 
-/** The route/reconnect open: seed the live mirror and the store from the
- * cache (a reconnect reuses the richer in-memory document), derive a cursor,
- * and send the openSession RPC. A failure lands on the Project home. */
-function bootEffect(
-	view: NavigationView & { kind: "session" },
-	epoch: number,
-	reply: Reply | undefined,
-	deps: NavigationDeps,
-): { run(): Promise<NavigationMessage> } {
-	return {
-		run: async () => {
-			const client = deps.getClient();
-			if (!client) return settleOpen(epoch, reply, { result: NOT_CONNECTED });
-			const store = getStore();
-			const sessionId = deps.lookupSessionId(view.projectId, view.stem);
-			let records: CacheEntryRecord[] = [];
-			let hint: SessionStatusHint | null = null;
-			if (sessionId) {
-				try {
-					({ records, hint } = await deps.loadSession(sessionId));
-				} catch {
-					// Cache read failure: plain open, full replace.
-				}
-			}
-			const state = store.getState();
-			const sameSession =
-				sessionId !== undefined &&
-				state.activeSessionId === sessionId &&
-				Object.keys(state.document.entries).length > 0;
-			const seed = sameSession ? state.document : seedDocument(records, hint ?? undefined);
-			client.mirror.applyReplace(seed);
-			if (sessionId !== undefined) cacheBase.value = { sessionId, doc: seed };
-			if (!sameSession && records.length > 0) {
-				store.getState().applyReplace(seed);
-			}
-			const cursor = computeCursor(records) ?? undefined;
-			return settleOpen(epoch, reply, await openRpc(client, view, cursor));
-		},
-	};
-}
-
-async function openRpc(
+/** The open RPC effect. Value-only: sends the RPC and returns its outcome;
+ * the commit, the rollback, and the fallback are the step's. */
+function openRpcEffect(
 	client: BridgeClient,
 	view: NavigationView & { kind: "session" },
 	cursor: PrefixCursor | undefined,
-): Promise<{ result: NavigationResult; ref?: SessionRef }> {
-	try {
-		const rpc = await client.openSession(view.projectId, view.stem, cursor ?? undefined);
-		if (rpc?.ok) {
-			return { result: { ok: true }, ref: (rpc as unknown as { session?: SessionRef }).session };
-		}
-		return { result: { ok: false, error: errorMessage(rpc?.error, "open session failed") } };
-	} catch (err) {
-		return { result: { ok: false, error: err instanceof Error ? err.message : String(err) } };
-	}
-}
-
-function settleOpen(
-	epoch: number,
+	transition: number,
 	reply: Reply | undefined,
-	outcome: { result: NavigationResult; ref?: SessionRef },
-): NavigationMessage {
-	reply?.(outcome.result);
-	return { kind: "openSettled", epoch, result: outcome.result, ref: outcome.ref };
+): ReactorEffect<NavigationMessage> {
+	return {
+		run: async () => {
+			try {
+				const rpc = await client.openSession(view.projectId, view.stem, cursor);
+				if (rpc?.ok) {
+					const result: NavigationResult = { ok: true };
+					reply?.(result);
+					return {
+						kind: "openSettled",
+						transition,
+						result,
+						ref: (rpc as unknown as { session?: SessionRef }).session,
+					};
+				}
+				const result: NavigationResult = { ok: false, error: errorMessage(rpc?.error, "open session failed") };
+				reply?.(result);
+				return { kind: "openSettled", transition, result };
+			} catch (error) {
+				const result: NavigationResult = { ok: false, error: errorText(error, "open session failed") };
+				reply?.(result);
+				return { kind: "openSettled", transition, result };
+			}
+		},
+	};
 }
 
 /** Resolve the /@latest alias target (ADR 13): the most recently active live
- * Session, else the most recent durable Session across Projects. The
- * resolved target continues as an ordinary transition: a user alias press
- * stages like a navigate (it writes the alias route) but opens like a boot
- * (mirror seeding, Project-home fallback); a reconnect resolution boots
- * outright (the URL already holds the alias). */
+ * Session, else the most recent durable Session across Projects. Value-only:
+ * the resolution returns as a completion carrying the epoch of the intent
+ * that started it, so a lookup that lands after a newer intent is ignored
+ * by one comparison — it cannot re-enter as a fresh intent. */
 function latestEffect(
 	boot: boolean,
+	epoch: number,
 	reply: Reply | undefined,
 	deps: NavigationDeps,
-): { run(): Promise<NavigationMessage> } {
+): ReactorEffect<NavigationMessage> {
 	return {
 		run: async () => {
-			const client = deps.getClient();
-			if (!client) {
-				if (boot) {
-					reply?.({ ok: true });
-					return { kind: "cleared" };
-				}
-				reply?.({ ok: false, error: "not connected" });
-				return { kind: "noop" };
-			}
+			// Every path settles the caller: with no target (or a lookup
+			// failure) a boot lands on the Launcher and a user press is a
+			// silent no-op (the old behavior); with a target, the reply
+			// settles at the staged transition's own settlement.
 			try {
-				const row = await deps.resolveLatest(client);
-				if (!row) {
-					// Nothing to open: a boot lands on the Launcher (settled
-					// once the landing applies); a user press is a silent
-					// no-op (the old behavior).
-					if (boot) {
-						reply?.({ ok: true });
-						return { kind: "cleared" };
-					}
+				const client = deps.getClient();
+				if (!client) {
 					reply?.({ ok: true });
-					return { kind: "noop" };
+					return { kind: "latestResolved", epoch, boot, target: null, reply };
 				}
-				const view = { kind: "session", projectId: row.projectId, stem: row.stem } as const;
-				return boot
-					? { kind: "boot", view, viaAlias: true, reply }
-					: { kind: "open", view, viaAlias: true, mode: "boot", reply };
+				try {
+					const row = await deps.resolveLatest(client);
+					return { kind: "latestResolved", epoch, boot, target: row, reply };
+				} catch {
+					reply?.({ ok: true });
+					return { kind: "latestResolved", epoch, boot, target: null, reply };
+				}
 			} catch {
-				if (boot) {
-					reply?.({ ok: true });
-					return { kind: "cleared" };
-				}
 				reply?.({ ok: true });
-				return { kind: "noop" };
+				return { kind: "latestResolved", epoch, boot, target: null, reply };
 			}
 		},
 	};
 }
 
 /** Release the server-side attachment (the Project-home / Launcher
- * transitions). The outcome reports to the caller; the commit decision is
- * navigation's. */
-function detachEffect(
-	epoch: number,
-	reply: Reply | undefined,
-	deps: NavigationDeps,
-): { run(): Promise<NavigationMessage> } {
+ * transitions). Value-only: the outcome settles the caller; the commit
+ * decision is the step's. */
+function detachEffect(epoch: number, reply: Reply | undefined, deps: NavigationDeps): ReactorEffect<NavigationMessage> {
 	return {
 		run: async () => {
 			const client = deps.getClient();
 			if (!client) {
-				const result = { ok: false, error: "not connected" };
+				const result: NavigationResult = NOT_CONNECTED;
 				reply?.(result);
 				return { kind: "launcherSettled", epoch, result };
 			}
@@ -330,8 +363,8 @@ function detachEffect(
 			try {
 				const rpc = await client.detach();
 				result = rpc?.ok ? { ok: true } : { ok: false, error: errorMessage(rpc?.error, "detach failed") };
-			} catch (err) {
-				result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+			} catch (error) {
+				result = { ok: false, error: errorText(error, "detach failed") };
 			}
 			reply?.(result);
 			return { kind: "launcherSettled", epoch, result };
@@ -383,61 +416,240 @@ function restoreView(previous: { view: NavigationView; sessionId: string | null 
 	}
 }
 
+/** Land a boot-mode failure on the Project home (ADR 11): the stem no longer
+ * resolves (deleted file, or an unflushed session after a daemon restart),
+ * so the staged address, the identity, and the alias flag all go. */
+function landProjectHome(projectId: string): { view: NavigationView; sessionId: string | null } {
+	const store = getStore();
+	store.getState().setAddressViaAlias(false);
+	store.getState().clearCurrentSession(projectId);
+	writeRoute({ kind: "project", projectId });
+	return { view: { kind: "project", projectId }, sessionId: null };
+}
+
 // ---------------------------------------------------------------------------
 // The step
 // ---------------------------------------------------------------------------
+
+/** Stage an opening transition: optimistic address (and, for user actions,
+ * route), supersede the previous pending transition, and admit the
+ * value-only prepare effect. Shared by `open`, `boot`, and a resolved
+ * `/@latest` target. */
+function stageOpen(
+	state: NavigationState,
+	view: NavigationView & { kind: "session" },
+	options: {
+		mode: "navigate" | "boot";
+		viaAlias: boolean;
+		/** User actions publish the URL at staging; a boot's URL already
+		 * names the target. */
+		writesRoute: boolean;
+		/** The alias press writes the alias route form (ADR 13). */
+		routeAlias: boolean;
+		sessionIdHint?: string;
+		reply?: Reply;
+	},
+	epoch: number,
+	transitionId: number,
+	deps: NavigationDeps,
+): { state: NavigationState; effects: ReactorEffect<NavigationMessage>[] } {
+	const store = getStore();
+	// A superseded transition never committed; remember its target so its
+	// late initial sync cannot commit over the successor.
+	const abandoned = state.pending ? { key: sessionKey(state.pending.view) } : state.abandoned;
+	const pending: PendingTransition = {
+		id: transitionId,
+		intentEpoch: epoch,
+		openEpoch: null,
+		view,
+		mode: options.mode,
+		viaAlias: options.viaAlias,
+		previous: state.current,
+		reply: options.reply,
+		synced: false,
+	};
+	if (options.viaAlias) store.getState().setAddressViaAlias(true);
+	else store.getState().setAddressViaAlias(false);
+	store.getState().setCurrentSession(view.projectId, view.stem);
+	if (options.writesRoute) {
+		if (options.routeAlias) writeRoute({ kind: "alias", alias: "latest" });
+		else writeRoute({ kind: "session", projectId: view.projectId, stem: view.stem });
+	}
+	return {
+		state: { ...state, pending, abandoned, intentEpoch: epoch },
+		effects: [prepareEffect(view, options.sessionIdHint, transitionId, options.reply, deps)],
+	};
+}
+
+/** Settle an opening transition: confirm (defensively committing the ref the
+ * server already pushed), roll back to the previous view, or land on the
+ * Project home — but only while the transition is still the newest intent;
+ * a superseded transition settles its caller and commits nothing. Clears the
+ * pending slot and the candidate either way: the transition is over. */
+function settleOpen(
+	state: NavigationState,
+	pending: PendingTransition,
+	result: NavigationResult,
+	ref: SessionRef | undefined,
+): NavigationState {
+	let current = state.current;
+	let abandoned = state.abandoned;
+	if (state.intentEpoch === pending.intentEpoch) {
+		if (result.ok) {
+			// The push precedes the reply, so the sync already committed;
+			// commit defensively only if it somehow did not.
+			if (!pending.synced && ref) commitSessionAddress(ref);
+			current = { view: pending.view, sessionId: ref?.sessionId ?? state.current.sessionId };
+			// This address is live again: a stale abandoned marker for it
+			// must not swallow a later legitimate sync.
+			abandoned = abandoned?.key === sessionKey(pending.view) ? null : abandoned;
+		} else if (pending.mode === "boot") {
+			current = landProjectHome(pending.view.projectId);
+		} else {
+			// A navigate failure restores the last committed view: the server
+			// left the previous attachment untouched, so the client must not
+			// claim the new address either.
+			restoreView(pending.previous);
+			current = pending.previous;
+		}
+	}
+	return { ...state, current, pending: null, candidate: null };
+}
 
 function navigationStep(
 	state: NavigationState,
 	message: NavigationMessage,
 	context: { epoch: number; send(message: NavigationMessage): void },
 	deps: NavigationDeps,
-): { state: NavigationState; effects?: Array<{ run(): Promise<NavigationMessage> }> } {
+	nextTransitionId: () => number,
+): { state: NavigationState; effects?: ReactorEffect<NavigationMessage>[] } {
 	switch (message.kind) {
 		case "open":
 		case "boot": {
 			const viaAlias = message.viaAlias === true;
-			// `mode` picks the failure fallback: navigate restores the last
-			// committed view; boot lands on the Project home. The effect kind
-			// follows it — an alias press stages like a navigate but opens like
-			// a boot — while `kind` alone decides whether staging writes the
-			// route (a user navigation publishes its URL; a boot's URL already
-			// names the target).
+			// `mode` picks the failure fallback and the seeding style:
+			// navigate restores the last committed view and seeds a
+			// candidate; boot seeds the live mirror and lands on the
+			// Project home. The alias press stages like a user navigation
+			// (it writes the alias route) but opens like a boot.
 			const mode: "navigate" | "boot" = message.kind === "open" ? (message.mode ?? "navigate") : "boot";
-			const effectKind: "open" | "boot" = message.kind === "boot" || mode === "boot" ? "boot" : "open";
-			const store = getStore();
-			// A superseded transition never committed; remember its target so
-			// its late initial sync cannot commit over the successor.
-			const abandoned = state.pending ? { key: sessionKey(state.pending.view) } : state.abandoned;
-			const pending: PendingTransition = {
-				epoch: context.epoch,
-				view: message.view,
-				mode,
-				previous: state.current,
-				synced: false,
-			};
-			// Optimistic staging: the address (and, for user navigation, the
-			// route) names the target before the RPC resolves.
-			if (viaAlias) store.getState().setAddressViaAlias(true);
-			else store.getState().setAddressViaAlias(false);
-			store.getState().setCurrentSession(message.view.projectId, message.view.stem);
-			if (message.kind === "open") {
-				if (viaAlias) writeRoute({ kind: "alias", alias: "latest" });
-				else writeRoute({ kind: "session", projectId: message.view.projectId, stem: message.view.stem });
+			return stageOpen(
+				state,
+				message.view,
+				{
+					mode,
+					viaAlias,
+					writesRoute: message.kind === "open",
+					routeAlias: viaAlias,
+					sessionIdHint: message.kind === "open" ? message.sessionIdHint : undefined,
+					reply: message.reply,
+				},
+				context.epoch,
+				nextTransitionId(),
+				deps,
+			);
+		}
+
+		case "prepared": {
+			// Cancelled by a terminal close: the caller settled at cancel time,
+			// and the runtime it targeted is gone — no RPC, no seeding. Prune.
+			if (state.cancelled.delete(message.transition)) return { state };
+			const pending = state.pending;
+			const ownsTransition = pending !== null && pending.id === message.transition;
+			// Seeding happens only for the transition that still owns the view;
+			// a superseded transition's late cache read must never overwrite
+			// the successor's candidate, mirror, or store.
+			let cursor: PrefixCursor | undefined;
+			if (ownsTransition && pending !== null && state.intentEpoch === pending.intentEpoch && message.seed !== null) {
+				const seed = message.seed;
+				cursor = computeCursor(seed.records) ?? undefined;
+				const store = getStore();
+				if (pending.mode === "navigate") {
+					// Candidate seeding (ADR 09): the delta initial sync
+					// applies to the candidate, not the live mirror.
+					if (cursor !== undefined) {
+						state = {
+							...state,
+							candidate: {
+								sessionId: seed.sessionId,
+								doc: seedDocument(seed.records, seed.hint ?? undefined),
+							},
+						};
+					}
+				} else {
+					// Boot seeding: the live mirror (and, when the cache has
+					// content, the store) hold the cached prefix before the
+					// initial sync applies. A reconnect reuses the richer
+					// in-memory document over the cache.
+					const s = store.getState();
+					const sameSession = s.activeSessionId === seed.sessionId && Object.keys(s.document.entries).length > 0;
+					const doc = sameSession ? s.document : seedDocument(seed.records, seed.hint ?? undefined);
+					deps.getClient()?.mirror.applyReplace(doc);
+					cacheBase.value = { sessionId: seed.sessionId, doc };
+					if (!sameSession && seed.records.length > 0) {
+						store.getState().applyReplace(doc);
+					}
+				}
 			}
-			const effect =
-				effectKind === "boot" || message.kind === "boot"
-					? bootEffect(message.view, context.epoch, message.reply, deps)
-					: openEffect(message.view, message.sessionIdHint, context.epoch, message.reply, deps);
-			return { state: { ...state, pending, abandoned, intentEpoch: context.epoch }, effects: [effect] };
+			const client = deps.getClient();
+			if (!client) {
+				// The connection vanished mid-preparation: settle like a
+				// failed RPC (the caller learns the transition never ran).
+				message.reply?.(NOT_CONNECTED);
+				if (ownsTransition) return { state: settleOpen(state, pending, NOT_CONNECTED, undefined) };
+				return { state };
+			}
+			// The RPC runs even for a superseded transition: the server
+			// serialized the transitions and the reply must settle. Its
+			// settlement commits nothing (the openSettled owner check).
+			const cursorHint = cursor ?? (message.seed ? (computeCursor(message.seed.records) ?? undefined) : undefined);
+			return {
+				state: ownsTransition ? { ...state, pending: { ...pending, openEpoch: context.epoch } } : state,
+				effects: [openRpcEffect(client, message.view, cursorHint, message.transition, message.reply)],
+			};
 		}
 
 		case "latest":
-		case "bootLatest":
+		case "bootLatest": {
+			const boot = message.kind === "bootLatest";
 			return {
-				state,
-				effects: [latestEffect(message.kind === "bootLatest", message.reply, deps)],
+				state: { ...state, intentEpoch: context.epoch },
+				effects: [latestEffect(boot, context.epoch, message.reply, deps)],
 			};
+		}
+
+		case "latestResolved": {
+			// A resolution that lands after a newer intent commits nothing —
+			// it cannot re-enter as a fresh intent over the successor's view.
+			// The caller still settles: silently, like the old no-target press.
+			if (state.intentEpoch !== message.epoch) {
+				message.reply?.({ ok: true });
+				return { state };
+			}
+			if (!message.target) {
+				if (message.boot) {
+					getStore().getState().clearCurrentSession();
+					writeRoute({ kind: "launcher" });
+					return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
+				}
+				return { state }; // a user press with nothing to open: silent no-op
+			}
+			const view = { kind: "session", projectId: message.target.projectId, stem: message.target.stem } as const;
+			return stageOpen(
+				state,
+				view,
+				{
+					mode: "boot",
+					viaAlias: true,
+					writesRoute: !message.boot,
+					routeAlias: true,
+					reply: message.reply,
+				},
+				context.epoch,
+				nextTransitionId(),
+				deps,
+			);
+		}
 
 		case "project": {
 			if (message.mode === "boot") {
@@ -453,25 +665,25 @@ function navigationStep(
 			}
 			const wasSession = state.current.view.kind === "session";
 			const epoch = context.epoch;
-			const effect: { run(): Promise<NavigationMessage> } = {
+			const reply = message.reply;
+			const projectId = message.projectId;
+			const effect: ReactorEffect<NavigationMessage> = {
 				run: async () => {
 					const client = deps.getClient();
 					if (client && wasSession) {
 						try {
 							const rpc = await client.detach();
-							message.reply?.(
-								rpc?.ok ? { ok: true } : { ok: false, error: errorMessage(rpc?.error, "detach failed") },
-							);
-						} catch (err) {
+							reply?.(rpc?.ok ? { ok: true } : { ok: false, error: errorMessage(rpc?.error, "detach failed") });
+						} catch (error) {
 							// A failed detach reports to the caller, but the
 							// Project home commits regardless (the old behavior:
 							// the address change is not conditional on it).
-							message.reply?.({ ok: false, error: err instanceof Error ? err.message : String(err) });
+							reply?.({ ok: false, error: errorText(error, "detach failed") });
 						}
 					} else {
-						message.reply?.({ ok: true });
+						reply?.({ ok: true });
 					}
-					return { kind: "projectSettled", epoch, projectId: message.projectId };
+					return { kind: "projectSettled", epoch, projectId };
 				},
 			};
 			return { state: { ...state, intentEpoch: context.epoch }, effects: [effect] };
@@ -495,131 +707,13 @@ function navigationStep(
 			};
 		}
 
-		case "created": {
-			// The initial-sync push committed the address through the
-			// no-pending sync path; re-assert idempotently for the reply path.
-			commitSessionAddress(message.ref);
-			return {
-				state: {
-					...state,
-					current: {
-						view: { kind: "session", projectId: message.ref.projectId, stem: message.ref.stem },
-						sessionId: message.ref.sessionId,
-					},
-				},
-			};
-		}
-
-		case "closed": {
-			// The rendered Session's runtime ended: the document can never
-			// progress again, so the address, the session id, and the route all
-			// go, retaining the Project to land on its home. A close of some
-			// other Session changes nothing here. The rendered address is a
-			// store-level fact (the committed view's publication).
-			const s = getStore().getState();
-			if (s.currentProjectId === message.projectId && s.currentStem === message.stem) {
-				s.clearCurrentSession(message.projectId);
-				writeRoute({ kind: "project", projectId: message.projectId });
-				return {
-					state: {
-						...state,
-						current: { view: { kind: "project", projectId: message.projectId }, sessionId: null },
-					},
-				};
-			}
-			return { state };
-		}
-
-		case "sync": {
-			const ref = message.ref;
-			const pending = state.pending;
-			if (pending !== null) {
-				const matches = pending.view.projectId === ref.projectId && pending.view.stem === ref.stem;
-				if (!matches) {
-					// A superseded transition's initial sync: the server
-					// serialized both opens, and this one lost. It commits
-					// nothing; the successor's sync follows on the wire.
-					return { state };
-				}
-				if (message.ops !== null) {
-					// Promote the candidate the open seeded: the mirror's own
-					// application of this delta ran against the old-session
-					// base and is discarded (ADR 09).
-					const promoted = promoteSessionCandidate(ref.sessionId, message.ops);
-					if (promoted) {
-						deps.getClient()?.mirror.applyReplace(promoted.doc);
-						cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
-					}
-				}
-				commitSessionAddress(ref);
-				return {
-					state: {
-						...state,
-						current: { view: pending.view, sessionId: ref.sessionId },
-						pending: { ...pending, synced: true },
-					},
-				};
-			}
-			// No pending transition: a newSession's initial sync (its reply
-			// commits through `created`), or a re-assert. A superseded target's
-			// sync must not commit over the successor.
-			if (state.abandoned !== null && state.abandoned.key === `${ref.projectId}/${ref.stem}`) {
-				return { state };
-			}
-			commitSessionAddress(ref);
-			return {
-				state: {
-					...state,
-					current: {
-						view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
-						sessionId: ref.sessionId,
-					},
-				},
-			};
-		}
-
 		case "openSettled": {
 			const pending = state.pending;
-			if (pending === null || pending.epoch !== message.epoch) {
-				// Superseded: the successor owns the view; the reply already
-				// fired from the effect.
-				return { state };
-			}
-			discardSessionCandidate();
-			if (message.result.ok) {
-				// The push precedes the reply, so the sync already committed;
-				// commit defensively only if it somehow did not.
-				if (!pending.synced && message.ref) commitSessionAddress(message.ref);
-				return {
-					state: {
-						...state,
-						pending: null,
-						current: {
-							view: pending.view,
-							sessionId: message.ref?.sessionId ?? state.current.sessionId,
-						},
-					},
-				};
-			}
-			if (pending.mode === "boot") {
-				// A boot failure lands on the Project home (ADR 11): the stem no
-				// longer resolves, so the staged address and identity must go.
-				getStore().getState().setAddressViaAlias(false);
-				getStore().getState().clearCurrentSession(pending.view.projectId);
-				writeRoute({ kind: "project", projectId: pending.view.projectId });
-				return {
-					state: {
-						...state,
-						pending: null,
-						current: { view: { kind: "project", projectId: pending.view.projectId }, sessionId: null },
-					},
-				};
-			}
-			// A navigate failure restores the last committed view: the server
-			// left the previous attachment untouched, so the client must not
-			// claim the new address either.
-			restoreView(pending.previous);
-			return { state: { ...state, pending: null, current: pending.previous } };
+			// A cancelled transition's stray RPC completion: the caller settled
+			// at cancel time; prune and commit nothing.
+			state.cancelled.delete(message.transition);
+			if (pending === null || pending.id !== message.transition) return { state };
+			return { state: settleOpen(state, pending, message.result, message.ref) };
 		}
 
 		case "projectSettled": {
@@ -636,7 +730,6 @@ function navigationStep(
 		case "launcherSettled": {
 			if (state.intentEpoch !== message.epoch) return { state };
 			if (!message.result.ok) return { state };
-			discardSessionCandidate();
 			const store = getStore();
 			store.getState().setAddressViaAlias(false);
 			store.getState().clearCurrentSession();
@@ -644,14 +737,133 @@ function navigationStep(
 			return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 		}
 
-		case "cleared": {
-			getStore().getState().clearCurrentSession();
-			writeRoute({ kind: "launcher" });
-			return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
+		case "created": {
+			const key = `${message.ref.projectId}/${message.ref.stem}`;
+			// A newer transition in flight owns the view, and an abandoned
+			// address must not reclaim it.
+			if (state.pending !== null || state.abandoned?.key === key) return { state };
+			const s = getStore().getState();
+			// The initial-sync push committed the address through the
+			// no-pending sync path; this re-asserts idempotently. When a
+			// newer intent replaced the view meanwhile, the store address no
+			// longer names this session and the re-assert is skipped.
+			if (s.currentProjectId !== message.ref.projectId || s.currentStem !== message.ref.stem) {
+				return { state };
+			}
+			commitSessionAddress(message.ref);
+			return {
+				state: {
+					...state,
+					current: {
+						view: { kind: "session", projectId: message.ref.projectId, stem: message.ref.stem },
+						sessionId: message.ref.sessionId,
+					},
+				},
+			};
 		}
 
-		case "noop":
-			return { state };
+		case "closed": {
+			// The host's terminal ownership push: the runtime behind an address
+			// ended, so nothing for that address can commit or roll back a view
+			// anymore. The rendered address is a store-level fact (the
+			// committed view's publication — or the optimistic stage, while a
+			// transition is in flight).
+			const key = `${message.projectId}/${message.stem}`;
+			let pending = state.pending;
+			let current = state.current;
+			const cancelled = state.cancelled;
+			// A pending transition targeting the closed address is cancelled:
+			// its caller settles here, its prepare admits no RPC (the runtime
+			// it targeted is gone), and its late sync and reply commit nothing.
+			if (pending !== null && sessionKey(pending.view) === key) {
+				pending.reply?.({ ok: false, error: "session closed" });
+				cancelled.add(pending.id);
+				pending = null;
+			}
+			// The closed address must not survive as a rollback target either:
+			// a transition in flight to another address would otherwise
+			// "restore" the dead session on failure.
+			if (
+				pending !== null &&
+				pending.previous.view.kind === "session" &&
+				sessionKey(pending.previous.view) === key
+			) {
+				pending = {
+					...pending,
+					previous: { view: { kind: "project", projectId: message.projectId }, sessionId: null },
+				};
+			}
+			const s = getStore().getState();
+			if (s.currentProjectId === message.projectId && s.currentStem === message.stem) {
+				// The rendered Session's runtime ended: the document can never
+				// progress again, so the address, the session id, and the route
+				// all go, retaining the Project to land on its home.
+				s.clearCurrentSession(message.projectId);
+				writeRoute({ kind: "project", projectId: message.projectId });
+				current = { view: { kind: "project", projectId: message.projectId }, sessionId: null };
+			}
+			return { state: { ...state, pending, current, cancelled, abandoned: { key } } };
+		}
+
+		case "sync": {
+			const ref = message.ref;
+			const pending = state.pending;
+			if (pending !== null) {
+				const matches = pending.view.projectId === ref.projectId && pending.view.stem === ref.stem;
+				if (!matches) {
+					// A superseded transition's initial sync: the server
+					// serialized both opens, and this one lost. It commits
+					// nothing; the successor's sync follows on the wire.
+					return { state };
+				}
+				if (state.intentEpoch !== pending.intentEpoch) {
+					// A newer intent owns the view; the pending transition's
+					// sync commits nothing.
+					return { state };
+				}
+				if (message.ops !== null) {
+					// Promote the candidate the prepare seeded: the mirror's own
+					// application of this delta ran against the old-session
+					// base and is discarded (ADR 09).
+					const promoted =
+						state.candidate !== null ? promoteCandidate(state.candidate, ref.sessionId, message.ops) : null;
+					if (promoted) {
+						deps.getClient()?.mirror.applyReplace(promoted.doc);
+						cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
+					}
+				}
+				commitSessionAddress(ref);
+				return {
+					state: {
+						...state,
+						current: { view: pending.view, sessionId: ref.sessionId },
+						pending: { ...pending, synced: true },
+						candidate: null,
+					},
+				};
+			}
+			// No pending transition: a newSession's initial sync (its reply
+			// commits through `created`), or a re-assert. A superseded or
+			// closed target's late sync must not commit over the successor —
+			// unless it re-asserts the already-rendered address, which is
+			// idempotent by definition and never a takeover.
+			const key = `${ref.projectId}/${ref.stem}`;
+			const reasserts = state.current.view.kind === "session" && sessionKey(state.current.view) === key;
+			if (state.abandoned !== null && state.abandoned.key === key && !reasserts) {
+				return { state };
+			}
+			commitSessionAddress(ref);
+			return {
+				state: {
+					...state,
+					current: {
+						view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
+						sessionId: ref.sessionId,
+					},
+					abandoned: state.abandoned?.key === key ? null : state.abandoned,
+				},
+			};
+		}
 	}
 }
 
@@ -666,15 +878,19 @@ interface NavigationRuntime {
 
 function createRuntime(deps: NavigationDeps): NavigationRuntime {
 	const runtime = {} as NavigationRuntime;
+	let nextTransitionId = 1;
 	runtime.deps = deps;
 	runtime.reactor = createReactor<NavigationState, NavigationMessage>({
 		initial: {
 			current: { view: { kind: "launcher" }, sessionId: null },
 			pending: null,
+			candidate: null,
 			abandoned: null,
 			intentEpoch: 0,
+			cancelled: new Set<number>(),
 		},
-		step: (state, message, context) => navigationStep(state, message, context, runtime.deps),
+		step: (state, message, context) =>
+			navigationStep(state, message, context, runtime.deps, () => nextTransitionId++),
 		onUnhandledEffectError: (error) => {
 			console.error("navigation effect failed", error);
 		},
@@ -685,11 +901,10 @@ function createRuntime(deps: NavigationDeps): NavigationRuntime {
 let runtime: NavigationRuntime = createRuntime(defaultDeps);
 
 /** Test seam: a fresh navigation (reset state) with optional dep overrides.
- * Also clears the cache base and any pending candidate. */
+ * Also clears the cache base (the candidate is reset with the state). */
 export function resetNavigationForTests(deps?: Partial<NavigationDeps>): void {
 	runtime = createRuntime({ ...defaultDeps, ...deps });
 	cacheBase.value = null;
-	discardSessionCandidate();
 }
 
 function settled(promise: Promise<NavigationResult>): Promise<NavigationResult> {
@@ -728,8 +943,9 @@ export function navigationBoot(target: NavigationTarget): Promise<NavigationResu
 	);
 }
 
-/** Open the `/@latest` alias (user action): resolve, then boot the target
- * without leaving the alias URL. */
+/** Open the `/@latest` alias (user action): resolve, then open the target
+ * without leaving the alias URL. Resolves when the resolved target's
+ * transition settles; a superseded resolution is a silent no-op. */
 export function navigationLatest(): Promise<NavigationResult> {
 	return settled(
 		new Promise<NavigationResult>((resolve) => {

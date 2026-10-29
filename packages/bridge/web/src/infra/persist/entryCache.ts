@@ -18,9 +18,8 @@
 // and is therefore not importable from test/suite.
 // ============================================================================
 
-import type { CacheEntryRecord, EntryCacheStore, PrefixCursor, SessionStatusHint } from "../../../../src/core/index.ts";
-import { computeCursor, InMemoryEntryCacheStore, seedDocument } from "../../../../src/core/index.ts";
-import { beginSessionCandidate } from "../net/sessionCandidate.ts";
+import type { CacheEntryRecord, EntryCacheStore, SessionStatusHint } from "../../../../src/core/index.ts";
+import { InMemoryEntryCacheStore } from "../../../../src/core/index.ts";
 
 const DB_NAME = "pi-bridge-cache";
 const ENTRIES_STORE = "entries";
@@ -133,25 +132,11 @@ export function getEntryCache(): Promise<EntryCacheStore> {
 }
 
 // ---------------------------------------------------------------------------
-// Switch preparation (ADR 09 §Session switch, steps 1–3): load the target
-// session's cache into a candidate mirror, derive its cursor. Returns
-// undefined when there is no usable cache — the switch then falls back to a
-// full replace. A cache read failure degrades the same way.
+// Switch preparation (ADR 09) is the navigation reactor's: its prepare
+// effect reads records through `loadSession`, and the step that receives
+// them stages the candidate document as transition state. There is no
+// seeding side effect here.
 // ---------------------------------------------------------------------------
-
-export async function prepareSwitch(sessionId: string): Promise<PrefixCursor | undefined> {
-	let records: CacheEntryRecord[] = [];
-	let hint: SessionStatusHint | null = null;
-	try {
-		({ records, hint } = await (await getEntryCache()).loadSession(sessionId));
-	} catch {
-		// Cache read failure: plain switch, full replace.
-		return undefined;
-	}
-	const cursor = computeCursor(records);
-	if (cursor) beginSessionCandidate(sessionId, seedDocument(records, hint ?? undefined));
-	return cursor ?? undefined;
-}
 
 function open(): Promise<EntryCacheStore> {
 	return new Promise<EntryCacheStore>((resolve, reject) => {

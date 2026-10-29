@@ -1,8 +1,8 @@
 // ADR 09 stage-5 tests: client cache plumbing that is testable without a
 // DOM — the in-memory EntryCacheStore (policy-facing storage semantics), the
-// document→record helpers, and the candidate-mirror registry. The IndexedDB
-// adapter (web/src/infra/persist/entryCache.ts) uses DOM types and is checked by
-// web/tsconfig only.
+// document→record helpers, and the pure candidate-promotion functions. The
+// IndexedDB adapter (web/src/infra/persist/entryCache.ts) uses DOM types and
+// is checked by web/tsconfig only.
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -19,12 +19,7 @@ import {
 	seedDocument,
 	statusHintOfDocument,
 } from "../../src/core/index.ts";
-import {
-	beginSessionCandidate,
-	discardSessionCandidate,
-	promoteSessionCandidate,
-	sessionCandidatePending,
-} from "../../web/src/infra/net/sessionCandidate.ts";
+import { promoteCandidate, type SessionCandidate } from "../../web/src/infra/net/sessionCandidate.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -144,16 +139,17 @@ describe("cacheRecordsOfDocument / statusHintOfDocument", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Candidate mirror registry
+// Candidate promotion — pure functions. The candidate itself is the
+// navigation reactor's transition state (seeded and consumed by steps);
+// these tests pin the promotion computation.
 // ---------------------------------------------------------------------------
 
 describe("sessionCandidate", () => {
-	it("tracks a pending candidate and promotes on matching delta", () => {
+	it("promotes a matching candidate on its initial-sync delta", () => {
 		const base = seedDocument(recordsOf("s2", docOf([userEntry("a")])));
-		beginSessionCandidate("s2", base);
-		expect(sessionCandidatePending()).toBe(true);
+		const candidate: SessionCandidate = { sessionId: "s2", doc: base };
 
-		const promoted = promoteSessionCandidate("s2", [
+		const promoted = promoteCandidate(candidate, "s2", [
 			{
 				op: "add",
 				path: "/entries/new",
@@ -164,17 +160,11 @@ describe("sessionCandidate", () => {
 		expect(promoted?.doc.entries.new).toBeDefined();
 		// `before` is the pre-promotion seed — the cache-write base.
 		expect(promoted?.before.entries.new).toBeUndefined();
-		// Promotion clears the candidate — a second switch may start.
-		expect(sessionCandidatePending()).toBe(false);
-		expect(promoteSessionCandidate("s2", [])).toBeNull();
 	});
 
-	it("does not promote on a session mismatch — the candidate survives", () => {
-		beginSessionCandidate("s2", seedDocument([]));
-		expect(promoteSessionCandidate("other", [])).toBeNull();
-		expect(sessionCandidatePending()).toBe(true);
-		discardSessionCandidate();
-		expect(sessionCandidatePending()).toBe(false);
+	it("does not promote on a session mismatch", () => {
+		const candidate: SessionCandidate = { sessionId: "s2", doc: seedDocument([]) };
+		expect(promoteCandidate(candidate, "other", [])).toBeNull();
 	});
 });
 
@@ -196,12 +186,12 @@ describe("client restore convergence", () => {
 		const cursor = computeCursor(loaded);
 		expect(cursor).toEqual({ sessionId: "s", lastKnownId: "b", entryCount: 2 });
 
-		// prepareSwitch equivalent: seed the candidate.
-		const candidate = seedDocument(loaded, hint ?? undefined);
-		beginSessionCandidate("s", candidate);
+		// Switch preparation: the navigation step stages the candidate from
+		// the loaded records.
+		const candidate: SessionCandidate = { sessionId: "s", doc: seedDocument(loaded, hint ?? undefined) };
 
 		// The server's delta for the missing suffix + current status.
-		const promoted = promoteSessionCandidate("s", [
+		const promoted = promoteCandidate(candidate, "s", [
 			{ op: "add", path: "/entries/c", value: { ...full.entries.c } as never },
 			{ op: "replace", path: "/status", value: full.status as never },
 		]);

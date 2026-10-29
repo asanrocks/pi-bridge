@@ -3,6 +3,12 @@
 // guards: optimistic staging, initial-sync commit, failure rollback, boot
 // fallback, superseded transitions, alias handling, candidate promotion, and
 // the terminal session_closed landing.
+//
+// The authority rule these tests hold navigation to: a step may read and
+// write anything; an effect may only observe and return a message. The
+// supersede regressions pin the races that rule exists for — a stale alias
+// resolution, a superseded boot's cache seed, a reverse-order cache read —
+// each landing after a newer intent committed and each committing nothing.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -19,7 +25,9 @@ import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import {
 	cacheBase,
+	type NavigationResult,
 	navigationBoot,
+	navigationBootLatest,
 	navigationInitialSync,
 	navigationLatest,
 	navigationOpen,
@@ -27,7 +35,6 @@ import {
 	navigationSessionClosed,
 	resetNavigationForTests,
 } from "./navigation.ts";
-import { beginSessionCandidate, discardSessionCandidate } from "./sessionCandidate.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -35,6 +42,7 @@ import { beginSessionCandidate, discardSessionCandidate } from "./sessionCandida
 
 const REF_A: SessionRef = { projectId: "proj", sessionId: "id-a", stem: "a" };
 const REF_B: SessionRef = { projectId: "proj", sessionId: "id-b", stem: "b" };
+const REF_C: SessionRef = { projectId: "proj", sessionId: "id-c", stem: "c" };
 
 function emptyDocument(): Document {
 	return initFromEntries([]);
@@ -59,6 +67,11 @@ function gate<T>(): { promise: Promise<T>; open: (value: T) => void } {
 		open = resolve;
 	});
 	return { promise, open };
+}
+
+/** One microtask-drain tick: lets effect completions queue and apply. */
+function tick(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 interface FakeClient {
@@ -114,7 +127,6 @@ beforeEach(() => {
 afterEach(() => {
 	delete g.window;
 	resetStore();
-	discardSessionCandidate();
 });
 
 function recordsFor(sessionId: string): CacheEntryRecord[] {
@@ -135,6 +147,8 @@ function recordsFor(sessionId: string): CacheEntryRecord[] {
 		},
 	];
 }
+
+const DELTA_OP: PatchOp = { op: "add", path: "/status/isStreaming", value: false };
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -260,12 +274,8 @@ describe("Navigation", () => {
 		const cursor: PrefixCursor = { sessionId: "id-b", lastKnownId: "e0", entryCount: 1 };
 		resetNavigationForTests({
 			getClient: () => fake.client,
-			prepareSwitch: async (sessionId) => {
-				// Mirrors the real prepareSwitch: seed the candidate, derive
-				// the cursor.
-				beginSessionCandidate(sessionId, emptyDocument());
-				return cursor;
-			},
+			lookupSessionId: () => "id-b",
+			loadSession: async () => ({ records: recordsFor("id-b"), hint: null }),
 		});
 
 		// The server pushes the initial sync before the reply; gate the reply
@@ -275,7 +285,7 @@ describe("Navigation", () => {
 		const opened = navigationOpen({ projectId: "proj", stem: "b" }, { sessionId: "id-b" });
 		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
 		expect(fake.openCalls[0].cursor).toEqual(cursor);
-		navigationInitialSync(REF_B, [{ op: "add", path: "/status/isStreaming", value: false } as PatchOp]);
+		navigationInitialSync(REF_B, [DELTA_OP]);
 		replyGate.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
 		expect((await opened).ok).toBe(true);
 		// The promoted candidate document replaced the mirror, and the cache
@@ -299,15 +309,21 @@ describe("Navigation", () => {
 		const openA = gate<RpcReply>();
 		const openB = gate<RpcReply>();
 		fake.openReplies.push(openA.promise, openB.promise);
-		void navigationOpen({ projectId: "proj", stem: "a" });
-		void navigationOpen({ projectId: "proj", stem: "b" });
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
 		openA.open({ ok: true, session: REF_A } as unknown as RpcReply);
 		openB.open({ ok: true, session: REF_B } as unknown as RpcReply);
-		await vi.waitFor(() => expect(getStore().getState().currentStem).toBe("b"));
-		// Both opens settled with no sync yet; A's late sync must not commit
-		// over the committed B view.
+		// Let both settlements apply: B committed (defensively, from its
+		// reply's ref — no sync arrived yet), A was superseded.
+		await openedA;
+		await openedB;
+		expect(getStore().getState().currentStem).toBe("b");
+		expect(getStore().getState().activeSessionId).toBe("id-b");
+		// A's late sync must not commit over the committed B view.
 		navigationInitialSync(REF_A, null);
-		expect(getStore().getState().activeSessionId).toBeNull();
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("b");
+		expect(s.activeSessionId).toBe("id-b");
 	});
 
 	it("resolves the /@latest alias and keeps the alias URL", async () => {
@@ -326,6 +342,138 @@ describe("Navigation", () => {
 		const calls = replaceState.mock.calls.filter((c) => c[2] === "/proj/a");
 		expect(calls).toHaveLength(0);
 		expect(getStore().getState().addressViaAlias).toBe(true);
+	});
+
+	it("an alias resolution superseded by a newer intent commits nothing", async () => {
+		// F2: the lookup re-entered as a fresh intent overrode the successor.
+		const fake = fakeClient();
+		const resolve = gate<SessionInfo | null>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			resolveLatest: () => resolve.promise,
+		});
+		const latest = navigationLatest();
+		// A newer intent commits B while the lookup is in flight.
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
+		navigationInitialSync(REF_B, null);
+		await openedB;
+		expect(getStore().getState().currentStem).toBe("b");
+
+		// The stale lookup now returns A — it must commit nothing: no staged
+		// open, no alias route, no address or id change.
+		resolve.open({ projectId: "proj", stem: "a", sessionId: "id-a" } as unknown as SessionInfo);
+		const result = await latest;
+		expect(result.ok).toBe(true);
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("b");
+		expect(s.activeSessionId).toBe("id-b");
+		expect(routeWritten()).toBe("/proj/b");
+		expect(s.addressViaAlias).toBe(false);
+	});
+
+	it("a superseded boot-time alias resolution cannot clear the committed view", async () => {
+		// F2b: a stale "nothing to open" answer cleared the committed view.
+		const fake = fakeClient();
+		const resolve = gate<SessionInfo | null>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			resolveLatest: () => resolve.promise,
+		});
+		const bootLatest = navigationBootLatest();
+		// A newer intent commits C while the lookup is in flight.
+		const openedC = navigationOpen({ projectId: "proj", stem: "c" });
+		navigationInitialSync(REF_C, null);
+		await openedC;
+		expect(getStore().getState().currentStem).toBe("c");
+
+		resolve.open(null);
+		await bootLatest;
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("c");
+		expect(s.activeSessionId).toBe("id-c");
+		expect(routeWritten()).toBe("/proj/c");
+	});
+
+	it("a superseded open's late cache read never overwrites the successor's candidate", async () => {
+		// G1: the seed happened inside the open effect, so a superseded open
+		// that finished its cache read last overwrote the successor's
+		// candidate — the successor's delta then failed to promote.
+		const fake = fakeClient();
+		const loadA = gate<{ records: CacheEntryRecord[]; hint: null }>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: (_projectId, stem) => `id-${stem}`,
+			loadSession: async (sessionId) =>
+				sessionId === "id-a" ? loadA.promise : { records: recordsFor("id-b"), hint: null },
+		});
+		// Open A (cache read gated), then supersede with B (cache read
+		// immediate): B seeds its candidate and sends its RPC first.
+		const replyB = gate<RpcReply>();
+		fake.openReplies.push(replyB.promise);
+		void navigationOpen({ projectId: "proj", stem: "a" });
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
+
+		// A's cache read resolves AFTER B seeded — the superseded transition
+		// must seed nothing.
+		loadA.open({ records: recordsFor("id-a"), hint: null });
+		await tick();
+
+		// B's delta initial sync still promotes its own candidate; its reply
+		// settles afterwards (the server pushes the sync first).
+		navigationInitialSync(REF_B, [DELTA_OP]);
+		replyB.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
+		await openedB;
+		expect(cacheBase.value?.sessionId).toBe("id-b");
+		expect(fake.applyReplaces.length).toBe(1);
+	});
+
+	it("a superseded boot never paints the abandoned session's cache", async () => {
+		// G2: the boot effect seeded the live mirror and the store from
+		// inside the effect, so a superseded boot painted the abandoned
+		// session's cache into the committed view.
+		const fake = fakeClient();
+		const loadA = gate<{ records: CacheEntryRecord[]; hint: null }>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: (_projectId, stem) => `id-${stem}`,
+			loadSession: async (sessionId) => (sessionId === "id-a" ? loadA.promise : { records: [], hint: null }),
+		});
+		const bootedA = navigationBoot({ projectId: "proj", stem: "a" });
+		// Supersede with an open to B that commits.
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
+		navigationInitialSync(REF_B, null);
+		await openedB;
+		expect(getStore().getState().currentStem).toBe("b");
+
+		// The abandoned boot's cache read resolves: neither the mirror nor
+		// the store may receive A's seed.
+		loadA.open({ records: recordsFor("id-a"), hint: null });
+		await bootedA;
+		expect(fake.applyReplaces).toHaveLength(0);
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("b");
+		expect(Object.keys(s.document.entries)).toEqual([]);
+	});
+
+	it("a throwing dependency settles the caller instead of hanging", async () => {
+		// G7: every effect path settles the caller — an unexpected throw
+		// becomes a failed transition, not a permanently pending RPC.
+		const fake = fakeClient();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: () => {
+				throw new Error("index bug");
+			},
+		});
+		const opened: Promise<NavigationResult> = navigationOpen({ projectId: "proj", stem: "a" });
+		const result = await Promise.race([
+			opened,
+			new Promise<NavigationResult>((_, reject) => setTimeout(() => reject(new Error("hung")), 300)),
+		]);
+		expect(result.ok).toBe(false);
+		// The failure rolled back to the (empty) committed view.
+		expect(getStore().getState().currentStem).toBeNull();
 	});
 
 	it("session_closed lands on the Project home only for the rendered Session", async () => {
