@@ -419,9 +419,17 @@ applies):
   committed is a silent no-op — it cannot re-enter as a fresh intent and
   override the successor, and a stale "nothing to open" answer cannot clear
   a committed view.
-- A `newSession` reply re-asserts its address through `created` (the
-  initial-sync push committed it first through the no-pending path; a newer
-  intent or an abandoned address blocks the re-assert). The host's
+- Creating a Session is a navigation-owned transition too (`navigationCreate`):
+  it mints an `operationId`, supersedes any pending open (which settles
+  superseded without sending), and sends the `newSession` RPC as an effect.
+  The server carries the id onto the transition's initial-sync frame and the
+  reply, so the frame commits the created address only while that creation is
+  still the newest intent — a stale or cancelled creation's sync selects
+  nothing, and a newer intent blocks the reply's defensive commit. The
+  creation slot frees at settlement, ready for the next creation. An
+  unattributed initial-sync frame (no `operationId`) can no longer select a
+  new address at all: it may only re-assert the already-rendered address,
+  idempotently. The host's
   `session_closed` push cancels a pending transition targeting that address
   (its caller settles, its prepare admits no RPC, its late sync and reply
   commit nothing), removes that address as a rollback target for a

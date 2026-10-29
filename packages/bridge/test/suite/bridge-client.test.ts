@@ -373,15 +373,17 @@ describe("BridgeClient", () => {
 		client.abort();
 		expect(JSON.parse(transport.sent[0]).verb).toBe("abort");
 
-		client.newSession("proj", "hello");
+		client.newSession("proj", "hello", { operationId: "op-1" });
 		const newSessionFrame = JSON.parse(transport.sent[1]);
 		expect(newSessionFrame.verb).toBe("newSession");
 		expect(newSessionFrame.projectId).toBe("proj");
 		expect(newSessionFrame.text).toBe("hello");
+		expect(newSessionFrame.operationId).toBe("op-1");
 		expect("images" in newSessionFrame).toBe(false);
 		expect("model" in newSessionFrame).toBe(false);
 
 		client.newSession("proj", "hello", {
+			operationId: "op-2",
 			images: [{ type: "image", mimeType: "image/png", data: "aGk=" }],
 			model: { provider: "p", modelId: "m" },
 			thinkingLevel: "high",

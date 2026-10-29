@@ -28,8 +28,8 @@ and rejects exactly once, so a failed request leaves nothing pending.
 
 | `kind` | Payload and contract |
 | --- | --- |
-| `replace` | `{ session: SessionRef, document: Document }`. Always an initial sync. It replaces the mirror wholesale. |
-| `patch` | `{ ops: PatchOp[], session?: SessionRef }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. |
+| `replace` | `{ session: SessionRef, document: Document, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
+| `patch` | `{ ops: PatchOp[], session?: SessionRef, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
 | `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
@@ -39,6 +39,16 @@ and rejects exactly once, so a failed request leaves nothing pending.
 when it is the initial-sync delta selected by cursor validation. A live patch
 is attached to the already selected session and has no address. The initial
 sync is emitted before later live patches on that Connection.
+
+A creation's initial sync carries the `newSession` request's `operationId`:
+the Connection stamps it onto the frame it emits inside the transition (the
+attach is synchronous within it), and onto the reply. The id names the
+*operation*, not the resulting Session — the address does not exist until the
+server allocates the file — so a client's selection owner can admit the frame
+only while the intent that sent the request still owns the view. Frames
+without an `operationId` (opens, re-attaches, reconnects) select nothing on
+their own: the client admits them only as re-assertions of the rendered
+address or through an in-flight transition it owns.
 
 `SessionRef` is `{ projectId, sessionId, stem }`. `projectId` and `stem` are
 the client address; `sessionId` is the durable cache and activation key. A
@@ -82,7 +92,7 @@ immediately but tracked (see [host runtime](../host/runtime.md)).
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
 | `pull` | Attached Session and this Connection's subscription set | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become live subscriptions; committed paths are one-shot. |
 | `openSession` | Project plus `stem`; reattaches this Connection | `{ ok: true, session: SessionRef }`. The initial `replace` or cursor patch is pushed before the reply. An optional `PrefixCursor` selects the delta path. |
-| `newSession` | Project; first prompt text is required | `{ ok: true, session: SessionRef }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn. Refused admission leaves no empty live Session. |
+| `newSession` | Project; first prompt text and an `operationId` are required | `{ ok: true, session: SessionRef, operationId }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn and the operation id. Refused admission leaves no empty live Session. A missing `operationId` is refused — an unattributed creation cannot be admitted by a selection owner. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
 | `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. Every Connection attached to the address is detached and receives a `session_closed` push — after the disposal's final patches, before this reply. |
 | `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Attached Connections are detached and receive a `session_closed` push, as with `closeSession`. Fails when no durable file exists to move. |

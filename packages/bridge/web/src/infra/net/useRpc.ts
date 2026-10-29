@@ -22,7 +22,6 @@ import type {
 	ReadFileReply,
 	RpcReply,
 	SessionInfo,
-	SessionRef,
 	SnapshotFile,
 	SnapshotState,
 	TextPolishReply,
@@ -33,7 +32,7 @@ import { getStore } from "../state/store.tsx";
 import { selectRenderDiverged } from "../state/ui.ts";
 import { getGlobalClient } from "./client.ts";
 import {
-	navigationCreated,
+	navigationCreate,
 	navigationLatest,
 	navigationLauncher,
 	navigationOpen,
@@ -149,22 +148,22 @@ export function useRpc() {
 	/** Create a session in a Project by sending its first prompt. The prompt
 	 * (with optional attachments and a pre-session model choice) is admitted
 	 * server-side before the attach (ADR 12 slice) — the initial sync the
-	 * client navigates into carries the in-flight turn. Returns true on
-	 * success so the caller can clear (or keep) its draft. */
+	 * client navigates into carries the in-flight turn, and the transition
+	 * (including the operation id that attributes its initial sync) is the
+	 * navigation reactor's. Returns true on success so the caller can clear
+	 * (or keep) its draft. */
 	const newSession = useCallback(
 		async (
 			projectId: string,
 			text: string,
 			options?: { images?: ImageContent[]; model?: ModelRef; thinkingLevel?: string },
 		) => {
-			const reply = await rpc(() => getGlobalClient()?.newSession(projectId, text, options), "new session failed");
-			if (reply?.ok) {
-				const ref = (reply as unknown as { session?: SessionRef }).session;
-				// The initial-sync push already committed the address through
-				// navigation; the reply re-asserts it (idempotent).
-				if (ref) navigationCreated(ref);
+			if (!getGlobalClient()) return false;
+			const result = await navigationCreate(projectId, text, options);
+			if (!result.ok && !result.superseded) {
+				rpcErrorToast(new Error(result.error ?? "new session failed"), "new session failed");
 			}
-			return reply?.ok === true;
+			return result.ok;
 		},
 		[],
 	);

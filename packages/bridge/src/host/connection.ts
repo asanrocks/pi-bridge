@@ -181,6 +181,12 @@ export class Connection {
 	/** The current attachment: a registry-issued lease, never the Session's
 	 * runtime itself. Raw Manager access is a type error by construction. */
 	private lease: SessionLease | null = null;
+	/** The operation id of the newSession transition currently in flight, if
+	 * any: the transition's attach happens synchronously inside the verb
+	 * (transitions serialize on this Connection), so the initial-sync frame
+	 * the handle emits in that window is exactly that creation's — and gets
+	 * its operation id stamped here, where the wire envelope is built. */
+	private syncAttribution: string | null = null;
 	private _disposed = false;
 	/** Serialized attachment-changing transitions (see runTransition),
 	 * drained at disposal so a transition still in flight when the socket
@@ -206,7 +212,11 @@ export class Connection {
 			},
 			onInitialSync: (frame) => {
 				this.subscriptions.clear();
-				this.send(frame as unknown as Record<string, unknown>);
+				// A creation's initial sync carries its operation id, so the
+				// client's selection owner can attribute the frame (see
+				// NewSessionRequest.operationId).
+				const attributed = this.syncAttribution !== null ? { ...frame, operationId: this.syncAttribution } : frame;
+				this.send(attributed as unknown as Record<string, unknown>);
 			},
 		};
 
@@ -439,6 +449,9 @@ export class Connection {
 					this.runTransition(id, async () => {
 						if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
 						if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
+						if (typeof m.operationId !== "string" || m.operationId === "") {
+							throw new Error("Missing `operationId`");
+						}
 						if (m.images !== undefined && !Array.isArray(m.images)) throw new Error("Invalid `images`");
 						if (
 							m.model !== undefined &&
@@ -452,13 +465,31 @@ export class Connection {
 						if (m.thinkingLevel !== undefined && typeof m.thinkingLevel !== "string") {
 							throw new Error("Invalid `thinkingLevel`");
 						}
-						const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, {
-							images: m.images,
-							model: m.model,
-							thinkingLevel: m.thinkingLevel,
-						});
-						if (result.ok) this.send({ id, ok: true, session: (result.session ?? null) as unknown as JsonValue });
-						else this.sendReply(id, false, result.error);
+						// Attribute this transition's initial sync: the attach happens
+						// synchronously inside the verb (this Connection's transitions
+						// serialize), so the frame the handle emits in this window is
+						// exactly this creation's. The finally clears the window before
+						// any later transition runs.
+						this.syncAttribution = m.operationId;
+						try {
+							const result = await this.daemonVerbs.newSession(m.projectId, this, m.text, {
+								images: m.images,
+								model: m.model,
+								thinkingLevel: m.thinkingLevel,
+							});
+							if (result.ok) {
+								this.send({
+									id,
+									ok: true,
+									session: (result.session ?? null) as unknown as JsonValue,
+									operationId: m.operationId,
+								});
+							} else {
+								this.sendReply(id, false, result.error);
+							}
+						} finally {
+							this.syncAttribution = null;
+						}
 					});
 					break;
 				}

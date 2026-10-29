@@ -1,9 +1,10 @@
 // Ownership gates in navigation: only the owning intent may admit a command or
 // commit a view. A superseded open sends no RPC (so a slow cache read cannot
-// reorder the wire), a no-target alias settles its caller, and the
-// Project-home transition reads the staged intent instead of the committed
-// one. The unattributed newSession sync case remains `it.fails` until the
-// creation operation carries an identity the reactor can check.
+// reorder the wire), a no-target alias settles its caller, the Project-home
+// transition reads the staged intent instead of the committed one, and a
+// newSession initial sync needs an operation id before it can select: an
+// unattributed frame may only re-assert, an attributed one only while its
+// creation is the newest intent.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient, CacheEntryRecord, Document, RpcReply } from "../../../../src/core/index.ts";
@@ -161,7 +162,7 @@ describe("view commits require an owner", () => {
 		expect(fake.calls.at(-1)).toBe("detach");
 	});
 
-	it.fails("an unattributed newSession sync cannot override a newer Project home", async () => {
+	it("an unattributed newSession sync cannot override a newer Project home", async () => {
 		const fake = recordingClient();
 		resetNavigationForTests({ getClient: () => fake.client });
 		await navigationProject("proj", "boot");

@@ -52,6 +52,8 @@ import type {
 	BridgeClient,
 	CacheEntryRecord,
 	Document,
+	ImageContent,
+	ModelRef,
 	PatchOp,
 	PrefixCursor,
 	SessionInfo,
@@ -142,6 +144,11 @@ interface NavigationState {
 	 * may still arrive; it must not commit over the successor. Server
 	 * ordering means only the latest abandoned target can still deliver. */
 	abandoned: { key: string } | null;
+	/** The current creation intent, if any: the operation id of the newest
+	 * `newSession` transition and the epoch it was admitted under. A
+	 * creation's initial sync carries its operation id, so the sync commits
+	 * only while this intent is still the newest one. */
+	creation: { operationId: string; intentEpoch: number } | null;
 	/** The epoch of the last applied navigation intent (open, boot, latest,
 	 * bootLatest, project, launcher). The newest intent owns view mutations:
 	 * every commit point compares against it. */
@@ -190,9 +197,9 @@ type NavigationMessage =
 	| { kind: "latestResolved"; epoch: number; boot: boolean; target: SessionInfo | null; reply?: Reply }
 	// Cache-prepare completion: carries the transition it belongs to, the
 	// target it captured at staging, and the cached prefix it read. The step
-	// seeds (or, when superseded, seeds nothing) and admits the open RPC —
-	// the RPC runs for a superseded transition too, because the server
-	// serialized the transitions and the reply must settle.
+	// seeds (or, when superseded, settles the caller and admits nothing —
+	// see the admission gate) and admits the open RPC for the owning
+	// transition only.
 	| {
 			kind: "prepared";
 			transition: number;
@@ -206,14 +213,28 @@ type NavigationMessage =
 	| { kind: "projectSettled"; epoch: number; projectId: string }
 	| { kind: "launcher"; mode: "navigate" | "boot"; reply?: Reply }
 	| { kind: "launcherSettled"; epoch: number; result: NavigationResult }
-	// A newSession reply committed its address (the initial-sync push already
-	// landed through the no-pending sync path; this re-asserts idempotently).
-	| { kind: "created"; ref: SessionRef }
+	// A creation intent (the newSession verb): the operation id is minted
+	// here, recorded as the current creation, and carried by the RPC effect.
+	// The server's reply and the transition's initial-sync frame both carry
+	// it back, so both can be attributed to the intent that admitted them.
+	| {
+			kind: "create";
+			projectId: string;
+			text: string;
+			operationId: string;
+			images?: ImageContent[];
+			model?: ModelRef;
+			thinkingLevel?: string;
+			reply?: Reply;
+	  }
+	// The creation RPC's completion.
+	| { kind: "createSettled"; operationId: string; result: NavigationResult; ref?: SessionRef }
 	// The host's terminal ownership push for an address.
 	| { kind: "closed"; projectId: string; stem: string }
 	// An address-bearing initial-sync frame (replace: ops null; cursor-aware
-	// delta: ops set). Delivered by the connection pipeline.
-	| { kind: "sync"; ref: SessionRef; ops: PatchOp[] | null };
+	// delta: ops set). Delivered by the connection pipeline. `operationId`
+	// is present when the frame was emitted by a newSession transition.
+	| { kind: "sync"; ref: SessionRef; ops: PatchOp[] | null; operationId?: string };
 
 /** Injectable seams (tests supply fakes; production reads the globals). */
 export interface NavigationDeps {
@@ -315,6 +336,41 @@ function openRpcEffect(
 				const result: NavigationResult = { ok: false, error: errorText(error, "open session failed") };
 				reply?.(result);
 				return { kind: "openSettled", transition, result };
+			}
+		},
+	};
+}
+
+/** The creation RPC effect (the newSession verb). Value-only: sends the
+ * RPC carrying the creation's operation id and returns its outcome — the
+ * server stamps the same id onto the transition's initial-sync frame, so
+ * the commit decision in the step can attribute both. */
+function createRpcEffect(
+	client: BridgeClient,
+	message: NavigationMessage & { kind: "create" },
+): ReactorEffect<NavigationMessage> {
+	const { projectId, text, operationId, images, model, thinkingLevel, reply } = message;
+	return {
+		run: async () => {
+			try {
+				const rpc = await client.newSession(projectId, text, { operationId, images, model, thinkingLevel });
+				if (rpc?.ok) {
+					const result: NavigationResult = { ok: true };
+					reply?.(result);
+					return {
+						kind: "createSettled",
+						operationId,
+						result,
+						ref: (rpc as unknown as { session?: SessionRef }).session,
+					};
+				}
+				const result: NavigationResult = { ok: false, error: errorMessage(rpc?.error, "new session failed") };
+				reply?.(result);
+				return { kind: "createSettled", operationId, result };
+			} catch (error) {
+				const result: NavigationResult = { ok: false, error: errorText(error, "new session failed") };
+				reply?.(result);
+				return { kind: "createSettled", operationId, result };
 			}
 		},
 	};
@@ -781,29 +837,61 @@ function navigationStep(
 			return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 		}
 
-		case "created": {
-			const key = `${message.ref.projectId}/${message.ref.stem}`;
-			// A newer transition in flight owns the view, and an abandoned
-			// address must not reclaim it.
-			if (state.pending !== null || state.abandoned?.key === key) return { state };
-			const s = getStore().getState();
-			// The initial-sync push committed the address through the
-			// no-pending sync path; this re-asserts idempotently. When a
-			// newer intent replaced the view meanwhile, the store address no
-			// longer names this session and the re-assert is skipped.
-			if (s.currentProjectId !== message.ref.projectId || s.currentStem !== message.ref.stem) {
+		case "create": {
+			const client = deps.getClient();
+			if (!client) {
+				message.reply?.(NOT_CONNECTED);
 				return { state };
 			}
-			commitObservation(message.ref, deps);
+			// A creation is the newest intent: it supersedes a pending open,
+			// which settles without sending (or, its RPC already having left,
+			// commits nothing on settlement). Nothing is staged optimistically
+			// — the address does not exist until the server allocates the
+			// file — but the creation records itself, so its attributed
+			// initial sync can commit the view later.
+			const pending = state.pending;
+			if (pending !== null) {
+				pending.reply?.({ ok: false, error: "superseded", superseded: true });
+			}
 			return {
 				state: {
 					...state,
-					current: {
-						view: { kind: "session", projectId: message.ref.projectId, stem: message.ref.stem },
-						sessionId: message.ref.sessionId,
-					},
+					pending: null,
+					candidate: null,
+					creation: { operationId: message.operationId, intentEpoch: context.epoch },
+					intentEpoch: context.epoch,
 				},
+				effects: [createRpcEffect(client, message)],
 			};
+		}
+
+		case "createSettled": {
+			const creation = state.creation;
+			// A stray completion (a stale or unknown operation): the slot a
+			// newer creation overwrote is not this one's to clear.
+			if (creation === null || creation.operationId !== message.operationId) return { state };
+			let current = state.current;
+			if (state.intentEpoch === creation.intentEpoch && message.result.ok && message.ref) {
+				// The push precedes the reply, so the attributed sync already
+				// committed; commit defensively only if it somehow did not —
+				// and never over an address that was closed meanwhile (the
+				// abandoned marker records it).
+				const key = `${message.ref.projectId}/${message.ref.stem}`;
+				const s = getStore().getState();
+				if (
+					state.abandoned?.key !== key &&
+					(s.currentProjectId !== message.ref.projectId || s.currentStem !== message.ref.stem)
+				) {
+					commitObservation(message.ref, deps);
+				}
+				current = {
+					view: { kind: "session", projectId: message.ref.projectId, stem: message.ref.stem },
+					sessionId: message.ref.sessionId,
+				};
+			}
+			// The creation operation is over either way: its slot frees for
+			// the next creation intent.
+			return { state: { ...state, current, creation: null } };
 		}
 
 		case "closed": {
@@ -886,14 +974,45 @@ function navigationStep(
 					},
 				};
 			}
-			// No pending transition: a newSession's initial sync (its reply
-			// commits through `created`), or a re-assert. A superseded or
-			// closed target's late sync must not commit over the successor —
-			// unless it re-asserts the already-rendered address, which is
-			// idempotent by definition and never a takeover.
+			// No pending transition: a creation's initial sync (attributed), or a
+			// re-assert of the already-rendered address. Both are admission-gated,
+			// not exclusion-guarded: an unattributed frame may only re-assert (a
+			// new address has no identity to prove its intent, so it commits
+			// nothing), and an attributed frame commits only while its creation
+			// is still the newest intent. A superseded or closed target's late
+			// sync therefore cannot commit over the successor — unless it
+			// re-asserts the already-rendered address, which is idempotent by
+			// definition and never a takeover.
 			const key = `${ref.projectId}/${ref.stem}`;
 			const reasserts = state.current.view.kind === "session" && sessionKey(state.current.view) === key;
-			if (state.abandoned !== null && state.abandoned.key === key && !reasserts) {
+			if (message.operationId !== undefined) {
+				const creation = state.creation;
+				if (
+					creation === null ||
+					creation.operationId !== message.operationId ||
+					state.intentEpoch !== creation.intentEpoch ||
+					state.abandoned?.key === key
+				) {
+					// A superseded or cancelled creation (or one whose address was
+					// closed while it was in flight): its sync selects nothing.
+					return { state };
+				}
+				commitObservation(ref, deps);
+				return {
+					state: {
+						...state,
+						current: {
+							view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
+							sessionId: ref.sessionId,
+						},
+						abandoned: state.abandoned?.key === key ? null : state.abandoned,
+					},
+				};
+			}
+			if (!reasserts) {
+				// Unattributed and not a re-assert: it names a view nothing
+				// admitted. (The abandoned marker's check is subsumed — a
+				// non-reasserting frame never commits.)
 				return { state };
 			}
 			commitObservation(ref, deps);
@@ -930,6 +1049,7 @@ function createRuntime(deps: NavigationDeps): NavigationRuntime {
 			pending: null,
 			candidate: null,
 			abandoned: null,
+			creation: null,
 			intentEpoch: 0,
 			cancelled: new Set<number>(),
 		},
@@ -943,6 +1063,10 @@ function createRuntime(deps: NavigationDeps): NavigationRuntime {
 }
 
 let runtime: NavigationRuntime = createRuntime(defaultDeps);
+/** Monotonic creation operation ids: minted for each `navigationCreate`,
+ * unique for the module's lifetime (a reset navigation keeps counting, so a
+ * frame attributed to a pre-reset creation can never match a newer one). */
+let nextOperationId = 1;
 
 /** Test seam: a fresh navigation (reset state) with optional dep overrides.
  * Also clears the cache base (the candidate is reset with the state). */
@@ -1048,9 +1172,33 @@ export function navigationLauncher(mode: "navigate" | "boot" = "navigate"): Prom
 	);
 }
 
-/** Commit a newly created Session's address (the newSession reply path). */
-export function navigationCreated(ref: SessionRef): void {
-	void runtime.reactor.send({ kind: "created", ref }).catch(() => {});
+/** Create a Session in a Project by sending its first prompt (the
+ * newSession verb) as a navigation-owned transition. The operation id is
+ * minted here and recorded as the current creation intent; the server
+ * carries it onto the transition's initial-sync frame and reply, so both
+ * are attributed to this intent and commit only while it is the newest.
+ * Resolves with the RPC's outcome (a superseded creation reports
+ * `superseded` — the newer intent owns the view). */
+export function navigationCreate(
+	projectId: string,
+	text: string,
+	options?: { images?: ImageContent[]; model?: ModelRef; thinkingLevel?: string },
+): Promise<NavigationResult> {
+	const operationId = `create-${nextOperationId++}`;
+	return settled(
+		new Promise<NavigationResult>((resolve) => {
+			void runtime.reactor.send({
+				kind: "create",
+				projectId,
+				text,
+				operationId,
+				images: options?.images,
+				model: options?.model,
+				thinkingLevel: options?.thinkingLevel,
+				reply: resolve,
+			});
+		}),
+	);
 }
 
 /** The host's `session_closed` push: terminal ownership for an address. */
@@ -1059,7 +1207,9 @@ export function navigationSessionClosed(projectId: string, stem: string): void {
 }
 
 /** An address-bearing initial-sync frame (replace or cursor-aware delta),
- * delivered by the connection pipeline after the mirror applied it. */
-export function navigationInitialSync(ref: SessionRef, ops: PatchOp[] | null): void {
-	void runtime.reactor.send({ kind: "sync", ref, ops }).catch(() => {});
+ * delivered by the connection pipeline after the mirror applied it.
+ * `operationId` is present when the frame was emitted by a newSession
+ * transition (see NewSessionRequest.operationId). */
+export function navigationInitialSync(ref: SessionRef, ops: PatchOp[] | null, operationId?: string): void {
+	void runtime.reactor.send({ kind: "sync", ref, ops, operationId }).catch(() => {});
 }

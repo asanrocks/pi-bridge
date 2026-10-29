@@ -748,7 +748,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId, text: "hello" });
+		const id = send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
 		expect(reply.ok).toBe(true);
 		expect(reply.session.projectId).toBe(projectId);
@@ -796,7 +796,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId, text: "first prompt" });
+		const id = send(ws, { verb: "newSession", projectId, text: "first prompt", operationId: "op-1" });
 		await waitForReply(frames, id);
 
 		const listId = send(ws, { verb: "listActiveSessions" });
@@ -827,13 +827,13 @@ describe("daemon: session activation", () => {
 
 		const first = (await waitForReply(
 			frames,
-			send(ws, { verb: "newSession", projectId, text: "one" }),
+			send(ws, { verb: "newSession", projectId, text: "one", operationId: "op-1" }),
 		)) as unknown as {
 			session: SessionRef;
 		};
 		const second = (await waitForReply(
 			frames,
-			send(ws, { verb: "newSession", projectId, text: "two" }),
+			send(ws, { verb: "newSession", projectId, text: "two", operationId: "op-1" }),
 		)) as unknown as {
 			session: SessionRef;
 		};
@@ -861,7 +861,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId, text: "hello world" });
+		const id = send(ws, { verb: "newSession", projectId, text: "hello world", operationId: "op-1" });
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; session: SessionRef };
 		expect(reply.ok).toBe(true);
 		// The initial sync the client navigates into follows the attach.
@@ -898,6 +898,7 @@ describe("daemon: session activation", () => {
 			verb: "newSession",
 			projectId,
 			text: "look at this",
+			operationId: "op-1",
 			images: [image],
 			model: { provider: "p", modelId: "m" },
 			thinkingLevel: "high",
@@ -932,7 +933,13 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId, text: "hi", model: { provider: "p", modelId: "m" } });
+		const id = send(ws, {
+			verb: "newSession",
+			projectId,
+			text: "hi",
+			operationId: "op-1",
+			model: { provider: "p", modelId: "m" },
+		});
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; error?: string };
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("Model not found");
@@ -958,7 +965,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		const id = send(ws, { verb: "newSession", projectId, text: "hello" });
+		const id = send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		const reply = (await waitForReply(frames, id)) as unknown as { ok: boolean; error?: string };
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("no model selected");
@@ -972,7 +979,7 @@ describe("daemon: session activation", () => {
 		const frames2 = collectFrames(ws2);
 		const retry = (await waitForReply(
 			frames2,
-			send(ws2, { verb: "newSession", projectId, text: "hello" }),
+			send(ws2, { verb: "newSession", projectId, text: "hello", operationId: "op-1" }),
 		)) as unknown as { ok: boolean };
 		expect(retry.ok).toBe(true);
 		ws2.close();
@@ -990,11 +997,20 @@ describe("daemon: session activation", () => {
 		const badFrames: Array<[Record<string, unknown>, RegExp]> = [
 			[{ verb: "newSession", projectId }, /Missing `text`/],
 			[{ verb: "newSession", projectId, text: "  " }, /Missing `text`/],
+			// An unattributed creation is refused: the operation id is what the
+			// client's selection owner attributes the initial sync with.
+			[{ verb: "newSession", projectId, text: "hi" }, /Missing `operationId`/],
 			// Malformed optional fields are rejected before anything is created.
-			[{ verb: "newSession", projectId, text: "hi", images: "nope" }, /Invalid `images`/],
-			[{ verb: "newSession", projectId, text: "hi", model: { provider: 1, modelId: "m" } }, /Invalid `model`/],
-			[{ verb: "newSession", projectId, text: "hi", model: "p/m" }, /Invalid `model`/],
-			[{ verb: "newSession", projectId, text: "hi", thinkingLevel: 42 }, /Invalid `thinkingLevel`/],
+			[{ verb: "newSession", projectId, text: "hi", operationId: "op-1", images: "nope" }, /Invalid `images`/],
+			[
+				{ verb: "newSession", projectId, text: "hi", operationId: "op-1", model: { provider: 1, modelId: "m" } },
+				/Invalid `model`/,
+			],
+			[{ verb: "newSession", projectId, text: "hi", operationId: "op-1", model: "p/m" }, /Invalid `model`/],
+			[
+				{ verb: "newSession", projectId, text: "hi", operationId: "op-1", thinkingLevel: 42 },
+				/Invalid `thinkingLevel`/,
+			],
 		];
 		for (const [frame, errorRe] of badFrames) {
 			const reply = (await waitForReply(frames, send(ws, frame))) as unknown as { ok: boolean; error?: string };
@@ -1239,7 +1255,7 @@ describe("daemon: session activation", () => {
 		const projectId = basename(a).toLowerCase();
 
 		const ws = await openClient(port);
-		send(ws, { verb: "newSession", projectId, text: "hello" });
+		send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		await settle();
 		// The fresh-session creation is in flight (the factory is gated) and
 		// has no address yet — there is nothing in the active snapshot for the
@@ -1454,7 +1470,10 @@ describe("daemon: idle GC", () => {
 		const frames = collectFrames(ws);
 		const projectId = basename(a).toLowerCase();
 
-		expect((await waitForReply(frames, send(ws, { verb: "newSession", projectId, text: "hello" }))).ok).toBe(true);
+		expect(
+			(await waitForReply(frames, send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" })))
+				.ok,
+		).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
 
 		// Past the short idle delay: the longer unflushed cap still holds.
@@ -1941,7 +1960,7 @@ describe("daemon: archiveSession", () => {
 		const frames = collectFrames(ws);
 		const created = (await waitForReply(
 			frames,
-			send(ws, { verb: "newSession", projectId, text: "hello" }),
+			send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" }),
 		)) as unknown as {
 			session: SessionRef;
 		};
@@ -2094,7 +2113,7 @@ describe("daemon: session listing", () => {
 		expect(page2.hasMore).toBe(false);
 
 		// An unflushed active session is included as a normal row.
-		const newId = send(ws, { verb: "newSession", projectId, text: "hello" });
+		const newId = send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		const created = (await waitForReply(frames, newId)) as unknown as { session: SessionRef };
 		const allId = send(ws, { verb: "listSessions", projectId });
 		const all = (await waitForReply(frames, allId)) as unknown as {

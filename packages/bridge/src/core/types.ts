@@ -354,6 +354,11 @@ export interface ReplaceMessage {
 	/** Session reference (ADR 11). Always present: a replace is an initial sync. */
 	session: SessionRef;
 	document: Document;
+	/** Present when this initial sync was emitted by a `newSession`
+	 * transition: the operation id of that creation. The frame is otherwise
+	 * unattributed; the client's selection owner checks the id before letting
+	 * a creation's sync commit the view. */
+	operationId?: string;
 }
 
 export interface PatchMessage {
@@ -364,6 +369,9 @@ export interface PatchMessage {
 	 */
 	session?: SessionRef;
 	ops: PatchOp[];
+	/** Present when this initial-sync patch was emitted by a `newSession`
+	 * transition: the operation id of that creation (see ReplaceMessage). */
+	operationId?: string;
 }
 
 export interface SessionsChangedMessage {
@@ -527,6 +535,12 @@ export interface OpenSessionRequest {
 export interface NewSessionRequest {
 	verb: "newSession";
 	projectId: string;
+	/** The creation's operation id, minted by the client's selection owner.
+	 * It names the *operation*, not the resulting Session (whose address is
+	 * unknown until the reply): the initial-sync frame and the reply carry
+	 * it back, so the client can admit the frame only while that intent
+	 * still owns the view. Required — an unattributed creation is refused. */
+	operationId: string;
 	/** First prompt text. Required, non-empty. */
 	text: string;
 	/** Optional image attachments for the first prompt. */

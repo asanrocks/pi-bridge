@@ -28,6 +28,7 @@ import {
 	type NavigationResult,
 	navigationBoot,
 	navigationBootLatest,
+	navigationCreate,
 	navigationInitialSync,
 	navigationLatest,
 	navigationOpen,
@@ -78,19 +79,27 @@ interface FakeClient {
 	client: BridgeClient;
 	applyReplaces: Document[];
 	openCalls: Array<{ projectId: string; stem: string; cursor?: PrefixCursor }>;
+	/** Recorded newSession requests (the operation id is what the tests
+	 * attribute the transition's initial sync with, like the server does). */
+	createCalls: Array<{ projectId: string; text: string; operationId: string }>;
 	detachReplies: Array<RpcReply>;
 	/** Configure the next openSession replies, in order. */
 	openReplies: Array<Promise<RpcReply>>;
+	/** Configure the next newSession replies, in order. */
+	createReplies: Array<Promise<RpcReply>>;
 }
 
 function fakeClient(): FakeClient {
 	const fake = {} as FakeClient;
 	const applyReplaces: Document[] = [];
 	const openCalls: FakeClient["openCalls"] = [];
+	const createCalls: FakeClient["createCalls"] = [];
 	fake.openReplies = [];
+	fake.createReplies = [];
 	fake.detachReplies = [];
 	fake.applyReplaces = applyReplaces;
 	fake.openCalls = openCalls;
+	fake.createCalls = createCalls;
 	// A minimal DocumentMirror: `document`/`revision` are what navigation's
 	// atomic observation commit publishes, `applyReplace` is what seeding
 	// and promotion install.
@@ -110,6 +119,16 @@ function fakeClient(): FakeClient {
 			const reply = fake.openReplies.shift();
 			if (reply) return reply;
 			return { ok: true, session: { projectId, sessionId: `id-${stem}`, stem } } as unknown as RpcReply;
+		},
+		newSession: async (projectId: string, text: string, options: { operationId: string }) => {
+			createCalls.push({ projectId, text, operationId: options.operationId });
+			const reply = fake.createReplies.shift();
+			if (reply) return reply;
+			return {
+				ok: true,
+				session: { projectId, sessionId: `id-new-${createCalls.length}`, stem: `new-${createCalls.length}` },
+				operationId: options.operationId,
+			} as unknown as RpcReply;
 		},
 		detach: async () => (fake.detachReplies.shift() ?? { ok: true }) as RpcReply,
 	} as unknown as BridgeClient;
@@ -332,13 +351,72 @@ describe("Navigation", () => {
 		expect(cacheBase.value?.sessionId).toBe("id-b");
 	});
 
-	it("commits a no-pending sync (a newSession's initial sync)", () => {
+	it("commits a creation's initial sync when its operation owns the view", async () => {
 		const fake = fakeClient();
+		const reply = gate<RpcReply>();
+		fake.createReplies.push(reply.promise);
 		resetNavigationForTests({ getClient: () => fake.client });
-		navigationInitialSync(REF_A, null);
+		const created = navigationCreate("proj", "first prompt");
+		// The operation id crossed on the request; the server pushes the
+		// attributed initial sync before the reply, like the wire does.
+		await vi.waitFor(() => expect(fake.createCalls).toHaveLength(1));
+		const op = fake.createCalls[0]!.operationId;
+		navigationInitialSync(REF_A, null, op);
+		reply.open({ ok: true, session: REF_A } as unknown as RpcReply);
+		expect((await created).ok).toBe(true);
 		const s = getStore().getState();
 		expect(s.currentStem).toBe("a");
 		expect(s.activeSessionId).toBe("id-a");
+	});
+
+	it("a creation sync with a stale operation id commits nothing", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		// Commit the Project home, then let a creation's attributed sync arrive
+		// for an operation that is no longer the current creation intent.
+		await navigationProject("proj", "boot");
+		navigationInitialSync(REF_A, null, "create-stale");
+		const s = getStore().getState();
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+	});
+
+	it("a creation reply commits defensively only while it owns the view", async () => {
+		const fake = fakeClient();
+		const reply = gate<RpcReply>();
+		fake.createReplies.push(reply.promise);
+		resetNavigationForTests({ getClient: () => fake.client });
+		const created = navigationCreate("proj", "first prompt");
+		await vi.waitFor(() => expect(fake.createCalls).toHaveLength(1));
+		// A newer intent replaces the view before the creation's reply lands.
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
+		navigationInitialSync(REF_B, null);
+		await openedB;
+		expect(getStore().getState().currentStem).toBe("b");
+		reply.open({ ok: true, session: REF_A } as unknown as RpcReply);
+		expect((await created).ok).toBe(true); // the RPC itself succeeded
+		// Its settlement committed nothing over the newer view.
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("b");
+		expect(s.activeSessionId).toBe("id-b");
+	});
+
+	it("a creation supersedes a pending open: no RPC, nothing commits", async () => {
+		const fake = fakeClient();
+		const loadA = gate<{ records: CacheEntryRecord[]; hint: null }>();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: () => "id-a",
+			loadSession: () => loadA.promise,
+		});
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		const created = navigationCreate("proj", "first prompt");
+		// A's cache read lands after the creation superseded it: no open RPC.
+		loadA.open({ records: recordsFor("id-a"), hint: null });
+		const superseded = await openedA;
+		expect(superseded.superseded).toBe(true);
+		expect(fake.openCalls).toHaveLength(0);
+		expect((await created).ok).toBe(true);
 	});
 
 	it("an abandoned target's late sync commits nothing", async () => {

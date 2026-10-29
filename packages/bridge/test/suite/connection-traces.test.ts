@@ -32,7 +32,7 @@ interface TraceManager {
 
 /** A Manager stand-in: records calls; `prompt` settles when disposal
  * releases it (as a real abort would); `renameSession` is gated. */
-function traceManager(stem: string): TraceManager {
+function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`): TraceManager {
 	const calls: string[] = [];
 	let disposed = 0;
 	const gates: Array<() => void> = [];
@@ -64,7 +64,7 @@ function traceManager(stem: string): TraceManager {
 		document,
 		liveSessionId: stem,
 		cwd: `/proj`,
-		sessionFile: `/proj/sessions/${stem}.jsonl`,
+		sessionFile,
 		createdAt: new Date(0).toISOString(),
 		onPatch: () => () => {},
 		addConnection(handle: ConnectionHandle) {
@@ -118,6 +118,7 @@ function makeBundle(): Bundle {
 	const project: ProjectConfig = { id: "proj", cwd: root, sessionDir };
 	const managers = new Map<string, TraceManager>();
 	const sessionsChanged: string[] = [];
+	let freshCount = 0;
 	const link = createLocalExecutionLink({
 		openManager: async (_p, abs) => {
 			const stem = basename(abs, ".jsonl");
@@ -126,7 +127,11 @@ function makeBundle(): Bundle {
 			return tm.manager;
 		},
 		createManager: async () => {
-			throw new Error("not used");
+			freshCount += 1;
+			const stem = `new-${freshCount}`;
+			const tm = traceManager(stem, join(sessionDir, `${stem}.jsonl`));
+			managers.set(stem, tm);
+			return tm.manager;
 		},
 		idleGcMs: 60_000,
 		unflushedIdleGcMs: 60_000,
@@ -165,7 +170,10 @@ function makeBundle(): Bundle {
 			const activation = await link.open(conn, project, stem, abs, cursor ?? null);
 			return { ok: true, session: activation.ref };
 		},
-		newSession: async () => ({ ok: false, error: "unused" }),
+		newSession: async (_projectId, conn, text, options) => {
+			const activation = await link.create(conn, project, text, options);
+			return { ok: true, session: activation.ref };
+		},
 		detach: (conn) => link.release(conn),
 		closeSession: async (projectId, stem) => {
 			const activation = await link.awaitSettled(projectId, stem);
@@ -349,6 +357,47 @@ describe("Connection protocol traces", () => {
 		// drain awaits any in-flight creation.
 		await bundle.link.dispose();
 		expect(tm.disposeCalls()).toBe(1);
+	});
+
+	it("newSession attributes its initial sync and reply with the operation id", async () => {
+		const bundle = makeBundle();
+		const { serverWs, clientWs } = await createWsPair();
+		await waitForOpen(clientWs);
+		const frames = collectFrames(clientWs);
+		new Connection(serverWs, bundle.verbs, null, false);
+		cleanups.push(() => {
+			serverWs.close();
+			clientWs.close();
+		});
+
+		// An unattributed creation is refused before anything is created.
+		clientWs.send(JSON.stringify({ id: "n1", verb: "newSession", projectId: "proj", text: "hello" }));
+		const missing = await replyFor(frames, "n1");
+		expect(missing.ok).toBe(false);
+		expect(missing.error).toBe("Missing `operationId`");
+
+		// The creation's initial sync carries the operation id (the frame is
+		// emitted inside the transition, so the attribution window is exact),
+		// and so does the reply.
+		clientWs.send(
+			JSON.stringify({ id: "n2", verb: "newSession", projectId: "proj", text: "hello", operationId: "op-9" }),
+		);
+		const sync = (await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace")) as Record<
+			string,
+			unknown
+		>;
+		expect(sync.operationId).toBe("op-9");
+		const reply = await replyFor(frames, "n2");
+		expect(reply.ok).toBe(true);
+		expect(reply.operationId).toBe("op-9");
+
+		// A plain open's initial sync stays unattributed.
+		clientWs.send(JSON.stringify({ id: "o1", verb: "openSession", projectId: "proj", stem: "plain" }));
+		const sync2 = (await waitForFrame(
+			frames,
+			(f) => (f as Record<string, unknown>).kind === "replace" && f !== sync,
+		)) as Record<string, unknown>;
+		expect(sync2.operationId).toBeUndefined();
 	});
 
 	it("session_closed precedes the close reply on the closing Connection", async () => {

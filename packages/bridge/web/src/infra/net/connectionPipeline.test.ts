@@ -10,7 +10,7 @@ import type { BridgeClient, PatchOp, ServerPushMessage } from "../../../../src/c
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import { type ConnectionPipeline, createConnectionPipeline } from "./connectionPipeline.ts";
-import { resetNavigationForTests } from "./navigation.ts";
+import { navigationOpen, resetNavigationForTests } from "./navigation.ts";
 
 // Node test env: the pipeline touches DOM scheduling APIs at creation
 // (document.addEventListener) and in scheduleFlush. Stub the minimum
@@ -37,7 +37,23 @@ function fakeClient(): {
 	mirror: { document: ReturnType<typeof initFromEntries>; revision: number };
 } {
 	const mirror = { document: initFromEntries([]), revision: 0 };
-	return { client: { mirror } as unknown as BridgeClient, mirror };
+	// openSession/newSession succeed immediately, so an address-bearing frame
+	// pushed right after a navigation intent arrives while its transition is
+	// still pending — the wire order (the server pushes the initial sync
+	// before the RPC reply).
+	const client = {
+		mirror,
+		openSession: async (projectId: string, stem: string) => ({
+			ok: true,
+			session: { projectId, sessionId: `id-${stem}`, stem },
+		}),
+		newSession: async (projectId: string, _text: string, options: { operationId: string }) => ({
+			ok: true,
+			session: { projectId, sessionId: "s2", stem: "next" },
+			operationId: options.operationId,
+		}),
+	} as unknown as BridgeClient;
+	return { client, mirror };
 }
 
 function patch(ops: PatchOp[]): ServerPushMessage {
@@ -132,7 +148,7 @@ describe("connectionPipeline live-patch flush policy", () => {
 		expect(getStore().getState().pullTick).toBe(pullBefore);
 	});
 
-	it("an address-bearing replace is never observed torn: the address, the id, the document, and the revision land in one store write", () => {
+	it("an address-bearing replace is never observed torn: the address, the id, the document, and the revision land in one store write", async () => {
 		// G3: the replace path used to publish the new session's document
 		// before the address committed (and the delta path committed the
 		// address before the document), so a store subscriber could observe
@@ -146,32 +162,39 @@ describe("connectionPipeline live-patch flush policy", () => {
 		resetNavigationForTests({ getClient: () => client });
 		pipeline = createConnectionPipeline(client);
 
-		const observed: Array<{ stem: string | null; doc: unknown }> = [];
+		const observed: Array<{ stem: string | null; sessionId: string | null; doc: unknown }> = [];
 		const unsubscribe = getStore().subscribe((s) => {
-			observed.push({ stem: s.currentStem, doc: s.document });
+			observed.push({ stem: s.currentStem, sessionId: s.activeSessionId, doc: s.document });
 		});
 		try {
 			const next = initFromEntries([]);
 			mirror.document = next;
 			mirror.revision += 1;
 
+			// The frame arrives while an open transition for the target is
+			// pending — the wire order. (An unattributed frame with no owning
+			// transition can no longer select a new address at all.)
+			const opened = navigationOpen({ projectId: "proj", stem: "next" });
 			pipeline.onPush({
 				kind: "replace",
 				session: { projectId: "proj", sessionId: "s2", stem: "next" },
 				document: next,
 			});
+			await opened;
 
 			const s = getStore().getState();
 			expect(s.currentStem).toBe("next");
 			expect(s.activeSessionId).toBe("s2");
 			expect(s.document).toBe(next);
-			// Every observation pairs an address with the document it belongs
-			// to: the new address only with the new document, any other
-			// address only with the old one — never a cross.
+			// The optimistic stage may publish the new address while the old
+			// document still shows (the id is null until the initial sync), so
+			// the untorn-pairing invariant is about the frame's publication:
+			// the new document never appears under another address, and the
+			// durable id never appears without its document.
 			expect(observed.length).toBeGreaterThan(0);
 			for (const o of observed) {
-				if (o.stem === "next") expect(o.doc).toBe(next);
-				else expect(o.doc).not.toBe(next);
+				if (o.doc === next) expect(o.stem).toBe("next");
+				else expect(o.sessionId).not.toBe("s2");
 			}
 		} finally {
 			unsubscribe();

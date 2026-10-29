@@ -213,7 +213,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// as the rendered view.
 		if (push.kind === "replace") {
 			barrier();
-			navigationInitialSync(push.session, null);
+			navigationInitialSync(push.session, null, push.operationId);
 			const ref = push.session;
 			const doc = client.mirror.document;
 			const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
@@ -237,7 +237,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// the delta write-through below runs only under that committed id.
 		if (push.kind === "patch" && push.session) {
 			barrier();
-			navigationInitialSync(push.session, push.ops);
+			navigationInitialSync(push.session, push.ops, push.operationId);
 			writeThroughDelta(push.session);
 			store.getState().bumpPullTick();
 			return;

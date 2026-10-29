@@ -412,7 +412,9 @@ The timer model and its reservation invariant govern this runtime.
 
 ### `newSession`
 
-`newSession` requires a non-empty text prompt and a Project id. The
+`newSession` requires a non-empty text prompt, a Project id, and an
+`operationId` minted by the client's selection owner (a missing id is refused
+before anything is created). The
 execution link creates a fresh Manager, derives its allocated stem from the
 Manager's session
 file, and registers the Activation. Before attaching the Connection it applies
@@ -424,6 +426,13 @@ clamped to the model — so a pick never inherits the placeholder default
 model's clamped level from `setModel`'s re-derivation. Events that arrive
 before attachment remain in the canonical Document and are covered by the
 synchronous initial sync.
+
+The Connection stamps the request's `operationId` onto the transition's
+initial-sync frame and reply: the attach (which emits the frame) is
+synchronous inside the serialized transition, so the attribution window is
+exact — only that creation's frame carries the id, and a later transition
+cannot. The id is the client's admission handle for the frame, not server
+state.
 
 If model selection is unknown or prompt admission fails, the fresh Activation
 is disposed and the RPC returns an error; no empty Session is left behind. On
