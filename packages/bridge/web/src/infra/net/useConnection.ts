@@ -21,6 +21,7 @@ import { parseRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
+import { createBrowserFlushScheduler } from "./browserScheduler.ts";
 import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
@@ -157,7 +158,7 @@ export function useConnection(): { retry: () => void } {
 			setGlobalClient(client);
 
 			// Push ingestion + coalescing + cache write-through, frozen at cleanup.
-			const pipeline = createConnectionPipeline(client);
+			const pipeline = createConnectionPipeline(client, createBrowserFlushScheduler());
 			client.onPush = pipeline.onPush;
 			connectionCleanup = pipeline.cleanup;
 

@@ -1,13 +1,15 @@
 // ============================================================================
 // React store context — provides the Zustand ClientStore to all components.
-// Created once at app mount; consumed via useStore(selector).
+// The store instance lives in store.ts (DOM- and React-free) so the
+// imperative connection and event paths can reach it without a context;
+// this module adds the React bindings over that one instance.
 // ============================================================================
 
 import { createContext, useContext } from "react";
 import { useStore as useZustandStore } from "zustand";
-import { type ClientStore, createClientStore } from "./store.ts";
+import { type ClientStore, getStore } from "./store.ts";
 
-const store = createClientStore();
+const store = getStore();
 const StoreContext = createContext(store);
 
 /** Provide the store to children. Wrap the app root. */
@@ -25,6 +27,4 @@ export function useStore<T>(selector: (state: ClientStore) => T): T {
 }
 
 /** Get the store object directly (for actions, outside render). */
-export function getStore() {
-	return store;
-}
+export { getStore };

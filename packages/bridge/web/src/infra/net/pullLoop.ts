@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { getAtPath, isEntrySealed, type JsonValue, planPull } from "../../../../src/core/index.ts";
-import { getStore } from "../state/store.tsx";
+import { getStore } from "../state/store.ts";
 import { getGlobalClient } from "./client.ts";
 import { drainPullQueue } from "./pullQueue.ts";
 

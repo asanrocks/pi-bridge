@@ -36,6 +36,21 @@ export function createClientStore() {
 }
 
 // ---------------------------------------------------------------------------
+// The application store — one instance, outside React
+// ---------------------------------------------------------------------------
+
+// The imperative connection and event paths (pipeline, navigation, pull
+// loop) need the store without a React context; this module is DOM- and
+// React-free, so they import it directly and the React context (store.tsx)
+// re-exports the same singleton.
+const applicationStore = createClientStore();
+
+/** The application store (for actions, outside render). */
+export function getStore() {
+	return applicationStore;
+}
+
+// ---------------------------------------------------------------------------
 // Public surface — consumers keep importing from this module.
 // ---------------------------------------------------------------------------
 

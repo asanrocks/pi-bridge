@@ -9,23 +9,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient, PatchOp, ServerPushMessage } from "../../../../src/core/index.ts";
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
-import { type ConnectionPipeline, createConnectionPipeline } from "./connectionPipeline.ts";
+import { type ConnectionPipeline, createConnectionPipeline, type FlushScheduler } from "./connectionPipeline.ts";
 import { navigationOpen, resetNavigationForTests } from "./navigation.ts";
 
-// Node test env: the pipeline touches DOM scheduling APIs at creation
-// (document.addEventListener) and in scheduleFlush. Stub the minimum
-// surface; rAF never fires, so deferred flushes stay pending for the
-// assertions below.
-const g = globalThis as unknown as {
-	document?: unknown;
-	requestAnimationFrame?: () => number;
-	cancelAnimationFrame?: () => void;
-};
-
-function stubDom(): void {
-	g.document = { hidden: false, addEventListener: () => {}, removeEventListener: () => {} };
-	g.requestAnimationFrame = vi.fn(() => 1);
-	g.cancelAnimationFrame = vi.fn();
+// The pipeline's scheduling is an injected FlushScheduler; the manual fake
+// records the requested frame without firing it, so deferred flushes stay
+// pending for the assertions below (and `flushFrame` settles one on demand).
+function manualScheduler(): { scheduler: FlushScheduler; frameRequested(): boolean; flushFrame(): void } {
+	let frame: (() => void) | null = null;
+	let requested = false;
+	const scheduler: FlushScheduler = {
+		hidden: () => false,
+		onVisibilityChange: () => () => {},
+		scheduleFrame(flush: () => void) {
+			requested = true;
+			frame = flush;
+			return () => {
+				frame = null;
+			};
+		},
+	};
+	return {
+		scheduler,
+		frameRequested: () => requested,
+		flushFrame: () => {
+			const f = frame;
+			frame = null;
+			f?.();
+		},
+	};
 }
 
 // The pipeline reads client.mirror.document at flush time (the real
@@ -69,23 +81,22 @@ describe("connectionPipeline live-patch flush policy", () => {
 	});
 
 	it("flushes a status-op patch synchronously", () => {
-		stubDom();
+		const sched = manualScheduler();
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, sched.scheduler);
 		const next = initFromEntries([]);
 		mirror.document = next;
 
 		pipeline.onPush(patch([{ op: "replace", path: "/status/isStreaming", value: false }]));
 
-		// No rAF/timer yield: the store must already hold the new document.
+		// No frame/timer yield: the store must already hold the new document.
 		expect(getStore().getState().document).toBe(next);
-		expect(g.requestAnimationFrame).not.toHaveBeenCalled();
+		expect(sched.frameRequested()).toBe(false);
 	});
 
 	it("flushes a mixed status + append batch synchronously", () => {
-		stubDom();
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
 		const next = initFromEntries([]);
 		mirror.document = next;
 
@@ -100,18 +111,18 @@ describe("connectionPipeline live-patch flush policy", () => {
 	});
 
 	it("defers a non-status patch to the coalescing schedule", () => {
-		stubDom();
+		const sched = manualScheduler();
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, sched.scheduler);
 		const next = initFromEntries([]);
 		mirror.document = next;
 
 		pipeline.onPush(patch([{ op: "append", path: "/entries/e1/content/0/text", value: "hi" }]));
 
-		// Scheduled (rAF requested), not applied — the store still holds the
-		// previous document until the coalescing flush fires.
+		// Scheduled (a frame requested), not applied — the store still holds
+		// the previous document until the coalescing flush fires.
 		expect(getStore().getState().document).not.toBe(next);
-		expect(g.requestAnimationFrame).toHaveBeenCalled();
+		expect(sched.frameRequested()).toBe(true);
 	});
 
 	it("publishes the mirror revision when a live patch replaces an entry root", () => {
@@ -119,9 +130,8 @@ describe("connectionPipeline live-patch flush policy", () => {
 		// ViewModel cache key (same ids, same lengths), so re-projection is
 		// gated on the document revision — a declared projection input the
 		// pipeline publishes from the mirror, with the document it describes.
-		stubDom();
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
 		const next = initFromEntries([]);
 		mirror.document = next;
 
@@ -155,12 +165,11 @@ describe("connectionPipeline live-patch flush policy", () => {
 		// the new document under the old address or the reverse. The
 		// publication is now the navigation reactor's — one store write — and
 		// this subscriber asserts the pair is never torn.
-		stubDom();
 		const w = globalThis as unknown as { window?: unknown };
 		w.window = { location: { pathname: "/" }, history: { replaceState: vi.fn() } };
 		const { client, mirror } = fakeClient();
 		resetNavigationForTests({ getClient: () => client });
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
 
 		const observed: Array<{ stem: string | null; sessionId: string | null; doc: unknown }> = [];
 		const unsubscribe = getStore().subscribe((s) => {
@@ -215,7 +224,6 @@ describe("connectionPipeline session_closed handling", () => {
 	let replaceState: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
-		stubDom();
 		// writeRoute reads window.location and writes history — stub both, as
 		// no other test in this file routes.
 		replaceState = vi.fn();
@@ -237,7 +245,7 @@ describe("connectionPipeline session_closed handling", () => {
 
 	it("lands on the Project home when the closed Session is the rendered one", async () => {
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
 		// Commit the rendered view through a real attach (generation 1), as
 		// the wire would: a close may end only the committed observation.
 		const opened = navigationOpen({ projectId: "proj", stem: "stem" });
@@ -266,7 +274,7 @@ describe("connectionPipeline session_closed handling", () => {
 
 	it("ignores a close of some other Session", async () => {
 		const { client, mirror } = fakeClient();
-		pipeline = createConnectionPipeline(client);
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
 		const opened = navigationOpen({ projectId: "proj", stem: "stem" });
 		const committed = initFromEntries([]);
 		mirror.document = committed;

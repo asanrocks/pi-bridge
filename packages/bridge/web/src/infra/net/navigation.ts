@@ -77,7 +77,7 @@ import {
 } from "../../../../src/core/index.ts";
 import { lookupSessionId } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
-import { getStore } from "../state/store.tsx";
+import { getStore } from "../state/store.ts";
 import { getGlobalClient } from "./client.ts";
 import { resolveLatestSession } from "./latestSession.ts";
 import type { LocalSessionSeed } from "./sessionBoot.ts";

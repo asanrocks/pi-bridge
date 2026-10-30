@@ -365,6 +365,18 @@ Tests preserve the same boundaries used in production.
 - Web store, route, candidate-mirror, pull-loop, and cache tests remain
   browser-independent where possible. The web TypeScript gate and the curated
   browser-smoke bundle protect the core/ViewModel boundary.
+- The cross-layer lifecycle trace (`test/suite/lifecycle-trace.test.ts`)
+  drives the whole stack at once: the real Daemon over faux-provider
+  Managers, a real `BridgeClient` on a real WebSocket, the real connection
+  pipeline (with an injected flush scheduler), and the real navigation
+  actor. Its scenarios — attach/stream/seal, a switch leaving a session
+  streaming headless, close-across-navigation, reconnect through the cache
+  cursor, and daemon shutdown mid-turn — assert the invariants that must
+  hold across every interleaving: the mirror projects the canonical
+  Document, a left-behind stream never repaints the successor, a dead
+  observation delivers nothing, a close reply implies the runtime was
+  disposed exactly once, and a shutdown drain settles streaming sessions
+  before it resolves.
 
 The important test oracle is convergence: a mirror seeded from cache and
 advanced by a valid initial-sync patch must equal the server's full initial

@@ -25,8 +25,21 @@ import {
 } from "../../../../src/core/index.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
-import { getStore } from "../state/store.tsx";
+import { getStore } from "../state/store.ts";
 import { advanceCacheBase, cacheBaseDocFor, navigationObservation } from "./navigation.ts";
+
+/** Injectable scheduling for the pipeline's coalescing (the browser's
+ * rAF/visibility APIs in production; deterministic fakes in tests — this
+ * module is DOM-free, so the cross-layer trace harness can run it in Node).
+ * `scheduleFrame` returns the cancel for a scheduled flush. */
+export interface FlushScheduler {
+	/** True while the tab is hidden (coalescing drops to ~1s). */
+	hidden(): boolean;
+	/** Register a visibility listener; the return value removes it. */
+	onVisibilityChange(listener: () => void): () => void;
+	/** Schedule one flush; the return value cancels it. */
+	scheduleFrame(flush: () => void): () => void;
+}
 
 export interface ConnectionPipeline {
 	/** Push handler for BridgeClient.onPush. No-op after cleanup. */
@@ -35,7 +48,7 @@ export interface ConnectionPipeline {
 	cleanup(): void;
 }
 
-export function createConnectionPipeline(client: BridgeClient): ConnectionPipeline {
+export function createConnectionPipeline(client: BridgeClient, scheduler: FlushScheduler): ConnectionPipeline {
 	let disposed = false;
 
 	// ── Patch coalescing ────────────────────────────────────────────────
@@ -47,13 +60,13 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	// state wholesale), as does any patch touching `/status` (see the
 	// live-patch handler).
 	let pendingOps: PatchOp[] | null = null;
-	let rafId: number | null = null;
+	let frameCancel: (() => void) | null = null;
 	let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
 	const cancelPending = () => {
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-			rafId = null;
+		if (frameCancel !== null) {
+			frameCancel();
+			frameCancel = null;
 		}
 		if (hideTimer !== null) {
 			clearTimeout(hideTimer);
@@ -124,18 +137,18 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 	};
 
 	const scheduleFlush = () => {
-		if (document.hidden) {
+		if (scheduler.hidden()) {
 			if (hideTimer === null) hideTimer = setTimeout(flush, 1000);
-		} else if (rafId === null) {
-			rafId = requestAnimationFrame(() => flush());
+		} else if (frameCancel === null) {
+			frameCancel = scheduler.scheduleFrame(flush);
 		}
 	};
 
-	const onVisibilityChange = () => {
-		if (document.hidden) {
-			if (rafId !== null) {
-				cancelAnimationFrame(rafId);
-				rafId = null;
+	const offVisibilityChange = scheduler.onVisibilityChange(() => {
+		if (scheduler.hidden()) {
+			if (frameCancel !== null) {
+				frameCancel();
+				frameCancel = null;
 			}
 			if (pendingOps !== null && hideTimer === null) {
 				hideTimer = setTimeout(flush, 1000);
@@ -147,7 +160,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			}
 			if (pendingOps !== null) flush();
 		}
-	};
+	});
 
 	// ── Push handler ───────────────────────────────────────────────────
 
@@ -275,13 +288,11 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		}
 	};
 
-	document.addEventListener("visibilitychange", onVisibilityChange);
-
 	return {
 		onPush,
 		cleanup() {
 			disposed = true;
-			document.removeEventListener("visibilitychange", onVisibilityChange);
+			offVisibilityChange();
 			cancelPending();
 			pendingOps = null;
 		},

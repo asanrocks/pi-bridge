@@ -23,7 +23,7 @@ import type { Document, SessionRef } from "../../../../src/core/index.ts";
 import type { Route } from "../lib/routes.ts";
 import { writeRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
-import { getStore } from "../state/store.tsx";
+import { getStore } from "../state/store.ts";
 
 /** What a step may ask about the currently published view. */
 export interface ViewPublication {
