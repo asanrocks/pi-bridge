@@ -53,6 +53,7 @@ again; use the phrase given:
 | family | "hue" ("kinds share a hue") |
 | lane | describe the serialization in words |
 | wants | "pending pulls" |
+| lease | "capability" |
 
 One code-local name is a sanctioned exception: **`LaneLayout`**
 (`src/viewmodel/tree.ts`), the history tree's layout, where a *lane* is a
@@ -125,10 +126,7 @@ and [core protocol](core/protocol.md).
    registration: it is the only path to that Session's runtime — commands,
    mutations, and observation registration — and it rejects once its
    registration ended. The registry issues capabilities; it never hands out
-   a Manager. (The current code names this a *lease*,
-   `src/host/session-lease.ts`, with one observer per registration; ADR 19
-   generalizes it with independently releasable observations and a joinable
-   release.)
+   a Manager.
 8. A **reactor** *(bound)* is a serialized state machine over one lifetime:
    typed messages are applied one at a time by a synchronous step, and
    admitted effects return as ordinary messages carrying the epoch of the

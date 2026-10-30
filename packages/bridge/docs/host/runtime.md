@@ -191,13 +191,22 @@ switches to another Session. Git-stamp writing is enabled by default and can
 be disabled with `gitStamps: false`, primarily for tests. The complete stamp
 contract is in [git-stamps.md](git-stamps.md).
 
-## Session work admission
+## The Session actor
 
-`src/host/session-execution.ts` owns the order of the work admitted against
-one registration's runtime. Work arrives in two admission classes, and the
-classes exist because the bridge must not add a competing turn lifecycle
-(architecture invariant 5: pi's event loop is serial and the bridge observes
-it):
+`src/host/session-actor.ts` is the one owner of one Session's runtime
+lifetime: the Manager and its canonical Document, command admission,
+observation registration, and terminal teardown, behind one phase state
+machine (`creating → live → closing → closed`). Clients reach the runtime
+only through a `SessionCapability` the actor issued — the registration
+identity, the two admission classes, observation registration, and a
+joinable release — and every observation is its own independently
+releasable `ObservationCapability`. The actor is created around a built
+runtime, so its phase begins `live`; `creating` names the pre-registration
+window the registry owns today.
+
+Work arrives in two admission classes, and the classes exist because the
+bridge must not add a competing turn lifecycle (architecture invariant 5:
+pi's event loop is serial and the bridge observes it):
 
 - **Mutations** (`setModel`, `setThinkingLevel`, `renameSession`, `setLabel`,
   `navigate`) are serialized among themselves — one at a time, in admission
@@ -210,25 +219,29 @@ it):
   turn would stall the live pulls the client issues while content streams.
   Immediate work is tracked, so the terminal drain accounts for it.
 
-`end` is the terminal boundary: admission stops synchronously, queued
+`close` is the terminal boundary: admission stops synchronously, queued
 mutations reject, the runtime is disposed exactly once (its disposal aborts
 and finalizes the in-flight turn, which settles the tracked work admitted
-against it), and every tracked operation is awaited before `end` resolves.
-Registry collection and daemon shutdown both end through it, so a Manager is
-disposed exactly once regardless of which path terminates it.
+against it), every tracked operation is awaited, and every live observation
+is released after the drain — they owned delivery of the teardown's final
+patches, so nothing registered through a capability outlives the actor's
+tear-down. Registry collection and daemon shutdown both close through it,
+so a Manager is disposed exactly once regardless of which path terminates
+it.
 
 ## Connection
 
 A Connection owns exactly one WebSocket. It starts detached and can be attached
-through at most one **Session lease** at a time: the Activation registry issues
-a `SessionLease` (`src/host/session-lease.ts`) for one registration, and it is
+through at most one **Session capability** at a time: the Activation registry
+issues the Session actor's `SessionCapability` for one registration, and it is
 the only path to the Session's runtime — the Connection never holds the
 Manager itself, so a command cannot be written that bypasses the registration's
-admission check. `attachLease` first releases the current lease (removing its
-observer from that runtime and ending its admission), records the new lease,
-resets the connection-local `CompactCodec`, and installs the lease's observer,
-which asks the Manager for initial sync. `detach` releases the lease without
-disposing the Activation. A lease rejects commands once its registration ended
+admission check. `attachCapability` first releases the current capability
+(removing its observer from that runtime and ending its admission), records
+the new capability, resets the connection-local `CompactCodec`, and registers
+the capability's observer, which asks the Manager for initial sync. `detach`
+releases the capability without disposing the Activation. A capability
+rejects commands once its registration ended
 — collection, replacement, or daemon shutdown — including the mid-collection
 window before the terminal `session_closed` push. A command admitted before
 its registration ended still completes against the runtime it captured, so the

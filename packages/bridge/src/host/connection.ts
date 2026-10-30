@@ -50,7 +50,7 @@ import {
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
 import type { ConnectionHandle } from "./manager.ts";
-import type { SessionLease } from "./session-lease.ts";
+import type { SessionCapability } from "./session-actor.ts";
 
 // ============================================================================
 // DaemonVerbs — the Connection → Daemon seam (ADR 11)
@@ -159,15 +159,15 @@ export interface DaemonVerbs {
 // Connection — the serialized protocol actor for one WebSocket.
 //
 // It owns the socket, RPC correlation, its own attachment-transition line,
-// and the SessionLease that is its current attachment. It owns no Session
-// execution state: attached-session commands are issued through the lease
-// (captured at handler entry, before any await), and the two serialization
-// domains stay separate —
+// and the SessionCapability that is its current attachment. It owns no
+// Session execution state: attached-session commands are issued through the
+// capability (captured at handler entry, before any await), and the two
+// serialization domains stay separate —
 //
 //   Connection transitions (openSession, newSession, detach): serialized
 //     among themselves, in arrival order (this.transitions).
-//   Session work (commands, mutations): serialized by the SessionExecution
-//     behind the lease; the Connection adds no ordering of its own.
+//   Session work (commands, mutations): serialized by the Session actor
+//     behind the capability; the Connection adds no ordering of its own.
 // ============================================================================
 
 export class Connection {
@@ -178,9 +178,10 @@ export class Connection {
 	private subscriptions = new Set<string>();
 	private codec = new CompactCodec();
 	private handle: ConnectionHandle;
-	/** The current attachment: a registry-issued lease, never the Session's
-	 * runtime itself. Raw Manager access is a type error by construction. */
-	private lease: SessionLease | null = null;
+	/** The current attachment: a Session actor-issued capability, never the
+	 * Session's runtime itself. Raw Manager access is a type error by
+	 * construction. */
+	private capability: SessionCapability | null = null;
 	/** The operation id of the newSession transition currently in flight, if
 	 * any: the transition's attach happens synchronously inside the verb
 	 * (transitions serialize on this Connection), so the initial-sync frame
@@ -234,14 +235,14 @@ export class Connection {
 
 	// ── Attachment state ──────────────────────────────────────────────────
 
-	/** True while a Session lease is held. */
+	/** True while a Session capability is held. */
 	get isAttached(): boolean {
-		return this.lease !== null;
+		return this.capability !== null;
 	}
 
 	/** The address + identity of the attached session (ADR 11). */
 	get attachedSession(): SessionRef | null {
-		return this.lease?.ref ?? null;
+		return this.capability?.ref ?? null;
 	}
 
 	/** True once the socket closed and the Connection was disposed. A disposed
@@ -251,22 +252,23 @@ export class Connection {
 		return this._disposed;
 	}
 
-	/** Accept a registry-issued lease as this Connection's attachment. The
-	 * codec is reset before the observer is installed, so the initial-sync
-	 * frame the installation emits cannot reuse a remembered append path
-	 * from the previous session (ADR 11). */
-	attachLease(lease: SessionLease, cursor: PrefixCursor | null): void {
+	/** Accept a Session actor-issued capability as this Connection's
+	 * attachment. The codec is reset before the observer is installed, so the
+	 * initial-sync frame the installation emits cannot reuse a remembered
+	 * append path from the previous session (ADR 11). */
+	attachCapability(capability: SessionCapability, cursor: PrefixCursor | null): void {
 		this.detach();
-		this.lease = lease;
+		this.capability = capability;
 		this.codec.reset();
-		lease.attachObserver(this.handle, cursor);
+		capability.observe(this.handle, cursor);
 	}
 
-	/** Release the current attachment: the lease removes its observer from
-	 * the runtime and ends; the activation stays alive for idle collection. */
+	/** Release the current attachment: the capability removes its observer from
+	 * the runtime and ends its admission; the activation stays alive for idle
+	 * collection. */
 	detach(): void {
-		this.lease?.release();
-		this.lease = null;
+		void this.capability?.release();
+		this.capability = null;
 	}
 
 	/** Release the current attachment and drain the transition chain.
@@ -330,9 +332,9 @@ export class Connection {
 	 * cannot retarget it: the command executes against, and reports on, the
 	 * session that was attached when the request arrived.
 	 */
-	private requireAttachment(): SessionLease {
-		if (!this.lease) throw new Error("no session attached");
-		return this.lease;
+	private requireAttachment(): SessionCapability {
+		if (!this.capability) throw new Error("no session attached");
+		return this.capability;
 	}
 
 	private async handleMessage(msg: ClientMessage): Promise<void> {
@@ -342,7 +344,7 @@ export class Connection {
 			switch (verb) {
 				// ── Attached session verbs ─────────────────────────────────
 				case "prompt": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as PromptRequest;
 					if (typeof m.text !== "string") throw new Error("Missing `text`");
 					// Light shape validation: images are opaque base64 blobs relayed
@@ -364,70 +366,70 @@ export class Connection {
 					) {
 						throw new Error("Invalid `images`");
 					}
-					await lease.command((session) => session.prompt(m.text, images));
+					await capability.command((session) => session.prompt(m.text, images));
 					this.sendReply(id, true);
 					break;
 				}
 				case "abort": {
-					const lease = this.requireAttachment();
-					await lease.command((session) => session.abort());
+					const capability = this.requireAttachment();
+					await capability.command((session) => session.abort());
 					this.sendReply(id, true);
 					break;
 				}
 				case "discardSteer": {
-					const lease = this.requireAttachment();
-					await lease.command((session) => session.discardSteer());
+					const capability = this.requireAttachment();
+					await capability.command((session) => session.discardSteer());
 					this.sendReply(id, true);
 					break;
 				}
 				case "setModel": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as SetModelRequest;
-					await lease.mutate((session) => session.setModel(m.provider, m.model));
+					await capability.mutate((session) => session.setModel(m.provider, m.model));
 					this.sendReply(id, true);
 					break;
 				}
 				case "setThinkingLevel": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as SetThinkingLevelRequest;
-					await lease.mutate((session) => session.setThinkingLevel(m.level));
+					await capability.mutate((session) => session.setThinkingLevel(m.level));
 					this.sendReply(id, true);
 					break;
 				}
 				case "renameSession": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as RenameSessionRequest;
 					if (typeof m.name !== "string") throw new Error("Missing `name`");
-					await lease.mutate((session) => session.renameSession(m.name));
+					await capability.mutate((session) => session.renameSession(m.name));
 					this.sendReply(id, true);
 					// The refresh broadcast belongs to the command's target — read
 					// from the capture, never from the live attachment, which a
 					// transition completing during the rename may have moved.
-					this.daemonVerbs.sessionsChanged(lease.ref.projectId);
+					this.daemonVerbs.sessionsChanged(capability.ref.projectId);
 					break;
 				}
 				case "setLabel": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as SetLabelRequest;
 					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 					if (typeof m.label !== "string") throw new Error("Missing `label`");
-					await lease.mutate((session) => session.setLabel(m.entryId, m.label));
+					await capability.mutate((session) => session.setLabel(m.entryId, m.label));
 					this.sendReply(id, true);
 					break;
 				}
 				case "navigate": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as NavigateRequest;
 					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					await lease.mutate((session) => session.navigate(m.entryId));
+					await capability.mutate((session) => session.navigate(m.entryId));
 					this.sendReply(id, true);
 					break;
 				}
 				case "recoverTurn": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					// The Manager re-derives the boundary and refuses when the tail
 					// is not recoverable; `action` reports which repair ran.
-					const action = await lease.command((session) => session.recoverTurn());
+					const action = await capability.command((session) => session.recoverTurn());
 					this.send({ id, ok: true, action: action as unknown as JsonValue });
 					break;
 				}
@@ -612,8 +614,8 @@ export class Connection {
 					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
 					// Requires an attachment: the recorded commit belongs to the
 					// attached session's repository, so its cwd is the query base.
-					const lease = this.requireAttachment();
-					const result = await lease.command((session) => this.daemonVerbs.gitShow(m.commit, session.cwd));
+					const capability = this.requireAttachment();
+					const result = await capability.command((session) => this.daemonVerbs.gitShow(m.commit, session.cwd));
 					this.send({ id, ok: true, ...result });
 					break;
 				}
@@ -645,10 +647,10 @@ export class Connection {
 
 				// ── Connection-local verb ──────────────────────────────────
 				case "pull": {
-					const lease = this.requireAttachment();
+					const capability = this.requireAttachment();
 					const m = msg as unknown as PullRequest;
 					if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
-					const values = await lease.command((session) => {
+					const values = await capability.command((session) => {
 						const out: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
 						for (const req of m.requests) {
 							const entry = session.document.entries[req.entryId];

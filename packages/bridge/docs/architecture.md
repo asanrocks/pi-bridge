@@ -286,11 +286,11 @@ These are the load-bearing rules for changes across layers:
    no competing turn lifecycle.
 6. **A Manager serves exactly one Session.** An Activation is never rebound;
    Project/stem resolution and activation reservations enforce exclusivity.
-   A Connection reaches a Session only through a registry-issued lease, and
-   one SessionExecution owns the work admitted against that registration:
+   A Connection reaches a Session only through a registry-issued capability,
+   and the Session actor owns the work admitted against that registration:
    mutations serialize in admission order, turns/aborts/reads run immediately
-   but tracked, and its terminal `end` is the one disposal path — collection
-   and shutdown both go through it.
+   but tracked, and its terminal `close` is the one disposal path —
+   collection and shutdown both go through it.
 7. **Lazy values exist only at the wire/cache boundary.** The canonical
    Document contains real values; null in a projection means not pulled.
 8. **Cancellation finalizes.** Aborted turns produce durable or pending error
@@ -316,7 +316,7 @@ These are the load-bearing rules for changes across layers:
 16. **The cache is disposable derived state.** Server validation and
     authoritative initial sync determine correctness, not IndexedDB contents.
 17. **Async work is admitted by a named owner.** Every asynchronous
-    transition belongs to a LifecycleScope, a reactor, or a SessionExecution;
+    transition belongs to a LifecycleScope, a reactor, or the Session actor;
     a superseded or terminal owner ignores late completions instead of each
     call site re-checking "is this still current?", admits no new externally
     visible work once superseded (a stale completion is dropped, and a not-
@@ -337,8 +337,7 @@ guarded against.
 | Owner | Admits | Supersede rule | Terminal |
 | --- | --- | --- | --- |
 | Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution, creation transitions | Admission is gated by intent ownership: a superseded transition sends nothing and settles its caller; a completion carries the admitting message's epoch and the step compares; a creation's initial sync carries its operation id and commits only while its creation is the newest intent | `close()` — drains messages, effects, completions |
-| `SessionExecution` | Session commands against one registration | Commands capture the lease; admission rejects once `end` began | `end()` — disposes the runtime exactly once, drains tracked work |
-| `SessionLease` | One Connection's attachment | Released when the registration ends or the Connection detaches | `release()` — removes the observer, rejects commands |
+| Session actor (`host/session-actor.ts`) | Session commands and observations against one registration | Commands capture the capability; admission rejects once `close` began; observations release independently per registration handle | `close()` — disposes the runtime exactly once, drains tracked work, releases every observation |
 | `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
 | `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
 | `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` *before* the runtime is disposed, so every drained observation appends to a live runtime |

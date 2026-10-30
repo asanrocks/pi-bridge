@@ -94,10 +94,10 @@ Behavior-preserving slices, each leaving the bridge suite green:
 
 1. The contracts and their characterization tests (this change).
 2. Introduce the Session actor: it absorbs `SessionExecution`, observation
-   registration, Git observation teardown, and disposal.
+   registration, Git observation teardown, and disposal; the Connection
+   holds the capability and the lease is deleted.
 3. Thin the Activation registry to the index and reservation layer.
-4. Split the Connection into the protocol adapter with typed handlers;
-   `SessionLease` becomes the capability.
+4. Split the Connection into the protocol adapter with typed handlers.
 5. Tag observation frames with the attachment generation; the browser drops
    stale generations.
 6. Extract the browser view actor from the navigation reactor.

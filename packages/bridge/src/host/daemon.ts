@@ -121,7 +121,7 @@ export class Daemon {
 	 * reported by `getDaemonInfo` for the Project home's Pinned group. */
 	private globalSettings: SettingsManager | null = null;
 	private connections = new Set<Connection>();
-	/** The session-execution link: everything that runs a Session (the
+	/** The execution link: everything that runs a Session (the
 	 * Activation registry, Manager creation, per-session choreography) sits
 	 * behind this interface, so the Daemon depends on the contract, not on
 	 * execution locality. Constructed in start(); null before it, so a failed
@@ -394,8 +394,8 @@ export class Daemon {
 
 		for (const activation of this.execution!.live()) {
 			if (activation.ref.projectId !== project.id) continue;
-			const abs = activation.manager.sessionFile;
-			let sortTimeMs = Date.parse(activation.manager.createdAt);
+			const abs = activation.actor.manager.sessionFile;
+			let sortTimeMs = Date.parse(activation.actor.manager.createdAt);
 			if (existsSync(abs)) {
 				try {
 					sortTimeMs = statSync(abs).mtimeMs;
@@ -448,8 +448,8 @@ export class Daemon {
 		for (const activation of this.execution!.live()) {
 			const project = this.projects.get(activation.ref.projectId);
 			if (!project) continue;
-			const abs = activation.manager.sessionFile;
-			let sortTimeMs = Date.parse(activation.manager.createdAt);
+			const abs = activation.actor.manager.sessionFile;
+			let sortTimeMs = Date.parse(activation.actor.manager.createdAt);
 			if (existsSync(abs)) {
 				try {
 					sortTimeMs = statSync(abs).mtimeMs;
@@ -480,14 +480,14 @@ export class Daemon {
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
-		const doc = activation?.manager.document;
+		const doc = activation?.actor.manager.document;
 		const live = doc ? documentSummary(doc) : undefined;
 		return {
 			projectId: project.id,
 			sessionId: meta?.sessionId ?? activation?.ref.sessionId ?? entry.stem,
 			stem: entry.stem,
 			active: activation !== undefined,
-			isStreaming: activation ? activation.manager.document.status.isStreaming : false,
+			isStreaming: activation ? activation.actor.manager.document.status.isStreaming : false,
 			name: meta?.name ?? (doc ? doc.status.name || undefined : undefined),
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? live?.firstMessageText,

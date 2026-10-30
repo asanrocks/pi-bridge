@@ -728,8 +728,8 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 
 		dispose(): Promise<void> {
 			// Idempotent and joinable: every caller observes the same teardown,
-			// so a direct dispose (the harness) and the registry's
-			// SessionExecution drain cannot interleave a second run through it.
+			// so a direct dispose (the harness) and the registry's Session actor
+			// close cannot interleave a second run through it.
 			if (disposed !== null) return disposed;
 			disposed = (async () => {
 				// 1. Save: finalize + flush the in-flight turn — including a

@@ -71,7 +71,7 @@ the Document, when applicable, arrive as pushes before or independently of
 the reply. A reply is therefore acknowledgement or query data, not a second
 state channel.
 
-Every attached-session verb captures the Session lease it addresses at
+Every attached-session verb captures the Session capability it addresses at
 handler entry, before any await: a transition that completes while the
 command runs cannot retarget it, so the command executes against — and its
 reply reports on — the session that was attached when the request arrived,

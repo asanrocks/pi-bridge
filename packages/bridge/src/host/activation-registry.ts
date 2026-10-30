@@ -24,8 +24,7 @@ import type { PrefixCursor, SessionRef } from "../core/index.ts";
 import type { Connection } from "./connection.ts";
 import type { Manager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
-import { createSessionExecution, type SessionExecution } from "./session-execution.ts";
-import { createSessionLease, type SessionLease } from "./session-lease.ts";
+import { createSessionActor, type SessionActor, type SessionCapability } from "./session-actor.ts";
 
 /** Address key: (projectId, stem) — the client-facing address of a Session. */
 export function addressKey(projectId: string, stem: string): string {
@@ -49,11 +48,10 @@ export interface ActivationRecord {
 	ref: SessionRef;
 	/** This registration's authorization identity (see above). */
 	authorization: ActivationAuthorization;
-	manager: Manager;
-	/** The work-admission owner for this registration's runtime: commands
-	 * admitted against the Manager run through it, and its terminal `end` is
-	 * the one disposal path (registry collection and shutdown both call it). */
-	execution: SessionExecution;
+	/** The one owner of this Session's runtime lifetime: admission,
+	 * observation registration, and terminal disposal all go through it. The
+	 * record holds it; the Manager it owns is read through `actor.manager`. */
+	actor: SessionActor;
 	/** Attached Connections. GC is gated on this being empty. */
 	connections: Set<Connection>;
 	gcTimer: ReturnType<typeof setTimeout> | null;
@@ -270,12 +268,16 @@ export class ActivationRegistry {
 			await manager.dispose();
 			throw new Error("daemon is shutting down");
 		}
+		const authorization: ActivationAuthorization = {
+			incarnation: this.options.incarnation,
+			generation: ++this.generations,
+		};
+		const actor = createSessionActor({ manager, ref, authorization });
 		const record: ActivationRecord = {
 			id: randomUUID(),
 			ref,
-			authorization: { incarnation: this.options.incarnation, generation: ++this.generations },
-			manager,
-			execution: createSessionExecution(manager),
+			authorization,
+			actor,
 			connections: new Set(),
 			gcTimer: null,
 			collecting: null,
@@ -325,17 +327,13 @@ export class ActivationRegistry {
 	}
 	// ── Attachment ────────────────────────────────────────────────────────────
 
-	/** Issue the lease a Connection's attachment runs through. Validity is
-	 * the registration's: commands are admitted only while the record is
+	/** Issue the capability a Connection's attachment runs through. Validity
+	 * is the registration's: commands are admitted only while the record is
 	 * live (not collecting) and the registry has not begun shutdown, so a
 	 * command admitted during disposal is rejected before it reaches a
 	 * runtime being torn down. */
-	private leaseFor(record: ActivationRecord): SessionLease {
-		return createSessionLease({
-			execution: record.execution,
-			ref: record.ref,
-			authorization: record.authorization,
-		});
+	private capabilityFor(record: ActivationRecord): SessionCapability {
+		return record.actor.capability();
 	}
 
 	attach(conn: Connection, record: ActivationRecord, cursor: PrefixCursor | null): void {
@@ -354,7 +352,7 @@ export class ActivationRegistry {
 			return;
 		}
 		this.release(conn);
-		conn.attachLease(this.leaseFor(record), cursor);
+		conn.attachCapability(this.capabilityFor(record), cursor);
 		record.connections.add(conn);
 		this.connectionActivation.set(conn, record);
 		this.cancelGc(record);
@@ -375,8 +373,8 @@ export class ActivationRegistry {
 		if (this.disposed) return;
 		if (record.ended || record.gcTimer !== null || record.collecting !== null) return;
 		if (record.connections.size > 0) return;
-		const durable = existsSync(record.manager.sessionFile);
-		const empty = Object.keys(record.manager.document.entries).length === 0;
+		const durable = existsSync(record.actor.manager.sessionFile);
+		const empty = Object.keys(record.actor.manager.document.entries).length === 0;
 		const delay = durable || empty ? this.options.idleGcMs : this.options.unflushedIdleGcMs;
 		record.gcTimer = setTimeout(() => {
 			record.gcTimer = null;
@@ -393,7 +391,7 @@ export class ActivationRegistry {
 
 	private async maybeCollect(record: ActivationRecord): Promise<void> {
 		if (record.ended || record.collecting !== null || record.connections.size > 0) return;
-		const status = record.manager.document.status;
+		const status = record.actor.manager.document.status;
 		if (status.isStreaming || status.isCompacting) {
 			this.armGc(record);
 			return;
@@ -445,10 +443,11 @@ export class ActivationRegistry {
 		// would let a concurrent openSession create a second activation for a
 		// session whose first Manager is still shutting down, violating the
 		// ADR 11 exclusivity invariant. The address (and its pending-open
-		// promise) stays reserved for the whole disposal. The execution's end
+		// promise) stays reserved for the whole disposal. The actor's close
 		// rejects admission synchronously, drains the mutation line, disposes
-		// the runtime exactly once, and awaits the tracked work.
-		await record.execution.end();
+		// the runtime exactly once, awaits the tracked work, and releases every
+		// observation.
+		await record.actor.close();
 		this.records.delete(record.id);
 		const key = addressKey(record.ref.projectId, record.ref.stem);
 		if (this.byAddress.get(key) === record.id) this.byAddress.delete(key);
@@ -496,14 +495,14 @@ export class ActivationRegistry {
 	dispose(): Promise<void> {
 		if (this.disposeDrain !== null) return this.disposeDrain;
 		this.disposed = true;
-		const executions: SessionExecution[] = [];
+		const actors: SessionActor[] = [];
 		const draining: Promise<unknown>[] = [];
 		for (const record of this.records.values()) {
 			if (record.gcTimer) clearTimeout(record.gcTimer);
 			// A mid-collection activation already owns its disposal; awaiting it
 			// avoids a concurrent double-dispose, then it drops out of the map.
 			if (record.collecting) draining.push(record.collecting);
-			else executions.push(record.execution);
+			else actors.push(record.actor);
 		}
 		// In-flight creations: they settle (register refuses and disposes the
 		// Manager) before this returns, so nothing can appear after shutdown.
@@ -519,8 +518,8 @@ export class ActivationRegistry {
 		this.connectionActivation.clear();
 		this.disposeDrain = (async () => {
 			await Promise.allSettled(draining);
-			for (const execution of executions) {
-				await execution.end();
+			for (const actor of actors) {
+				await actor.close();
 			}
 		})();
 		return this.disposeDrain;

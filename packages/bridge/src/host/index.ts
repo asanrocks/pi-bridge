@@ -5,7 +5,9 @@ export { createManager } from "./manager.ts";
 export type {
 	ActorPhase,
 	ObservationCapability,
+	SessionActor,
+	SessionActorOptions,
 	SessionCapability,
 	SessionObserver,
 } from "./session-actor.ts";
-export { createSessionCapability } from "./session-actor.ts";
+export { createSessionActor, issueDirectCapability } from "./session-actor.ts";
