@@ -343,6 +343,16 @@ export interface Patch {
 	ops: PatchOp[];
 }
 
+/** The pre-wire initial-sync frame the Manager emits at attach (ADR 09/11):
+ * a replace snapshot or a cursor-aware delta, both carrying the session
+ * reference. The observing Connection stamps the attachment generation (and
+ * a creation's operation id) onto the wire envelope, so the core frame
+ * carries content only — the wire messages' `generation` is required and is
+ * minted at the socket (ADR 19). */
+export type InitialSyncFrame =
+	| { kind: "replace"; session: SessionRef; document: Document }
+	| { kind: "patch"; session: SessionRef; ops: PatchOp[] };
+
 // ---------------------------------------------------------------------------
 // Wire protocol messages (ADR 06: dual channel)
 // ---------------------------------------------------------------------------
@@ -357,9 +367,11 @@ export interface ReplaceMessage {
 	/** The attachment generation that produced this frame (ADR 19): one
 	 * connection mint per attach, so an observation frame names the
 	 * attachment whose stream it belongs to even when the address is
-	 * unchanged. An address-bearing frame establishes the client mirror's
-	 * generation; a live frame that does not match it is dropped. */
-	generation?: number;
+	 * unchanged. Required on every observation frame — an unattributed frame
+	 * is a protocol violation and is dropped by the client. An
+	 * address-bearing frame establishes the client mirror's generation; a
+	 * live frame that does not match it is dropped. */
+	generation: number;
 	/** Present when this initial sync was emitted by a `newSession`
 	 * transition: the operation id of that creation. The frame is otherwise
 	 * unattributed; the client's selection owner checks the id before letting
@@ -375,12 +387,11 @@ export interface PatchMessage {
 	 */
 	session?: SessionRef;
 	ops: PatchOp[];
-	/** The attachment generation that produced this frame (ADR 19): an
-	 * address-bearing patch establishes the client mirror's generation, and
-	 * a live patch that does not match it is dropped. Absent on compact
-	 * (bare-append) frames, which cannot cross an attachment change because
-	 * attach resets the codec. */
-	generation?: number;
+	/** The attachment generation that produced this frame (ADR 19), required
+	 * on every observation frame: an address-bearing patch establishes the
+	 * client mirror's generation, and a live patch that does not match it is
+	 * dropped. */
+	generation: number;
 	/** Present when this initial-sync patch was emitted by a `newSession`
 	 * transition: the operation id of that creation (see ReplaceMessage). */
 	operationId?: string;
@@ -419,10 +430,10 @@ export interface SessionClosedMessage {
 	kind: "session_closed";
 	projectId: string;
 	stem: string;
-	/** The attachment generation of the observation that ended (ADR 19):
-	 * the close names the attachment it severed, so a client can drop a
-	 * close that does not describe its current observation. */
-	generation?: number;
+	/** The attachment generation of the observation that ended (ADR 19),
+	 * required: the close names the attachment it severed, so a client can
+	 * drop a close that does not describe its current observation. */
+	generation: number;
 }
 
 export type ServerPushMessage =
@@ -1007,10 +1018,10 @@ export interface PullReply {
 	ok: true;
 	values: { entryId: string; fieldPath: string; value: JsonValue }[];
 	/** The attachment generation current when the request was admitted
-	 * (ADR 19): the values describe that attachment's document, so a client
-	 * whose mirror has since advanced (a reattach on this socket) drops
-	 * them. */
-	generation?: number;
+	 * (ADR 19), required: the values describe that attachment's document, so
+	 * a client whose mirror has since advanced (a reattach on this socket)
+	 * drops them. */
+	generation: number;
 }
 
 export interface ListFilesReply {

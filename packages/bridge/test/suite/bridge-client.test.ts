@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BridgeClient, type BridgeTransport, getAtPath, type ServerPushMessage } from "../../src/core/index.ts";
+import { BridgeClient, type BridgeTransport } from "../../src/core/index.ts";
 
 // ---------------------------------------------------------------------------
 // Mock transport
@@ -292,39 +292,6 @@ describe("BridgeClient", () => {
 		expect(pushes).toEqual([]);
 	});
 
-	// ── Compact wire form (bare-string append) ─────────────────────────────
-
-	it("decodes a compact bare-string frame as an append to the remembered path", () => {
-		const { client, transport } = makeClient();
-
-		const path = "/entries/pending:message/content/0/thinking";
-
-		// Prime the client's remembered path with a full append-patch frame.
-		transport.inject({ kind: "patch", ops: [{ op: "append", path, value: "Hello" }] });
-		expect(getAtPath(client.mirror.document, path)).toBe("Hello");
-
-		// A bare JSON string on the wire = compact append to the remembered path.
-		if (transport.onMessage) transport.onMessage(JSON.stringify(" world"));
-
-		expect(getAtPath(client.mirror.document, path)).toBe("Hello world");
-	});
-
-	it("fires onPush with the restored patch for a compact frame", () => {
-		const { client, transport } = makeClient();
-
-		const pushes: ServerPushMessage[] = [];
-		client.onPush = (msg) => pushes.push(msg);
-
-		const path = "/entries/pending:message/content/0/thinking";
-		transport.inject({ kind: "patch", ops: [{ op: "append", path, value: "a" }] });
-		transport.inject({ kind: "patch", ops: [{ op: "append", path, value: "b" }] }); // also compact
-
-		if (transport.onMessage) transport.onMessage(JSON.stringify("c")); // bare string
-
-		expect(pushes.length).toBe(3);
-		expect(pushes[2]).toEqual({ kind: "patch", ops: [{ op: "append", path, value: "c" }] });
-	});
-
 	// ── Typed verb wire frames ───────────────────────────────────────────
 
 	it("prompt sends correct wire frame", () => {
@@ -466,13 +433,19 @@ describe("BridgeClient", () => {
 		expect(seen).toEqual(["replace", "patch"]);
 	});
 
-	it("frames without a generation stay admissible (compact frames, seeded mirrors)", () => {
+	it("a live patch with no established observation is dropped", () => {
+		// The generation is required on every observation frame, and a mirror
+		// with no address-bearing frame yet holds no observation: a live patch
+		// that somehow arrives before the initial sync admits nothing (ADR 19).
 		const { client, transport } = makeClient();
-		transport.inject({ kind: "replace", session, document: emptyDoc(), generation: 1 });
+		const seen: string[] = [];
+		client.onPush = (push) => seen.push(push.kind);
 		transport.inject({
 			kind: "patch",
 			ops: [{ op: "replace", path: "/status/model", value: { provider: "a", modelId: "b" } }],
+			generation: 1,
 		});
-		expect(client.mirror.document.status.model).toEqual({ provider: "a", modelId: "b" });
+		expect(client.mirror.document.status.model).toEqual({ provider: "", modelId: "" });
+		expect(seen).toEqual([]);
 	});
 });

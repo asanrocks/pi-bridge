@@ -78,14 +78,11 @@ export async function flushPullQueue(): Promise<void> {
 		// Stale-attachment guard (ADR 19): the reply carries the attachment
 		// generation current when its request was admitted, and a reattach on
 		// this socket advanced the mirror's — the values describe an
-		// observation the view no longer holds. The reattached initial sync
+		// observation the view no longer holds. A mirror with no established
+		// generation holds no observation either. The reattached initial sync
 		// bumps pullTick, so visible fields re-register; no retry is scheduled.
 		const replyGeneration = (reply as Record<string, unknown>).generation;
-		if (
-			replyGeneration !== undefined &&
-			client.mirror.generation !== null &&
-			replyGeneration !== client.mirror.generation
-		) {
+		if (client.mirror.generation === null || replyGeneration !== client.mirror.generation) {
 			return;
 		}
 

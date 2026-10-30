@@ -23,14 +23,13 @@ import {
 	type Document,
 	GIT_STAMP_CUSTOM_TYPE,
 	type ImageContent,
+	type InitialSyncFrame,
 	initFromEntries,
 	type JsonValue,
 	type Patch,
-	type PatchMessage,
 	type PatchOp,
 	type PrefixCursor,
 	type RecoverableTurnKind,
-	type ReplaceMessage,
 	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
@@ -103,7 +102,7 @@ export interface CreateManagerOptions {
  */
 export interface ConnectionHandle {
 	onPatch(patch: Patch): void;
-	onInitialSync(frame: PatchMessage | ReplaceMessage): void;
+	onInitialSync(frame: InitialSyncFrame): void;
 }
 
 export interface Manager {

@@ -15,7 +15,6 @@ import type {
 	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
-	type AppendOp,
 	type BashExecutionEntry,
 	type CompactionEntry,
 	type Content,
@@ -28,8 +27,6 @@ import {
 	type ModelRef,
 	type Patch,
 	type PatchOp,
-	type RpcReply,
-	type ServerPushMessage,
 	type Stats,
 	type Status,
 	type ToolResultEntry,
@@ -902,94 +899,6 @@ function sanitizeBlockValue(path: string, block: AnyRecord, subscriptions: Set<s
 		return { ...block, arguments: null };
 	}
 	return block;
-}
-
-// ---------------------------------------------------------------------------
-// CompactCodec — stateful wire-frame compaction for streaming appends
-// ---------------------------------------------------------------------------
-//
-// During streaming, the diff engine emits one single-op `append` patch per
-// token, all targeting the same path (e.g. `.../content/0/thinking`). The
-// JSON-Patch frame envelope (`{"kind":"patch","ops":[{"op":"append",
-// "path":"...","value":"x"}]}`) is ~100 bytes to deliver a ~7-byte token.
-//
-// CompactCodec sits at the WS serialization boundary. When consecutive
-// single-op `append` patches target the *same* path, the encoder emits the
-// value as a bare JSON string (no envelope); the decoder restores the append
-// op before handing the frame up. Upper layers (diff engine, mirror, onPush)
-// are untouched — they keep emitting and consuming full patch frames.
-//
-// Invariants:
-//  - The remembered path is only valid across consecutive single-op
-//    `append` patches to the same path. Anything else clears it: multi-op
-//    patches, non-append ops (notably `move`, which relocates a path),
-//    `replace` snapshots, out-of-band pushes, and RPC replies.
-//  - The encoder always sends a full patch frame to prime a new path before
-//    emitting compact frames for it, so a compact frame only arrives when the
-//    decoder's remembered path is already set (WS reliable-ordered; reconnect
-//    uses `replace`, which resets state on both sides).
-//  - `append` values are always strings (AppendOp.value: string), so the
-//    compact form is a bare JSON string — unambiguous vs. the object form.
-
-export class CompactCodec {
-	private lastAppendPath: string | null = null;
-
-	/** Clear remembered state. Call on (re)connect. */
-	reset(): void {
-		this.lastAppendPath = null;
-	}
-
-	/** Host → wire. Emits the compact bare-string form for a single-op
-	 * `append` patch whose path matches the remembered one; otherwise
-	 * serializes the full frame and updates state per the invariants. */
-	encodeOutgoing(frame: Record<string, unknown>): string {
-		const op = singleAppendOp(frame);
-		if (op !== null) {
-			if (this.lastAppendPath !== null && op.path === this.lastAppendPath) {
-				return JSON.stringify(op.value);
-			}
-			this.lastAppendPath = op.path;
-			return JSON.stringify(frame);
-		}
-		this.lastAppendPath = null;
-		return JSON.stringify(frame);
-	}
-
-	/** Wire → client. Restores the append op for compact (bare-string) frames;
-	 * passes objects through and updates remembered state. Throws if a compact
-	 * frame arrives with no remembered path — a protocol violation that can't
-	 * happen under reliable-ordered delivery + the encoder's prime-first rule. */
-	decodeIncoming(raw: string): ServerPushMessage | RpcReply {
-		const msg: JsonValue = JSON.parse(raw) as JsonValue;
-		if (typeof msg === "string") {
-			if (this.lastAppendPath === null) {
-				throw new Error("compact append frame arrived with no remembered path");
-			}
-			return {
-				kind: "patch",
-				ops: [{ op: "append", path: this.lastAppendPath, value: msg }],
-			};
-		}
-		const op = singleAppendOp(msg);
-		this.lastAppendPath = op ? op.path : null;
-		return msg as ServerPushMessage | RpcReply;
-	}
-}
-
-/** If `msg` is a `{kind:"patch"}` frame with exactly one string-valued
- * `append` op, return that op; otherwise null. Shared by encode and decode
- * so both sides apply the same compact-eligibility rule. */
-function singleAppendOp(msg: unknown): AppendOp | null {
-	if (msg === null || typeof msg !== "object" || Array.isArray(msg)) return null;
-	const obj = msg as Record<string, unknown>;
-	if (obj.kind !== "patch" || !Array.isArray(obj.ops) || obj.ops.length !== 1) return null;
-	// Initial-sync patches carry `session` and are never compacted (ADR 11):
-	// the bare-string form has no place to keep the address.
-	if (obj.session !== undefined) return null;
-	const op = obj.ops[0] as Record<string, unknown> | undefined;
-	if (op === undefined || op === null) return null;
-	if (op.op !== "append" || typeof op.path !== "string" || typeof op.value !== "string") return null;
-	return { op: "append", path: op.path, value: op.value };
 }
 
 // ============================================================================

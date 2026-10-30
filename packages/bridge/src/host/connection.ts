@@ -25,7 +25,7 @@ import type {
 	PrefixCursor,
 	SessionRef,
 } from "../core/index.ts";
-import { CompactCodec, filterPatchForSocket, type Patch } from "../core/index.ts";
+import { filterPatchForSocket, type Patch } from "../core/index.ts";
 import { connectionVerbHandler, type DaemonVerbs, type VerbContext } from "./connection-verbs.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
@@ -38,7 +38,6 @@ export class Connection {
 	private logger: TrafficLogger | null;
 	private devMode: boolean;
 	private subscriptions = new Set<string>();
-	private codec = new CompactCodec();
 	private handle: ConnectionHandle;
 	/** The current attachment: a Session actor-issued capability, never the
 	 * Session's runtime itself. Raw Manager access is a type error by
@@ -125,15 +124,13 @@ export class Connection {
 	}
 
 	/** Accept a Session actor-issued capability as this Connection's
-	 * attachment. The codec is reset before the observer is installed, so the
-	 * initial-sync frame the installation emits cannot reuse a remembered
-	 * append path from the previous session (ADR 11) — and the generation is
-	 * minted first, so that frame already names the new attachment (ADR 19). */
+	 * attachment. The generation is minted before the observer is installed,
+	 * so the initial-sync frame the installation emits already names the new
+	 * attachment (ADR 19). */
 	attachCapability(capability: SessionCapability, cursor: PrefixCursor | null): void {
 		this.detach();
 		this.attachmentGeneration++;
 		this.capability = capability;
-		this.codec.reset();
 		capability.observe(this.handle, cursor);
 	}
 
@@ -327,7 +324,10 @@ export class Connection {
 
 	private send(data: Record<string, unknown>): void {
 		try {
-			this.ws.send(this.codec.encodeOutgoing(data));
+			// Plain JSON frames: transport compaction is retired from the live
+			// path, because a compacted frame cannot carry the attachment
+			// generation every observation frame must name (ADR 19).
+			this.ws.send(JSON.stringify(data));
 			this.logger?.log("out", data);
 		} catch {
 			// Socket closed

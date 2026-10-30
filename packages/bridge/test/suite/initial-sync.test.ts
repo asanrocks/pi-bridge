@@ -5,7 +5,6 @@ import {
 	applyPatch,
 	buildInitialSync,
 	type CacheEntryRecord,
-	CompactCodec,
 	computeCursor,
 	type Document,
 	initFromEntries,
@@ -316,24 +315,6 @@ describe("buildInitialSync: delta patch", () => {
 		if (frame.kind !== "patch") throw new Error("expected patch");
 		expect(frame.ops).toContainEqual({ op: "replace", path: "/status", value: doc.status });
 		expect(frame.ops.every((o) => o.op === "append")).toBe(false);
-	});
-
-	it("resets CompactCodec state in both frame forms", () => {
-		const codec = new CompactCodec();
-		const { doc, piEntries } = midTurnDoc();
-		const delta = buildInitialSync(doc, piEntries, REF, { sessionId: "s", lastKnownId: "b", entryCount: 2 });
-		const decodedDelta = codec.decodeIncoming(codec.encodeOutgoing(delta as unknown as Record<string, unknown>));
-		expect(decodedDelta).toEqual(delta);
-		// Codec state was reset: a compact bare-string frame has no remembered
-		// path to restore.
-		expect(() => codec.decodeIncoming(JSON.stringify("x"))).toThrow();
-
-		const replaceFrame = buildInitialSync(doc, piEntries, REF, null);
-		const decodedReplace = codec.decodeIncoming(
-			codec.encodeOutgoing(replaceFrame as unknown as Record<string, unknown>),
-		);
-		expect(decodedReplace).toEqual(replaceFrame);
-		expect(() => codec.decodeIncoming(JSON.stringify("x"))).toThrow();
 	});
 });
 

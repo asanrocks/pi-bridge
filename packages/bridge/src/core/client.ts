@@ -6,7 +6,7 @@
 // Does NOT include: WebSocket transport, rendering.
 // ============================================================================
 
-import { applyPatch, CompactCodec, getAtPath, setAtPath } from "./document.ts";
+import { applyPatch, getAtPath, setAtPath } from "./document.ts";
 import type {
 	Document,
 	GitDiffState,
@@ -74,7 +74,7 @@ export class DocumentMirror {
 	/** Record the attachment generation an address-bearing frame (an initial
 	 * sync) carries. Direct document applications (candidate promotion, cache
 	 * seeding) leave it unchanged: they replicate the same stream. */
-	setGeneration(generation: number | null): void {
+	setGeneration(generation: number): void {
 		this._generation = generation;
 	}
 
@@ -176,7 +176,6 @@ export class BridgeClient {
 	private transport: BridgeTransport;
 	private pending = new Map<string, PendingRpc>();
 	private nextId = 0;
-	private codec = new CompactCodec();
 	private _onPush: ((msg: ServerPushMessage) => void) | null = null;
 
 	constructor(transport: BridgeTransport) {
@@ -185,8 +184,8 @@ export class BridgeClient {
 
 		this.transport.onMessage = (data: string) => {
 			try {
-				const msg = this.codec.decodeIncoming(data);
-				this.handleMessage(msg as unknown as Record<string, unknown>);
+				const msg = JSON.parse(data) as Record<string, unknown>;
+				this.handleMessage(msg);
 			} catch {
 				// Ignore malformed messages
 			}
@@ -406,25 +405,22 @@ export class BridgeClient {
 			const push = msg as unknown as ServerPushMessage;
 			if (push.kind === "replace") {
 				// A replace is an address-bearing initial sync: it establishes the
-				// attachment generation this mirror replicates (ADR 19).
-				if (push.generation !== undefined) this.mirror.setGeneration(push.generation);
+				// attachment generation this mirror replicates (ADR 19). The
+				// generation is required on every observation frame.
+				this.mirror.setGeneration(push.generation);
 				this.mirror.applyReplace(push.document);
 			} else if (push.kind === "patch") {
 				if (push.session !== undefined) {
 					// Address-bearing: a cursor-aware initial sync — it establishes
 					// the generation like a replace.
-					if (push.generation !== undefined) this.mirror.setGeneration(push.generation);
+					this.mirror.setGeneration(push.generation);
 				} else {
-					// A live patch from an older attachment — same address or not —
-					// must not touch the mirror (ADR 19). Compact (bare-append)
-					// frames carry no generation; they cannot cross an attachment
-					// change, because attach resets the codec.
-					const generation = push.generation;
-					if (
-						generation !== undefined &&
-						this.mirror.generation !== null &&
-						generation !== this.mirror.generation
-					) {
+					// A live patch belongs to the attachment the mirror replicates
+					// (ADR 19): one from any other attachment — same address or
+					// not — must not touch the mirror. A mirror with no
+					// established generation holds no observation, so it admits
+					// nothing either.
+					if (this.mirror.generation === null || push.generation !== this.mirror.generation) {
 						return;
 					}
 				}

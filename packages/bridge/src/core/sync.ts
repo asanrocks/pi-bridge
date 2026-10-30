@@ -14,16 +14,7 @@
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { projectEntry, stripLazyFields } from "./document.ts";
-import type {
-	Document,
-	Entry,
-	JsonValue,
-	PatchMessage,
-	PatchOp,
-	PrefixCursor,
-	ReplaceMessage,
-	SessionRef,
-} from "./types.ts";
+import type { Document, Entry, InitialSyncFrame, JsonValue, PatchOp, PrefixCursor, SessionRef } from "./types.ts";
 import { isEntrySealed } from "./types.ts";
 
 /**
@@ -73,15 +64,14 @@ function collectProvisional(doc: Document): Array<[string, Entry]> {
  * Build the initial-sync frame. A valid cursor yields one ordinary multi-op
  * patch: adds for the missing committed suffix, adds for current provisional
  * skeletons, and complete status and scoped models. Anything else yields a
- * full replace. The delta always carries at least the two unconditional
- * replaces, so it is never a compact single-append frame (CompactCodec).
+ * full replace.
  */
 export function buildInitialSync(
 	doc: Document,
 	piEntries: SessionEntry[],
 	session: SessionRef,
 	cursor: PrefixCursor | null,
-): PatchMessage | ReplaceMessage {
+): InitialSyncFrame {
 	const valid = cursor !== null && validateCursor(piEntries, cursor, session.sessionId);
 
 	if (!valid) {

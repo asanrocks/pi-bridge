@@ -14,6 +14,7 @@ import WebSocket from "ws";
 import type {
 	Document,
 	Entry,
+	InitialSyncFrame,
 	Patch,
 	PatchMessage,
 	PrefixCursor,
@@ -36,12 +37,12 @@ const FIXTURE_URL = new URL("../../../coding-agent/test/fixtures/before-compacti
 
 /** Collecting handle for raw (no-WebSocket) Manager attachment. */
 class FrameCollector implements ConnectionHandle {
-	frames: Array<PatchMessage | ReplaceMessage> = [];
+	frames: Array<InitialSyncFrame> = [];
 	patches: Patch[] = [];
 	onPatch(patch: Patch): void {
 		this.patches.push(patch);
 	}
-	onInitialSync(frame: PatchMessage | ReplaceMessage): void {
+	onInitialSync(frame: InitialSyncFrame): void {
 		this.frames.push(frame);
 	}
 }

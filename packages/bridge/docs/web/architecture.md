@@ -368,9 +368,10 @@ generation. Observation delivery is typed — the pipeline hands over
 `ViewObservationEvent` values (`viewEvents.ts`) through one seam
 (`navigationObservation`), deciding nothing itself — and every observation
 frame carries the attachment generation that produced it (ADR 19): the
-actor records the generation of the frame that committed the view, an
-unattributed re-assert from another generation never commits (same address
-or not), and a stale-generation `session_closed` never ends the view. One
+actor records the generation of the frame that committed the view, a
+re-assert or `session_closed` from any other generation never commits or
+ends the view (same address or not; a null committed generation means no
+observation is committed, so nothing re-asserts). One
 authority rule governs the whole module:
 
 > A step may read and write anything; an effect may only observe and return

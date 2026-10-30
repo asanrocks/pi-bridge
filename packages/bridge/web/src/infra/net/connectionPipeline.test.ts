@@ -57,7 +57,7 @@ function fakeClient(): {
 }
 
 function patch(ops: PatchOp[]): ServerPushMessage {
-	return { kind: "patch", ops };
+	return { kind: "patch", ops, generation: 1 };
 }
 
 describe("connectionPipeline live-patch flush policy", () => {
@@ -177,6 +177,7 @@ describe("connectionPipeline live-patch flush policy", () => {
 			const opened = navigationOpen({ projectId: "proj", stem: "next" });
 			pipeline.onPush({
 				kind: "replace",
+				generation: 1,
 				session: { projectId: "proj", sessionId: "s2", stem: "next" },
 				document: next,
 			});
@@ -234,11 +235,24 @@ describe("connectionPipeline session_closed handling", () => {
 		getStore().setState({ currentProjectId: null, currentStem: null, activeSessionId: null });
 	});
 
-	it("lands on the Project home when the closed Session is the rendered one", () => {
-		const { client } = fakeClient();
+	it("lands on the Project home when the closed Session is the rendered one", async () => {
+		const { client, mirror } = fakeClient();
 		pipeline = createConnectionPipeline(client);
+		// Commit the rendered view through a real attach (generation 1), as
+		// the wire would: a close may end only the committed observation.
+		const opened = navigationOpen({ projectId: "proj", stem: "stem" });
+		const committed = initFromEntries([]);
+		mirror.document = committed;
+		pipeline.onPush({
+			kind: "replace",
+			session: { projectId: "proj", sessionId: "s1", stem: "stem" },
+			document: committed,
+			generation: 1,
+		});
+		await opened;
+		expect(getStore().getState().currentStem).toBe("stem");
 
-		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "stem" });
+		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "stem", generation: 1 });
 
 		// The document can never progress again: the address, the durable
 		// session id, and the route all go, retaining the Project to land on
@@ -250,12 +264,22 @@ describe("connectionPipeline session_closed handling", () => {
 		expect(replaceState).toHaveBeenCalledWith(null, "", "/proj");
 	});
 
-	it("ignores a close of some other Session", () => {
-		const { client } = fakeClient();
+	it("ignores a close of some other Session", async () => {
+		const { client, mirror } = fakeClient();
 		pipeline = createConnectionPipeline(client);
+		const opened = navigationOpen({ projectId: "proj", stem: "stem" });
+		const committed = initFromEntries([]);
+		mirror.document = committed;
+		pipeline.onPush({
+			kind: "replace",
+			session: { projectId: "proj", sessionId: "s1", stem: "stem" },
+			document: committed,
+			generation: 1,
+		});
+		await opened;
 
-		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "other" });
-		pipeline.onPush({ kind: "session_closed", projectId: "other", stem: "stem" });
+		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "other", generation: 1 });
+		pipeline.onPush({ kind: "session_closed", projectId: "other", stem: "stem", generation: 2 });
 
 		const s = getStore().getState();
 		expect(s.currentStem).toBe("stem");

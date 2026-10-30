@@ -76,7 +76,7 @@ pi runtime
 Manager: canonical Document for one Session
   | unfiltered patches and initial-sync frame
   v
-Connection: one WebSocket, subscriptions, RPC demux, compact transport
+Connection: one WebSocket, subscriptions, RPC demux
   | replace/patch pushes, registry pushes, RPC replies
   v
 BridgeClient + DocumentMirror: browser-side replica and typed RPC
@@ -90,7 +90,7 @@ Node process.
 
 **Core and ViewModel.** `core` is pure and browser-safe. It defines the
 Document and Entry types, JSON Patch plus `append`, event application,
-reconciliation, mirror operations, lazy-path filtering, compact transport, and
+reconciliation, mirror operations, lazy-path filtering, and
 cache/sync policy. The ViewModel is also pure and maps the active Document
 branch into turns, actions, git observations, sibling navigation, and pull
 requests. Neither layer knows about WebSockets, the DOM, or the filesystem.
@@ -219,7 +219,7 @@ current mirror is promoted only when the initial-sync frame names the target
 absence, corruption, or a stale cursor changes performance only: the server
 falls back to replace.
 
-### Lazy pulls and transport compaction
+### Lazy pulls
 
 The web ViewModel declares pending lazy paths while rendering. One pull-loop
 drainer deduplicates them against the mirror and in-flight requests, sends one
@@ -227,14 +227,9 @@ batch, and ingests the values. Pulling an unsealed field also subscribes the
 Connection to later updates on that path; pulling a committed field is
 one-shot. The Connection filters live patches per subscription and sanitizes
 lazy fields embedded inside parent add/replace values, so filtered replay and
-fresh wire initialization converge.
-
-At the WebSocket boundary, `CompactCodec` may encode consecutive ordinary
-single-append patches to one path as bare JSON strings. The first append primes
-the path. Replace, initial-sync frames, multi-operation patches, non-append
-operations, broadcasts, RPC replies, and attachment changes clear the codec
-state. The decoder restores the full append operation before the mirror sees
-it.
+fresh wire initialization converge. There is no transport compaction on the
+live path: every frame is a full JSON envelope carrying its attachment
+generation (ADR 19), because a compacted frame cannot name its owner.
 
 ## 6. State machines
 
@@ -355,7 +350,7 @@ guarded against.
 Tests preserve the same boundaries used in production.
 
 - Pure unit tests exercise `applyEvent`, the entry projection, patch application,
-  immutable mirror updates, lazy filtering, compact transport, cursor/cache
+  immutable mirror updates, lazy filtering, cursor/cache
   policy, git-stamp parsing, and ViewModel/tree projection with hand-built
   inputs.
 - Raw-object integration tests subscribe to Manager patch callbacks and use

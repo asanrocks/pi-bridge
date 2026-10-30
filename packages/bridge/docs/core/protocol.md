@@ -28,12 +28,12 @@ and rejects exactly once, so a failed request leaves nothing pending.
 
 | `kind` | Payload and contract |
 | --- | --- |
-| `replace` | `{ session: SessionRef, document: Document, generation?, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
-| `patch` | `{ ops: PatchOp[], session?: SessionRef, generation?, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
+| `replace` | `{ session: SessionRef, document: Document, generation, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
+| `patch` | `{ ops: PatchOp[], session?: SessionRef, generation, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
 | `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
-| `session_closed` | `{ projectId, stem, generation? }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
+| `session_closed` | `{ projectId, stem, generation }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
 `replace` always carries a `SessionRef`. A `patch` carries a `SessionRef` only
 when it is the initial-sync delta selected by cursor validation. A live patch
@@ -58,16 +58,17 @@ Document prefix cursor.
 
 **Attachment generations (ADR 19).** Every observation frame — a replace, a
 patch (live or initial sync), a `session_closed`, and a `pull` reply —
-carries `generation`: the attachment that produced it, one mint per attach
-on its Connection. An address-bearing frame (a replace, a cursor-aware
-initial-sync patch) establishes the client mirror's generation; a live
-frame that does not match the established one is dropped before the mirror
-— same address or not, a frame from an older attachment cannot touch the
-successor's state. A `pull` reply carries the generation current when its
+carries a required `generation`: the attachment that produced it, one mint
+per attach on its Connection. Ownership on the wire is not optional: a
+frame without a generation is a protocol violation and is dropped. An
+address-bearing frame (a replace, a cursor-aware initial-sync patch)
+establishes the client mirror's generation; a live frame that does not
+match the established one is dropped before the mirror — same address or
+not, a frame from an older attachment cannot touch the successor's state,
+and a mirror with no established generation holds no observation and admits
+no live frame. A `pull` reply carries the generation current when its
 request was admitted, so a reply that lands after a reattach is dropped
-instead of filling the successor with the old observation's values. Compact
-(bare-append) frames carry no generation; they cannot cross an attachment
-change, because attach resets the codec.
+instead of filling the successor with the old observation's values.
 
 A push is unsolicited. `sessions_changed`, `active_sessions_changed`,
 `pinned_models_changed`, and `session_closed` do not alter the Document
@@ -164,29 +165,14 @@ The initial-sync contract is cursor-aware:
 The cursor is checked against the session file's ordered ids and the referenced
 `sessionId`; it does not authenticate arbitrary client cache contents. Both
 forms are address-bearing, so they establish the client's active cache key.
-The initial-sync patch is never compacted, even when one of its operations
-could otherwise look like a single append.
+A Connection clears its lazy subscriptions when initial sync is sent. This
+prevents pull state from crossing Session boundaries.
 
-A Connection clears its lazy subscriptions when initial sync is sent and resets
-its `CompactCodec` when it attaches. This prevents pull state and streaming
-append state from crossing Session boundaries.
+## No transport compaction
 
-## CompactCodec
-
-`CompactCodec` is stateful transport compaction at the WebSocket boundary. For
-consecutive ordinary live `patch` frames containing exactly one string-valued
-`append` to the same path, the first frame is sent in full to prime the path;
-subsequent frames are sent as a bare JSON string containing only the appended
-value. The decoder restores each bare string to a normal `patch` with an
-`append` operation before the mirror sees it.
-
-The remembered path is cleared by every other frame: multi-operation patches,
-non-append operations including `move`, `replace`, broadcasts, and RPC replies.
-A frame with `session` is never compacted because the compact form cannot carry
-its `SessionRef`. `append` values are always strings, so a bare JSON string is
-unambiguous. `reset()` is called on attach or reconnect. Reliable ordered
-WebSocket delivery and the prime-first rule mean a compact frame cannot arrive
-without a remembered path; the decoder treats that as a protocol violation.
-
-The compaction is invisible above the transport. Core producers, the
-`DocumentMirror`, and push listeners use the full typed frame shape.
+Every frame on the wire is a full JSON envelope. Transport compaction (the
+former `CompactCodec`, which encoded consecutive single-append live patches as
+bare JSON strings) is retired: a compacted frame cannot carry the attachment
+generation every observation frame must name, so ownership on the wire would
+have been optional exactly where stale frames are most dangerous. If compaction
+ever returns, it can only be as an envelope-preserving encoding.

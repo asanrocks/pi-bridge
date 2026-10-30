@@ -243,7 +243,7 @@ the only path to the Session's runtime — the Connection never holds the
 Manager itself, so a command cannot be written that bypasses the registration's
 admission check. `attachCapability` first releases the current capability
 (removing its observer from that runtime and ending its admission), records
-the new capability, resets the connection-local `CompactCodec`, and registers
+the new capability, mints the next attachment generation, and registers
 the capability's observer, which asks the Manager for initial sync. `detach`
 releases the capability without disposing the Activation. A capability
 rejects commands once its registration ended
@@ -254,12 +254,14 @@ reply the client trusts describes the session that was attached when the
 request arrived. A socket close disposes the Connection and releases its daemon
 attachment.
 
-The codec reset is part of attachment correctness: an append-compression path
-remembered for one Session must not be reused for another. Initial-sync frames
-are sent unfiltered and clear lazy subscriptions. Live patches are filtered by
-those subscriptions before the Connection sends them. A `pull` request reads
-values from the attached Manager's canonical Document; pulling an unsealed
-lazy path also registers that path for subsequent live patches.
+Initial-sync frames are sent unfiltered and clear lazy subscriptions; every
+observation frame the Connection emits — initial sync, live patch, and the
+terminal `session_closed` — is stamped with the current attachment generation
+(ADR 19), and frames are plain JSON envelopes (there is no transport
+compaction, because a compacted frame cannot name its owner). Live patches are
+filtered by those subscriptions before the Connection sends them. A `pull`
+request reads values from the attached Manager's canonical Document; pulling
+an unsealed lazy path also registers that path for subsequent live patches.
 
 Attachment changes mint the next **attachment generation** (ADR 19): every
 observation frame the Connection emits — the initial sync, live patches, and

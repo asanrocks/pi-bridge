@@ -242,19 +242,21 @@ type NavigationMessage =
 	// The creation RPC's completion.
 	| { kind: "createSettled"; operationId: string; result: NavigationResult; ref?: SessionRef }
 	// The host's terminal ownership push for an address, carrying the
-	// attachment generation it severed (ADR 19).
-	| { kind: "closed"; projectId: string; stem: string; generation?: number }
+	// attachment generation it severed (ADR 19) — required on every
+	// observation frame.
+	| { kind: "closed"; projectId: string; stem: string; generation: number }
 	// An address-bearing initial-sync frame (replace: ops null; cursor-aware
 	// delta: ops set), delivered by the connection pipeline as a typed
 	// observation event. `operationId` is present when the frame was emitted
 	// by a newSession transition; `generation` names the attachment whose
-	// stream the frame belongs to (ADR 19).
+	// stream the frame belongs to (ADR 19) and is required on every
+	// observation frame.
 	| {
 			kind: "sync";
 			ref: SessionRef;
 			ops: PatchOp[] | null;
 			operationId?: string;
-			generation?: number;
+			generation: number;
 	  }
 	// A cache-first local restore completed (ADR 09, value-only per ADR 19):
 	// the values the cache read produced. The actor decides whether they
@@ -940,22 +942,21 @@ function navigationStep(
 		}
 
 		case "closed": {
-			// A close names the attachment it severed (ADR 19): a stale-generation
-			// close — from an older attachment on this socket — describes an
-			// observation the view no longer holds, even when the address matches.
-			// Absent generation (legacy frames, a restored view): the address decides.
-			if (
-				message.generation !== undefined &&
-				state.committedGeneration !== null &&
-				message.generation !== state.committedGeneration
-			) {
-				return { state };
-			}
 			// The host's terminal ownership push: the runtime behind an address
 			// ended, so nothing for that address can commit or roll back a view
-			// anymore. The rendered address is a store-level fact (the
-			// committed view's publication — or the optimistic stage, while a
-			// transition is in flight).
+			// anymore. Two paths process it, and only the second is gated:
+			//
+			//   - A pending transition targeting the address is cancelled
+			//     unconditionally. The close may name the attachment that
+			//     transition is still acquiring — the server-side attach and the
+			//     close crossed on the wire — so its generation is one the actor
+			//     has not committed (and may never commit). The runtime is gone;
+			//     the open must not attach to a corpse whatever the close names.
+			//   - The committed view may be ended only when the close names the
+			//     committed attachment (ADR 19): a close from any other
+			//     attachment — same address or not — describes an observation the
+			//     view does not hold. A null committed generation means no
+			//     observation is committed, so nothing is ended.
 			const key = `${message.projectId}/${message.stem}`;
 			let pending = state.pending;
 			let current = state.current;
@@ -963,10 +964,21 @@ function navigationStep(
 			// A pending transition targeting the closed address is cancelled:
 			// its caller settles here, its prepare admits no RPC (the runtime
 			// it targeted is gone), and its late sync and reply commit nothing.
+			let cancelledTarget = false;
 			if (pending !== null && sessionKey(pending.view) === key) {
 				pending.reply?.({ ok: false, error: "session closed" });
 				cancelled.add(pending.id);
 				pending = null;
+				cancelledTarget = true;
+			}
+			const endsCommitted =
+				state.committedGeneration === message.generation &&
+				current.view.kind === "session" &&
+				sessionKey(current.view) === key;
+			if (!cancelledTarget && !endsCommitted) {
+				// A stale close (or one for an address nothing here holds): it
+				// describes an observation the view does not hold.
+				return { state };
 			}
 			// The closed address must not survive as a rollback target either:
 			// a transition in flight to another address would otherwise
@@ -1027,7 +1039,7 @@ function navigationStep(
 						current: { view: pending.view, sessionId: ref.sessionId },
 						pending: { ...pending, synced: true },
 						candidate: null,
-						committedGeneration: message.generation ?? state.committedGeneration,
+						committedGeneration: message.generation,
 					},
 				};
 			}
@@ -1062,7 +1074,7 @@ function navigationStep(
 							view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
 							sessionId: ref.sessionId,
 						},
-						committedGeneration: message.generation ?? state.committedGeneration,
+						committedGeneration: message.generation,
 						abandoned: state.abandoned?.key === key ? null : state.abandoned,
 					},
 				};
@@ -1074,15 +1086,10 @@ function navigationStep(
 				return { state };
 			}
 			// A re-assert must come from the committed attachment: the generation
-			// names the attachment the frame belongs to, so a mismatch is a stale
-			// attachment's frame even when the address is unchanged (ADR 19).
-			// Frames without a generation (legacy hand-built frames, a restored
-			// pre-generation view) keep the address rule alone.
-			if (
-				message.generation !== undefined &&
-				state.committedGeneration !== null &&
-				message.generation !== state.committedGeneration
-			) {
+			// names the attachment the frame belongs to, so a mismatch — or a null
+			// committed generation, meaning no observation is committed — is a
+			// frame the view does not hold (ADR 19).
+			if (state.committedGeneration !== message.generation) {
 				return { state };
 			}
 			commitObservation(ref, deps);
@@ -1093,7 +1100,7 @@ function navigationStep(
 						view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
 						sessionId: ref.sessionId,
 					},
-					committedGeneration: message.generation ?? state.committedGeneration,
+					committedGeneration: message.generation,
 					abandoned: state.abandoned?.key === key ? null : state.abandoned,
 				},
 			};

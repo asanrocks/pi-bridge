@@ -43,7 +43,9 @@ class DeferredTransport implements BridgeTransport {
 	): void {
 		const held = this.pendingPulls.splice(0, this.pendingPulls.length);
 		for (const pull of held) {
-			this.onMessage?.(JSON.stringify({ id: pull.id, ok: true, values, ...extra }));
+			// The attachment generation current when the request was admitted:
+			// the mirror's committed generation unless a test overrides it.
+			this.onMessage?.(JSON.stringify({ id: pull.id, ok: true, values, generation: 1, ...extra }));
 		}
 	}
 }
@@ -110,6 +112,9 @@ function makeClient(): { client: BridgeClient; transport: DeferredTransport } {
 
 /** Seed the global client's mirror and the store with `doc`. */
 function seed(client: BridgeClient, doc: Document): void {
+	// A seeded mirror replicates an established observation (ADR 19): the
+	// pull guard compares the reply's generation against the mirror's.
+	client.mirror.setGeneration(1);
 	client.mirror.applyReplace(doc);
 	getStore().getState().applyReplace(doc);
 }

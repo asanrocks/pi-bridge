@@ -172,6 +172,7 @@ describe("view commits require an owner", () => {
 		// commit over the newer intent that owns the view.
 		navigationObservation({
 			kind: "initial_sync",
+			generation: 1,
 			ref: { projectId: "proj", sessionId: "id-a", stem: "a" },
 			ops: null,
 		});
