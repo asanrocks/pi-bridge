@@ -54,7 +54,9 @@ browse branches in History. A steerer can do the following:
   `provider/modelId` and, on an unpinned row, a pin toggle that its hover
   reveals; a pinned row keeps a filled pin visible, so the pinned set is
   scannable. The glyph is state only — hovering the control changes its fill,
-  never the symbol, and the tooltip names the action. Shift+Enter toggles the focused row. Ctrl/Cmd+P
+  never the symbol, and the tooltip names the action. Hover and the keyboard
+  cursor reveal the same pin (`data-cursor`), because Shift+Enter's target has
+  to be visible to the user who presses it. Shift+Enter toggles the focused row. Ctrl/Cmd+P
   cycles the pinned list; Shift reverses the cycle. The controls remain
   available whenever connected.
 - Attach PNG, JPEG, WebP, or GIF images by file picker, paste, or drag and
@@ -260,9 +262,9 @@ Folder children:
 
 - Active Sessions are pinned first and remain visible in the `active` and
   `open` states. A green dot means active and an orange pulsing dot means
-  streaming. The attached `(Project, stem)` row is the only selected row
-  and uses the accent tint; a folder row never does — it is a fold control,
-  not a target.
+  streaming. The attached `(Project, stem)` row is the only selected row: the
+  accent tint plus weight `500` on its name, per Row states below. A folder row
+  never carries identity — it is a fold control, not a target.
 - Dormant Session history is fetched when a folder unfolds, ordered into
   `Today`, `This week`, and `Earlier`, and shown with relative timestamps.
   `Load more` requests the next page. A dormant row has a muted status dot
@@ -961,6 +963,51 @@ for new buttons, chips, action rows, and Markdown hosts.
   between two surfaces — a field, a portal, a card, a thumbnail — and never the
   thing that says a control can be clicked.
 
+### Row states
+
+A list row shows four states — selected or not, times hovered or not — but they
+are two dimensions, not four styles. **Identity** is persistent (the session
+you are attached to, the model in force, the file you opened); **position** is
+transient (the pointer, or the keyboard cursor in a list that moves one).
+
+| | not selected | selected |
+| --- | --- | --- |
+| rest | no fill | accent tint (`--row-selected-alpha`), name weight `500` |
+| position | `--color-muted` | the same tint one step down (`--row-selected-hover-alpha`) |
+
+- **Hue-locked, not layered.** Both dimensions live in the fill channel, so
+  they take different hues: identity is the cool accent, position the warm
+  neutral. A warm wash and a blue wash at similar luminance are distinguishable
+  at a glance; two warm washes 1.03:1 apart are not.
+- **One value per state, no overrides.** A selected row declares its own hover
+  step, so selection and pointer feedback coexist. A
+  `sidebarItemSelected:hover` that repaints the resting identity fill is the
+  defect this replaced.
+- **Strength is a token.** `--row-selected-alpha` and
+  `--row-selected-hover-alpha` carry only a number; the tint is mixed with
+  `transparent` at the use site so it composites over the row's own surface
+  (chrome sidebar, page-tone portal) rather than pinning a hex per host. 30% is
+  1.28:1 on the chrome and 1.30:1 on the portal — past texture, and legible
+  because the pair also differs in hue. It sits below the 1.4:1 control-state
+  floor deliberately: that floor was written for a fill that carries the state
+  alone, and identity here also carries weight.
+- **Identity is not a band.** A leading stripe spends a gutter rows do not all
+  have and is the last thing a left-to-right scan finds.
+- **A structural header never paints a state fill.** Group and section headers
+  are a hairline plus an uppercase `--tracking-caps` label; a header fill
+  1.09:1 from the hover fill reads as a hovered row.
+- **Reveal follows position, not the pointer.** A row control revealed on hover
+  appears for the keyboard cursor too (`.portalItem[data-cursor] .portalPin`),
+  or the user who needs Shift+Enter never sees the target. `aria-current` (and
+  `aria-selected` where the row is a `treeitem`) is the non-visual channel.
+- **Rows whose fill already carries meaning keep it.** The History graph's
+  path membership and the action rows' hues are semantic: position there is a
+  stronger alpha of the same hue, and identity moves to the row's mark column
+  (the history node dot) or the edge.
+- These rules are gated: `scripts/check-bridge-styling-tokens.mjs` fails a
+  `:hover` rule painting `--row-selected-alpha`, a structural header at rest
+  painting a row state fill, and any use of the retired `--color-accent-soft`.
+
 ### Iconography and control surfaces
 
 A control is a hit target carrying one glyph, plus a label when it needs words.
@@ -1131,7 +1178,9 @@ hover hue would otherwise sit under the opacity — and WCAG exempts inactive
 components from the 3:1 non-text rule, so no per-state disabled color is needed.
 Focus is never the control's business — the global accent ring in `index.css`
 covers every button — and a control must not restate hover or focus as a
-`border-color` change, which it cannot do anyway once it has no border.
+`border-color` change, which it cannot do anyway once it has no border. This
+section is about controls: a row's identity *is* a surface, and its two
+channels are specified under Row states above.
 
 **Toggle state swaps the glyph when the glyph has two forms.** Colour alone
 cannot carry on/off (WCAG 1.4.1), so a toggle whose symbol can differ shows the

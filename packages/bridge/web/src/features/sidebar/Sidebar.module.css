@@ -154,14 +154,23 @@
 	background: var(--color-muted);
 }
 
-/* Attached session ("you are here"): cool accent tint, hue-distinct from
-   the warm --color-muted hover; exactly one row wears it. */
+/* Attached session ("you are here"): the accent tint, cool against the warm
+   --color-muted hover so the pair differs in hue and not only in depth, plus
+   weight on the name. Exactly one row wears it. The tint's strength is the
+   token's business (see Row states in app/index.css), not this rule's. */
 .sidebarItem.sidebarItemSelected {
-	background: var(--color-accent-soft);
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-alpha), transparent);
 }
 
+/* The selected row keeps pointer feedback: same hue, next step. There is no
+   `selected:hover` + `selected` collapse because position and identity never
+   paint the same value. */
 .sidebarItem.sidebarItemSelected:hover {
-	background: var(--color-accent-soft);
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-hover-alpha), transparent);
+}
+
+.sidebarItemSelected .sidebarItemName {
+	font-weight: 500;
 }
 
 /* Row wrapper: positioning context for the hover-revealed row-menu

@@ -125,11 +125,17 @@ export function ModelPickerPortal({
 		if (isSelected) cls += ` ${styles.portalItemSelected}`;
 		if (isFocused) cls += ` ${styles.portalItemFocused}`;
 		return (
-			<div key={`${m.provider}/${m.id}`} className={cls} data-flat-idx={flatIdx}>
+			<div
+				key={`${m.provider}/${m.id}`}
+				className={cls}
+				data-flat-idx={flatIdx}
+				data-cursor={isFocused || undefined}
+			>
 				<button
 					type="button"
 					className={styles.portalItemSelect}
 					title={`${m.provider}/${m.id}`}
+					aria-current={isSelected ? "true" : undefined}
 					onMouseEnter={() => setFocusIdx(flatIdx)}
 					onClick={() => onSelectModel(m.provider, m.id)}
 				>

@@ -429,6 +429,53 @@ for (const [f, source] of css) {
 	}
 }
 
+// ── Pass 1e: row states are hue-locked, one value per dimension ─────────────
+//
+// A row's identity (selected) and position (hover / keyboard cursor) share the
+// fill channel, so they are locked to two hues: identity is the accent tint
+// from --row-selected-alpha, position is --color-muted, and the selected row's
+// own hover step is --row-selected-hover-alpha. Two failures are mechanical:
+// a :hover rule painting the resting identity value (selected+hover collapses
+// into selected, which is what this replaced), and a structural header painted
+// with a row state fill (a header 1.09:1 from the hover fill reads as a hovered
+// row). Semantic rows are exempt by construction: family B spends the fill on
+// meaning, which is why the current-value rules here are about the tokens that
+// exist, not about every accent mix.
+
+const RETIRED_ROW_TOKEN = "--color-accent-soft";
+const STRUCTURAL_HEADER = /groupHeader|GroupHeader|sectionHeader|SectionHeader/;
+const ROW_STATE_FILL = /background[^;]*var\(--(?:color-muted|row-selected)/;
+// A state selector (hover/focus/attribute) means the rule is a control's
+// feedback rather than the header's resting surface.
+const STATE_SELECTOR = /:hover|:focus|\[data-|\[aria-/;
+
+for (const [f, source] of css) {
+	for (const part of source.split("}")) {
+		const open = part.indexOf("{");
+		if (open === -1) continue;
+		const selector = part.slice(0, open).trim();
+		const body = part.slice(open + 1);
+		const where = `${f}: ${selector.split("\n").pop()?.trim()}`;
+
+		if (/:hover/.test(selector) && body.includes("var(--row-selected-alpha)")) {
+			errors.push(
+				`${where}: a :hover rule paints the resting identity tint — selected+hover is the same hue's next step, var(--row-selected-hover-alpha)`,
+			);
+		}
+		if (STRUCTURAL_HEADER.test(selector) && !STATE_SELECTOR.test(selector) && ROW_STATE_FILL.test(body)) {
+			errors.push(
+				`${where}: a structural header paints a row state fill — headers are a hairline plus a label, never a hover/selected surface`,
+			);
+		}
+	}
+
+	if (source.includes(RETIRED_ROW_TOKEN)) {
+		errors.push(
+			`${f}: ${RETIRED_ROW_TOKEN} is retired — row identity is the accent tint at var(--row-selected-alpha), with var(--row-selected-hover-alpha) for its hover step`,
+		);
+	}
+}
+
 // ── Pass 2: every reference resolves ────────────────────────────────────────
 
 for (const { name, loc } of references) {

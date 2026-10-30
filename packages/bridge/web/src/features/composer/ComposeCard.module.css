@@ -875,10 +875,6 @@
 	border-radius: var(--radius-sm);
 }
 
-.portalSearchInput:focus {
-	border-color: var(--color-accent);
-}
-
 .portalList {
 	overflow-y: auto;
 	flex: 1;
@@ -897,7 +893,8 @@
 	font-size: var(--fs-xs);
 	font-weight: 600;
 	color: var(--color-muted-foreground);
-	background: var(--color-sidebar);
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-caps);
 }
 
 /* Per-group "More…" row (ADR 15): hides a provider's folded tail. It reads as
@@ -927,7 +924,6 @@
 .portalItem {
 	display: flex;
 	align-items: center;
-	border-left: 2px solid transparent;
 	user-select: none;
 }
 
@@ -963,6 +959,14 @@
    as the model; a pinned row keeps its pin visible so the pinned set is
    scannable. The box is reserved either way, so revealing a pin never shifts
    the row. */
+/* Ghost pin toggle. The glyph is state only: a filled accent pin on a pinned
+   row, an outline pin on an unpinned row. Hover never swaps the glyph — the
+   action lives in the tooltip/aria-label, and hover is signalled by the button
+   surface. Unpinned pins stay hidden until the row is hovered *or carries the
+   keyboard cursor* (`data-cursor`), so Shift+Enter's target is visible to the
+   user who needs it; a pinned row keeps its pin visible so the pinned set is
+   scannable. The box is reserved either way, so revealing a pin never shifts
+   the row. */
 .portalPin {
 	composes: ghost from "../../render/buttons.module.css";
 	flex-shrink: 0;
@@ -972,7 +976,8 @@
 	opacity: 0;
 }
 
-.portalItem:hover .portalPin {
+.portalItem:hover .portalPin,
+.portalItem[data-cursor] .portalPin {
 	opacity: 1;
 }
 
@@ -986,20 +991,32 @@
 
 /* One highlight surface for row hover and the keyboard cursor — `--color-muted`
    is the token's documented hover role and matches the sidebar's rows, so a
-   row reads the same whether the pointer or the cursor is on it. Selection is
-   carried by the accent border, not a second background. */
+   row reads the same whether the pointer or the cursor is on it. Identity is
+   the accent tint; the two dimensions are hue-locked (see Row states in
+   app/index.css), so no state needs an override and the selected row still
+   answers the pointer. */
 .portalItem:hover {
 	background: var(--color-muted);
 }
 
 .portalItemSelected {
-	border-left-color: var(--color-accent);
-	background: var(--color-muted);
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-alpha), transparent);
+}
+
+.portalItemSelected .portalItemName {
+	font-weight: 500;
 }
 
 /* Keyboard cursor on a non-selected row; same surface as hover. */
 .portalItemFocused {
 	background: var(--color-muted);
+}
+
+/* Cursor on the selected row: the identity hue's next step, not a second
+   channel. Declared after both base rules so equal specificity resolves here. */
+.portalItemSelected.portalItemFocused,
+.portalItemSelected:hover {
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-hover-alpha), transparent);
 }
 
 .portalNoMatch {

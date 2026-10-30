@@ -86,7 +86,6 @@
   /* ── Accent ──────────────────────────────────────────────────────────── */
   --color-accent: #4a7bab;               /* active state, focus, primary CTA */
   --color-accent-hover: #3a6a9a;
-  --color-accent-soft: #e1e8ef;           /* attached-instance row tint (accent over warm sidebar) */
   --color-on-accent: #ffffff;             /* text/icons on accent background */
   --color-surface-raised: #ffffff;        /* composer card (deliberately brighter than page) */
 
@@ -157,6 +156,21 @@
      --color-muted hover it was introduced to replace — and the ink change would
      be carrying the state alone. */
   --state-fill-alpha: 20%;
+
+  /* ── Row states ─────────────────────────────────────────────────────── */
+  /* A row has two dimensions: identity (selected — persistent) and position
+     (hover or keyboard cursor — transient). They share the fill channel, so
+     they are hue-locked instead of layered: identity is the accent tint,
+     position is the warm neutral --color-muted, and the selected row's own
+     hover step is the same hue one step down. Each dimension therefore keeps
+     one value per state and no rule needs an override.
+     These carry only strength, like --state-fill-alpha. The tint is mixed with
+     `transparent` at the use site so it composites over the row's own surface
+     (chrome sidebar, page-tone portal) rather than hard-coding a host. At 30%
+     it is 1.28:1 against the chrome and 1.30:1 against the portal — past
+     texture, and legible because the pair differs in hue as well as depth. */
+  --row-selected-alpha: 30%;
+  --row-selected-hover-alpha: 42%;
 
   /* ── Elevation (shadows are structural, not a second color palette) ── */
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.15);   /* small floating controls */  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.12);  /* popovers, panels, portals */
@@ -259,7 +273,6 @@
     /* ── Accent ──────────────────────────────────────────────────────────── */
     --color-accent: #7fa8cf;              /* lightened: 7.2:1 on page, 6.4:1 on chrome */
     --color-accent-hover: #94b8da;
-    --color-accent-soft: #24303c;         /* attached-instance row tint */
     --color-on-accent: #16150f;           /* dark ink on the lightened accent */
     --color-surface-raised: #23201a;      /* composer card, above the page */
 

@@ -75,8 +75,20 @@
 	background: var(--color-muted);
 }
 
+/* Current file in the tree (identity, not the keyboard cursor: StatePicker's
+   rows use `data-active` for that). The accent tint plus weight, so the
+   selected row is findable without a band and the hover step stays available
+   (see Row states in app/index.css). */
 .treeRow[data-active] {
-	background: var(--color-accent-soft);
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-alpha), transparent);
+}
+
+.treeRow[data-active]:hover {
+	background: color-mix(in srgb, var(--color-accent) var(--row-selected-hover-alpha), transparent);
+}
+
+.treeRow[data-active] .treeName {
+	font-weight: 500;
 }
 
 .treeRow[data-on-path] {
