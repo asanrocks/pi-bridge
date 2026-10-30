@@ -44,11 +44,16 @@
 // the candidate's seeding and promotion, the cache-first paint decision,
 // and the cache base); the connection pipeline owns document publication
 // and cache write-through mechanics, reading and advancing the cache base
-// through the exported functions below. restoreLocalSession (sessionBoot)
-// is value-only: it returns the seed, and the `localSeed` step decides
-// whether the values become visible — the store-based race guard runs
-// here, reading one owner's publication (the address is staged before the
-// RPC, and the session id lands only with the initial sync).
+// through the exported functions below. Every read and write of published
+// state goes through the view port (`viewPort.ts`, ADR 19): the port is the
+// complete inventory of the actor's inputs (what the last decision
+// published) and outputs (the decisions themselves), so the store, the
+// route, and the address index are one adapter's mechanics, not scattered
+// reach-throughs. restoreLocalSession (sessionBoot) is value-only: it
+// returns the seed, and the `localSeed` step decides whether the values
+// become visible — the race guard reads the port's own publications (the
+// address is staged before the RPC, and the session id lands only with the
+// initial sync).
 // ============================================================================
 
 import type {
@@ -70,8 +75,7 @@ import {
 	type ReactorEffect,
 	seedDocument,
 } from "../../../../src/core/index.ts";
-import { writeRoute } from "../lib/routes.ts";
-import { lookupSessionId, rememberAddress } from "../persist/addressIndex.ts";
+import { lookupSessionId } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
@@ -79,6 +83,7 @@ import { resolveLatestSession } from "./latestSession.ts";
 import type { LocalSessionSeed } from "./sessionBoot.ts";
 import { promoteCandidate, type SessionCandidate } from "./sessionCandidate.ts";
 import type { ViewObservationEvent } from "./viewEvents.ts";
+import { createNavigationViewPort, type NavigationViewPort } from "./viewPort.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -263,9 +268,12 @@ type NavigationMessage =
 	// become visible — the restore itself writes nothing.
 	| { kind: "localSeed"; seed: LocalSessionSeed };
 
-/** Injectable seams (tests supply fakes; production reads the globals). */
+/** Injectable seams (tests supply fakes; production reads the globals). The
+ * port is the actor's complete store/route/index surface — every read and
+ * write of published state goes through it (ADR 19). */
 export interface NavigationDeps {
 	getClient(): BridgeClient | null;
+	port: NavigationViewPort;
 	lookupSessionId(projectId: string, stem: string): string | undefined;
 	loadSession(sessionId: string): Promise<{ records: CacheEntryRecord[]; hint: SessionStatusHint | null }>;
 	resolveLatest(client: BridgeClient): Promise<SessionInfo | null>;
@@ -273,8 +281,12 @@ export interface NavigationDeps {
 
 const defaultDeps: NavigationDeps = {
 	getClient: () => getGlobalClient(),
+	port: createNavigationViewPort(),
 	lookupSessionId,
 	loadSession: async (sessionId) => (await getEntryCache()).loadSession(sessionId),
+	// The alias resolution's default reads the directory slices the store
+	// holds (projects, active sessions) — directory input, not view
+	// authority; the seam itself is injectable.
 	resolveLatest: (client) =>
 		resolveLatestSession(client, getStore().getState().projects, getStore().getState().activeSessions),
 };
@@ -502,51 +514,32 @@ function sessionKey(view: NavigationView): string {
  * the frame the pipeline just applied (promoted, for a delta). */
 function commitObservation(ref: SessionRef, deps: NavigationDeps): void {
 	const mirror = deps.getClient()?.mirror;
-	rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-	const store = getStore();
 	if (mirror !== undefined) {
-		store.getState().commitObservation(ref, mirror.document, mirror.revision);
+		deps.port.commitObservation(ref, mirror.document, mirror.revision);
 	} else {
 		// No client (tests without a mirror): the address pair alone — the
 		// document will be published with the next frame.
-		store.getState().setCurrentSession(ref.projectId, ref.stem);
-		store.getState().setActiveSessionId(ref.sessionId);
-	}
-	if (!store.getState().addressViaAlias) {
-		writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+		deps.port.commitAddress(ref);
 	}
 }
 
 /** Restore a committed view after a failed navigate-mode open: the address,
  * the session id, and the route all describe the view the client actually
  * holds server-side. */
-function restoreView(previous: { view: NavigationView; sessionId: string | null }): void {
-	const store = getStore();
-	if (previous.view.kind === "session") {
-		store.getState().setCurrentSession(previous.view.projectId, previous.view.stem);
-	} else if (previous.view.kind === "project") {
-		store.getState().setCurrentSession(previous.view.projectId, null);
-	} else {
-		store.getState().setCurrentSession(null, null);
-	}
-	store.getState().setActiveSessionId(previous.sessionId);
-	if (previous.view.kind === "session") {
-		writeRoute({ kind: "session", projectId: previous.view.projectId, stem: previous.view.stem });
-	} else if (previous.view.kind === "project") {
-		writeRoute({ kind: "project", projectId: previous.view.projectId });
-	} else {
-		writeRoute({ kind: "launcher" });
-	}
+function restoreView(previous: { view: NavigationView; sessionId: string | null }, port: NavigationViewPort): void {
+	port.restoreView(previous.view, previous.sessionId);
 }
 
 /** Land a boot-mode failure on the Project home (ADR 11): the stem no longer
  * resolves (deleted file, or an unflushed session after a daemon restart),
  * so the staged address, the identity, and the alias flag all go. */
-function landProjectHome(projectId: string): { view: NavigationView; sessionId: string | null } {
-	const store = getStore();
-	store.getState().setAddressViaAlias(false);
-	store.getState().clearCurrentSession(projectId);
-	writeRoute({ kind: "project", projectId });
+function landProjectHome(
+	projectId: string,
+	port: NavigationViewPort,
+): { view: NavigationView; sessionId: string | null } {
+	port.setAddressViaAlias(false);
+	port.clearSession(projectId);
+	port.writeRoute({ kind: "project", projectId });
 	return { view: { kind: "project", projectId }, sessionId: null };
 }
 
@@ -576,7 +569,7 @@ function stageOpen(
 	transitionId: number,
 	deps: NavigationDeps,
 ): { state: NavigationState; effects: ReactorEffect<NavigationMessage>[] } {
-	const store = getStore();
+	const port = deps.port;
 	// A superseded transition never committed; remember its target so its
 	// late initial sync cannot commit over the successor.
 	const abandoned = state.pending ? { key: sessionKey(state.pending.view) } : state.abandoned;
@@ -591,12 +584,11 @@ function stageOpen(
 		reply: options.reply,
 		synced: false,
 	};
-	if (options.viaAlias) store.getState().setAddressViaAlias(true);
-	else store.getState().setAddressViaAlias(false);
-	store.getState().setCurrentSession(view.projectId, view.stem);
+	port.setAddressViaAlias(options.viaAlias);
+	port.stageAddress(view.projectId, view.stem);
 	if (options.writesRoute) {
-		if (options.routeAlias) writeRoute({ kind: "alias", alias: "latest" });
-		else writeRoute({ kind: "session", projectId: view.projectId, stem: view.stem });
+		if (options.routeAlias) port.writeRoute({ kind: "alias", alias: "latest" });
+		else port.writeRoute({ kind: "session", projectId: view.projectId, stem: view.stem });
 	}
 	return {
 		state: { ...state, pending, abandoned, intentEpoch: epoch },
@@ -628,12 +620,12 @@ function settleOpen(
 			// must not swallow a later legitimate sync.
 			abandoned = abandoned?.key === sessionKey(pending.view) ? null : abandoned;
 		} else if (pending.mode === "boot") {
-			current = landProjectHome(pending.view.projectId);
+			current = landProjectHome(pending.view.projectId, deps.port);
 		} else {
 			// A navigate failure restores the last committed view: the server
 			// left the previous attachment untouched, so the client must not
 			// claim the new address either.
-			restoreView(pending.previous);
+			restoreView(pending.previous, deps.port);
 			current = pending.previous;
 		}
 	}
@@ -702,7 +694,6 @@ function navigationStep(
 			if (message.seed !== null) {
 				const seed = message.seed;
 				cursor = computeCursor(seed.records) ?? undefined;
-				const store = getStore();
 				if (pending.mode === "navigate") {
 					// Candidate seeding (ADR 09): the delta initial sync
 					// applies to the candidate, not the live mirror.
@@ -720,13 +711,15 @@ function navigationStep(
 					// content, the store) hold the cached prefix before the
 					// initial sync applies. A reconnect reuses the richer
 					// in-memory document over the cache.
-					const s = store.getState();
-					const sameSession = s.activeSessionId === seed.sessionId && Object.keys(s.document.entries).length > 0;
-					const doc = sameSession ? s.document : seedDocument(seed.records, seed.hint ?? undefined);
+					const sameSession =
+						deps.port.renderedSessionId() === seed.sessionId && !deps.port.renderedDocumentEmpty();
+					const doc = sameSession
+						? deps.port.renderedDocument()
+						: seedDocument(seed.records, seed.hint ?? undefined);
 					deps.getClient()?.mirror.applyReplace(doc);
 					advanceCacheBase(seed.sessionId, doc);
 					if (!sameSession && seed.records.length > 0) {
-						store.getState().applyReplace(doc);
+						deps.port.paintLocalDocument(doc);
 					}
 				}
 			}
@@ -763,8 +756,8 @@ function navigationStep(
 			}
 			if (!message.target) {
 				if (message.boot) {
-					getStore().getState().clearCurrentSession();
-					writeRoute({ kind: "launcher" });
+					deps.port.clearSession();
+					deps.port.writeRoute({ kind: "launcher" });
 					message.reply?.({ ok: true });
 					return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 				}
@@ -795,7 +788,7 @@ function navigationStep(
 		case "project": {
 			if (message.mode === "boot") {
 				// The URL already names the Project home; nothing to detach.
-				getStore().getState().setCurrentSession(message.projectId, null);
+				deps.port.stageAddress(message.projectId, null);
 				return {
 					state: {
 						...state,
@@ -838,8 +831,8 @@ function navigationStep(
 
 		case "launcher": {
 			if (message.mode === "boot") {
-				getStore().getState().clearCurrentSession();
-				writeRoute({ kind: "launcher" });
+				deps.port.clearSession();
+				deps.port.writeRoute({ kind: "launcher" });
 				return {
 					state: {
 						...state,
@@ -865,10 +858,9 @@ function navigationStep(
 
 		case "projectSettled": {
 			if (state.intentEpoch !== message.epoch) return { state };
-			const store = getStore();
-			store.getState().setAddressViaAlias(false);
-			store.getState().setCurrentSession(message.projectId, null);
-			writeRoute({ kind: "project", projectId: message.projectId });
+			deps.port.setAddressViaAlias(false);
+			deps.port.stageAddress(message.projectId, null);
+			deps.port.writeRoute({ kind: "project", projectId: message.projectId });
 			return {
 				state: { ...state, current: { view: { kind: "project", projectId: message.projectId }, sessionId: null } },
 			};
@@ -877,10 +869,9 @@ function navigationStep(
 		case "launcherSettled": {
 			if (state.intentEpoch !== message.epoch) return { state };
 			if (!message.result.ok) return { state };
-			const store = getStore();
-			store.getState().setAddressViaAlias(false);
-			store.getState().clearCurrentSession();
-			writeRoute({ kind: "launcher" });
+			deps.port.setAddressViaAlias(false);
+			deps.port.clearSession();
+			deps.port.writeRoute({ kind: "launcher" });
 			return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 		}
 
@@ -924,10 +915,10 @@ function navigationStep(
 				// and never over an address that was closed meanwhile (the
 				// abandoned marker records it).
 				const key = `${message.ref.projectId}/${message.ref.stem}`;
-				const s = getStore().getState();
+				const rendered = deps.port.renderedAddress();
 				if (
 					state.abandoned?.key !== key &&
-					(s.currentProjectId !== message.ref.projectId || s.currentStem !== message.ref.stem)
+					(rendered.projectId !== message.ref.projectId || rendered.stem !== message.ref.stem)
 				) {
 					commitObservation(message.ref, deps);
 				}
@@ -993,13 +984,13 @@ function navigationStep(
 					previous: { view: { kind: "project", projectId: message.projectId }, sessionId: null },
 				};
 			}
-			const s = getStore().getState();
-			if (s.currentProjectId === message.projectId && s.currentStem === message.stem) {
+			const rendered = deps.port.renderedAddress();
+			if (rendered.projectId === message.projectId && rendered.stem === message.stem) {
 				// The rendered Session's runtime ended: the document can never
 				// progress again, so the address, the session id, and the route
 				// all go, retaining the Project to land on its home.
-				s.clearCurrentSession(message.projectId);
-				writeRoute({ kind: "project", projectId: message.projectId });
+				deps.port.clearSession(message.projectId);
+				deps.port.writeRoute({ kind: "project", projectId: message.projectId });
 				current = { view: { kind: "project", projectId: message.projectId }, sessionId: null };
 			}
 			return { state: { ...state, pending, current, cancelled, abandoned: { key } } };
@@ -1108,27 +1099,28 @@ function navigationStep(
 
 		case "localSeed": {
 			// A cache-first restore's values arrived (ADR 09); the actor decides
-			// whether they become visible (ADR 19). The guard is store-based on
-			// purpose: navigation maintains exactly the invariants it reads — the
-			// address is staged before the RPC resolves, and the durable session id
-			// lands only with an address-bearing initial sync — so a stale cache
-			// read can never overwrite wire data.
+			// whether they become visible (ADR 19). The guard reads the port's
+			// own publications on purpose: navigation maintains exactly the
+			// invariants it reads — the address is staged before the RPC
+			// resolves, and the durable session id lands only with an
+			// address-bearing initial sync — so a stale cache read can never
+			// overwrite wire data.
 			const { projectId, stem, sessionId, doc } = message.seed;
-			const s = getStore().getState();
-			const unclaimed = s.currentProjectId === null && s.currentStem === null;
+			const rendered = deps.port.renderedAddress();
+			const unclaimed = rendered.projectId === null && rendered.stem === null;
 			const matchesEmpty =
-				s.currentProjectId === projectId && s.currentStem === stem && Object.keys(s.document.entries).length === 0;
-			// `activeSessionId` set means an address-bearing frame already landed —
-			// even for an empty session — so the wire is authoritative.
-			if ((!unclaimed && !matchesEmpty) || s.activeSessionId !== null) return { state };
+				rendered.projectId === projectId && rendered.stem === stem && deps.port.renderedDocumentEmpty();
+			// A published session id means an address-bearing frame already landed
+			// — even for an empty session — so the wire is authoritative.
+			if ((!unclaimed && !matchesEmpty) || deps.port.renderedSessionId() !== null) return { state };
 			// Address first, then the id (the pipeline's ordering rule):
-			// setCurrentSession unbinds a stale id on an address change, so the pair
-			// must land in this order.
-			getStore().getState().setCurrentSession(projectId, stem);
-			getStore().getState().setActiveSessionId(sessionId);
+			// staging unbinds a stale id on an address change, so the pair must
+			// land in this order.
+			deps.port.stageAddress(projectId, stem);
+			deps.port.publishSessionId(sessionId);
 			// A local paint is a publication outside the mirror: the store's own
 			// revision counter advances, exactly like the restore path it replaces.
-			getStore().getState().applyReplace(doc);
+			deps.port.paintLocalDocument(doc);
 			return { state };
 		}
 	}

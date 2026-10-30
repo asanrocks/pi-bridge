@@ -371,7 +371,17 @@ frame carries the attachment generation that produced it (ADR 19): the
 actor records the generation of the frame that committed the view, a
 re-assert or `session_closed` from any other generation never commits or
 ends the view (same address or not; a null committed generation means no
-observation is committed, so nothing re-asserts). One
+observation is committed, so nothing re-asserts).
+
+Every read and write of published state goes through the **view port**
+(`viewPort.ts`, ADR 19): the port is the complete inventory of the actor's
+inputs (the rendered address, the published session id, the rendered
+document facts) and outputs (stage, commit, restore, clear, paint, route,
+alias flag). The store, the history API, and the address index are one
+adapter's mechanics behind it (`createNavigationViewPort`), injectable
+through `NavigationDeps.port`; the actor's steps never touch them
+directly, so the local-seed race guard and the close/rollback decisions
+read one owner's publication — their own. One
 authority rule governs the whole module:
 
 > A step may read and write anything; an effect may only observe and return
