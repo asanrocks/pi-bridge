@@ -135,8 +135,9 @@ and [core protocol](core/protocol.md).
    owner: a reactor whose state names the resources the lifetime holds, where
    every transition is one applied message and every asynchronous completion
    returns as one. Its close is the terminal drain of state and resources
-   together. ADR 19 proposes the Session, Connection, and browser view actors
-   over these seam terms.
+   together. The Session, Connection, and browser view actors are built over
+   these seam terms; their contracts live in the host runtime and web
+   architecture documents.
 
 ## C. Document sync
 

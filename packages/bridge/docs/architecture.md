@@ -306,12 +306,19 @@ These are the load-bearing rules for changes across layers:
 13. **Filtered delivery converges.** Lazy filtering sanitizes parent values as
     well as leaf operations, so filtered replay matches a fresh projection.
 14. **Wire frames have one owner.** BridgeClient and Connection construct the
-    envelopes; feature code uses typed methods and push data.
+    envelopes; feature code uses typed methods and push data. Every
+    observation frame carries the attachment generation that produced it —
+    ownership on the wire is mandatory, and a frame from another attachment
+    is dropped before the mirror and the view see it (ADR 19).
 15. **The URL selects navigation.** The navigation reactor is the single
     owner of browser Session selection: it stages, commits on the
     address-bearing initial sync, and rolls back or falls back per
     transition; no other module writes the current address, the session id,
-    the navigation route, or the candidate mirror.
+    the navigation route, or the candidate mirror. Every read and write of
+    published state goes through the view port
+    (`web/src/infra/net/viewPort.ts`) — the typed seam that is the actor's
+    complete input/output surface — so the store, the route, and the address
+    index are one adapter's mechanics (ADR 19).
 16. **The cache is disposable derived state.** Server validation and
     authoritative initial sync determine correctness, not IndexedDB contents.
 17. **Async work is admitted by a named owner.** Every asynchronous
@@ -340,7 +347,7 @@ guarded against.
 | `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
 | `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
 | `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` *before* the runtime is disposed, so every drained observation appends to a live runtime |
-| ActivationRegistry | Manager creation, registration, attachment, and the collection choreography | Address-keyed reservations; the actor's phase is terminal per registration | `collect()`/`dispose()` — joinable: a second caller awaits the in-flight disposal / the memoized drain |
+| ActivationRegistry | Creation reservations, the address and durable-session-id indexes, and the collection choreography | Address-keyed reservations; the actor's phase is terminal per registration | `collect()`/`dispose()` — joinable: a second caller awaits the in-flight disposal / the memoized drain |
 | Manager teardown | Runtime disposal, observation-scope drain | — | `dispose()` — idempotent and joinable; the observation scope drains before the runtime goes |
 | Connection pipeline | Push ingestion, cache write-through, coalescing | `disposed` freezes writes; deltas gate on the committed session id | `cleanup()` — pending ops dropped, in-flight cache writes gated |
 | Pull loop | Lazy-value pulls | Reply admitted only for unchanged seal state and unfetched fields | `cancelPullRetry()` at teardown; reconnect replaces the client |
