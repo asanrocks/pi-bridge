@@ -41,12 +41,14 @@
 // either.
 //
 // Division of labor: navigation owns selection (address, route, session id,
-// the candidate's seeding and promotion, and the cache base it seeds); the
-// connection pipeline owns document publication and cache write-through
-// mechanics; restoreLocalSession owns the cache-first paint and keeps its
-// own store-based race guard (navigation maintains exactly the store
-// invariants that guard reads: the address is staged before the RPC, and
-// the session id lands only with the initial sync).
+// the candidate's seeding and promotion, the cache-first paint decision,
+// and the cache base); the connection pipeline owns document publication
+// and cache write-through mechanics, reading and advancing the cache base
+// through the exported functions below. restoreLocalSession (sessionBoot)
+// is value-only: it returns the seed, and the `localSeed` step decides
+// whether the values become visible — the store-based race guard runs
+// here, reading one owner's publication (the address is staged before the
+// RPC, and the session id lands only with the initial sync).
 // ============================================================================
 
 import type {
@@ -74,6 +76,7 @@ import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
 import { resolveLatestSession } from "./latestSession.ts";
+import type { LocalSessionSeed } from "./sessionBoot.ts";
 import { promoteCandidate, type SessionCandidate } from "./sessionCandidate.ts";
 import type { ViewObservationEvent } from "./viewEvents.ts";
 
@@ -252,7 +255,11 @@ type NavigationMessage =
 			ops: PatchOp[] | null;
 			operationId?: string;
 			generation?: number;
-	  };
+	  }
+	// A cache-first local restore completed (ADR 09, value-only per ADR 19):
+	// the values the cache read produced. The actor decides whether they
+	// become visible — the restore itself writes nothing.
+	| { kind: "localSeed"; seed: LocalSessionSeed };
 
 /** Injectable seams (tests supply fakes; production reads the globals). */
 export interface NavigationDeps {
@@ -278,7 +285,27 @@ const defaultDeps: NavigationDeps = {
 // write and re-establishes it on the replace repair path.
 // ---------------------------------------------------------------------------
 
-export const cacheBase: { value: { sessionId: string; doc: Document } | null } = { value: null };
+const cacheBase: { value: { sessionId: string; doc: Document } | null } = { value: null };
+
+/** The document the last cache write for `sessionId` was planned against —
+ * the pipeline's write-through base. The fallback is status-only: a session
+ * with no base yet has nothing committed to plan a delta against. */
+export function cacheBaseDocFor(sessionId: string, fallbackStatus: Document["status"]): Document {
+	return cacheBase.value !== null && cacheBase.value.sessionId === sessionId
+		? cacheBase.value.doc
+		: { status: fallbackStatus, entries: {} };
+}
+
+/** Advance the cache base to the document the pipeline just wrote through:
+ * the next delta plans against it (ADR 09). */
+export function advanceCacheBase(sessionId: string, doc: Document): void {
+	cacheBase.value = { sessionId, doc };
+}
+
+/** The current cache base (tests and diagnostics). */
+export function currentCacheBase(): { sessionId: string; doc: Document } | null {
+	return cacheBase.value;
+}
 
 // ---------------------------------------------------------------------------
 // Effects — value-only. Each observes and returns a completion message, and
@@ -695,7 +722,7 @@ function navigationStep(
 					const sameSession = s.activeSessionId === seed.sessionId && Object.keys(s.document.entries).length > 0;
 					const doc = sameSession ? s.document : seedDocument(seed.records, seed.hint ?? undefined);
 					deps.getClient()?.mirror.applyReplace(doc);
-					cacheBase.value = { sessionId: seed.sessionId, doc };
+					advanceCacheBase(seed.sessionId, doc);
 					if (!sameSession && seed.records.length > 0) {
 						store.getState().applyReplace(doc);
 					}
@@ -990,7 +1017,7 @@ function navigationStep(
 						state.candidate !== null ? promoteCandidate(state.candidate, ref.sessionId, message.ops) : null;
 					if (promoted) {
 						deps.getClient()?.mirror.applyReplace(promoted.doc);
-						cacheBase.value = { sessionId: ref.sessionId, doc: promoted.before };
+						advanceCacheBase(ref.sessionId, promoted.before);
 					}
 				}
 				commitObservation(ref, deps);
@@ -1070,6 +1097,32 @@ function navigationStep(
 					abandoned: state.abandoned?.key === key ? null : state.abandoned,
 				},
 			};
+		}
+
+		case "localSeed": {
+			// A cache-first restore's values arrived (ADR 09); the actor decides
+			// whether they become visible (ADR 19). The guard is store-based on
+			// purpose: navigation maintains exactly the invariants it reads — the
+			// address is staged before the RPC resolves, and the durable session id
+			// lands only with an address-bearing initial sync — so a stale cache
+			// read can never overwrite wire data.
+			const { projectId, stem, sessionId, doc } = message.seed;
+			const s = getStore().getState();
+			const unclaimed = s.currentProjectId === null && s.currentStem === null;
+			const matchesEmpty =
+				s.currentProjectId === projectId && s.currentStem === stem && Object.keys(s.document.entries).length === 0;
+			// `activeSessionId` set means an address-bearing frame already landed —
+			// even for an empty session — so the wire is authoritative.
+			if ((!unclaimed && !matchesEmpty) || s.activeSessionId !== null) return { state };
+			// Address first, then the id (the pipeline's ordering rule):
+			// setCurrentSession unbinds a stale id on an address change, so the pair
+			// must land in this order.
+			getStore().getState().setCurrentSession(projectId, stem);
+			getStore().getState().setActiveSessionId(sessionId);
+			// A local paint is a publication outside the mirror: the store's own
+			// revision counter advances, exactly like the restore path it replaces.
+			getStore().getState().applyReplace(doc);
+			return { state };
 		}
 	}
 }
@@ -1253,6 +1306,10 @@ export function navigationCreate(
  * it (the value-only pipeline slice), so the actor decides nothing for it
  * here either.
  */
+export function navigationLocalSeed(seed: LocalSessionSeed): Promise<void> {
+	return runtime.reactor.send({ kind: "localSeed", seed });
+}
+
 export function navigationObservation(event: ViewObservationEvent): void {
 	if (event.kind === "initial_sync") {
 		void runtime.reactor

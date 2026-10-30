@@ -1,14 +1,17 @@
 // ============================================================================
-// sessionBoot unit tests — the local restore half of boot (`restoreLocalSession`).
-// The wire half is the navigation reactor, covered by navigation.test.ts. The
-// store is the module singleton from store.tsx; each test resets the fields
-// the restore reads and writes.
+// sessionBoot unit tests — the local restore half of boot. The restore is
+// value-only (ADR 19): it returns the seed, and the view actor's `localSeed`
+// step decides whether the values become visible — these tests drive both
+// halves of that flow and pin the race guards (a stale cache read can never
+// overwrite wire data). The wire half's transitions are covered by
+// navigation.test.ts.
 // ============================================================================
 
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CacheEntryRecord, Document, Entry, SessionStatusHint } from "../../../../src/core/index.ts";
 import { seedDocument } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
+import { navigationLocalSeed, resetNavigationForTests } from "./navigation.ts";
 import { type LocalRestoreDeps, restoreLocalSession } from "./sessionBoot.ts";
 
 // ---------------------------------------------------------------------------
@@ -79,12 +82,15 @@ function deps(
 
 beforeEach(() => {
 	resetStore();
+	resetNavigationForTests();
 });
 
 describe("restoreLocalSession", () => {
 	it("seeds the store from the cache, claiming address and session id", async () => {
 		const records = [msgRecord("s1", 0, "a"), msgRecord("s1", 1, "b")];
-		await restoreLocalSession("proj", "stem", deps(records));
+		const seed = await restoreLocalSession("proj", "stem", deps(records));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.currentProjectId).toBe("proj");
@@ -100,14 +106,18 @@ describe("restoreLocalSession", () => {
 		// changed label). The revision is the declared projection input that
 		// moves, so the restore must publish it together with the document.
 		const before = getStore().getState().docRevision;
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 		expect(getStore().getState().docRevision).toBeGreaterThan(before);
 	});
 
 	it("quiesces volatile status flags from the cached hint", async () => {
 		const records = [msgRecord("s1", 0, "a")];
 		const hint: SessionStatusHint = { isStreaming: true, isCompacting: true, pendingSteer: ["queued"] };
-		await restoreLocalSession("proj", "stem", deps(records, hint));
+		const seed = await restoreLocalSession("proj", "stem", deps(records, hint));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const status = getStore().getState().document.status;
 		expect(status.isStreaming).toBe(false);
@@ -117,13 +127,21 @@ describe("restoreLocalSession", () => {
 
 	it("keeps the cached hint's non-volatile fields", async () => {
 		const records = [msgRecord("s1", 0, "a")];
-		await restoreLocalSession("proj", "stem", deps(records, { name: "my session" }));
+		const seed = await restoreLocalSession("proj", "stem", deps(records, { name: "my session" }));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		expect(getStore().getState().document.status.name).toBe("my session");
 	});
 
 	it("is a no-op when the address has no remembered session id", async () => {
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")], null, { knownAddress: false }));
+		const seed = await restoreLocalSession(
+			"proj",
+			"stem",
+			deps([msgRecord("s1", 0, "a")], null, { knownAddress: false }),
+		);
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.currentProjectId).toBeNull();
@@ -133,20 +151,26 @@ describe("restoreLocalSession", () => {
 	});
 
 	it("is a no-op on a cache read failure", async () => {
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")], null, { failRead: true }));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")], null, { failRead: true }));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		expect(getStore().getState().currentStem).toBeNull();
 	});
 
 	it("is a no-op when the cache holds no records", async () => {
-		await restoreLocalSession("proj", "stem", deps([]));
+		const seed = await restoreLocalSession("proj", "stem", deps([]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		expect(getStore().getState().currentStem).toBeNull();
 	});
 
 	it("never overwrites wire data: address claimed by another address", async () => {
 		getStore().setState({ currentProjectId: "other", currentStem: "other-stem" });
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.currentProjectId).toBe("other");
@@ -161,7 +185,9 @@ describe("restoreLocalSession", () => {
 			activeSessionId: "s1",
 			document: wireDoc,
 		});
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "cache")]));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "cache")]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.document).toBe(wireDoc);
@@ -170,7 +196,9 @@ describe("restoreLocalSession", () => {
 
 	it("never overwrites wire data: an empty session already synced (activeSessionId set)", async () => {
 		getStore().setState({ currentProjectId: "proj", currentStem: "stem", activeSessionId: "s1" });
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.activeSessionId).toBe("s1");
@@ -181,7 +209,9 @@ describe("restoreLocalSession", () => {
 		// Navigation stages the address before its RPC resolves; the local
 		// restore may land in that window and must still paint.
 		getStore().setState({ currentProjectId: "proj", currentStem: "stem" });
-		await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		const seed = await restoreLocalSession("proj", "stem", deps([msgRecord("s1", 0, "a")]));
+		// Value-only restore (ADR 19): the actor decides visibility.
+		if (seed !== null) await navigationLocalSeed(seed);
 
 		const s = getStore().getState();
 		expect(s.activeSessionId).toBe("s1");

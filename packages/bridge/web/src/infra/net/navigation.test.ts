@@ -24,7 +24,7 @@ import type {
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import {
-	cacheBase,
+	currentCacheBase,
 	type NavigationResult,
 	navigationBoot,
 	navigationBootLatest,
@@ -322,7 +322,7 @@ describe("Navigation", () => {
 		expect((await booted).ok).toBe(true);
 		// The cache seed painted the store before the wire answered.
 		expect(Object.keys(getStore().getState().document.entries)).toEqual(["e0"]);
-		expect(cacheBase.value?.sessionId).toBe("id-a");
+		expect(currentCacheBase()?.sessionId).toBe("id-a");
 	});
 
 	it("promotes the candidate on a matching initial-sync delta", async () => {
@@ -347,7 +347,7 @@ describe("Navigation", () => {
 		// The promoted candidate document replaced the mirror, and the cache
 		// base is the pre-promotion seed.
 		expect(fake.applyReplaces.length).toBe(1);
-		expect(cacheBase.value?.sessionId).toBe("id-b");
+		expect(currentCacheBase()?.sessionId).toBe("id-b");
 	});
 
 	it("commits a creation's initial sync when its operation owns the view", async () => {
@@ -541,7 +541,7 @@ describe("Navigation", () => {
 		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: [DELTA_OP] });
 		replyB.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
 		await openedB;
-		expect(cacheBase.value?.sessionId).toBe("id-b");
+		expect(currentCacheBase()?.sessionId).toBe("id-b");
 		expect(fake.applyReplaces.length).toBe(1);
 	});
 

@@ -18,7 +18,6 @@
 import {
 	type BridgeClient,
 	cacheRecordsOfDocument,
-	type Document,
 	type PatchOp,
 	planCacheWrites,
 	type ServerPushMessage,
@@ -27,7 +26,7 @@ import {
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
-import { cacheBase, navigationObservation } from "./navigation.ts";
+import { advanceCacheBase, cacheBaseDocFor, navigationObservation } from "./navigation.ts";
 
 export interface ConnectionPipeline {
 	/** Push handler for BridgeClient.onPush. No-op after cleanup. */
@@ -89,12 +88,9 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// the session's cache base.
 		const sessionId = store.getState().activeSessionId;
 		if (sessionId) {
-			const baseDoc: Document =
-				cacheBase.value !== null && cacheBase.value.sessionId === sessionId
-					? cacheBase.value.doc
-					: { status: after.status, entries: {} };
+			const baseDoc = cacheBaseDocFor(sessionId, after.status);
 			const writes = planCacheWrites(sessionId, baseDoc, after);
-			cacheBase.value = { sessionId, doc: after };
+			advanceCacheBase(sessionId, after);
 			if (writes.length > 0) {
 				void getEntryCache()
 					.then((cache) => {
@@ -115,12 +111,9 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		const store = getStore();
 		if (store.getState().activeSessionId !== ref.sessionId) return;
 		const after = client.mirror.document;
-		const baseDoc: Document =
-			cacheBase.value !== null && cacheBase.value.sessionId === ref.sessionId
-				? cacheBase.value.doc
-				: { status: after.status, entries: {} };
+		const baseDoc = cacheBaseDocFor(ref.sessionId, after.status);
 		const writes = planCacheWrites(ref.sessionId, baseDoc, after);
-		cacheBase.value = { sessionId: ref.sessionId, doc: after };
+		advanceCacheBase(ref.sessionId, after);
 		if (writes.length > 0) {
 			void getEntryCache()
 				.then((cache) => {
@@ -230,7 +223,7 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 			const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
 			// The repair rewrites the whole session by design — the snapshot
 			// becomes the new cache base.
-			cacheBase.value = { sessionId: ref.sessionId, doc };
+			advanceCacheBase(ref.sessionId, doc);
 			void getEntryCache()
 				.then((cache) => {
 					if (!disposed) return cache.replaceSession(ref.sessionId, repairRecords, statusHintOfDocument(doc));

@@ -445,21 +445,24 @@ applies):
   when it names the rendered Session.
 - `useRpc`'s address operations are thin wrappers over the transition
   messages; `useConnection`'s boot path sends them with boot semantics. The
-  cache base lives here (the boot seeding and the promotion both install
-  it); the pipeline advances it on delta writes and the replace repair
-  re-establishes it.
+  cache base is the actor's private state (ADR 19): the boot seeding and
+  the promotion install it, and the pipeline reads and advances it through
+  `cacheBaseDocFor`/`advanceCacheBase` — never the box itself.
 
-`sessionBoot.ts` keeps the local half of boot, `restoreLocalSession`: at
-mount, before the wire, it looks up the route's remembered `sessionId`, loads
-the cache records and status hint, and seeds the store document — quiescing
-the volatile status flags, because a cached mid-flight turn (streaming,
-compaction, pending steer) can never progress without the daemon — behind a
-store-based race guard that never lets stale cache overwrite wire data. The
-guard reads exactly the invariants navigation maintains: the address is
-staged before the RPC resolves, and the durable session id lands only with
-the initial sync. With no remembered id, no records, or a failed read it is
-a no-op and the address stays unclaimed, so the Launcher's down states show
-while connecting.
+`sessionBoot.ts` keeps the local half of boot, and it is value-only
+(ADR 19): `restoreLocalSession` reads the route's remembered `sessionId`,
+loads the cache records and status hint, and returns the seed — the
+address, the durable id, and the quiesced document (a cached mid-flight
+turn can never progress without the daemon, so streaming, compaction, and
+pending steer are cleared) — writing nothing. The seed goes to the view
+actor (`navigationLocalSeed`), whose `localSeed` step decides whether the
+values become visible behind the store-based race guard that never lets
+stale cache overwrite wire data: the guard reads exactly the invariants
+navigation maintains — the address is staged before the RPC resolves, and
+the durable session id lands only with the initial sync. With no
+remembered id, no records, or a failed read there is no seed and the
+address stays unclaimed, so the Launcher's down states show while
+connecting.
 
 `devConsole.ts` hooks browser `console.log`, `console.warn`, and
 `console.error` only when daemon information reports development mode. The

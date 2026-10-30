@@ -1,23 +1,22 @@
 // ============================================================================
 // sessionBoot — the cache-first local half of boot (ADR 09 §Client Restore
-// Flow + ADR 11 §URLs). The route's session renders from the IndexedDB cache
-// before and independent of the wire; the wire half — staging, the open RPC,
-// initial-sync commit, and fallback — is the navigation reactor
-// (`navigation.ts`), which also owns the cache base this module seeds
-// against.
+// Flow + ADR 11 §URLs). The route's session can render from the IndexedDB
+// cache before and independent of the wire, and this module reads that local
+// truth — value-only (ADR 19): it returns the seed (the address, the durable
+// session id, and the quiesced seeded document) and writes nothing. The view
+// actor decides whether the values become visible: `navigationLocalSeed`
+// carries them to the navigation reactor, whose step applies the race guard
+// (the wire may have claimed the view while the cache read was in flight)
+// and paints.
 //
 // The restore is last-known-state and always renderable; the connection
-// gates capabilities (sync, mutation), never rendering. The race guard is
-// store-based on purpose: navigation maintains exactly the invariants the
-// guard reads — the address is staged before the RPC resolves, and the
-// durable session id lands only with the initial sync — so the guard is one
-// place, reading one owner's publication.
+// gates capabilities (sync, mutation), never rendering.
 // ============================================================================
 
-import { type CacheEntryRecord, type SessionStatusHint, seedDocument } from "../../../../src/core/index.ts";
+import type { CacheEntryRecord, Document, SessionStatusHint } from "../../../../src/core/index.ts";
+import { seedDocument } from "../../../../src/core/index.ts";
 import { lookupSessionId } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
-import { getStore } from "../state/store.tsx";
 
 /** Injectable seams (tests): the address→id map and the cache read. */
 export interface LocalRestoreDeps {
@@ -30,13 +29,24 @@ const defaultLocalRestoreDeps: LocalRestoreDeps = {
 	loadSession: (sessionId) => getEntryCache().then((cache) => cache.loadSession(sessionId)),
 };
 
+/** What a local restore produced: the values, and nothing else. The view
+ * actor decides whether they become visible. */
+export interface LocalSessionSeed {
+	/** The address the seed restores. */
+	readonly projectId: string;
+	readonly stem: string;
+	/** The durable session id the cached records belong to. */
+	readonly sessionId: string;
+	/** The seeded document — last-known state, never authoritative. */
+	readonly doc: Document;
+}
+
 /**
- * Restore the route's session from the local cache, before and independent of
- * the wire. No-op unless the address's session id is remembered and the cache
- * holds records: with no local truth there is nothing to render, and the
- * address stays unclaimed so the Launcher's down states show while
- * connecting. Nothing here touches the mirror or `cacheBase` — the wire half
- * (navigation) owns those once a connection exists.
+ * Read the route's session from the local cache, before and independent of
+ * the wire. Returns null unless the address's session id is remembered and
+ * the cache holds records: with no local truth there is nothing to render,
+ * and the address stays unclaimed so the Launcher's down states show while
+ * connecting.
  *
  * The seeded status is quiesced: the cached hint may describe a mid-flight
  * turn (streaming, compaction, pending steer) that can never progress without
@@ -47,40 +57,21 @@ export async function restoreLocalSession(
 	projectId: string,
 	stem: string,
 	deps: LocalRestoreDeps = defaultLocalRestoreDeps,
-): Promise<void> {
+): Promise<LocalSessionSeed | null> {
 	const sessionId = deps.lookupSessionId(projectId, stem);
-	if (!sessionId) return;
+	if (!sessionId) return null;
 	let records: CacheEntryRecord[] = [];
 	let hint: SessionStatusHint | null = null;
 	try {
 		({ records, hint } = await deps.loadSession(sessionId));
 	} catch {
-		return; // cache read failure: no local truth to render
+		return null; // cache read failure: no local truth to render
 	}
-	if (records.length === 0) return;
-
-	const store = getStore();
-	// Race guard: the wire may have advanced while the cache read was in
-	// flight — never let stale cache overwrite wire data. Apply only when the
-	// address is still unclaimed, or the claimed address is this one and
-	// nothing has rendered for it yet (the wire half stages the address before
-	// its RPC resolves). `activeSessionId` set means an address-bearing frame
-	// already landed — even for an empty session — so the wire is authoritative.
-	const s = store.getState();
-	const unclaimed = s.currentProjectId === null && s.currentStem === null;
-	const matchesEmpty =
-		s.currentProjectId === projectId && s.currentStem === stem && Object.keys(s.document.entries).length === 0;
-	if ((!unclaimed && !matchesEmpty) || s.activeSessionId !== null) return;
+	if (records.length === 0) return null;
 
 	const doc = seedDocument(records, hint ?? undefined);
 	doc.status.isStreaming = false;
 	doc.status.isCompacting = false;
 	doc.status.pendingSteer = [];
-
-	// Address first, then the id (the pipeline's ordering rule):
-	// setCurrentSession unbinds a stale id on an address change, so the pair
-	// must land in this order.
-	store.getState().setCurrentSession(projectId, stem);
-	store.getState().setActiveSessionId(sessionId);
-	store.getState().applyReplace(doc);
+	return { projectId, stem, sessionId, doc };
 }

@@ -25,7 +25,13 @@ import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
 import { hookConsole, unhookConsole } from "./devConsole.ts";
-import { navigationBoot, navigationBootLatest, navigationLauncher, navigationProject } from "./navigation.ts";
+import {
+	navigationBoot,
+	navigationBootLatest,
+	navigationLauncher,
+	navigationLocalSeed,
+	navigationProject,
+} from "./navigation.ts";
 import { cancelPullRetry, flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
 import { restoreLocalSession } from "./sessionBoot.ts";
@@ -233,7 +239,13 @@ export function useConnection(): { retry: () => void } {
 		// authoritative; with no local truth the address stays unclaimed and
 		// the Launcher's down states show while connecting.
 		const route = parseRoute(window.location.pathname);
-		if (route.kind === "session") void restoreLocalSession(route.projectId, route.stem);
+		if (route.kind === "session") {
+			// Value-only restore (ADR 19): the read produces the seed, and the
+			// view actor decides whether it becomes visible.
+			void restoreLocalSession(route.projectId, route.stem).then((seed) => {
+				if (seed !== null) void navigationLocalSeed(seed);
+			});
+		}
 		connect();
 		return () => {
 			disposedRef.current = true;
