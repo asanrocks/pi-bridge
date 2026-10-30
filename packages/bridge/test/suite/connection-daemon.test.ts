@@ -640,4 +640,33 @@ describe("Connection + Daemon", () => {
 		serverWs.close();
 		clientWs.close();
 	}, 30000);
+
+	it("stamps observation frames with the attachment generation (ADR 19)", async () => {
+		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
+		harnesses.push(bh);
+
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
+		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		const first = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
+		expect((first as Record<string, unknown>).generation).toBe(1);
+
+		// A reattach mints the next generation: the new initial sync already
+		// names the new attachment, even though the address is unchanged.
+		clientFrames.length = 0;
+		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		const second = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
+		expect((second as Record<string, unknown>).generation).toBe(2);
+
+		// The terminal close names the attachment it severed.
+		clientFrames.length = 0;
+		conn.pushSessionClosed(mockSessionRef.projectId, mockSessionRef.stem);
+		const closed = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "session_closed");
+		expect((closed as Record<string, unknown>).generation).toBe(2);
+
+		serverWs.close();
+		clientWs.close();
+	}, 30000);
 }, 30000);

@@ -24,6 +24,23 @@ function makeClient(): { client: BridgeClient; transport: MockTransport } {
 	return { client, transport };
 }
 
+const session = { projectId: "p", sessionId: "s1", stem: "stem" };
+
+function emptyDoc(): Record<string, unknown> {
+	return {
+		status: {
+			leafId: null,
+			name: "",
+			model: { provider: "", modelId: "" },
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+		},
+		entries: {},
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -412,5 +429,50 @@ describe("BridgeClient", () => {
 		const frame = JSON.parse(transport.sent[0]);
 		expect(frame.verb).toBe("pull");
 		expect(frame.requests).toEqual([{ entryId: "e1", fieldPath: "/entries/e1/content/0/text" }]);
+	});
+
+	// ── Attachment generations (ADR 19) ─────────────────────────────────────────
+
+	it("an address-bearing frame establishes the mirror's generation", () => {
+		const { client, transport } = makeClient();
+		expect(client.mirror.generation).toBeNull();
+		transport.inject({ kind: "replace", session, document: emptyDoc(), generation: 3 });
+		expect(client.mirror.generation).toBe(3);
+		// A cursor-aware initial-sync patch establishes it like a replace.
+		transport.inject({ kind: "patch", session, ops: [], generation: 4 });
+		expect(client.mirror.generation).toBe(4);
+	});
+
+	it("drops a live patch from an older attachment — the mirror and onPush never see it", () => {
+		const { client, transport } = makeClient();
+		const seen: string[] = [];
+		client.onPush = (push) => seen.push(push.kind);
+		transport.inject({ kind: "replace", session, document: emptyDoc(), generation: 2 });
+		transport.inject({
+			kind: "patch",
+			ops: [{ op: "replace", path: "/status/model", value: { provider: "a", modelId: "b" } }],
+			generation: 1,
+		});
+		// Stale attachment, same address or not: the mirror never applied it,
+		// and the pipeline never saw it (no publication, no cache write).
+		expect(client.mirror.document.status.model).toEqual({ provider: "", modelId: "" });
+		expect(seen).toEqual(["replace"]);
+		transport.inject({
+			kind: "patch",
+			ops: [{ op: "replace", path: "/status/model", value: { provider: "a", modelId: "b" } }],
+			generation: 2,
+		});
+		expect(client.mirror.document.status.model).toEqual({ provider: "a", modelId: "b" });
+		expect(seen).toEqual(["replace", "patch"]);
+	});
+
+	it("frames without a generation stay admissible (compact frames, seeded mirrors)", () => {
+		const { client, transport } = makeClient();
+		transport.inject({ kind: "replace", session, document: emptyDoc(), generation: 1 });
+		transport.inject({
+			kind: "patch",
+			ops: [{ op: "replace", path: "/status/model", value: { provider: "a", modelId: "b" } }],
+		});
+		expect(client.mirror.document.status.model).toEqual({ provider: "a", modelId: "b" });
 	});
 });

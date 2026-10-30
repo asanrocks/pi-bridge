@@ -57,8 +57,25 @@ export class DocumentMirror {
 	 * the revision instead. */
 	revision = 0;
 
+	private _generation: number | null = null;
+
 	constructor(document?: Document) {
 		this.document = document ?? emptyMirror();
+	}
+
+	/** The attachment generation of the last address-bearing frame applied
+	 * (ADR 19): the observation stream this mirror currently replicates.
+	 * Null before one arrives (a seeded cache mirror). Live frames are
+	 * admitted only while they match it — see BridgeClient's ingestion rule. */
+	get generation(): number | null {
+		return this._generation;
+	}
+
+	/** Record the attachment generation an address-bearing frame (an initial
+	 * sync) carries. Direct document applications (candidate promotion, cache
+	 * seeding) leave it unchanged: they replicate the same stream. */
+	setGeneration(generation: number | null): void {
+		this._generation = generation;
 	}
 
 	/**
@@ -388,8 +405,29 @@ export class BridgeClient {
 		if (!("id" in msg) || msg.id === undefined) {
 			const push = msg as unknown as ServerPushMessage;
 			if (push.kind === "replace") {
+				// A replace is an address-bearing initial sync: it establishes the
+				// attachment generation this mirror replicates (ADR 19).
+				if (push.generation !== undefined) this.mirror.setGeneration(push.generation);
 				this.mirror.applyReplace(push.document);
 			} else if (push.kind === "patch") {
+				if (push.session !== undefined) {
+					// Address-bearing: a cursor-aware initial sync — it establishes
+					// the generation like a replace.
+					if (push.generation !== undefined) this.mirror.setGeneration(push.generation);
+				} else {
+					// A live patch from an older attachment — same address or not —
+					// must not touch the mirror (ADR 19). Compact (bare-append)
+					// frames carry no generation; they cannot cross an attachment
+					// change, because attach resets the codec.
+					const generation = push.generation;
+					if (
+						generation !== undefined &&
+						this.mirror.generation !== null &&
+						generation !== this.mirror.generation
+					) {
+						return;
+					}
+				}
 				this.mirror.applyPatch(push.ops);
 			}
 			if (this._onPush) this._onPush(push);

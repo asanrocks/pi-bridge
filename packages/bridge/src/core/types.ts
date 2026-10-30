@@ -354,6 +354,12 @@ export interface ReplaceMessage {
 	/** Session reference (ADR 11). Always present: a replace is an initial sync. */
 	session: SessionRef;
 	document: Document;
+	/** The attachment generation that produced this frame (ADR 19): one
+	 * connection mint per attach, so an observation frame names the
+	 * attachment whose stream it belongs to even when the address is
+	 * unchanged. An address-bearing frame establishes the client mirror's
+	 * generation; a live frame that does not match it is dropped. */
+	generation?: number;
 	/** Present when this initial sync was emitted by a `newSession`
 	 * transition: the operation id of that creation. The frame is otherwise
 	 * unattributed; the client's selection owner checks the id before letting
@@ -369,6 +375,12 @@ export interface PatchMessage {
 	 */
 	session?: SessionRef;
 	ops: PatchOp[];
+	/** The attachment generation that produced this frame (ADR 19): an
+	 * address-bearing patch establishes the client mirror's generation, and
+	 * a live patch that does not match it is dropped. Absent on compact
+	 * (bare-append) frames, which cannot cross an attachment change because
+	 * attach resets the codec. */
+	generation?: number;
 	/** Present when this initial-sync patch was emitted by a `newSession`
 	 * transition: the operation id of that creation (see ReplaceMessage). */
 	operationId?: string;
@@ -407,6 +419,10 @@ export interface SessionClosedMessage {
 	kind: "session_closed";
 	projectId: string;
 	stem: string;
+	/** The attachment generation of the observation that ended (ADR 19):
+	 * the close names the attachment it severed, so a client can drop a
+	 * close that does not describe its current observation. */
+	generation?: number;
 }
 
 export type ServerPushMessage =
@@ -990,6 +1006,11 @@ export interface PullReply {
 	id: string;
 	ok: true;
 	values: { entryId: string; fieldPath: string; value: JsonValue }[];
+	/** The attachment generation current when the request was admitted
+	 * (ADR 19): the values describe that attachment's document, so a client
+	 * whose mirror has since advanced (a reattach on this socket) drops
+	 * them. */
+	generation?: number;
 }
 
 export interface ListFilesReply {

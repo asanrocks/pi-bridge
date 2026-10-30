@@ -28,12 +28,12 @@ and rejects exactly once, so a failed request leaves nothing pending.
 
 | `kind` | Payload and contract |
 | --- | --- |
-| `replace` | `{ session: SessionRef, document: Document, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
-| `patch` | `{ ops: PatchOp[], session?: SessionRef, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
+| `replace` | `{ session: SessionRef, document: Document, generation?, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
+| `patch` | `{ ops: PatchOp[], session?: SessionRef, generation?, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
 | `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
-| `session_closed` | `{ projectId, stem }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
+| `session_closed` | `{ projectId, stem, generation? }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
 `replace` always carries a `SessionRef`. A `patch` carries a `SessionRef` only
 when it is the initial-sync delta selected by cursor validation. A live patch
@@ -55,6 +55,19 @@ the client address; `sessionId` is the durable cache and activation key. A
 `SessionAddress` contains only the address pair. `SessionListCursor` is a
 separate total-order cursor for Project history pagination and is not a
 Document prefix cursor.
+
+**Attachment generations (ADR 19).** Every observation frame — a replace, a
+patch (live or initial sync), a `session_closed`, and a `pull` reply —
+carries `generation`: the attachment that produced it, one mint per attach
+on its Connection. An address-bearing frame (a replace, a cursor-aware
+initial-sync patch) establishes the client mirror's generation; a live
+frame that does not match the established one is dropped before the mirror
+— same address or not, a frame from an older attachment cannot touch the
+successor's state. A `pull` reply carries the generation current when its
+request was admitted, so a reply that lands after a reattach is dropped
+instead of filling the successor with the old observation's values. Compact
+(bare-append) frames carry no generation; they cannot cross an attachment
+change, because attach resets the codec.
 
 A push is unsolicited. `sessions_changed`, `active_sessions_changed`,
 `pinned_models_changed`, and `session_closed` do not alter the Document

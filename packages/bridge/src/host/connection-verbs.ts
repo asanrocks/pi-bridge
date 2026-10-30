@@ -164,8 +164,9 @@ export interface DaemonVerbs {
 // ============================================================================
 
 /** What a verb handler may touch: the daemon seam, the attachment capability,
- * subscription registration, and the reply path — nothing else of the
- * Connection's state, and no runtime. */
+ * subscription registration, the reply path, and the attachment generation
+ * current at admission — nothing else of the Connection's state, and no
+ * runtime. */
 export interface VerbContext {
 	/** The Daemon's verb implementation (ADR 11). */
 	readonly daemonVerbs: DaemonVerbs;
@@ -175,6 +176,11 @@ export interface VerbContext {
 	 * cannot retarget it: the command executes against, and reports on, the
 	 * session that was attached when the request arrived. */
 	requireAttachment(): SessionCapability;
+	/** The attachment generation current when the request was admitted
+	 * (ADR 19): the generation its reply's payload describes (a pull reads
+	 * the attachment that was current at admission; a reattach supersedes
+	 * it, so the client drops the reply). */
+	readonly attachmentGeneration: number;
 	/** Register a live lazy-path subscription (a pull on an unsealed entry:
 	 * later patches on that path keep flowing to this Connection). */
 	subscribe(fieldPath: string): void;
@@ -293,7 +299,7 @@ const sessionVerbs: Record<string, VerbHandler> = {
 			// later patches on that path flowing to this Connection.
 			if (value.live) ctx.subscribe(value.fieldPath);
 		}
-		ctx.send({ id: msg.id, ok: true, values: out });
+		ctx.send({ id: msg.id, ok: true, values: out, generation: ctx.attachmentGeneration });
 	},
 };
 

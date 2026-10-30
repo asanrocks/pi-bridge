@@ -256,6 +256,16 @@ those subscriptions before the Connection sends them. A `pull` request reads
 values from the attached Manager's canonical Document; pulling an unsealed
 lazy path also registers that path for subsequent live patches.
 
+Attachment changes mint the next **attachment generation** (ADR 19): every
+observation frame the Connection emits — the initial sync, live patches, and
+the terminal `session_closed` the registry hands it after detaching it
+(`pushSessionClosed`) — names the attachment whose stream it belongs to, and
+a `pull` reply names the generation current when its request was admitted.
+The client mirror admits a live frame only while it matches the established
+generation, so a frame from an older attachment cannot touch the successor's
+state even when the address is unchanged; the rule and the wire field are
+specified in [core protocol](../core/protocol.md).
+
 The Connection demultiplexes RPC frames by verb. Every verb that is not an
 attachment transition is a typed handler in
 `src/host/connection-verbs.ts`: a seam function that validates the request

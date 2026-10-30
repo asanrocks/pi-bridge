@@ -462,11 +462,7 @@ export class ActivationRegistry {
 		for (const conn of record.connections) {
 			this.connectionActivation.delete(conn);
 			conn.detach();
-			conn.push({
-				kind: "session_closed",
-				projectId: record.ref.projectId,
-				stem: record.ref.stem,
-			});
+			conn.pushSessionClosed(record.ref.projectId, record.ref.stem);
 		}
 		record.connections.clear();
 	}

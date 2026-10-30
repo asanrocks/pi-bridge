@@ -37,10 +37,13 @@ class DeferredTransport implements BridgeTransport {
 	}
 
 	/** Deliver one reply for every held pull. */
-	reply(values: Array<{ entryId: string; fieldPath: string; value: unknown }>): void {
+	reply(
+		values: Array<{ entryId: string; fieldPath: string; value: unknown }>,
+		extra: Record<string, unknown> = {},
+	): void {
 		const held = this.pendingPulls.splice(0, this.pendingPulls.length);
 		for (const pull of held) {
-			this.onMessage?.(JSON.stringify({ id: pull.id, ok: true, values }));
+			this.onMessage?.(JSON.stringify({ id: pull.id, ok: true, values, ...extra }));
 		}
 	}
 }
@@ -225,6 +228,27 @@ describe("pull loop stale-reply guards", () => {
 		await flushing;
 
 		expect(thinkingOf(client.mirror.document, "a1")).toBe("newer");
+	});
+
+	it("drops a reply whose attachment generation the mirror advanced past (ADR 19)", async () => {
+		const { client, transport } = makeClient();
+		setGlobalClient(client);
+		seed(client, docOf("a1"));
+		// The socket reattached while the pull was in flight: the new initial
+		// sync committed generation 2, and the reply was admitted against 1.
+		client.mirror.setGeneration(2);
+		enqueuePulls([{ entryId: "a1", fieldPath: THINKING("a1") }]);
+
+		const flushing = flushPullQueue();
+		transport.reply([{ entryId: "a1", fieldPath: THINKING("a1"), value: "stale" }], { generation: 1 });
+		await flushing;
+
+		// The values describe an observation the view no longer holds: nothing
+		// is ingested into the mirror and nothing reaches the store.
+		const entry = client.mirror.document.entries.a1 as {
+			content: Array<{ thinking: string | null }>;
+		};
+		expect(entry.content[0].thinking).toBeNull();
 	});
 
 	it("cancelPullRetry clears a scheduled retry: teardown owns the timer", async () => {

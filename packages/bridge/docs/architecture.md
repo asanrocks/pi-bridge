@@ -175,9 +175,13 @@ pushes.
 
 The push contract is:
 
-- `replace` carries a `SessionRef` and a complete wire-projected Document.
-- `patch` carries ordered Patch operations. Only a cursor-aware initial-sync
-  patch carries a `SessionRef`; live patches do not.
+- `replace` carries a `SessionRef`, a complete wire-projected Document, and
+  the attachment `generation` (ADR 19) that produced it.
+- `patch` carries ordered Patch operations and the attachment `generation`.
+  Only a cursor-aware initial-sync patch carries a `SessionRef`; live patches
+  do not. An address-bearing frame establishes the client mirror's
+  generation, and a live frame from an older attachment is dropped before
+  the mirror — same address or not.
 - `sessions_changed` carries the refreshed first page for one Project.
 - `active_sessions_changed` carries the global active or streaming Session
   snapshot.
