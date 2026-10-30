@@ -29,11 +29,10 @@ import {
 	navigationBoot,
 	navigationBootLatest,
 	navigationCreate,
-	navigationInitialSync,
 	navigationLatest,
+	navigationObservation,
 	navigationOpen,
 	navigationProject,
-	navigationSessionClosed,
 	resetNavigationForTests,
 } from "./navigation.ts";
 
@@ -194,7 +193,7 @@ describe("Navigation", () => {
 		expect(getStore().getState().currentStem).toBe("a");
 		expect(routeWritten()).toBe("/proj/a");
 
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		const result = await opened;
 		expect(result.ok).toBe(true);
 		const s = getStore().getState();
@@ -211,7 +210,7 @@ describe("Navigation", () => {
 		fake.openReplies.push(okA.promise);
 		const first = navigationOpen({ projectId: "proj", stem: "a" });
 		okA.open({ ok: true, session: REF_A } as unknown as RpcReply);
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		await first;
 
 		const fail = gate<RpcReply>();
@@ -239,7 +238,7 @@ describe("Navigation", () => {
 		});
 		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		expect((await openedB).ok).toBe(true);
 		// A's cache read lands after B committed: no RPC was admitted, nothing
 		// was seeded, and the caller learns the transition never ran —
@@ -269,13 +268,13 @@ describe("Navigation", () => {
 
 		// The server serialized both transitions: A's initial sync arrives first
 		// and must commit nothing.
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		expect(getStore().getState().activeSessionId).toBeNull();
 
 		// A's reply fails; a naive rollback would have restored the launcher
 		// while B was still in flight.
 		openA.open({ id: "x", ok: false, error: "gone" } as unknown as RpcReply);
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		openB.open({ ok: true, session: REF_B } as unknown as RpcReply);
 
 		const result = await openedB;
@@ -319,7 +318,7 @@ describe("Navigation", () => {
 			loadSession: async () => ({ records: recordsFor("id-a"), hint: null }),
 		});
 		const booted = navigationBoot({ projectId: "proj", stem: "a" });
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		expect((await booted).ok).toBe(true);
 		// The cache seed painted the store before the wire answered.
 		expect(Object.keys(getStore().getState().document.entries)).toEqual(["e0"]);
@@ -342,7 +341,7 @@ describe("Navigation", () => {
 		const opened = navigationOpen({ projectId: "proj", stem: "b" }, { sessionId: "id-b" });
 		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
 		expect(fake.openCalls[0].cursor).toEqual(cursor);
-		navigationInitialSync(REF_B, [DELTA_OP]);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: [DELTA_OP] });
 		replyGate.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
 		expect((await opened).ok).toBe(true);
 		// The promoted candidate document replaced the mirror, and the cache
@@ -361,7 +360,7 @@ describe("Navigation", () => {
 		// attributed initial sync before the reply, like the wire does.
 		await vi.waitFor(() => expect(fake.createCalls).toHaveLength(1));
 		const op = fake.createCalls[0]!.operationId;
-		navigationInitialSync(REF_A, null, op);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, operationId: op });
 		reply.open({ ok: true, session: REF_A } as unknown as RpcReply);
 		expect((await created).ok).toBe(true);
 		const s = getStore().getState();
@@ -375,7 +374,7 @@ describe("Navigation", () => {
 		// Commit the Project home, then let a creation's attributed sync arrive
 		// for an operation that is no longer the current creation intent.
 		await navigationProject("proj", "boot");
-		navigationInitialSync(REF_A, null, "create-stale");
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, operationId: "create-stale" });
 		const s = getStore().getState();
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
@@ -390,7 +389,7 @@ describe("Navigation", () => {
 		await vi.waitFor(() => expect(fake.createCalls).toHaveLength(1));
 		// A newer intent replaces the view before the creation's reply lands.
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		await openedB;
 		expect(getStore().getState().currentStem).toBe("b");
 		reply.open({ ok: true, session: REF_A } as unknown as RpcReply);
@@ -438,7 +437,7 @@ describe("Navigation", () => {
 		expect(getStore().getState().currentStem).toBe("b");
 		expect(getStore().getState().activeSessionId).toBe("id-b");
 		// A's late sync must not commit over the committed B view.
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		const s = getStore().getState();
 		expect(s.currentStem).toBe("b");
 		expect(s.activeSessionId).toBe("id-b");
@@ -455,7 +454,7 @@ describe("Navigation", () => {
 		// route writes on the sync commit.
 		await vi.waitFor(() => expect(routeWritten()).toBe("/@latest"));
 		expect(getStore().getState().addressViaAlias).toBe(true);
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		expect((await opened).ok).toBe(true);
 		const calls = replaceState.mock.calls.filter((c) => c[2] === "/proj/a");
 		expect(calls).toHaveLength(0);
@@ -473,7 +472,7 @@ describe("Navigation", () => {
 		const latest = navigationLatest();
 		// A newer intent commits B while the lookup is in flight.
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		await openedB;
 		expect(getStore().getState().currentStem).toBe("b");
 
@@ -500,7 +499,7 @@ describe("Navigation", () => {
 		const bootLatest = navigationBootLatest();
 		// A newer intent commits C while the lookup is in flight.
 		const openedC = navigationOpen({ projectId: "proj", stem: "c" });
-		navigationInitialSync(REF_C, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_C, ops: null });
 		await openedC;
 		expect(getStore().getState().currentStem).toBe("c");
 
@@ -539,7 +538,7 @@ describe("Navigation", () => {
 
 		// B's delta initial sync still promotes its own candidate; its reply
 		// settles afterwards (the server pushes the sync first).
-		navigationInitialSync(REF_B, [DELTA_OP]);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: [DELTA_OP] });
 		replyB.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
 		await openedB;
 		expect(cacheBase.value?.sessionId).toBe("id-b");
@@ -560,7 +559,7 @@ describe("Navigation", () => {
 		const bootedA = navigationBoot({ projectId: "proj", stem: "a" });
 		// Supersede with an open to B that commits.
 		const openedB = navigationOpen({ projectId: "proj", stem: "b" });
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		await openedB;
 		expect(getStore().getState().currentStem).toBe("b");
 
@@ -599,15 +598,59 @@ describe("Navigation", () => {
 		resetNavigationForTests({ getClient: () => fake.client });
 		resetStore({ currentProjectId: "proj", currentStem: "a", activeSessionId: "id-a" });
 
-		navigationSessionClosed("proj", "other");
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "other" });
 		expect(getStore().getState().currentStem).toBe("a");
 
-		navigationSessionClosed("proj", "a");
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "a" });
 		const s = getStore().getState();
 		expect(s.currentProjectId).toBe("proj");
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
 		expect(routeWritten()).toBe("/proj");
+	});
+
+	it("an unattributed re-assert from an older attachment never commits (ADR 19)", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		// Commit a view through a generation-2 sync (a reattach on this socket).
+		const opened = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 2 });
+		await opened;
+		expect(getStore().getState().currentStem).toBe("a");
+
+		// The reactor's committed view is still A, but the rendered address
+		// moved on (the store is the observable). A late frame from the
+		// superseded attachment (generation 1) names the same address —
+		// same-address staleness is exactly what the generation decides.
+		resetStore({ currentProjectId: "proj", currentStem: null, activeSessionId: null });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await tick();
+		expect(getStore().getState().currentStem).toBeNull();
+
+		// The committed attachment's frame still re-asserts.
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 2 });
+		await tick();
+		expect(getStore().getState().currentStem).toBe("a");
+	});
+
+	it("a stale-generation session_closed is ignored (ADR 19)", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		const opened = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 2 });
+		await opened;
+		expect(getStore().getState().currentStem).toBe("a");
+
+		// The close of an older attachment — even naming the rendered address —
+		// never ends the committed view.
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "a", generation: 1 });
+		await tick();
+		expect(getStore().getState().currentStem).toBe("a");
+
+		// The committed attachment's close lands.
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "a", generation: 2 });
+		await tick();
+		expect(getStore().getState().currentStem).toBeNull();
 	});
 
 	it("a close cancels a pending open to that address: no RPC, settled caller, nothing commits", async () => {
@@ -625,7 +668,7 @@ describe("Navigation", () => {
 		const opened = navigationOpen({ projectId: "proj", stem: "a" });
 		expect(getStore().getState().currentStem).toBe("a"); // staged
 
-		navigationSessionClosed("proj", "a");
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "a" });
 		const result = await opened;
 		expect(result.ok).toBe(false);
 		expect(result.error).toBe("session closed");
@@ -643,7 +686,7 @@ describe("Navigation", () => {
 		load.open({ records: recordsFor("id-a"), hint: null });
 		await tick();
 		expect(fake.openCalls).toHaveLength(0);
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		expect(getStore().getState().currentStem).toBeNull();
 	});
 
@@ -657,14 +700,14 @@ describe("Navigation", () => {
 		fake.openReplies.push(okB.promise);
 		const first = navigationOpen({ projectId: "proj", stem: "b" });
 		okB.open({ ok: true, session: REF_B } as unknown as RpcReply);
-		navigationInitialSync(REF_B, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: null });
 		await first;
 
 		// Open C (fails later); B dies while C is in flight.
 		const failC = gate<RpcReply>();
 		fake.openReplies.push(failC.promise);
 		const openedC = navigationOpen({ projectId: "proj", stem: "c" });
-		navigationSessionClosed("proj", "b");
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "b" });
 		failC.open({ id: "x", ok: false, error: "no such session" } as unknown as RpcReply);
 
 		const result = await openedC;
@@ -686,7 +729,7 @@ describe("Navigation", () => {
 		fake.openReplies.push(okA.promise);
 		const first = navigationOpen({ projectId: "proj", stem: "a" });
 		okA.open({ ok: true, session: REF_A } as unknown as RpcReply);
-		navigationInitialSync(REF_A, null);
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null });
 		await first;
 
 		const result = await navigationProject("proj");

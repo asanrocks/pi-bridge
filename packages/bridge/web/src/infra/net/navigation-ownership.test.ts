@@ -11,8 +11,8 @@ import type { BridgeClient, CacheEntryRecord, Document, RpcReply } from "../../.
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import {
-	navigationInitialSync,
 	navigationLatest,
+	navigationObservation,
 	navigationOpen,
 	navigationProject,
 	resetNavigationForTests,
@@ -170,7 +170,11 @@ describe("view commits require an owner", () => {
 
 		// A newSession initial sync has no transition identity: it must not
 		// commit over the newer intent that owns the view.
-		navigationInitialSync({ projectId: "proj", sessionId: "id-a", stem: "a" }, null);
+		navigationObservation({
+			kind: "initial_sync",
+			ref: { projectId: "proj", sessionId: "id-a", stem: "a" },
+			ops: null,
+		});
 		expect(getStore().getState().currentStem).toBeNull();
 	});
 });

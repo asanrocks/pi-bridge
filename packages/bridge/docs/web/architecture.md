@@ -356,14 +356,22 @@ persists nothing.
 
 ### Navigation
 
-`navigation.ts` is the one owner of browser Session selection. Opening a
+`navigation.ts` is the browser view actor (ADR 19): the one owner of
+browser Session selection. Opening a
 Session, showing a Project home, leaving to the Launcher, and resolving the
 `/@latest` alias are transitions of one state machine — built on the core
 reactor primitive — whose state is the committed view (`current`), at most
 one in-flight session transition (`pending`), the candidate document seeded
 for that transition, the most recently superseded or closed target
-(`abandoned`), and the cancelled transitions. One authority rule governs
-the whole module:
+(`abandoned`), the cancelled transitions, and the committed attachment
+generation. Observation delivery is typed — the pipeline hands over
+`ViewObservationEvent` values (`viewEvents.ts`) through one seam
+(`navigationObservation`), deciding nothing itself — and every observation
+frame carries the attachment generation that produced it (ADR 19): the
+actor records the generation of the frame that committed the view, an
+unattributed re-assert from another generation never commits (same address
+or not), and a stale-generation `session_closed` never ends the view. One
+authority rule governs the whole module:
 
 > A step may read and write anything; an effect may only observe and return
 > a message.

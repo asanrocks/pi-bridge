@@ -7,7 +7,7 @@
 //     session's cache base) and the full-replace repair path.
 // Selection and the address-bearing publication are the navigation
 // reactor's (ADR 09/18's single-owner rule): initial-sync frames are
-// forwarded there (navigationInitialSync), and the reactor commits the
+// forwarded there (navigationObservation), and the reactor commits the
 // address, the session id, the document, and the revision as ONE store
 // write — this module never publishes a document it did not own the address
 // pairing for, so no subscriber can observe a new document under an old
@@ -27,7 +27,7 @@ import {
 import { rememberAddress } from "../persist/addressIndex.ts";
 import { getEntryCache } from "../persist/entryCache.ts";
 import { getStore } from "../state/store.tsx";
-import { cacheBase, navigationInitialSync, navigationSessionClosed } from "./navigation.ts";
+import { cacheBase, navigationObservation } from "./navigation.ts";
 
 export interface ConnectionPipeline {
 	/** Push handler for BridgeClient.onPush. No-op after cleanup. */
@@ -199,7 +199,12 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// all go, and a later command cannot reach a disposed runtime. A close of
 		// some other Session changes nothing here: the list pushes cover it.
 		if (push.kind === "session_closed") {
-			navigationSessionClosed(push.projectId, push.stem);
+			navigationObservation({
+				kind: "session_closed",
+				generation: push.generation,
+				projectId: push.projectId,
+				stem: push.stem,
+			});
 			return;
 		}
 
@@ -213,7 +218,13 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// as the rendered view.
 		if (push.kind === "replace") {
 			barrier();
-			navigationInitialSync(push.session, null, push.operationId);
+			navigationObservation({
+				kind: "initial_sync",
+				generation: push.generation,
+				ref: push.session,
+				ops: null,
+				operationId: push.operationId,
+			});
 			const ref = push.session;
 			const doc = client.mirror.document;
 			const repairRecords = cacheRecordsOfDocument(ref.sessionId, doc);
@@ -237,7 +248,13 @@ export function createConnectionPipeline(client: BridgeClient): ConnectionPipeli
 		// the delta write-through below runs only under that committed id.
 		if (push.kind === "patch" && push.session) {
 			barrier();
-			navigationInitialSync(push.session, push.ops, push.operationId);
+			navigationObservation({
+				kind: "initial_sync",
+				generation: push.generation,
+				ref: push.session,
+				ops: push.ops,
+				operationId: push.operationId,
+			});
 			writeThroughDelta(push.session);
 			store.getState().bumpPullTick();
 			return;

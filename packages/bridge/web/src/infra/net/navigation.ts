@@ -1,5 +1,6 @@
 // ============================================================================
-// Navigation — the one owner of browser Session selection.
+// Navigation — the browser view actor (ADR 19): the one owner of browser
+// Session selection.
 //
 // Opening a Session, creating one, resolving the /@latest alias, showing a
 // Project home, and leaving a view are *transitions*, not free-standing
@@ -74,6 +75,7 @@ import { getStore } from "../state/store.tsx";
 import { getGlobalClient } from "./client.ts";
 import { resolveLatestSession } from "./latestSession.ts";
 import { promoteCandidate, type SessionCandidate } from "./sessionCandidate.ts";
+import type { ViewObservationEvent } from "./viewEvents.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,6 +151,13 @@ interface NavigationState {
 	 * creation's initial sync carries its operation id, so the sync commits
 	 * only while this intent is still the newest one. */
 	creation: { operationId: string; intentEpoch: number } | null;
+	/** The attachment generation of the committed observation (ADR 19): the
+	 * generation of the initial-sync frame that committed the current view.
+	 * A frame from another generation — an older attachment on this socket —
+	 * never re-asserts the view and a stale close never ends it, even when
+	 * the address is unchanged. Null before the first committed sync (a
+	 * seeded or restored view). */
+	committedGeneration: number | null;
 	/** The epoch of the last applied navigation intent (open, boot, latest,
 	 * bootLatest, project, launcher). The newest intent owns view mutations:
 	 * every commit point compares against it. */
@@ -229,12 +238,21 @@ type NavigationMessage =
 	  }
 	// The creation RPC's completion.
 	| { kind: "createSettled"; operationId: string; result: NavigationResult; ref?: SessionRef }
-	// The host's terminal ownership push for an address.
-	| { kind: "closed"; projectId: string; stem: string }
+	// The host's terminal ownership push for an address, carrying the
+	// attachment generation it severed (ADR 19).
+	| { kind: "closed"; projectId: string; stem: string; generation?: number }
 	// An address-bearing initial-sync frame (replace: ops null; cursor-aware
-	// delta: ops set). Delivered by the connection pipeline. `operationId`
-	// is present when the frame was emitted by a newSession transition.
-	| { kind: "sync"; ref: SessionRef; ops: PatchOp[] | null; operationId?: string };
+	// delta: ops set), delivered by the connection pipeline as a typed
+	// observation event. `operationId` is present when the frame was emitted
+	// by a newSession transition; `generation` names the attachment whose
+	// stream the frame belongs to (ADR 19).
+	| {
+			kind: "sync";
+			ref: SessionRef;
+			ops: PatchOp[] | null;
+			operationId?: string;
+			generation?: number;
+	  };
 
 /** Injectable seams (tests supply fakes; production reads the globals). */
 export interface NavigationDeps {
@@ -895,6 +913,17 @@ function navigationStep(
 		}
 
 		case "closed": {
+			// A close names the attachment it severed (ADR 19): a stale-generation
+			// close — from an older attachment on this socket — describes an
+			// observation the view no longer holds, even when the address matches.
+			// Absent generation (legacy frames, a restored view): the address decides.
+			if (
+				message.generation !== undefined &&
+				state.committedGeneration !== null &&
+				message.generation !== state.committedGeneration
+			) {
+				return { state };
+			}
 			// The host's terminal ownership push: the runtime behind an address
 			// ended, so nothing for that address can commit or roll back a view
 			// anymore. The rendered address is a store-level fact (the
@@ -971,6 +1000,7 @@ function navigationStep(
 						current: { view: pending.view, sessionId: ref.sessionId },
 						pending: { ...pending, synced: true },
 						candidate: null,
+						committedGeneration: message.generation ?? state.committedGeneration,
 					},
 				};
 			}
@@ -1005,6 +1035,7 @@ function navigationStep(
 							view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
 							sessionId: ref.sessionId,
 						},
+						committedGeneration: message.generation ?? state.committedGeneration,
 						abandoned: state.abandoned?.key === key ? null : state.abandoned,
 					},
 				};
@@ -1015,6 +1046,18 @@ function navigationStep(
 				// non-reasserting frame never commits.)
 				return { state };
 			}
+			// A re-assert must come from the committed attachment: the generation
+			// names the attachment the frame belongs to, so a mismatch is a stale
+			// attachment's frame even when the address is unchanged (ADR 19).
+			// Frames without a generation (legacy hand-built frames, a restored
+			// pre-generation view) keep the address rule alone.
+			if (
+				message.generation !== undefined &&
+				state.committedGeneration !== null &&
+				message.generation !== state.committedGeneration
+			) {
+				return { state };
+			}
 			commitObservation(ref, deps);
 			return {
 				state: {
@@ -1023,6 +1066,7 @@ function navigationStep(
 						view: { kind: "session", projectId: ref.projectId, stem: ref.stem },
 						sessionId: ref.sessionId,
 					},
+					committedGeneration: message.generation ?? state.committedGeneration,
 					abandoned: state.abandoned?.key === key ? null : state.abandoned,
 				},
 			};
@@ -1050,6 +1094,7 @@ function createRuntime(deps: NavigationDeps): NavigationRuntime {
 			candidate: null,
 			abandoned: null,
 			creation: null,
+			committedGeneration: null,
 			intentEpoch: 0,
 			cancelled: new Set<number>(),
 		},
@@ -1201,15 +1246,27 @@ export function navigationCreate(
 	);
 }
 
-/** The host's `session_closed` push: terminal ownership for an address. */
-export function navigationSessionClosed(projectId: string, stem: string): void {
-	void runtime.reactor.send({ kind: "closed", projectId, stem }).catch(() => {});
-}
-
-/** An address-bearing initial-sync frame (replace or cursor-aware delta),
- * delivered by the connection pipeline after the mirror applied it.
- * `operationId` is present when the frame was emitted by a newSession
- * transition (see NewSessionRequest.operationId). */
-export function navigationInitialSync(ref: SessionRef, ops: PatchOp[] | null, operationId?: string): void {
-	void runtime.reactor.send({ kind: "sync", ref, ops, operationId }).catch(() => {});
+/** The transport pipeline's typed observation delivery (ADR 19): the one
+ * seam for the observation events the view actor consumes. The pipeline
+ * decodes the wire and hands over values — it decides nothing. A live
+ * `patch` is not an actor message yet: the pipeline's coalescer publishes
+ * it (the value-only pipeline slice), so the actor decides nothing for it
+ * here either.
+ */
+export function navigationObservation(event: ViewObservationEvent): void {
+	if (event.kind === "initial_sync") {
+		void runtime.reactor
+			.send({
+				kind: "sync",
+				ref: event.ref,
+				ops: event.ops,
+				operationId: event.operationId,
+				generation: event.generation,
+			})
+			.catch(() => {});
+	} else if (event.kind === "session_closed") {
+		void runtime.reactor
+			.send({ kind: "closed", projectId: event.projectId, stem: event.stem, generation: event.generation })
+			.catch(() => {});
+	}
 }

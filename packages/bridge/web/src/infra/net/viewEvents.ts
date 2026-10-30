@@ -1,6 +1,6 @@
 // ============================================================================
-// viewEvents — the typed observation events the browser view actor consumes
-// (ADR 19).
+// viewEvents — the typed observation events the browser view actor consumes.
+// (ADR 19). The navigation reactor consumes them through
 //
 // The view actor is the one owner of the committed view, the pending
 // transition, the cache candidate, the route, and store publication. The
@@ -31,27 +31,32 @@ export type ViewGeneration = number;
  * actor. `initial_sync` is the commit barrier (a full replace when `ops` is
  * null, a cursor-aware delta otherwise; `operationId` is present when a
  * newSession transition emitted the frame); `patch` is a live delta;
- * `session_closed` is the host's terminal ownership push for an address. */
+ * `session_closed` is the host's terminal ownership push for an address.
+ * `generation` is the attachment that produced the event — absent on compact
+ * (bare-append) frames and legacy hand-built frames. */
 export type ViewObservationEvent =
 	| {
 			kind: "initial_sync";
-			generation: ViewGeneration;
+			generation?: ViewGeneration;
 			ref: SessionRef;
 			ops: PatchOp[] | null;
 			operationId?: string;
 	  }
-	| { kind: "patch"; generation: ViewGeneration; ops: PatchOp[] }
-	| { kind: "session_closed"; generation: ViewGeneration; projectId: string; stem: string };
+	| { kind: "patch"; generation?: ViewGeneration; ops: PatchOp[] }
+	| { kind: "session_closed"; generation?: ViewGeneration; projectId: string; stem: string };
 
-/** The generation an event was produced by. */
-export function viewGeneration(event: ViewObservationEvent): ViewGeneration {
-	return event.generation;
+/** The generation an event was produced by, or null when it carries none
+ * (compact and legacy frames). */
+export function viewGeneration(event: ViewObservationEvent): ViewGeneration | null {
+	return event.generation ?? null;
 }
 
 /** True while an event belongs to the committed attachment. The comparison is
  * equality, not ordering: an older generation is a stale frame the actor
  * drops, and a newer one arrives before the transition that owns it has
- * committed — its own initial sync carries it. */
+ * committed — its own initial sync carries it. An event with no generation
+ * (compact and legacy frames) cannot be attributed and stays admissible,
+ * like the mirror's rule. */
 export function isCurrentGeneration(current: ViewGeneration, event: ViewObservationEvent): boolean {
-	return event.generation === current;
+	return event.generation === undefined || event.generation === current;
 }
