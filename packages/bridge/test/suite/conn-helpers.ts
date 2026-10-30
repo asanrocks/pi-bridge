@@ -3,7 +3,7 @@
 
 import WebSocket, { WebSocketServer } from "ws";
 import type { SessionInfo, SessionRef } from "../../src/core/index.ts";
-import type { DaemonVerbs } from "../../src/host/connection.ts";
+import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 
 /** Create an in-process WebSocket pair (server + client). */
 export function createWsPair(): Promise<{ serverWs: WebSocket; clientWs: WebSocket }> {

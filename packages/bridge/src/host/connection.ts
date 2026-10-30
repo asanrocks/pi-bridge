@@ -1,168 +1,14 @@
-import type { WebSocket } from "ws";
-import type {
-	ArchiveSessionRequest,
-	AsrCredential,
-	AsrCredentialsReply,
-	ClientMessage,
-	CloseSessionRequest,
-	DirectoryListing,
-	GetDaemonInfoReply,
-	GitBaseRequest,
-	GitDiffFileStat,
-	GitDiffRequest,
-	GitShowRequest,
-	ImageContent,
-	JsonValue,
-	ListDirectoryRequest,
-	ListFilesRequest,
-	ListSessionsRequest,
-	ModelRef,
-	NavigateRequest,
-	NewSessionRequest,
-	OpenSessionRequest,
-	PinnedModelInfo,
-	PrefixCursor,
-	ProjectInfo,
-	PromptRequest,
-	PullRequest,
-	ReadFileRequest,
-	RenameSessionRequest,
-	SessionInfo,
-	SessionListCursor,
-	SessionRef,
-	SetLabelRequest,
-	SetModelPinnedRequest,
-	SetModelRequest,
-	SetThinkingLevelRequest,
-	SnapshotFile,
-	TextPolishReply,
-	TextPolishRequest,
-} from "../core/index.ts";
-import {
-	CompactCodec,
-	filterPatchForSocket,
-	isEntrySealed,
-	MAX_IMAGE_BASE64_LENGTH,
-	MAX_IMAGES_PER_MESSAGE,
-	type Patch,
-	resolveFieldPath,
-} from "../core/index.ts";
-import { createLifecycleScope } from "./lifecycle-scope.ts";
-import type { TrafficLogger } from "./logger.ts";
-import type { ConnectionHandle } from "./manager.ts";
-import type { SessionCapability } from "./session-actor.ts";
-
-// ============================================================================
-// DaemonVerbs — the Connection → Daemon seam (ADR 11)
-// ============================================================================
-
-export interface DaemonVerbs {
-	/** Static Project configuration (ADR 11). Never a cwd allowlist: clients
-	 * address sessions by `(projectId, stem)`. Async because per-Project
-	 * default-model resolution may check auth. */
-	getDaemonInfo: () => Promise<{
-		projects: ProjectInfo[];
-		models: {
-			provider: string;
-			id: string;
-			name: string;
-			reasoning: boolean;
-			supportedThinkingLevels?: string[];
-		}[];
-		pinnedModels: PinnedModelInfo[];
-		/** Resolved `provider/modelId` keys of the picker's normal tier (ADR 15). */
-		visibleModels: string[];
-		thinkingLevels: string[];
-		devMode: boolean;
-	}>;
-	/** Pin or unpin one model in the daemon-global list (ADR 15). The new list
-	 * arrives as a `pinned_models_changed` push. */
-	setModelPinned: (provider: string, modelId: string, pinned: boolean) => Promise<void>;
-	/** Dictation credentials, minted or registered by the daemon because a page
-	 * can do neither (see `asr-credentials.ts`). Daemon-global: the ASR session
-	 * runs from the browser to the endpoint, not through this socket. */
-	asrCredentials: () => Promise<AsrCredential>;
-	/** Rewrite one draft through the upstream text-polish service (see
-	 * `text-polish.ts`). Daemon-global for the same reason: the page cannot speak
-	 * the protocol, so the daemon does. Rejects when the feature is off. */
-	textPolish: (text: string) => Promise<string>;
-	/** Paginated history query for one Project. */
-	listSessions: (
-		projectId: string,
-		max?: number,
-		cursor?: SessionListCursor | null,
-	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
-	/** Global active/streaming snapshot. */
-	listActiveSessions: () => SessionInfo[];
-	/** Resolve-or-activate `(projectId, stem)` and attach this Connection. */
-	openSession: (
-		projectId: string,
-		stem: string,
-		conn: Connection,
-		cursor?: PrefixCursor | null,
-	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
-	/** Create a new unflushed session in a Project and attach this Connection. */
-	/** Create a new unflushed session in a Project and attach this Connection.
-	 * The first prompt's `text` is required and admitted server-side before
-	 * the attach (ADR 12 slice); a refused admission disposes the fresh
-	 * activation, so no empty session is ever created. Optional `images`
-	 * attach to the first prompt; optional `model` is applied before
-	 * admission (the Project home's pre-session model choice). */
-	newSession: (
-		projectId: string,
-		conn: Connection,
-		text: string,
-		options?: { images?: ImageContent[]; model?: ModelRef; thinkingLevel?: string },
-	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
-	/** Release this Connection's attachment (activation stays alive for GC). */
-	detach: (conn: Connection) => void;
-	/** Terminate the live instance for `(projectId, stem)` — a kill, not a
-	 * GC: disposes the activation now, ignoring idle policy, streaming state,
-	 * and attached Connections. */
-	closeSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
-	/** Close a session, then move its file into the reserved archive prefix.
-	 * The close is unconditional; the move requires a durable file. */
-	archiveSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
-	/** Broadcast a Project's refreshed first page (rename, settle). */
-	sessionsChanged: (projectId: string) => void;
-	/** Path completion (ADR 12): resolved against `projectId`'s cwd, so it does
-	 * not require an attachment (the Project home completes pre-send). Throws
-	 * on an unknown Project. */
-	listFiles: (prefix: string, projectId: string) => Array<{ path: string; isDirectory: boolean }>;
-	/** Read one absolute path at one repository state (ADR 14). A missing path
-	 * is an `absent` value, not a throw; an invalid state/path or a spawn
-	 * failure throws (converted to an ok:false reply). An omitted state reads
-	 * the live filesystem. Attachment-free. */
-	readFile: (path: string, state?: string) => Promise<SnapshotFile>;
-	/** List one absolute directory's immediate children at one repository state
-	 * (ADR 14). A missing directory is an `absent` value, not a throw.
-	 * Attachment-free. */
-	listDirectory: (path: string, state?: string) => Promise<DirectoryListing>;
-	/** Show a commit (`git show --stat`) for an ADR 10 change card. Throws on
-	 * invalid commits and spawn failures (converted to an ok:false reply). */
-	gitShow: (commit: string, cwd?: string) => Promise<{ output: string; truncated: boolean }>;
-	/** Resolve the comparison base for reviewing one commit (ADR 14): its first
-	 * parent, or the repository's empty-tree oid for a root commit.
-	 * Attachment-free, like the browser's read queries. */
-	gitBase: (directory: string, commit: string) => Promise<{ baseline: string }>;
-	/** The browser's diff *directive* (file list, statuses, counts) between two
-	 * repository states under an absolute directory (see GitDiffRequest).
-	 * Throws like gitShow. Attachment-free. */
-	gitDiff: (
-		directory: string,
-		oldState: string,
-		newState: string,
-	) => Promise<{ files: GitDiffFileStat[]; filesOmitted?: number; untrackedOmitted: number }>;
-}
-
 // ============================================================================
 // Connection — the serialized protocol actor for one WebSocket.
 //
 // It owns the socket, RPC correlation, its own attachment-transition line,
-// and the SessionCapability that is its current attachment. It owns no
-// Session execution state: attached-session commands are issued through the
-// capability (captured at handler entry, before any await), and the two
-// serialization domains stay separate —
+// and the SessionCapability that is its current attachment. It interprets no
+// Session state and enforces no navigation policy: every verb that is not an
+// attachment transition is a typed handler in connection-verbs.ts, reached
+// through a context that exposes only the daemon seam, the attachment
+// capture, subscription registration, and the reply path. The three
+// attachment-changing transitions (openSession, newSession, detach) are the
+// serialized line itself and stay here:
 //
 //   Connection transitions (openSession, newSession, detach): serialized
 //     among themselves, in arrival order (this.transitions).
@@ -170,11 +16,26 @@ export interface DaemonVerbs {
 //     behind the capability; the Connection adds no ordering of its own.
 // ============================================================================
 
+import type { WebSocket } from "ws";
+import type {
+	ClientMessage,
+	JsonValue,
+	NewSessionRequest,
+	OpenSessionRequest,
+	PrefixCursor,
+	SessionRef,
+} from "../core/index.ts";
+import { CompactCodec, filterPatchForSocket, type Patch } from "../core/index.ts";
+import { connectionVerbHandler, type DaemonVerbs, type VerbContext } from "./connection-verbs.ts";
+import { createLifecycleScope } from "./lifecycle-scope.ts";
+import type { TrafficLogger } from "./logger.ts";
+import type { ConnectionHandle } from "./manager.ts";
+import type { SessionCapability } from "./session-actor.ts";
+
 export class Connection {
 	private ws: WebSocket;
 	private daemonVerbs: DaemonVerbs;
 	private logger: TrafficLogger | null;
-	private devMode: boolean;
 	private subscriptions = new Set<string>();
 	private codec = new CompactCodec();
 	private handle: ConnectionHandle;
@@ -193,12 +54,15 @@ export class Connection {
 	 * drained at disposal so a transition still in flight when the socket
 	 * closed settles before the Connection is gone. */
 	private transitions = createLifecycleScope();
+	/** The verb handlers' context: the daemon seam, the attachment capture,
+	 * subscription registration, and the reply path — nothing else of the
+	 * Connection's state. */
+	private verbs: VerbContext;
 
 	constructor(ws: WebSocket, daemonVerbs: DaemonVerbs, logger: TrafficLogger | null, devMode: boolean) {
 		this.ws = ws;
 		this.daemonVerbs = daemonVerbs;
 		this.logger = logger;
-		this.devMode = devMode;
 
 		// The Manager-facing handle (ADR 09). Initial-sync frames are sent
 		// unfiltered — construction already stripped lazy fields — and reset
@@ -219,6 +83,17 @@ export class Connection {
 				const attributed = this.syncAttribution !== null ? { ...frame, operationId: this.syncAttribution } : frame;
 				this.send(attributed as unknown as Record<string, unknown>);
 			},
+		};
+
+		this.verbs = {
+			daemonVerbs,
+			devMode,
+			requireAttachment: () => this.requireAttachment(),
+			subscribe: (fieldPath) => {
+				this.subscriptions.add(fieldPath);
+			},
+			reply: (id, ok, error) => this.sendReply(id, ok, error),
+			send: (data) => this.send(data),
 		};
 
 		// A Connection starts unattached. The Daemon attaches it via openSession.
@@ -342,99 +217,7 @@ export class Connection {
 
 		try {
 			switch (verb) {
-				// ── Attached session verbs ─────────────────────────────────
-				case "prompt": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as PromptRequest;
-					if (typeof m.text !== "string") throw new Error("Missing `text`");
-					// Light shape validation: images are opaque base64 blobs relayed
-					// to the provider; only the envelope fields and wire limits are
-					// checked here.
-					const images = m.images;
-					if (
-						images !== undefined &&
-						(!Array.isArray(images) ||
-							images.length > MAX_IMAGES_PER_MESSAGE ||
-							images.some(
-								(i) =>
-									i === null ||
-									typeof i !== "object" ||
-									typeof (i as ImageContent).data !== "string" ||
-									(i as ImageContent).data.length > MAX_IMAGE_BASE64_LENGTH ||
-									typeof (i as ImageContent).mimeType !== "string",
-							))
-					) {
-						throw new Error("Invalid `images`");
-					}
-					await capability.command((session) => session.prompt(m.text, images));
-					this.sendReply(id, true);
-					break;
-				}
-				case "abort": {
-					const capability = this.requireAttachment();
-					await capability.command((session) => session.abort());
-					this.sendReply(id, true);
-					break;
-				}
-				case "discardSteer": {
-					const capability = this.requireAttachment();
-					await capability.command((session) => session.discardSteer());
-					this.sendReply(id, true);
-					break;
-				}
-				case "setModel": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as SetModelRequest;
-					await capability.mutate((session) => session.setModel(m.provider, m.model));
-					this.sendReply(id, true);
-					break;
-				}
-				case "setThinkingLevel": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as SetThinkingLevelRequest;
-					await capability.mutate((session) => session.setThinkingLevel(m.level));
-					this.sendReply(id, true);
-					break;
-				}
-				case "renameSession": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as RenameSessionRequest;
-					if (typeof m.name !== "string") throw new Error("Missing `name`");
-					await capability.mutate((session) => session.renameSession(m.name));
-					this.sendReply(id, true);
-					// The refresh broadcast belongs to the command's target — read
-					// from the capture, never from the live attachment, which a
-					// transition completing during the rename may have moved.
-					this.daemonVerbs.sessionsChanged(capability.ref.projectId);
-					break;
-				}
-				case "setLabel": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as SetLabelRequest;
-					if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					if (typeof m.label !== "string") throw new Error("Missing `label`");
-					await capability.mutate((session) => session.setLabel(m.entryId, m.label));
-					this.sendReply(id, true);
-					break;
-				}
-				case "navigate": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as NavigateRequest;
-					if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-					await capability.mutate((session) => session.navigate(m.entryId));
-					this.sendReply(id, true);
-					break;
-				}
-				case "recoverTurn": {
-					const capability = this.requireAttachment();
-					// The Manager re-derives the boundary and refuses when the tail
-					// is not recoverable; `action` reports which repair ran.
-					const action = await capability.command((session) => session.recoverTurn());
-					this.send({ id, ok: true, action: action as unknown as JsonValue });
-					break;
-				}
-
-				// ── Navigation verbs (Daemon, side-effectful) ──────────────
+				// ── Attachment transitions (the serialized line itself) ──────
 				case "openSession": {
 					const m = msg as unknown as OpenSessionRequest;
 					this.runTransition(id, async () => {
@@ -502,175 +285,13 @@ export class Connection {
 					});
 					break;
 				}
-				case "closeSession": {
-					const m = msg as unknown as CloseSessionRequest;
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-					const result = await this.daemonVerbs.closeSession(m.projectId, m.stem);
-					if (result.ok) this.sendReply(id, true);
-					else this.sendReply(id, false, result.error);
-					break;
-				}
-				case "archiveSession": {
-					const m = msg as unknown as ArchiveSessionRequest;
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-					const result = await this.daemonVerbs.archiveSession(m.projectId, m.stem);
-					if (result.ok) this.sendReply(id, true);
-					else this.sendReply(id, false, result.error);
-					break;
-				}
 
-				// ── Daemon query verbs ─────────────────────────────────────
-				case "listSessions": {
-					const m = msg as unknown as ListSessionsRequest;
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					const result = await this.daemonVerbs.listSessions(m.projectId, m.max ?? undefined, m.cursor ?? null);
-					const reply: Record<string, unknown> = {
-						id,
-						ok: true,
-						sessions: result.sessions,
-						hasMore: result.hasMore,
-					};
-					if (result.nextCursor) reply.nextCursor = result.nextCursor;
-					this.send(reply);
-					break;
+				// ── Every other verb: a typed handler (connection-verbs.ts) ─
+				default: {
+					const handler = connectionVerbHandler(verb);
+					if (handler === undefined) throw new Error(`Unknown verb: ${verb}`);
+					await handler(this.verbs, msg);
 				}
-				case "listActiveSessions": {
-					this.send({ id, ok: true, sessions: this.daemonVerbs.listActiveSessions() });
-					break;
-				}
-				case "getDaemonInfo": {
-					const info = await this.daemonVerbs.getDaemonInfo();
-					const reply: GetDaemonInfoReply = { id, ok: true, ...info };
-					this.send(reply as unknown as Record<string, unknown>);
-					break;
-				}
-				case "setModelPinned": {
-					const m = msg as unknown as SetModelPinnedRequest;
-					if (typeof m.provider !== "string" || m.provider === "") throw new Error("Missing `provider`");
-					if (typeof m.modelId !== "string" || m.modelId === "") throw new Error("Missing `modelId`");
-					if (typeof m.pinned !== "boolean") throw new Error("Missing `pinned`");
-					await this.daemonVerbs.setModelPinned(m.provider, m.modelId, m.pinned);
-					this.send({ id, ok: true });
-					break;
-				}
-				case "asrCredentials": {
-					// Daemon-global and attachment-free, like getDaemonInfo: the ASR
-					// stream belongs to the browser, so this socket carries only the
-					// credential. A failure here is a plain RPC error the client shows.
-					const auth = await this.daemonVerbs.asrCredentials();
-					const reply: AsrCredentialsReply = { id, ok: true, auth };
-					this.send(reply as unknown as Record<string, unknown>);
-					break;
-				}
-				case "textPolish": {
-					// Daemon-global like asrCredentials, and for the same reason: the browser
-					// cannot speak the upstream protocol, so the daemon does. The draft is
-					// the only payload; the credential never leaves the host.
-					const m = msg as unknown as TextPolishRequest;
-					if (typeof m.text !== "string" || m.text.trim() === "") throw new Error("Missing `text`");
-					const text = await this.daemonVerbs.textPolish(m.text);
-					const reply: TextPolishReply = { id, ok: true, text };
-					this.send(reply as unknown as Record<string, unknown>);
-					break;
-				}
-				case "listFiles": {
-					const m = msg as unknown as ListFilesRequest;
-					if (typeof m.prefix !== "string") throw new Error("Missing `prefix`");
-					if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-					// Project-addressed, not attachment-scoped (ADR 12): relative
-					// paths resolve against the Project cwd, so the Project home's
-					// pre-send completion needs no attachment.
-					const entries = this.daemonVerbs.listFiles(m.prefix, m.projectId);
-					this.send({ id, ok: true, entries });
-					break;
-				}
-				case "readFile": {
-					const m = msg as unknown as ReadFileRequest;
-					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
-					if (m.state !== undefined && (typeof m.state !== "string" || m.state === "")) {
-						throw new Error("Invalid `state`");
-					}
-					// Attachment-free (ADR 14): the path is absolute, so no Session is
-					// needed to resolve it. An omitted state reads the live filesystem.
-					const result = await this.daemonVerbs.readFile(m.path, m.state);
-					this.send({ id, ok: true, ...result });
-					break;
-				}
-				case "listDirectory": {
-					const m = msg as unknown as ListDirectoryRequest;
-					if (typeof m.path !== "string" || m.path === "") throw new Error("Missing `path`");
-					if (m.state !== undefined && (typeof m.state !== "string" || m.state === "")) {
-						throw new Error("Invalid `state`");
-					}
-					// Attachment-free, like readFile.
-					const listing = await this.daemonVerbs.listDirectory(m.path, m.state);
-					this.send({ id, ok: true, ...listing });
-					break;
-				}
-				case "gitShow": {
-					const m = msg as unknown as GitShowRequest;
-					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
-					// Requires an attachment: the recorded commit belongs to the
-					// attached session's repository, so its cwd is the query base.
-					const capability = this.requireAttachment();
-					const result = await capability.command((session) => this.daemonVerbs.gitShow(m.commit, session.cwd));
-					this.send({ id, ok: true, ...result });
-					break;
-				}
-				case "gitBase": {
-					const m = msg as unknown as GitBaseRequest;
-					if (typeof m.directory !== "string" || m.directory === "") throw new Error("Missing `directory`");
-					if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
-					// Attachment-free: the absolute directory owns the commit.
-					const result = await this.daemonVerbs.gitBase(m.directory, m.commit);
-					this.send({ id, ok: true, ...result });
-					break;
-				}
-				case "gitDiff": {
-					const m = msg as unknown as GitDiffRequest;
-					if (typeof m.directory !== "string" || m.directory === "") throw new Error("Missing `directory`");
-					if (typeof m.old !== "string" || typeof m.new !== "string") throw new Error("Missing diff states");
-					// Attachment-free (ADR 14): the absolute directory scopes the diff.
-					const result = await this.daemonVerbs.gitDiff(m.directory, m.old, m.new);
-					this.send({ id, ok: true, ...result });
-					break;
-				}
-
-				// ── Dev-mode console relay ─────────────────────────────────
-				case "console": {
-					if (!this.devMode) throw new Error("console verb requires --dev mode");
-					this.sendReply(id, true);
-					break;
-				}
-
-				// ── Connection-local verb ──────────────────────────────────
-				case "pull": {
-					const capability = this.requireAttachment();
-					const m = msg as unknown as PullRequest;
-					if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
-					const values = await capability.command((session) => {
-						const out: { entryId: string; fieldPath: string; value: JsonValue }[] = [];
-						for (const req of m.requests) {
-							const entry = session.document.entries[req.entryId];
-							if (!entry) continue;
-							const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
-							if (value !== undefined) {
-								out.push({ entryId: req.entryId, fieldPath: req.fieldPath, value: value as JsonValue });
-								if (!isEntrySealed(entry)) {
-									this.subscriptions.add(req.fieldPath);
-								}
-							}
-						}
-						return Promise.resolve(out);
-					});
-					this.send({ id, ok: true, values });
-					break;
-				}
-
-				default:
-					throw new Error(`Unknown verb: ${verb}`);
 			}
 		} catch (err) {
 			this.sendReply(id, false, (err as Error).message);

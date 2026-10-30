@@ -51,7 +51,8 @@
 // ============================================================================
 
 import { existsSync } from "node:fs";
-import type { PrefixCursor, SessionRef } from "../core/index.ts";
+import type { ImageContent, JsonValue, PrefixCursor, PullRequestItem, SessionRef } from "../core/index.ts";
+import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
@@ -84,17 +85,49 @@ export interface ObservationCapability {
 	release(): Promise<void>;
 }
 
+/** One lazy value read by the pull verb: the resolved value, plus whether
+ * the entry it came from is still live (unsealed) — a live value keeps
+ * streaming, so later patches on that path must keep flowing to the
+ * pulling client. */
+export interface PulledValue {
+	readonly entryId: string;
+	readonly fieldPath: string;
+	readonly value: JsonValue;
+	readonly live: boolean;
+}
+
 /** One client's handle for one Activation registration: the only path to
- * that Session's runtime. Commands and mutations are admitted by the
- * Session's actor — a command admitted before its registration ended
- * completes against the runtime it captured, so the reply the client trusts
- * describes the session that was attached when the request arrived — and
- * observation registration returns its own independently releasable
- * capability. Everything rejects once the registration ended: release,
- * collection, replacement, or daemon shutdown. */
+ * that Session's runtime. The typed verbs are the Connection's session
+ * commands — a command admitted before its registration ended completes
+ * against the runtime it captured, so the reply the client trusts describes
+ * the session that was attached when the request arrived — and observation
+ * registration returns its own independently releasable capability. The
+ * generic `command`/`mutate` admission stays for reads and tests. Everything
+ * rejects once the registration ended: release, collection, replacement, or
+ * daemon shutdown. */
 export interface SessionCapability {
 	readonly ref: SessionRef;
 	readonly authorization: ActivationAuthorization;
+	/** The Session's working directory — identity data for attachment-bound
+	 * reads (gitShow's query base), not a runtime handle. */
+	readonly cwd: string;
+	// ── Typed session verbs (admitted by the actor) ─────────────────────
+	/** A turn. Immediate admitted work — a Stop must not queue behind it. */
+	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	abort(): Promise<void>;
+	discardSteer(): Promise<void>;
+	/** A serialized mutation: one at a time, in admission order. */
+	setModel(provider: string, modelId: string): Promise<void>;
+	setThinkingLevel(level: string): Promise<void>;
+	renameSession(name: string): Promise<void>;
+	setLabel(entryId: string, label: string): Promise<void>;
+	navigate(entryId: string | null): Promise<void>;
+	/** Recover the broken tail turn (ADR 16); `action` reports the repair. */
+	recoverTurn(): Promise<"retry" | "continue">;
+	/** Read lazy values at field paths (the pull verb); a live value's later
+	 * patches are the pulling client's to receive. */
+	pull(requests: PullRequestItem[]): Promise<PulledValue[]>;
+	// ── Admission for everything else (reads, tests) ─────────────────
 	command<T>(operation: (session: Manager) => Promise<T>): Promise<T>;
 	mutate<T>(operation: (session: Manager) => Promise<T>): Promise<T>;
 	observe(observer: SessionObserver, cursor: PrefixCursor | null): ObservationCapability;
@@ -215,33 +248,64 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 		cancelIdle();
 		let released = false;
 		const owned = new Set<{ stop(): void }>();
+		const admissible = (): boolean => !released && phase === "live";
+		const commandOp = <T>(operation: (session: Manager) => Promise<T>): Promise<T> => {
+			if (!admissible()) return Promise.reject(new Error("session is closed"));
+			// Admission is promise-shaped: an operation that fails before
+			// returning its promise rejects instead of escaping as a
+			// synchronous throw (untracked) — the same idiom BridgeClient.call
+			// uses for a transport that throws in `send`.
+			let started: Promise<T>;
+			try {
+				started = Promise.resolve(operation(manager));
+			} catch (error) {
+				return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+			}
+			const settle = started.then(
+				() => undefined,
+				() => undefined,
+			);
+			tracked.add(settle);
+			void settle.then(() => tracked.delete(settle));
+			return started;
+		};
+		const mutateOp = <T>(operation: (session: Manager) => Promise<T>): Promise<T> => {
+			if (!admissible()) return Promise.reject(new Error("session is closed"));
+			return mutations.run(() => operation(manager));
+		};
 		return {
 			ref,
 			authorization,
-			command<T>(operation: (session: Manager) => Promise<T>): Promise<T> {
-				if (released || phase !== "live") return Promise.reject(new Error("session is closed"));
-				// Admission is promise-shaped: an operation that fails before
-				// returning its promise rejects instead of escaping as a
-				// synchronous throw (untracked) — the same idiom BridgeClient.call
-				// uses for a transport that throws in `send`.
-				let started: Promise<T>;
-				try {
-					started = Promise.resolve(operation(manager));
-				} catch (error) {
-					return Promise.reject(error instanceof Error ? error : new Error(String(error)));
-				}
-				const settle = started.then(
-					() => undefined,
-					() => undefined,
-				);
-				tracked.add(settle);
-				void settle.then(() => tracked.delete(settle));
-				return started;
-			},
-			mutate<T>(operation: (session: Manager) => Promise<T>): Promise<T> {
-				if (released || phase !== "live") return Promise.reject(new Error("session is closed"));
-				return mutations.run(() => operation(manager));
-			},
+			cwd: manager.cwd,
+			prompt: (text, images) => commandOp((session) => session.prompt(text, images)),
+			abort: () => commandOp((session) => session.abort()),
+			discardSteer: () => commandOp((session) => session.discardSteer()),
+			setModel: (provider, modelId) => mutateOp((session) => session.setModel(provider, modelId)),
+			setThinkingLevel: (level) => mutateOp((session) => session.setThinkingLevel(level)),
+			renameSession: (name) => mutateOp((session) => session.renameSession(name)),
+			setLabel: (entryId, label) => mutateOp((session) => session.setLabel(entryId, label)),
+			navigate: (entryId) => mutateOp((session) => session.navigate(entryId)),
+			recoverTurn: () => commandOp((session) => session.recoverTurn()),
+			pull: (requests) =>
+				commandOp((session) => {
+					const out: PulledValue[] = [];
+					for (const req of requests) {
+						const entry = session.document.entries[req.entryId];
+						if (!entry) continue;
+						const value = resolveFieldPath(entry as unknown as Record<string, unknown>, req.fieldPath);
+						if (value !== undefined) {
+							out.push({
+								entryId: req.entryId,
+								fieldPath: req.fieldPath,
+								value: value as JsonValue,
+								live: !isEntrySealed(entry),
+							});
+						}
+					}
+					return Promise.resolve(out);
+				}),
+			command: commandOp,
+			mutate: mutateOp,
 			observe(observer: SessionObserver, cursor: PrefixCursor | null): ObservationCapability {
 				// The registration check is synchronous with the installation: a
 				// released capability, or one whose actor began closing, must not

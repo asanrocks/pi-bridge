@@ -2,8 +2,8 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Document, SessionRef } from "../../src/core/index.ts";
 import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
-import type { DaemonVerbs } from "../../src/host/connection.ts";
 import { Connection } from "../../src/host/connection.ts";
+import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { Manager } from "../../src/host/manager.ts";
 import { issueDirectCapability } from "../../src/host/session-actor.ts";
 import {

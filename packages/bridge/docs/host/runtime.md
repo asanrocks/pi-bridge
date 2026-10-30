@@ -256,11 +256,19 @@ those subscriptions before the Connection sends them. A `pull` request reads
 values from the attached Manager's canonical Document; pulling an unsealed
 lazy path also registers that path for subsequent live patches.
 
-The Connection demultiplexes RPC frames by verb. Attached Session verbs are:
+The Connection demultiplexes RPC frames by verb. Every verb that is not an
+attachment transition is a typed handler in
+`src/host/connection-verbs.ts`: a seam function that validates the request
+shape, captures its target at handler entry (before any await), and replies
+through a `VerbContext` exposing only the daemon seam, the attachment
+capability, subscription registration, and the reply path — no socket, no
+transition state, no runtime. Attached Session verbs are:
 `prompt`, `abort`, `discardSteer`, `setModel`, `setThinkingLevel`,
 `renameSession`, `setLabel`, `navigate`, and `recoverTurn`. They require an
-attachment and route to that Manager. Each captures its target — the attached
-Manager and SessionRef — at handler entry, before any await, so a transition
+attachment and are issued through the capability's typed verbs — the two
+admission classes (immediate commands, serialized mutations) are the
+Session actor's. Each handler captures the capability at handler entry,
+before any await, so a transition
 that completes while the command runs cannot retarget it: the command
 executes against, and reports on, the session attached when the request
 arrived. The host validates prompt image envelopes and enforces the shared
@@ -290,7 +298,10 @@ Connection's attachment, and are not serialized against it. Query verbs are `lis
 `listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),
 so their base travels in the request and they need no attachment. `gitShow`
 alone remains attachment-bound: it reads the attached Session's Project cwd.
-`pull` is Connection-local. `console` is accepted only when the daemon is in
+`pull` is Connection-local: it reads the attached runtime's lazy values
+through the capability and registers the live (unsealed) paths as
+subscriptions, so later patches on those paths keep flowing. `console` is
+accepted only when the daemon is in
 dev mode and is a no-op acknowledgement.
 
 RPC replies carry the request id and success or error fields. Document changes

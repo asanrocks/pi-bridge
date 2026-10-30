@@ -322,6 +322,45 @@ describe("SessionActor idle collection", () => {
 	});
 });
 
+describe("SessionCapability typed verbs", () => {
+	it("route through admission and reject once the actor closed", async () => {
+		const actor = actorFor(stubManager());
+		const capability = actor.capability();
+		await expect(capability.prompt("hello")).resolves.toBeUndefined();
+		await expect(capability.abort()).resolves.toBeUndefined();
+		await expect(capability.discardSteer()).resolves.toBeUndefined();
+		await expect(capability.setModel("prov", "model")).resolves.toBeUndefined();
+		await expect(capability.setThinkingLevel("low")).resolves.toBeUndefined();
+		await expect(capability.renameSession("name")).resolves.toBeUndefined();
+		await expect(capability.setLabel("e1", "label")).resolves.toBeUndefined();
+		await expect(capability.navigate("e1")).resolves.toBeUndefined();
+		await expect(capability.recoverTurn()).resolves.toBe("retry");
+		expect(capability.cwd).toBe("/proj");
+		await actor.close();
+		await expect(capability.prompt("late")).rejects.toThrow("session is closed");
+		await expect(capability.setModel("p", "m")).rejects.toThrow("session is closed");
+	});
+
+	it("pull reads values through the actor and reports live fields", async () => {
+		const manager = stubManager();
+		const capability = actorFor(manager).capability();
+		const entries = manager.document.entries as Record<string, unknown>;
+		entries.live = { id: "live", isSealed: false };
+		entries.sealed = { id: "sealed" };
+		const values = await capability.pull([
+			{ entryId: "live", fieldPath: "/entries/live/id" },
+			{ entryId: "sealed", fieldPath: "/entries/sealed/id" },
+			{ entryId: "missing", fieldPath: "/entries/missing/id" },
+		]);
+		// A live (unsealed) value streams further updates; a sealed one is
+		// one-shot; a missing entry is skipped, not an error.
+		expect(values).toEqual([
+			{ entryId: "live", fieldPath: "/entries/live/id", value: "live", live: true },
+			{ entryId: "sealed", fieldPath: "/entries/sealed/id", value: "sealed", live: false },
+		]);
+	});
+});
+
 describe("SessionActor terminal boundary", () => {
 	it("is joinable: one drain, one disposal, admitted work awaited", async () => {
 		const manager = stubManager();
