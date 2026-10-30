@@ -28,6 +28,15 @@
 //      carries the size. Slot values themselves are a TypeScript union, so this
 //      table only has to hold the family rule.
 //
+//   4. Every control resolves to a tier, or to a declared role with its reason.
+//
+//   5. A control's box follows its content: a button whose own children are
+//      literal words takes the outlined tier (or filled, when it is its
+//      surface's primary command), never the chromeless ghost/`dim` one. A
+//      glyph marks itself as actionable and a word cannot — the rule that was
+//      missing when `review` and `file` shipped as unbordered lowercase words
+//      in git and diff cards.
+//
 // Keeping the table in step with icons.tsx is checked, not trusted: every name
 // listed here must still be exported, and every exported `<Role>Icon` must be
 // listed. That way a new glyph forces a family decision at the point it is
@@ -254,7 +263,6 @@ const CONTROL_ROLES = new Map(
 		portalItemSelect: "list row",
 		portalMore: "list row",
 		supersededRow: "history row",
-		gitDiffAction: "history row action",
 		// Fold headers: a full-width target carrying a caret and a label.
 		actionCollapsed: "fold header",
 		actionGroupHeader: "action group header (sticky fold)",
@@ -340,6 +348,21 @@ function resolvesToTier(file, name, seen = new Set()) {
 	return rule.names.some((composed) => resolvesToTier(next, composed, seen));
 }
 
+/** The named tiers a class resolves to, so a rule can ask which box a control
+ * ended up with rather than only whether it has one. */
+function resolvedTiers(file, name, seen = new Set()) {
+	const key = `${file}:${name}`;
+	if (seen.has(key)) return new Set();
+	seen.add(key);
+	if (file.endsWith("buttons.module.css") && TIERS.has(name)) return new Set([name]);
+	const rule = MODULES.get(file)?.get(name);
+	if (!rule) return new Set();
+	const next = rule.from === undefined ? file : join(file, "..", rule.from);
+	const out = new Set();
+	for (const composed of rule.names) for (const tier of resolvedTiers(next, composed, seen)) out.add(tier);
+	return out;
+}
+
 const rolesUsed = new Set();
 for (const file of files.filter((f) => f.endsWith(".tsx"))) {
 	// Comments are stripped: the transcript's own prose mentions `<button>`.
@@ -369,6 +392,103 @@ for (const file of files.filter((f) => f.endsWith(".tsx"))) {
 		}
 		errors.push(
 			`${file}: <button className={…${local.map(([, name]) => `.${name}`).join(", ")}}> composes no tier (ghost/outlined/filled) and is not in CONTROL_ROLES — either make it a tiered control or record the role it plays instead`,
+		);
+	}
+}
+
+// ── Rule 5: a control's box follows its content ─────────────────────────────
+//
+// A glyph marks itself as actionable; a word cannot, so a button whose own
+// children are literal words takes the outlined (or filled) tier and never the
+// chromeless ghost/`dim` one. This is the rule that was missing when `review`
+// and `file` sat in git and diff cards as unbordered lowercase words: they
+// composed no tier at all, and a text control that composes none is either a
+// role (a chip, a row, a link) or a bug. Only the children's own literal text
+// counts — labels computed in an expression are invisible to a text scan and
+// are covered by the tier they compose.
+// The words are the value, not an action, so the button is a readout rather
+// than a verb: it keeps the chromeless tier because a border would turn the
+// model in force into a button, exactly as an icon would erase the value (see
+// design.md's words-vs-glyph table). Literal labels are rare here — most
+// readouts interpolate their value in an expression, which the scan skips — so
+// each entry is a decision, not a default.
+const TEXT_VALUE_OK = new Map(
+	Object.entries({
+		sidebarSectionToggle: "the section label is a fold-all toggle, not a verb — it sits in its header as a label",
+		composerModelBtn: "the model readout's words are the value in force (its narrow-screen label is the literal `Models`)",
+	}),
+);
+
+/** Index of the `>` that closes the tag starting at `start`, skipping quoted
+ * strings and `{…}` expressions so an attribute's `=>` or a `">"` does not end
+ * it early. */
+function tagEnd(source, start) {
+	let depth = 0;
+	let quote = null;
+	for (let i = start; i < source.length; i++) {
+		const ch = source[i];
+		if (quote) {
+			if (ch === quote && source[i - 1] !== "\\") quote = null;
+			continue;
+		}
+		if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+		else if (ch === "{") depth++;
+		else if (ch === "}") depth = Math.max(0, depth - 1);
+		else if (ch === ">" && depth === 0) return i;
+	}
+	return -1;
+}
+
+/** The literal words a button renders: its children with tags and `{…}`
+ * expressions removed, which is what a hand-typed label looks like. A label
+ * computed in an expression is invisible here by design — a value readout
+ * (`{cost}`, `{modelLabel}`) is not a hand-written verb. */
+function literalLabel(body) {
+	let out = "";
+	for (let i = 0; i < body.length; i++) {
+		const ch = body[i];
+		if (ch === "{") {
+			let depth = 0;
+			for (; i < body.length; i++) {
+				if (body[i] === "{") depth++;
+				else if (body[i] === "}" && --depth === 0) break;
+			}
+			out += " ";
+		} else if (ch === "<") {
+			const end = tagEnd(body, i);
+			if (end === -1) break;
+			i = end;
+			out += " ";
+		} else out += ch;
+	}
+	return out.trim();
+}
+
+for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+	const source = codeLines(readFileSync(file, "utf-8")).join("\n");
+	const imports = new Map();
+	for (const m of source.matchAll(/import\s+(\w+)\s+from\s+["']([^"']+\.module\.css)["']/g)) {
+		imports.set(m[1], join(file, "..", m[2]));
+	}
+	for (const open of source.matchAll(/<button\b/g)) {
+		const openEnd = tagEnd(source, open.index + open[0].length);
+		if (openEnd === -1) continue;
+		const tag = source.slice(open.index, openEnd + 1);
+		const close = source.indexOf("</button>", openEnd);
+		if (close === -1) continue;
+		const label = literalLabel(source.slice(openEnd + 1, close));
+		if (!/[A-Za-z]{2}/.test(label)) continue;
+		const local = [...classNameExpression(tag).matchAll(/(\w+)\.(\w+)/g)]
+			.map((m) => [m[1], m[2]])
+			.filter(([variable]) => imports.has(variable));
+		if (local.some(([, name]) => TEXT_VALUE_OK.has(name))) continue;
+		// A role-listed class is a chip, a row, a fold header, or a link: not a verb.
+		if (local.some(([, name]) => CONTROL_ROLES.has(name))) continue;
+		const tiers = new Set();
+		for (const [variable, name] of local) for (const tier of resolvedTiers(imports.get(variable), name)) tiers.add(tier);
+		if (tiers.has("outlined") || tiers.has("filled")) continue;
+		errors.push(
+			`${file}: <button> renders the words "${label.replace(/\s+/g, " ")}" but composes ${tiers.size ? [...tiers].join("/") : "no tier"} — a glyph marks itself as actionable and a word cannot, so a text control takes the outlined tier (or filled, if it is its surface's primary command). See docs/web/design.md, "Iconography and control surfaces"`,
 		);
 	}
 }

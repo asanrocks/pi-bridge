@@ -209,23 +209,17 @@
 	margin: 4px 0;
 }
 
-/* Review-surface trigger on a git change card: a quiet lowercase mono
-   action docked beside the meta, in the card's own text scale. */
+/* Review-surface trigger on a git change card: the `outlined` verb tier — a
+   text control carries a boundary (see docs/web/design.md, "Iconography and
+   control surfaces") — docked beside the meta in the card's own text scale.
+   Words rather than a glyph: the label carries the object and the scope (this
+   commit against its first parent), which no glyph in the set separates from
+   the file browser's rendering of the same commit. */
 .gitDiffAction {
-	background: none;
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-sm);
-	color: var(--color-muted-foreground);
-	cursor: pointer;
+	composes: outlined from "../../render/buttons.module.css";
 	font-size: var(--fs-xs);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 1px 6px;
 	flex-shrink: 0;
-}
-
-.gitDiffAction:hover {
-	color: var(--color-foreground);
-	border-color: var(--color-accent);
 }
 
 /* Branch + short hash docked right in the collapsed row (the read tool's
@@ -467,13 +461,12 @@
 	flex-shrink: 0;
 }
 
-/* Outlined text control — the named tier for a text verb that cannot become an
-   icon and would otherwise have nothing marking it. `.recoveryBtn` is the case
-   the tier exists for: it sits beside `.errorLine`, which is itself a container
-   (6% error tint plus a 2px left rule), so an unbordered verb there reads as a
-   continuation of the error text rather than an action on it. Kept to the
-   lightest compliant boundary (`--color-border-control`) so the action does not
-   compete with the message describing the failure. */
+/* Outlined text control — the tier every worded control takes, because a word
+   cannot mark itself as actionable the way a glyph can. `.recoveryBtn` is the
+   case the tier was written for: the labels predict the mechanism before the
+   click, so none of them can become a glyph. Kept to the lightest compliant
+   boundary (`--color-border-control`) so the action does not compete with the
+   message describing the failure. */
 .recoveryBtn {
 	composes: outlined from "../../render/buttons.module.css";
 	color: var(--color-error);

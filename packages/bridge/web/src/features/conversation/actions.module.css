@@ -758,11 +758,10 @@
 }
 
 .cardCtrlBtn {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: dim from "../../render/buttons.module.css";
 	padding: 4px 6px;
 	font: inherit;
 	font-size: var(--fs-xs);
-	color: var(--color-muted-foreground);
 }
 
 /* The cap toggle flips its chevron by direction, not by hue; hover and pressed

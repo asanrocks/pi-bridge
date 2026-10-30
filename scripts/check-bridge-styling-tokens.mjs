@@ -58,6 +58,15 @@
 //     `--shadow-*` other than `--shadow-chip` (the floating control's edge);
 //     any other elevation says the control is above the surface it sits in.
 //
+//   - The control's ink belongs to the tier. A rule that composes the tier may
+//     not restate the tier's own rest ink (`--color-secondary`) or the meta ink
+//     (`--color-muted-foreground`) as a plain `color`, nor `inherit` it: host
+//     declarations are unlayered, so they outrank the layered `.ghost:hover` and
+//     the ink stops moving while the fill keeps reporting state. Those two inks
+//     are the `dim` (icon) and `quiet` (verb) variants in
+//     render/buttons.module.css. A hue the tier cannot know (the error hue, a
+//     value at --color-foreground) is exempt: there the ink is the signal.
+//
 //   - `anchor()` takes one of a closed set of anchor sides. `anchor(inline-start)`
 //     is not in it, so the declaration is dropped and the surface keeps its
 //     static inline position while its block offset stays anchored — a menu that
@@ -297,11 +306,31 @@ for (const f of files) {
 const GHOST_COMPOSES = /composes:\s*[^;]*buttons\.module\.css/;
 const BORDER_DECL = /(?:^|;|\s)border(?:-color)?\s*:\s*([^;]+);/;
 
+// The control's ink belongs to the tier, not to the host: `composes` inlines the
+// tier's rules into the `control` layer, so a host declaration (unlayered, and
+// therefore higher priority whatever the specificity) outranks `.ghost:hover`.
+// A host that restates the rest ink as a plain `color` therefore freezes the ink
+// step and leaves only the fill moving — the fill then reports a state the ink
+// has stopped describing, which is what put a hover rectangle over the
+// unmoving `Projects` label. The tier's own rest ink and the meta ink have
+// variants (`.dim` for icon controls, `.quiet` for verbs); `color: inherit` is
+// the same bug spelled as inheritance. A hue the tier cannot know (the error
+// hue, a value at --color-foreground) stays legal: there the ink is the signal
+// and it has no step left to take.
+const TIER_OWNED_INK = /(?:^|;|\s)color\s*:\s*(?:var\(--color-(?:secondary|muted-foreground)\)|inherit)\s*;/;
+const TIER_FILE = "render/buttons.module.css";
+
 for (const [f, source] of css) {
 	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
 		const body = block[2];
 		if (!GHOST_COMPOSES.test(body)) continue;
 		const loc = `${f}: ${block[1].trim().split("\n").pop()?.trim() ?? ""}`;
+
+		if (!f.replace(/\\/g, "/").endsWith(TIER_FILE) && TIER_OWNED_INK.test(body)) {
+			errors.push(
+				`${loc}: control restates the tier's own ink as \`${TIER_OWNED_INK.exec(body)[0].replace(/^[;\s]+|;$/g, "")}\` — a host declaration outranks the layered tier hover, so the ink stops moving and only the fill reports the state; compose \`dim\` (icon control) or \`quiet\` (verb) from ${TIER_FILE} instead`,
+			);
+		}
 
 		const border = BORDER_DECL.exec(body);
 		if (border && /var\(--color-border\)/.test(border[1])) {

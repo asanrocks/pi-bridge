@@ -256,7 +256,13 @@ has exactly one navigation affordance, the `+` button, which opens the
 Project home — the compose surface where the first prompt creates the
 Session (there is no empty-Session creation path). Folder children sit
 flush-left with the folder row; hierarchy is carried by the chevron and
-row fills, not indentation.
+row fills, not indentation. The three fold targets share one hover
+signature: the `Projects` label and a folder row both step the meta ink to
+the foreground and paint nothing, while the `+` beside them takes the fill
+because it is an icon control (see
+[Iconography and control surfaces](#iconography-and-control-surfaces)). A
+folder row's hover is not a row state: it is a fold control, and the fill
+channel belongs to rows that carry identity or position.
 
 Folder children:
 
@@ -552,7 +558,7 @@ none infers a turn-scoped window git cannot know.
   and refetches on settle. Earlier turns and peeked paths offer no worktree
   item, because comparing them to the current worktree would silently span
   other turns.
-- **The git card** (`review`) opens that one commit against its first parent,
+- **The git card** (`Review`) opens that one commit against its first parent,
   resolved host-side. It is the card's only review meaning; the turn's
   transition windows belong to the chip menu, so there is no second `diff`
   affordance to disambiguate.
@@ -574,7 +580,7 @@ The browser is the one fullscreen repository surface (ADR 14): a file tree on
 the left, file content on the right, in the portal role (Escape, the close
 control, and the backdrop close it; read-only). Every entry point opens this same surface with a
 different target — a Markdown link or a tool card opens one file with the full
-tree, a turn chip menu or a git card's `review` control opens a changed-files
+tree, a turn chip menu or a git card's `Review` control opens a changed-files
 review, the TopBar badge's menu opens the live uncommitted review, and the
 Project home browses the worktree from the Project cwd with
 nothing selected. The browser is not a Session-scoped route: it is ephemeral
@@ -910,11 +916,13 @@ for new buttons, chips, action rows, and Markdown hosts.
   the padding edge instead of the text) and makes the apparent margin
   padding + marker. Padding is clearance, not taste: level 1 clears a
   two-digit `ol` marker, nested levels only a disc or single digit.
-- **Controls are glyph-first and chromeless at rest.** A button paints no
-  background and no border, and its state lives in the ink and in one optional
-  hover fill rather than in chrome; the composer's Send and Stop are the only
-  two exceptions. Icon-only is the default for verbs, and no in-document
-  control is a font glyph or an emoji. See
+- **A control's box follows its content.** Glyph-only controls are
+  chromeless: no background and no border, state in the ink plus one optional
+  hover fill. A control that carries words takes a boundary, because the words
+  are what have to read as actionable; the composer's Send and Stop stay the
+  only filled verbs, and a value chip or a row is neither. States live in the
+  ink either way, never in restated chrome. Icon-only is the default for verbs,
+  and no in-document control is a font glyph or an emoji. See
   [Iconography and control surfaces](#iconography-and-control-surfaces).
 - **One spec per role.** A role has one visual specification wherever it
   appears. `ComposeCard` and `ComposeBar` share the card shell; toolbar and
@@ -960,8 +968,9 @@ for new buttons, chips, action rows, and Markdown hosts.
   individual actions, dialogs, file viewing, and repeated rows; page sections
   are not nested cards. Radius stays in the token scale, with the composer as
   the deliberate larger-radius exception. A hairline border is a boundary
-  between two surfaces — a field, a portal, a card, a thumbnail — and never the
-  thing that says a control can be clicked.
+  between two surfaces — a field, a portal, a card, a thumbnail; the one other
+  boundary is the control that carries words (see
+  [Iconography and control surfaces](#iconography-and-control-surfaces)).
 
 ### Row states
 
@@ -1011,10 +1020,12 @@ transient (the pointer, or the keyboard cursor in a list that moves one).
 ### Iconography and control surfaces
 
 A control is a hit target carrying one glyph, plus a label when it needs words.
-At rest it paints no background and no border, so its only ink is the symbol.
-Chrome that exists to announce clickability competes with `--color-border`'s
-single job — hairlines between surfaces — so a control earns a boundary only by
-being a container.
+A glyph-only control paints no background and no border at rest, so its only ink
+is the symbol; a control that carries words takes a boundary, because a word has
+nothing else marking it as actionable. Chrome that exists to announce
+clickability competes with `--color-border`'s single job — hairlines between
+surfaces — so the boundary a control may own is the outlined tier's
+`--color-border-control` and nothing else.
 
 **Reviewing the set.** `web/src/dev/glyphs.tsx` renders every export at all four
 slots and again inside the box ladder, served by the dev server at
@@ -1182,6 +1193,37 @@ covers every button — and a control must not restate hover or focus as a
 section is about controls: a row's identity *is* a surface, and its two
 channels are specified under Row states above.
 
+**The tier owns the ink; the host composes a variant to move it.** Two variants
+step the ghost's rest ink down to the meta level for the row it lives in. `dim`
+is a glyph-only control at `--color-muted-foreground` with the fill intact — a
+glyph in a dense row reads dimmer than the tier's rest ink, and the fill is
+glyph-only control's own channel. `quiet` is the same ink for a fold label, and
+it drops the hover fill so a label inside a section header paints no rectangle.
+A host must not state that ink itself: `composes` inlines the tier into the
+`control` layer, so a host `color` is unlayered and outranks `.ghost:hover` —
+the ink then freezes at rest while the fill keeps moving, which is how the
+`Projects` label came to paint a hover rectangle over unmoving caps. A hue the
+tier cannot know stays a host decision: the error hue on a recovery verb, or a
+value already at `--color-foreground`, where the ink is the signal and has no
+step left to take. `check-bridge-styling-tokens.mjs` fails a tier host that
+restates `--color-secondary` or `--color-muted-foreground`, or inherits its ink,
+for that reason.
+
+**Glyph-only is chromeless; words take the boundary.** `quiet` serves the one
+control that is words without being a verb-style button: the `Projects` fold-all
+label, which has to sit in its header as a label and not as a chip. Every other
+text control is `outlined` — the file browser's header verbs and its review
+bar's, `Load more`, `Load failed — retry`, the whole-file toggle, the git card's
+`Review`, RecoveryBar's `Retry` and `Edit`, a dialog's cancel — so the boundary
+is a property of carrying words rather than of the host that happens to contain
+the control. Fills stay with the glyph-only controls and with the rows, which
+own the fill channel for position and identity: the icon controls beside those
+verbs keep theirs, because a glyph has no words to carry the change. The
+conversation's fold headers are the standing exception, deliberately: they are
+card heads that already sit on the action hue, so their hover darkens the hue
+they sit on instead of restating the outlined verbs' signature inside a card
+whose anatomy is a tint.
+
 **Toggle state swaps the glyph when the glyph has two forms.** Colour alone
 cannot carry on/off (WCAG 1.4.1), so a toggle whose symbol can differ shows the
 difference: an outline pin to a filled pin, a folded caret to an open one, the
@@ -1202,11 +1244,14 @@ thing — a command issued at the edge of a surface whose state changes somethin
 — and Send and Stop are the only two whose glyphs are also transport solids, in
 `--color-on-accent`, so box and symbol never disagree about weight.
 
-**A boundary belongs to the container, not to the control.** This is the rule the
-rest of this section follows from. A control earns a line or an edge by being a
-container or by floating over content — never because of what it contains. The
-proof is in the app twice: the turn toolbar's Copy and the per-message Copy chip
-are the same glyph at the same slot, and only the floating one has an edge.
+**A boundary belongs to the container, or to the words.** This is the rule the
+rest of this section follows from. A glyph-only control earns a line or an edge
+by being a container or by floating over content — never because of what the
+glyph is; the proof is in the app twice: the turn toolbar's Copy and the
+per-message Copy chip are the same glyph at the same slot, and only the floating
+one has an edge. Words are the other case: nobody can tell that a bare `Review`
+is clickable, so a text control owns its boundary at rest and does not depend on
+a host container lending it one.
 
 **Three text tiers, one emphasis each.** A text control picks a tier by what it
 has to say, and the tiers differ in *kind*, not degree. Each tier is a class in
@@ -1215,26 +1260,40 @@ states:
 
 | Tier | Shape | When |
 | --- | --- | --- |
-| ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | the default verb in a row — `Show all`, `Load more`, the model and cost readouts, sidebar rows |
-| outlined | 1px `--color-border-control`, surface's radius | a text verb with no row or hue to mark it, sitting inside a container that already carries chrome: `.recoveryBtn` beside the error line, a dialog's cancel |
+| ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn toolbar |
+| `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's chevrons, the topbar's changes badge |
+| `quiet` | `dim` without the hover fill | the one text control that is a label rather than a verb — the `Projects` fold-all toggle |
+| outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load more`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
 | filled | accent fill, `--color-on-accent` | the primary command *of the surface* — Send, Stop, `Retry now`, a dialog's confirm, the compare menu's `Apply` |
+
+The two variants are the tier's ink steps, not tiers of their own: they declare
+the rest ink *inside* the `control` layer, which is the only place a host can
+dim a control without outranking its own hover rule (see
+[State is ink](#iconography-and-control-surfaces)). Ink dimmer than the meta
+level is not a smaller step of the same thing — a glyph that dims further stops
+reading as a control at all.
 
 The tiers are enforced, not just described: `check-bridge-icon-contract.mjs`
 fails a `<button>` whose class resolves to none of them, unless its class is in
 the gate's role table (backdrop, row, menu item, fold header, chip, floating
-control, inline link) with the reason. That table is what "one spec per role"
-was missing — opt-in composition binds the modules that opt in and nothing else,
-which is how six hand-rolled buttons survived three sweeps.
+control, inline link) with the reason — and it fails a `<button>` whose own
+children are literal words but which composes the chromeless tier instead of
+`outlined`/`filled`. That second check is what the earlier sweeps lacked: a text
+control that composes no box at all is either a declared role or a bug, and
+`review`/`file` were the bug.
 
-The outlined tier is deliberately narrow. It exists for verbs whose label cannot
-become a glyph and that would otherwise be unmarked — not as a default, because
-border every text verb and the transcript's verbs outrank the tool rows and error
-lines that carry the actual meaning. It is also the lightest compliant boundary:
+The outlined tier is the boundary's home, and it is the lightest compliant one:
 `--color-border-control` sits at 3.18:1 on the page and 3.35:1 on the raised
 composer, the warmest grey that clears WCAG 1.4.11 — where `--color-border`
 (1.47:1) separates surfaces and cannot define a control. A button is never both
 outlined and filled, and a destructive verb takes the error hue in whichever tier
-it uses.
+it uses. The cost is real and is paid in scale rather than in compromise: a text
+verb owns a hairline at `--fs-xs`, and because each one is a bounded box the
+transcript's verbs no longer compete with the tool rows and error lines that
+carry the meaning — the boundary is what keeps a label from being read as prose,
+not what makes it loud. That is why the tier's padding stays at the chip scale
+(`1px 6px`, `2px 8px`) and why the box is never filled, shadowed, or resized on
+hover.
 
 **A control that floats over content keeps a container.** The attachment remove
 button sits on a thumbnail, the jump button floats over the conversation, and the
@@ -1287,7 +1346,7 @@ grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
 | Tool card | the `Full output` chip, the uncommitted count | Values, not actions. |
 | Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
 | Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
-| Sidebar list | `Load more` | The ghost tier's own example — a continuation, not an action on an object. |
+| Sidebar list | `Load more` | The outlined tier's own example — a continuation, not an action on an object. |
 | Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
 | Sidebar row menu | `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
 
@@ -1303,9 +1362,10 @@ recording with `CloseIcon` (the audio is gone) and cancels a pending polish with
 leave the row unable to say which of the two a click performs.
 
 **Implementation.** One spec, one file: `web/src/render/buttons.module.css`
-holds the ghost control and feature modules adopt it with CSS Modules
-`composes` (`composes: ghost from "../../render/buttons.module.css"`), never by
-restating its states. That keeps one declaration site without a global utility
+holds the ghost control, its two ink variants, and the outlined and filled
+tiers; feature modules adopt them with CSS Modules `composes`
+(`composes: quiet from "../../render/buttons.module.css"`), never by restating
+states or inks. That keeps one declaration site without a global utility
 class, so the global stylesheet stays tokens, base elements, shell geometry,
 focus, and scoped third-party corrections.
 

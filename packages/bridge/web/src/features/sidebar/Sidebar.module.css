@@ -50,10 +50,13 @@
 /* Fold button: chevron + name, one click target. Toggling is its only job —
    navigation to a Project home lives on the + button beside it. Quiet by
    construction — dimmed text, no fill at rest; hover darkens the text
-   rather than painting a tinted row. Weight 600 is deliberate: the
-   section header (xs/600) → folder (sm/600) → session (md/400) ladder
-   makes the folder read as a branch header without being louder in
-   color than the sessions under it. */
+   rather than painting a tinted row. That ink-only hover is the fold
+   control's signature, and the `Projects` label toggle above takes the same
+   one from the `quiet` tier, so the pane's two fold targets do not invent a
+   hover channel each.
+   Weight 600 is deliberate: the section header (xs/600) → folder (sm/600) →
+   session (md/400) ladder makes the folder read as a branch header without
+   being louder in color than the sessions under it. */
 .sidebarFolderRow {
 	display: flex;
 	align-items: center;
@@ -115,15 +118,14 @@
 	color: var(--color-muted-foreground);
 }
 
-/* Failed folder load: same slot, but clickable to retry — a text verb in a row,
-   so the ghost tier carries its states. */
+/* Failed folder load: same slot, but clickable to retry — a text verb, so it
+   carries the `outlined` tier's boundary and states. */
 .sidebarFolderRetry {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: outlined from "../../render/buttons.module.css";
 	justify-content: flex-start;
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
-	color: var(--color-secondary);
 	text-align: left;
 }
 
@@ -318,10 +320,10 @@ difference between them. */
 	}
 }
 
-/* Load-more control: the ghost tier's own example. Small, muted, sentence-case,
-   full-width — the tier brings the states, so no hover fill is restated here. */
+/* Load-more control: a text verb, so the `outlined` tier carries its boundary,
+   ink step, and no restated states. */
 .sidebarLoadMore {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: outlined from "../../render/buttons.module.css";
 	display: flex;
 	width: 100%;
 	justify-content: flex-start;
@@ -330,18 +332,19 @@ difference between them. */
 	padding: 4px 10px;
 	font-size: var(--fs-sm);
 	font-family: inherit;
-	color: var(--color-muted-foreground);
 }
 
 /* Fold-all toggle: the section header's label doubles as the button that
-   cycles every folder's fold state. Inherits the header's typography. */
+   cycles every folder's fold state. `quiet` keeps the header's meta ink and
+   adds the ink step its folder rows already have; it must not declare `color`
+   itself — an unlayered ink outranks the tier's hover rule and left this
+   control painting a fill over unmoving caps. Typography still inherits. */
 .sidebarSectionToggle {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: quiet from "../../render/buttons.module.css";
 	justify-content: flex-start;
 	gap: 6px;
 	padding: 0;
 	font: inherit;
-	color: inherit;
 	text-transform: inherit;
 	letter-spacing: inherit;
 }

@@ -15,14 +15,13 @@
 	margin-bottom: 4px;
 }
 
-/* Toggle row: two glyph-only controls (wrap, markdown), so the ghost tier owns
+/* Toggle row: two glyph-only controls (wrap, markdown), so the `dim` tier owns
    their states — the same spec the card toolbars use for the same two toggles. */
 .control {
-	composes: ghost from "./buttons.module.css";
+	composes: dim from "./buttons.module.css";
 	flex-shrink: 0;
 	width: var(--control-box-xs);
 	height: var(--control-box-xs);
-	color: var(--color-muted-foreground);
 }
 
 .control svg {

@@ -56,10 +56,10 @@
 	height: var(--control-box);
 }
 
-/* Dirty-now badge — the count of files differing from HEAD. A quiet ghost chip
-   on the TopBar, hidden while the tree is clean, so it reads as an ambient
-   state light rather than permanent chrome. A value control (the count), so it
-   carries its own muted hue instead of the control ink.
+/* Dirty-now badge — the count of files differing from HEAD. A quiet chip on the
+   TopBar, hidden while the tree is clean, so it reads as an ambient state light
+   rather than permanent chrome. A value control (the count), so it composes
+   `dim`'s muted ink instead of the control ink.
 
    Same 36px box and radius as the .topBarBtn controls beside it: at its old 4px
    vertical padding it was a ~24px chip, and a short pill next to two square
@@ -67,10 +67,9 @@
    toggle it is. Width stays content-driven because it holds a value, so the
    height and the corners are what make it a sibling. */
 .changesBadge {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: dim from "../../render/buttons.module.css";
 	gap: 2px;
 	height: var(--topbar-row);
-	color: var(--color-muted-foreground);
 	font-size: var(--fs-xs);
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 0 8px;

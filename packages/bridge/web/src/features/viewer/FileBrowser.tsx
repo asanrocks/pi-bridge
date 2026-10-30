@@ -1052,7 +1052,7 @@ const FileSection = memo(function FileSection({
 					title={`Show the whole file at ${newLabel}`}
 					onClick={onToggleFile}
 				>
-					file
+					File
 				</button>
 			</div>
 			{open && (

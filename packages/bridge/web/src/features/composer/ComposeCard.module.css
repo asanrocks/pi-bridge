@@ -491,10 +491,9 @@
 /* ── Cost button (token-breakdown popover) — session ledger ────────────── */
 
 .composerCostBtn {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: dim from "../../render/buttons.module.css";
 	gap: 3px;
 	font: inherit;
-	color: var(--color-muted-foreground);
 	padding: 4px 6px;
 	white-space: nowrap;
 }

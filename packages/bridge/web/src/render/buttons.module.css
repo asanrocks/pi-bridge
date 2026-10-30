@@ -19,8 +19,9 @@
 @layer theme, base, components, control, utilities;
 
 /* ============================================================================
-   Ghost control — the one spec for a chromeless icon button. See
-   docs/web/design.md, "Iconography and control surfaces".
+   Ghost control — the one spec for a chromeless control, with the two dimmer
+   ink variants (`dim`, `quiet`) below it. See docs/web/design.md,
+   "Iconography and control surfaces".
 
    Feature modules adopt it with
    `composes: ghost from "../../render/buttons.module.css";`
@@ -121,21 +122,63 @@
 }
 
 /* ============================================================================
+   `dim` and `quiet` — the ghost's two dimmer ink steps, declared here for the
+   same reason as the tier itself.
+
+   A host that wants a rest ink dimmer than `--color-secondary` states it here
+   rather than in its own module, because a host declaration is unlayered and
+   therefore outranks the layered `.ghost:hover` — the same precedence that
+   makes the layer order above matter. A host-declared `color` froze the ink at
+   rest and left only the fill moving, so the fill carried a state the ink had
+   stopped reporting (the `Projects` label toggle, whose hover painted a
+   rectangle over unmoving caps, was this bug). Composing a variant keeps the
+   ink step inside the layer that wins.
+
+   `dim` is the meta ink for an icon control: --color-muted-foreground is the
+   meta tone (a full step below the tier's rest ink), which is what a glyph in a
+   dense row wants, and the fill stays because the fill is the icon control's
+   channel.
+
+   `quiet` is the same ink for a fold label — words that have to sit in a header
+   as a label rather than as a chip — and it drops the hover fill with it.
+   ========================================================================= */
+
+@layer control {
+	.dim {
+		composes: ghost;
+		color: var(--color-muted-foreground);
+	}
+
+	.quiet {
+		composes: dim;
+		background: none;
+	}
+
+	/* The ink step is `.ghost:hover`'s, and it applies again because the ink now
+	   lives in this layer. Only the fill is suppressed, and only while the
+	   control is not engaged — an engaged verb keeps `data-on`'s fill. */
+	@media (hover: hover) {
+		.quiet:hover:not([data-on]) {
+			background: none;
+		}
+	}
+}
+
+/* ============================================================================
    Outlined and filled — the other two text tiers, declared here for the same
    reason as the ghost: a tier is a mechanism, so a feature composes it instead
    of restating its states.
 
-   `outlined` is deliberately narrow. It exists for a text verb whose label
-   cannot become a glyph and that sits inside a container already carrying
-   chrome, where an unbordered word reads as a continuation of the container's
-   text rather than an action on it. Every text verb getting a border flattens
-   the transcript: a 3:1 boundary on each of six to eight verbs outranks the tool
-   rows and error lines that carry the actual meaning.
+   `outlined` is the tier for a control that carries words: a glyph marks itself
+   as actionable, and a word cannot, so the boundary is what says "this is a
+   control" rather than a host container lending it one. It is the lightest
+   compliant boundary (`--color-border-control`, 3:1) and the box never fills,
+   shadows, or resizes on hover — the states are still the ghost's ink.
 
    `filled` is the surface's primary command and nothing else — Send, Stop, a
    dialog's confirm, the compare menu's Apply, a down-state Retry. Box and symbol
-   agree on weight (Send and Stop are also transport solids); everything else is
-   a ghost.
+   agree on weight (Send and Stop are also transport solids); every other text
+   control is outlined and every glyph-only one is a ghost.
    ========================================================================= */
 
 @layer control {

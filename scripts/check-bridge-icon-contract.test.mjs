@@ -143,13 +143,41 @@ test("rejects a button that composes no tier", async (t) => {
 	assert.match(result.stderr, /composes no tier/);
 });
 
-test("accepts a button that composes the ghost tier", async (t) => {
+test("accepts a glyph-only button that composes the ghost tier", async (t) => {
 	const root = await fixture(t, {
-		"render/buttons.module.css": ".ghost {\n\tpadding: 0;\n}\n",
+		"render/buttons.module.css": ".ghost {\n\tpadding: 0;\n}\n.outlined {\n\tborder: 1px solid var(--color-border-control);\n}\n",
+		"features/demo/Demo.module.css": ".go {\n\tcomposes: ghost from \"../../render/buttons.module.css\";\n}\n",
+		"features/demo/Demo.tsx": [
+			'import { CopyIcon } from "../../render/icons.tsx";',
+			'import styles from "./Demo.module.css";',
+			'export const Demo = () => <button type="button" className={styles.go} aria-label="Copy"><CopyIcon size={14} /></button>;',
+		].join("\n"),
+	});
+	const result = check(root);
+	assert.equal(result.status, 0, result.stderr);
+});
+
+test("rejects a text button that composes the ghost tier", async (t) => {
+	const root = await fixture(t, {
+		"render/buttons.module.css": ".ghost {\n\tpadding: 0;\n}\n.outlined {\n\tborder: 1px solid var(--color-border-control);\n}\n",
 		"features/demo/Demo.module.css": ".go {\n\tcomposes: ghost from \"../../render/buttons.module.css\";\n}\n",
 		"features/demo/Demo.tsx": [
 			'import styles from "./Demo.module.css";',
-			"export const Demo = () => <button type=\"button\" className={styles.go}>Go</button>;",
+			'export const Demo = () => <button type="button" className={styles.go}>Review</button>;',
+		].join("\n"),
+	});
+	const result = check(root);
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /renders the words "Review" but composes ghost/);
+});
+
+test("accepts a text button that composes the outlined tier", async (t) => {
+	const root = await fixture(t, {
+		"render/buttons.module.css": ".ghost {\n\tpadding: 0;\n}\n.outlined {\n\tborder: 1px solid var(--color-border-control);\n}\n",
+		"features/demo/Demo.module.css": ".go {\n\tcomposes: outlined from \"../../render/buttons.module.css\";\n}\n",
+		"features/demo/Demo.tsx": [
+			'import styles from "./Demo.module.css";',
+			'export const Demo = () => <button type="button" className={styles.go}>Review</button>;',
 		].join("\n"),
 	});
 	const result = check(root);

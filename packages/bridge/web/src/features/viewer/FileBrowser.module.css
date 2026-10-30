@@ -35,18 +35,16 @@
 	z-index: 1;
 }
 
-/* The tree scope is named by its own label: clicking it switches between the
-   full tree and the changed-files tree, so no header button is spent on it. */
-/* Tree scope toggle: a text control naming which file set is shown, so the ghost
-   tier carries its states (hover ink, and the engaged fill for `data-on`). */
+/* Tree scope toggle: a text control naming which file set is shown, so the
+   `outlined` tier carries its states — the ink step on hover, and the engaged
+   ink plus fill for `data-on`. */
 .treeScope {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: outlined from "../../render/buttons.module.css";
 	justify-content: flex-start;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: var(--color-muted-foreground);
 	font: inherit;
 }
 
@@ -464,9 +462,10 @@
 	white-space: nowrap;
 }
 
+/* The header's text verbs and the review bar's: one `outlined` spec, because a
+   control that carries words carries its own boundary. */
 .refreshBtn {
-	composes: ghost from "../../render/buttons.module.css";
-	color: var(--color-muted-foreground);
+	composes: outlined from "../../render/buttons.module.css";
 	font-size: var(--fs-xs);
 	padding: 2px 8px;
 	flex-shrink: 0;
@@ -476,11 +475,10 @@
    24 step, with the negative margin the box ladder prescribes so its 24px hit
    rect does not make the row taller than the ~20px chips beside it. */
 .fileIconBtn {
-	composes: ghost from "../../render/buttons.module.css";
+	composes: dim from "../../render/buttons.module.css";
 	width: 24px;
 	height: 24px;
 	margin: -2px 0;
-	color: var(--color-muted-foreground);
 	flex-shrink: 0;
 }
 
@@ -532,19 +530,13 @@
 	color: var(--color-foreground);
 }
 
-/* Whole-file toggle — the section's own quiet control, matching the state-pair
-   Refresh chrome. `data-on` is the ghost spec's "on" state. */
+/* Whole-file toggle — the section's own text verb, matching the header's. The
+   tier carries its states, including `data-on`'s engaged ink and fill. */
 .sectionFileBtn {
-	composes: ghost from "../../render/buttons.module.css";
-	color: var(--color-muted-foreground);
+	composes: outlined from "../../render/buttons.module.css";
 	font-size: var(--fs-xs);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 1px 6px;
 	flex-shrink: 0;
-}
-
-.sectionFileBtn[data-on] {
-	color: var(--color-accent);
 }
 
 .sectionTri {

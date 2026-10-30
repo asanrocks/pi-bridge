@@ -56,16 +56,11 @@
 }
 
 .copyBtn {
-	composes: ghost from "../render/buttons.module.css";
+	composes: dim from "../render/buttons.module.css";
 	flex: none;
 	width: 24px;
 	height: 24px;
-	color: var(--color-muted-foreground);
 	border-radius: var(--radius-xs);
-}
-
-.copyBtn:hover {
-	color: var(--color-foreground);
 }
 
 .note {

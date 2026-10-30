@@ -71,7 +71,6 @@
    partner takes the filled tier because it is the surface's primary command. */
 .secondary {
 	composes: outlined from "./buttons.module.css";
-	color: var(--color-secondary);
 }
 
 .primary {

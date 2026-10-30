@@ -125,7 +125,7 @@ export const GitChangeRow = memo(function GitChangeRow({ change }: { change: Git
 						aria-label="Review this commit"
 						title="Review this commit against its first parent"
 					>
-						review
+						Review
 					</button>
 				)}
 			</div>
