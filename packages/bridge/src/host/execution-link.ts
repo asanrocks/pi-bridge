@@ -115,6 +115,12 @@ export function createLocalExecutionLink(options: ExecutionLinkOptions): Executi
 			// operation the shutdown drain awaits. Fresh-session creation has no
 			// address key until the Manager allocated its file, so it cannot ride
 			// the per-address pending map opens use.
+			//
+			// This is the pre-live window ADR 19 sanctions (see the Session actor
+			// header): the runtime has no owner to admit work through until the
+			// actor exists, so the stem derivation and the pre-attach choices run
+			// on the raw Manager here. Everything after `register` goes through
+			// the actor — the record's capability is the only attachment path.
 			const activation = await registry.runCreation(async () => {
 				const manager = await options.createManager(project);
 				let stem: string;

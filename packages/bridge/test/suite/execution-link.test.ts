@@ -256,18 +256,17 @@ describe("ExecutionLink (local)", () => {
 		expect(conn.isAttached).toBe(false);
 		// Detach is not a kill: the activation stays live (for idle collection).
 		expect(link.live()).toContain(record);
-		expect((record.actor.manager as unknown as { disposeCalls: () => number }).disposeCalls()).toBe(0);
+		expect(bundle.managers[0]!.disposeCalls()).toBe(0);
 	});
 
 	it("dispose refuses further work and disposes the remaining Managers", async () => {
 		const bundle = makeLink();
 		const { link } = bundle;
 		await connectTo(link, bundle, "shut-1");
-		const record = link.byAddressAny("proj", "shut-1")!;
 		expect(existsSync(join(bundle.project.sessionDir, "shut-1.jsonl"))).toBe(true);
 
 		await link.dispose();
-		expect((record.actor.manager as unknown as { disposeCalls: () => number }).disposeCalls()).toBe(1);
+		expect(bundle.managers[0]!.disposeCalls()).toBe(1);
 
 		// Admission ends with the drain: nothing registers afterwards.
 		const abs = writeSession(bundle, "shut-2");

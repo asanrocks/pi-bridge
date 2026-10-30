@@ -200,9 +200,14 @@ machine (`creating → live → closing → closed`). Clients reach the runtime
 only through a `SessionCapability` the actor issued — the registration
 identity, the two admission classes, observation registration, and a
 joinable release — and every observation is its own independently
-releasable `ObservationCapability`. The actor is created around a built
-runtime, so its phase begins `live`; `creating` names the pre-registration
-window the registry owns today.
+releasable `ObservationCapability`. The Manager stays private to the actor:
+the daemon's listing reads go through `metadata()` (the typed facts derived
+from the canonical Document), and raw Manager access belongs to the creation
+paths only — the factory, the stem derivation, and the pre-attach choices in
+the ExecutionLink's fresh-session choreography. That pre-registration window
+is the one sanctioned raw access: the runtime has no owner to admit work
+through until the actor exists. The actor is created around a built runtime,
+so its phase begins `live`; `creating` names that window.
 
 Work arrives in two admission classes, and the classes exist because the
 bridge must not add a competing turn lifecycle (architecture invariant 5:
@@ -527,7 +532,8 @@ The reply reports `sessions`, `hasMore`, and the last row as `nextCursor`.
 `SessionInfo` carries `projectId`, durable `sessionId` when known, stem,
 `active`, `isStreaming`, timestamp, and available name, first-message text,
 latest-message preview, message count, and last-activity time. A durable file
-supplies metadata; an unflushed active Session supplies the live Document. For
+supplies metadata; an unflushed active Session supplies the actor's
+`metadata()` — the typed read surface over the canonical Document. For
 an active row the live latest-message preview and last-activity time win over
 the file scan; `timestamp` remains the durable sort key (mtime / header
 creation). `listActiveSessions` uses the Activation

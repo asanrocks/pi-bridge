@@ -15,8 +15,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
 import type {
-	Content,
-	Document,
 	ModelInfo,
 	ModelRef,
 	PinnedModelInfo,
@@ -46,7 +44,7 @@ import {
 	resolveStemPath,
 } from "./projects.ts";
 import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
-import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
+import { clampPreview, DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
 
@@ -393,16 +391,21 @@ export class Daemon {
 
 		for (const activation of this.execution!.live()) {
 			if (activation.ref.projectId !== project.id) continue;
-			const abs = activation.actor.manager.sessionFile;
-			let sortTimeMs = Date.parse(activation.actor.manager.createdAt);
-			if (existsSync(abs)) {
+			const meta = activation.actor.metadata();
+			let sortTimeMs = Date.parse(meta.createdAt);
+			if (existsSync(meta.sessionFile)) {
 				try {
-					sortTimeMs = statSync(abs).mtimeMs;
+					sortTimeMs = statSync(meta.sessionFile).mtimeMs;
 				} catch {
 					// fall back to the header creation time
 				}
 			}
-			byStem.set(activation.ref.stem, { stem: activation.ref.stem, abs, sortTimeMs, active: activation });
+			byStem.set(activation.ref.stem, {
+				stem: activation.ref.stem,
+				abs: meta.sessionFile,
+				sortTimeMs,
+				active: activation,
+			});
 		}
 
 		return [...byStem.values()];
@@ -447,16 +450,23 @@ export class Daemon {
 		for (const activation of this.execution!.live()) {
 			const project = this.projects.get(activation.ref.projectId);
 			if (!project) continue;
-			const abs = activation.actor.manager.sessionFile;
-			let sortTimeMs = Date.parse(activation.actor.manager.createdAt);
-			if (existsSync(abs)) {
+			const meta = activation.actor.metadata();
+			let sortTimeMs = Date.parse(meta.createdAt);
+			if (existsSync(meta.sessionFile)) {
 				try {
-					sortTimeMs = statSync(abs).mtimeMs;
+					sortTimeMs = statSync(meta.sessionFile).mtimeMs;
 				} catch {
 					// fall back to the header creation time
 				}
 			}
-			out.push(this.toSessionInfo(project, { stem: activation.ref.stem, abs, sortTimeMs, active: activation }));
+			out.push(
+				this.toSessionInfo(project, {
+					stem: activation.ref.stem,
+					abs: meta.sessionFile,
+					sortTimeMs,
+					active: activation,
+				}),
+			);
 		}
 		out.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
 		return out;
@@ -479,22 +489,23 @@ export class Daemon {
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
-		const doc = activation?.actor.manager.document;
-		const live = doc ? documentSummary(doc) : undefined;
+		// The actor's typed read surface (ADR 19): the daemon never reaches
+		// the runtime itself.
+		const live = activation?.actor.metadata();
 		return {
 			projectId: project.id,
 			sessionId: meta?.sessionId ?? activation?.ref.sessionId ?? entry.stem,
 			stem: entry.stem,
 			active: activation !== undefined,
-			isStreaming: activation ? activation.actor.manager.document.status.isStreaming : false,
-			name: meta?.name ?? (doc ? doc.status.name || undefined : undefined),
+			isStreaming: live ? live.isStreaming : false,
+			name: meta?.name ?? live?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? live?.firstMessageText,
 			// The live preview/activity win over the last flush for an active row;
 			// an inactive row has only the file scan.
 			lastMessageText: live?.lastMessageText ?? meta?.lastMessageText,
 			lastActivityAt: live?.lastActivityAt ?? meta?.lastActivityAt,
-			messageCount: meta?.messageCount ?? (doc ? doc.status.stats.messages || undefined : undefined),
+			messageCount: meta?.messageCount ?? live?.messageCount,
 		};
 	}
 
@@ -1066,53 +1077,5 @@ function firstTextBlock(content: unknown): string | undefined {
 }
 
 // ── Document-derived metadata (unflushed active sessions) ────────────────
-
-const PREVIEW_MAX = 120;
-
-/** Launcher-facing summary derived from a live Document (an unflushed or
- * active Session): the first user text, the most recent user/assistant message
- * text, and the latest entry timestamp. Text is clamped to one line. */
-function documentSummary(doc: Document): {
-	firstMessageText?: string;
-	lastMessageText?: string;
-	lastActivityAt?: string;
-} {
-	let first: string | undefined;
-	let firstTs = "";
-	let last: string | undefined;
-	let lastTs: string | undefined;
-	let lastActivityAt: string | undefined;
-	for (const entry of Object.values(doc.entries)) {
-		const ts = entry.timestamp ?? "";
-		if (ts && (!lastActivityAt || ts > lastActivityAt)) lastActivityAt = ts;
-		if (entry.kind !== "message") continue;
-		const text = extractFirstText(entry.content);
-		if (!text) continue;
-		if (entry.role === "user" && (first === undefined || firstTs === "" || ts < firstTs)) {
-			first = text;
-			firstTs = ts;
-		}
-		if (lastTs === undefined || ts >= lastTs) {
-			last = text;
-			lastTs = ts;
-		}
-	}
-	return {
-		firstMessageText: first ? clampPreview(first) : undefined,
-		lastMessageText: last ? clampPreview(last) : undefined,
-		lastActivityAt,
-	};
-}
-
-function extractFirstText(content: Content[]): string | undefined {
-	for (const block of content) {
-		if (block.type === "text" && block.text) return block.text;
-	}
-	return undefined;
-}
-
-function clampPreview(text: string): string {
-	const single = text.replace(/\s+/g, " ").trim();
-	if (single.length <= PREVIEW_MAX) return single;
-	return `${single.slice(0, PREVIEW_MAX - 1)}…`;
-}
+// The live-Document summary lives in the Session actor (`metadata()`); the
+// durable-file parser below keeps its own extraction over the jsonl lines.

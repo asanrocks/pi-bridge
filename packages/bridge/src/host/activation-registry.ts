@@ -57,7 +57,8 @@ export interface ActivationRecord {
 	authorization: ActivationAuthorization;
 	/** The one owner of this Session's runtime lifetime: admission,
 	 * observation registration, and terminal disposal all go through it. The
-	 * record holds it; the Manager it owns is read through `actor.manager`. */
+	 * record holds it; the daemon's listing reads go through
+	 * `actor.metadata()`, never the runtime itself. */
 	actor: SessionActor;
 	/** Attached Connections. The actor's capability count is the liveness
 	 * signal; this set drives the terminal detach-and-notify loop. */

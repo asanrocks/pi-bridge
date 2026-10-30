@@ -4,13 +4,16 @@
 // The actor owns exactly one Manager and its canonical Document: command
 // admission, observation registration, and terminal teardown all live here,
 // behind one phase state machine (creating → live → closing → closed). The
-// Manager remains the pi adapter and the Document projector inside the
-// actor; every client mutation of the runtime passes through a capability
-// the actor issued — raw Manager access belongs to the creation paths
-// (the factory, the registry's pre-registration choreography), never to a
-// client. The actor is created around a built runtime, so its phase begins
-// `live`; `creating` names the pre-registration window the registry owns
-// today, which the registry thinning moves inside the actor.
+// Manager stays private to the actor: every mutation of the runtime passes
+// through a capability the actor issued, and the daemon's listing reads go
+// through `metadata()` — the typed facts derived from the canonical
+// Document. Raw Manager access belongs to the creation paths only (the
+// factory, the stem derivation, and the pre-attach choices in the
+// ExecutionLink's fresh-session choreography): that window is the one
+// sanctioned raw access, because the runtime has no owner to admit work
+// through until the actor exists. The actor is created around a built
+// runtime, so its phase begins `live`; `creating` names that pre-registration
+// window.
 //
 // Admission keeps the two classes the bridge has always needed (architecture
 // invariant 5: pi's event loop is serial and the bridge observes it):
@@ -51,7 +54,15 @@
 // ============================================================================
 
 import { existsSync } from "node:fs";
-import type { ImageContent, JsonValue, PrefixCursor, PullRequestItem, SessionRef } from "../core/index.ts";
+import type {
+	Content,
+	Document,
+	ImageContent,
+	JsonValue,
+	PrefixCursor,
+	PullRequestItem,
+	SessionRef,
+} from "../core/index.ts";
 import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
@@ -64,6 +75,21 @@ import type { ConnectionHandle, Manager } from "./manager.ts";
  * cover direct construction. */
 export const DEFAULT_IDLE_GC_MS = 5 * 60_000;
 export const DEFAULT_UNFLUSHED_IDLE_GC_MS = 30 * 60_000;
+
+/** Listing facts the daemon derives from a live Session (ADR 19): the
+ * identity the file-scan path needs plus the preview fields computed from
+ * the canonical Document. This is the actor's only read surface — the
+ * daemon never reaches the runtime itself. */
+export interface ActorMetadata {
+	readonly sessionFile: string;
+	readonly createdAt: string;
+	readonly isStreaming: boolean;
+	readonly name?: string;
+	readonly messageCount?: number;
+	readonly firstMessageText?: string;
+	readonly lastMessageText?: string;
+	readonly lastActivityAt?: string;
+}
 
 /** The phase of one Session actor's lifetime. The registry's address
  * reservation covers `creating`; the actor owns the rest, and `closed` is
@@ -154,11 +180,9 @@ export interface SessionActor {
 	/** The actor's phase. `closing` is set synchronously when `close` begins;
 	 * `closed` holds once the drain settled. */
 	readonly phase: ActorPhase;
-	/** The owned runtime and its canonical Document. Read access is the
-	 * migration seam while the registry and the daemon still derive listing
-	 * metadata (streaming flag, session file, creation time) from it; every
-	 * mutation goes through a capability. */
-	readonly manager: Manager;
+	/** Listing facts derived from the canonical Document (see
+	 * `ActorMetadata`): the daemon's read surface over a live Session. */
+	metadata(): ActorMetadata;
 	/** Mint one client handle for this registration. Every capability shares
 	 * the actor's admission; each releases independently. A live capability
 	 * is an attached client and keeps the actor alive (glossary A.6). */
@@ -342,8 +366,19 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 		get phase() {
 			return phase;
 		},
-		get manager() {
-			return manager;
+		metadata(): ActorMetadata {
+			const doc = manager.document;
+			const summary = documentSummary(doc);
+			return {
+				sessionFile: manager.sessionFile,
+				createdAt: manager.createdAt,
+				isStreaming: doc.status.isStreaming,
+				name: doc.status.name || undefined,
+				messageCount: doc.status.stats.messages || undefined,
+				firstMessageText: summary.firstMessageText,
+				lastMessageText: summary.lastMessageText,
+				lastActivityAt: summary.lastActivityAt,
+			};
 		},
 		capability,
 		armIdle,
@@ -385,4 +420,59 @@ export function issueDirectCapability(
 	authorization: ActivationAuthorization = { incarnation: "test", generation: 1 },
 ): SessionCapability {
 	return createSessionActor({ manager, ref, authorization }).capability();
+}
+
+// ── Listing summary (the daemon's preview derivation, owned here) ───────
+
+const PREVIEW_MAX = 120;
+
+/** Clamp text to one preview line. Exported for the daemon's durable-file
+ * parser, which clamps the same way. */
+export function clampPreview(text: string): string {
+	const single = text.replace(/\s+/g, " ").trim();
+	if (single.length <= PREVIEW_MAX) return single;
+	return `${single.slice(0, PREVIEW_MAX - 1)}…`;
+}
+
+/** Launcher-facing summary derived from a live Document (an unflushed or
+ * active Session): the first user text, the most recent user/assistant
+ * message text, and the latest entry timestamp. Text is clamped to one
+ * line. */
+function documentSummary(doc: Document): {
+	firstMessageText?: string;
+	lastMessageText?: string;
+	lastActivityAt?: string;
+} {
+	let first: string | undefined;
+	let firstTs = "";
+	let last: string | undefined;
+	let lastTs: string | undefined;
+	let lastActivityAt: string | undefined;
+	for (const entry of Object.values(doc.entries)) {
+		const ts = entry.timestamp ?? "";
+		if (ts && (!lastActivityAt || ts > lastActivityAt)) lastActivityAt = ts;
+		if (entry.kind !== "message") continue;
+		const text = extractFirstText(entry.content);
+		if (!text) continue;
+		if (entry.role === "user" && (first === undefined || firstTs === "" || ts < firstTs)) {
+			first = text;
+			firstTs = ts;
+		}
+		if (lastTs === undefined || ts >= lastTs) {
+			last = text;
+			lastTs = ts;
+		}
+	}
+	return {
+		firstMessageText: first ? clampPreview(first) : undefined,
+		lastMessageText: last ? clampPreview(last) : undefined,
+		lastActivityAt,
+	};
+}
+
+function extractFirstText(content: Content[]): string | undefined {
+	for (const block of content) {
+		if (block.type === "text" && block.text) return block.text;
+	}
+	return undefined;
 }
