@@ -459,8 +459,9 @@ otherwise control order is shared between desktop and mobile. Send is disabled
 when disconnected, empty, compacting, or already committing, but is enabled
 during streaming to queue a steer. Model and thinking selection are separate
 from Send and can be changed while connected. Send and Stop are the row's only
-filled controls and the client's only two; every other control in the row is a
-ghost control (see
+filled controls and the client's only two; every other control in the row is
+chromeless — the glyph-only ones compose `ghost` or `dim`, and the model and
+cost readouts hold their value (see
 [Iconography and control surfaces](#iconography-and-control-surfaces)).
 
 When the tail turn is broken — it ended in an error after retries were
@@ -1153,8 +1154,8 @@ header is the registry (role, glyph, one sentence each), exports are named
   its `<svg>` is `aria-hidden`. Never both: `role="img"` with an `aria-label`
   inside an already-labelled button announces the control twice.
 
-**State is ink, not chrome.** A ghost control has five states and one channel
-each:
+**State is ink, not chrome.** A ghost control — and the outlined tier, which
+composes it — has five states and one ink channel each:
 
 | State | Ink | Fill |
 | --- | --- | --- |
@@ -1239,7 +1240,8 @@ one control its surface exists to offer: Send and Stop in the composer (the
 commit and the interrupt — ghosting them would leave the accent with nowhere to
 live at rest and turn "stop the agent now" into a 1.5px stroke), the confirm in
 a dialog, `Apply` in the compare menu, and `Retry now` in a connection down
-state. Everything else is a ghost. A new filled control has to be that same
+state. Everything else is a ghost when it is glyph-only and outlined when it
+carries words. A new filled control has to be that same
 thing — a command issued at the edge of a surface whose state changes something
 — and Send and Stop are the only two whose glyphs are also transport solids, in
 `--color-on-accent`, so box and symbol never disagree about weight.
