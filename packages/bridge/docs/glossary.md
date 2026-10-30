@@ -81,8 +81,8 @@ What exists, how it is named, how long it lives. Owned by
    another Session.
 6. An Activation is kept alive by its attached Connections and by streaming
    or compaction in progress; when none apply it is idle-collected. (The
-   rule is stable; the mechanism is not — ADR 11 implements it with idle
-   timers, ADR 12 proposes event boundaries.) A Session with no Activation
+   rule is stable; the mechanism is not — ADR 11 introduced idle timers,
+   which the Session actor now owns as a capability-count decision (ADR 19).) A Session with no Activation
    is dormant.
 7. An **alias** *(bound)* is a first URL segment beginning with `@` — a
    prefix no Project id may carry, so the two namespaces cannot collide and

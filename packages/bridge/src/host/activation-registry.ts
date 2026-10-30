@@ -1,18 +1,25 @@
 // ============================================================================
-// Activation registry — the one owner of live-Activation state.
+// Activation registry — the index and reservation layer around the Session
+// actors.
 //
-// An Activation is the live runtime of exactly one Session: one Manager, the
-// Connections attached to it, and the exclusive claims that keep the address
-// and the durable session id single-owner. The registry owns every state
-// transition of that lifetime:
+// A Session actor owns its runtime's lifetime: admission, observations,
+// terminal teardown, and the idle-collection decision (its live
+// capabilities, its streaming state, and the policy delays). The registry
+// owns what is addressed rather than run: the Activation records, the
+// address index, in-flight creation reservations, the durable session-id
+// ownership index, the Connection-to-Activation attachment index, and the
+// collection choreography — index cleanup and the terminal
+// `session_closed` notifications — once an actor ends (idle, close, or
+// shutdown).
 //
 //   absent → creating → live → collecting → absent
 //
-// Creation for one address is shared (concurrent opens join the same
-// promise), collection holds the address reserved until disposal completes
-// (a concurrent open waits and retries rather than creating a second Manager
-// for a session whose first is still shutting down), and the durable session
-// id can be claimed by only one (Project, stem) address.
+// describes the *address*: creation for one address is shared (concurrent
+// opens join the same promise), collection holds the address reserved until
+// the actor's close and the cleanup both complete (a concurrent open waits
+// and retries rather than creating a second Manager for a session whose
+// first is still shutting down), and the durable session id can be claimed
+// by only one (Project, stem) address.
 //
 // The registry does not serve assets, scan session files, or broadcast: the
 // daemon supplies hooks for the pushes and the Manager factory.
@@ -52,19 +59,16 @@ export interface ActivationRecord {
 	 * observation registration, and terminal disposal all go through it. The
 	 * record holds it; the Manager it owns is read through `actor.manager`. */
 	actor: SessionActor;
-	/** Attached Connections. GC is gated on this being empty. */
+	/** Attached Connections. The actor's capability count is the liveness
+	 * signal; this set drives the terminal detach-and-notify loop. */
 	connections: Set<Connection>;
-	gcTimer: ReturnType<typeof setTimeout> | null;
-	/** In-flight disposal; null once it completes. Transient bookkeeping,
-	 * never a state: `ended` is the terminal fact, and this promise is the
-	 * join every later `collect` caller awaits — cleared only when the
-	 * disposal completed, so the join window is exactly its lifetime. */
+	/** In-flight registration disposal (the actor's close plus this
+	 * registry's index cleanup); null once it completes. Transient
+	 * bookkeeping, never a state: the actor's phase is the terminal fact, and
+	 * this promise is the join every later `collect` caller and every
+	 * reservation awaits — cleared only when the disposal completed, so the
+	 * join window is exactly its lifetime. */
 	collecting: Promise<void> | null;
-	/** Terminal: set synchronously when collection begins, never reset. A
-	 * stale handle holding this record is refused by `collect` (it owns
-	 * nothing — not the address, not the durable-id claim), so it can
-	 * neither double-dispose nor release a newer registration's claims. */
-	ended: boolean;
 	lastStreaming: boolean;
 }
 
@@ -134,7 +138,7 @@ export class ActivationRegistry {
 		const id = this.byAddress.get(addressKey(projectId, stem));
 		if (id === undefined) return undefined;
 		const record = this.records.get(id);
-		return record !== undefined && !record.ended && record.collecting === null ? record : undefined;
+		return record !== undefined && record.actor.phase === "live" ? record : undefined;
 	}
 
 	/** The Activation for an address, including one mid-collection. */
@@ -147,7 +151,7 @@ export class ActivationRegistry {
 	live(): ActivationRecord[] {
 		const out: ActivationRecord[] = [];
 		for (const record of this.records.values()) {
-			if (!record.ended && record.collecting === null) out.push(record);
+			if (record.actor.phase === "live") out.push(record);
 		}
 		return out;
 	}
@@ -174,10 +178,10 @@ export class ActivationRegistry {
 			const existingId = this.byAddress.get(key);
 			if (existingId !== undefined) {
 				const record = this.records.get(existingId);
-				if (record && !record.ended && record.collecting === null) {
-					this.cancelGc(record);
-					return record;
-				}
+				// The actor's phase is the liveness fact. The capability the
+				// following attach mints cancels the actor's idle timer (and the
+				// fire-time re-check covers the window).
+				if (record && record.actor.phase === "live") return record;
 				if (record?.collecting) {
 					await record.collecting;
 					continue;
@@ -236,7 +240,7 @@ export class ActivationRegistry {
 	): Promise<ActivationRecord> {
 		for (;;) {
 			const record = await this.reserve(project, stem, abs);
-			if (record.ended) continue;
+			if (record.actor.phase !== "live") continue;
 			this.attach(conn, record, cursor);
 			return record;
 		}
@@ -272,22 +276,34 @@ export class ActivationRegistry {
 			incarnation: this.options.incarnation,
 			generation: ++this.generations,
 		};
-		const actor = createSessionActor({ manager, ref, authorization });
-		const record: ActivationRecord = {
+		// The actor owns the idle decision (its live capabilities and streaming
+		// state, with the registry's policy delays); the registry owns the
+		// collection choreography once the actor says it is idle.
+		let record: ActivationRecord | undefined;
+		const actor = createSessionActor({
+			manager,
+			ref,
+			authorization,
+			idleGcMs: this.options.idleGcMs,
+			unflushedIdleGcMs: this.options.unflushedIdleGcMs,
+			onIdle: () => {
+				if (record !== undefined) void this.collect(record);
+			},
+		});
+		record = {
 			id: randomUUID(),
 			ref,
 			authorization,
 			actor,
 			connections: new Set(),
-			gcTimer: null,
 			collecting: null,
-			ended: false,
 			lastStreaming: manager.document.status.isStreaming,
 		};
-		this.records.set(record.id, record);
-		this.byAddress.set(addressKey(ref.projectId, ref.stem), record.id);
+		const registered = record;
+		this.records.set(registered.id, registered);
+		this.byAddress.set(addressKey(ref.projectId, ref.stem), registered.id);
 		this.sessionOwnerById.set(ref.sessionId, {
-			recordId: record.id,
+			recordId: registered.id,
 			projectId: ref.projectId,
 			stem: ref.stem,
 		});
@@ -295,14 +311,14 @@ export class ActivationRegistry {
 		manager.onSettled(() => this.options.onSettled(ref));
 		manager.onPatch(() => {
 			const streaming = manager.document.status.isStreaming;
-			if (streaming !== record.lastStreaming) {
-				record.lastStreaming = streaming;
+			if (streaming !== registered.lastStreaming) {
+				registered.lastStreaming = streaming;
 				this.options.onStreamingChange();
 			}
 		});
 
 		this.options.onRegistryChange();
-		return record;
+		return registered;
 	}
 
 	// ── Attachment ────────────────────────────────────────────────────
@@ -338,72 +354,47 @@ export class ActivationRegistry {
 
 	attach(conn: Connection, record: ActivationRecord, cursor: PrefixCursor | null): void {
 		if (this.disposed) throw new Error("daemon is shutting down");
-		// An ended record owns nothing anymore: attaching it would pin a
-		// disposed Manager with a Connection nothing would release. Callers that
+		// A non-live actor owns nothing anymore: attaching it would pin a
+		// disposed runtime with a Connection nothing would release. Callers that
 		// can retry (open) re-reserve instead.
-		if (record.ended) throw new Error("session is closing");
+		if (record.actor.phase !== "live") throw new Error("session is closing");
 		// A socket that closed while its openSession/newSession RPC was in
 		// flight: the close handler already ran (and released nothing — the
 		// connection was not yet attached), so attaching now would pin the
-		// activation forever with an unreleasable Connection. Arm GC instead;
-		// the orphaned activation collects on the normal idle path.
+		// activation forever with an unreleasable Connection. Arm the actor's
+		// idle timer instead; the orphaned activation collects on the normal
+		// idle path.
 		if (conn.isDisposed) {
-			this.armGc(record);
+			record.actor.armIdle();
 			return;
 		}
 		this.release(conn);
+		// The minted capability raises the actor's live-client count, which
+		// cancels its idle timer — the count-based arming fires again when the
+		// Connection later releases it.
 		conn.attachCapability(this.capabilityFor(record), cursor);
 		record.connections.add(conn);
 		this.connectionActivation.set(conn, record);
-		this.cancelGc(record);
 	}
 
-	/** Release a Connection's attachment; arm GC when it was the last one. */
+	/** Release a Connection's attachment. The actor's idle arming is not
+	 * driven from here: it happens when the Connection releases its
+	 * capability (conn.detach), the signal the actor counts. */
 	release(conn: Connection): void {
 		const record = this.connectionActivation.get(conn);
 		if (!record) return;
 		this.connectionActivation.delete(conn);
 		record.connections.delete(conn);
-		if (record.connections.size === 0) this.armGc(record);
 	}
 
 	// ── Collection ────────────────────────────────────────────────────────
 
-	armGc(record: ActivationRecord): void {
-		if (this.disposed) return;
-		if (record.ended || record.gcTimer !== null || record.collecting !== null) return;
-		if (record.connections.size > 0) return;
-		const durable = existsSync(record.actor.manager.sessionFile);
-		const empty = Object.keys(record.actor.manager.document.entries).length === 0;
-		const delay = durable || empty ? this.options.idleGcMs : this.options.unflushedIdleGcMs;
-		record.gcTimer = setTimeout(() => {
-			record.gcTimer = null;
-			void this.maybeCollect(record);
-		}, delay);
-	}
-
-	private cancelGc(record: ActivationRecord): void {
-		if (record.gcTimer !== null) {
-			clearTimeout(record.gcTimer);
-			record.gcTimer = null;
-		}
-	}
-
-	private async maybeCollect(record: ActivationRecord): Promise<void> {
-		if (record.ended || record.collecting !== null || record.connections.size > 0) return;
-		const status = record.actor.manager.document.status;
-		if (status.isStreaming || status.isCompacting) {
-			this.armGc(record);
-			return;
-		}
-		await this.collect(record);
-	}
-
 	/**
-	 * Dispose `record` under its `collecting` reservation. Shared by idle GC
-	 * (via maybeCollect, after eligibility checks) and the explicit
-	 * closeSession verb (no eligibility checks — a close is a user-initiated
-	 * kill, so streaming state and attachments do not defer it).
+	 * Dispose `record` under its `collecting` reservation. Reached from the
+	 * actor's idle decision (onIdle, after its eligibility checks) and the
+	 * explicit closeSession verb (no eligibility checks — a close is a
+	 * user-initiated kill, so streaming state and attachments do not defer
+	 * it).
 	 */
 	async collect(record: ActivationRecord): Promise<void> {
 		// A disposal already in flight is joined, not re-entered: `collecting`
@@ -420,17 +411,16 @@ export class ActivationRegistry {
 		// records registered after it are refused. Either way this call owns
 		// nothing, and acting would double-dispose.
 		if (this.disposed) return;
-		// Terminal: a record that already ended owns nothing — not the address,
-		// not the durable-id claim. A stale handle reaching here (a close that
-		// raced a GC, a caller holding a replaced registration) is refused
+		// The actor's phase is the terminal fact: a registration whose actor
+		// began closing owns nothing — not the address, not the durable-id
+		// claim. A stale handle reaching here (a close that raced an idle
+		// collection, a caller holding a replaced registration) is refused
 		// instead of re-entering disposal, so it can neither double-dispose the
 		// runtime nor release a newer registration's claims.
-		if (record.ended) return;
-		// The terminal fact is set synchronously, before any await: from here
-		// on, every liveness check refuses the record even while its disposal
-		// is still in flight.
-		record.ended = true;
-		this.cancelGc(record);
+		if (record.actor.phase !== "live") return;
+		// disposeRecord invokes the actor's close synchronously before its
+		// first await, so the phase flips to `closing` before any caller can
+		// interleave — the terminal fact is set without a separate flag.
 		record.collecting = this.disposeRecord(record).finally(() => {
 			record.collecting = null;
 			this.options.onRegistryChange();
@@ -498,9 +488,10 @@ export class ActivationRegistry {
 		const actors: SessionActor[] = [];
 		const draining: Promise<unknown>[] = [];
 		for (const record of this.records.values()) {
-			if (record.gcTimer) clearTimeout(record.gcTimer);
 			// A mid-collection activation already owns its disposal; awaiting it
 			// avoids a concurrent double-dispose, then it drops out of the map.
+			// An idle actor's pending timer is cleared by its own close — the
+			// drain invokes it below.
 			if (record.collecting) draining.push(record.collecting);
 			else actors.push(record.actor);
 		}

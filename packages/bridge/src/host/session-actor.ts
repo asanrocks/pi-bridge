@@ -50,10 +50,19 @@
 //     event reaches a released observer.
 // ============================================================================
 
+import { existsSync } from "node:fs";
 import type { PrefixCursor, SessionRef } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
+
+/** Idle-collection policy defaults (ADR 11): a durable or empty session is
+ * collected after five idle minutes; an entry-bearing unflushed session only
+ * after thirty, because disposing it can drop entries that never reached
+ * disk. The registry passes the daemon's configured values; these defaults
+ * cover direct construction. */
+export const DEFAULT_IDLE_GC_MS = 5 * 60_000;
+export const DEFAULT_UNFLUSHED_IDLE_GC_MS = 30 * 60_000;
 
 /** The phase of one Session actor's lifetime. The registry's address
  * reservation covers `creating`; the actor owns the rest, and `closed` is
@@ -97,6 +106,13 @@ export interface SessionActorOptions {
 	manager: Manager;
 	ref: SessionRef;
 	authorization: ActivationAuthorization;
+	/** Idle-collection delays (ADR 11 daemon policy; defaults above). */
+	idleGcMs?: number;
+	unflushedIdleGcMs?: number;
+	/** The actor became idle: no live capability holds it, it is neither
+	 * streaming nor compacting, and the policy delay elapsed. The registry's
+	 * collection choreography — never invoked once `close` began. */
+	onIdle?: () => void;
 }
 
 export interface SessionActor {
@@ -111,8 +127,13 @@ export interface SessionActor {
 	 * mutation goes through a capability. */
 	readonly manager: Manager;
 	/** Mint one client handle for this registration. Every capability shares
-	 * the actor's admission; each releases independently. */
+	 * the actor's admission; each releases independently. A live capability
+	 * is an attached client and keeps the actor alive (glossary A.6). */
 	capability(): SessionCapability;
+	/** Arm the idle timer for a registration that never attached a client
+	 * (an orphaned creation whose Connection closed mid-transition): the
+	 * count-based arming only fires when a live capability leaves. */
+	armIdle(): void;
 	/** The terminal boundary: stop admission synchronously, dispose the
 	 * runtime exactly once, drain admitted work, release every observation.
 	 * Idempotent and joinable: every caller observes the same teardown. */
@@ -121,11 +142,57 @@ export interface SessionActor {
 
 export function createSessionActor(options: SessionActorOptions): SessionActor {
 	const { manager, ref, authorization } = options;
+	const idleGcMs = options.idleGcMs ?? DEFAULT_IDLE_GC_MS;
+	const unflushedIdleGcMs = options.unflushedIdleGcMs ?? DEFAULT_UNFLUSHED_IDLE_GC_MS;
+	const onIdle = options.onIdle;
 	const mutations = createLifecycleScope();
 	const tracked = new Set<Promise<unknown>>();
 	const liveObservations = new Set<{ stop(): void }>();
+	/** Live (unreleased) capabilities: a held capability is an attached
+	 * client, which keeps the actor alive and cancels idle collection
+	 * (glossary A.6 — attached Connections keep an Activation alive). */
+	let liveCapabilities = 0;
+	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let phase: ActorPhase = "live";
 	let closed: Promise<void> | undefined;
+
+	const cancelIdle = (): void => {
+		if (idleTimer !== null) {
+			clearTimeout(idleTimer);
+			idleTimer = null;
+		}
+	};
+
+	/** Arm the idle timer under the ADR 11 policy: a durable or empty session
+	 * waits `idleGcMs`; an unflushed session that already has entries waits
+	 * the longer `unflushedIdleGcMs`. No-ops while a capability is live or the
+	 * actor is not live — and the fire-time re-check covers the races. */
+	const armIdle = (): void => {
+		if (phase !== "live" || liveCapabilities > 0 || idleTimer !== null) return;
+		const durable = existsSync(manager.sessionFile);
+		const empty = Object.keys(manager.document.entries).length === 0;
+		idleTimer = setTimeout(
+			() => {
+				idleTimer = null;
+				void maybeCollect();
+			},
+			durable || empty ? idleGcMs : unflushedIdleGcMs,
+		);
+	};
+
+	/** The idle decision: re-check at fire time (a capability attached or a
+	 * close began since the timer was armed owns the decision now), defer
+	 * while the runtime is streaming or compacting, then hand the collection
+	 * to the registry's choreography. */
+	const maybeCollect = async (): Promise<void> => {
+		if (phase !== "live" || liveCapabilities > 0) return;
+		const status = manager.document.status;
+		if (status.isStreaming || status.isCompacting) {
+			armIdle();
+			return;
+		}
+		onIdle?.();
+	};
 
 	/** One installed observer's stop bookkeeping: idempotent, and visible to
 	 * the actor's close so no handle outlives the teardown. */
@@ -144,6 +211,8 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	};
 
 	const capability = (): SessionCapability => {
+		liveCapabilities++;
+		cancelIdle();
 		let released = false;
 		const owned = new Set<{ stop(): void }>();
 		return {
@@ -195,6 +264,9 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				released = true;
 				for (const record of owned) record.stop();
 				owned.clear();
+				liveCapabilities--;
+				// The last client left: the actor's own lifetime decision begins.
+				if (liveCapabilities === 0) armIdle();
 				return Promise.resolve();
 			},
 		};
@@ -210,11 +282,13 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			return manager;
 		},
 		capability,
+		armIdle,
 		close(): Promise<void> {
 			if (closed !== undefined) return closed;
 			// The terminal fact is synchronous: from here on every liveness
 			// check refuses the actor even while its disposal is in flight.
 			phase = "closing";
+			cancelIdle();
 			closed = (async () => {
 				// Queued mutations reject instead of running against a disposing
 				// runtime; the one still running settles first (mutations are

@@ -23,6 +23,10 @@ function tick(ms = 0): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** A runtime stub with the facts these contracts exercise: observation
  * handles (installed once per observer, each receiving the initial sync at
  * registration and patches while installed) and a counted disposal whose
@@ -246,6 +250,75 @@ describe("SessionActor observations", () => {
 		expect(terminal.phase).toBe("closing");
 		expect(() => terminal.capability().observe(observerFor([]), null)).toThrow("session is closed");
 		await ending;
+	});
+});
+
+describe("SessionActor idle collection", () => {
+	function idleActor(manager: Manager, idleGcMs: number, unflushedIdleGcMs = idleGcMs) {
+		let idle = 0;
+		const actor = createSessionActor({
+			manager,
+			ref: REF,
+			authorization: AUTHORIZATION,
+			idleGcMs,
+			unflushedIdleGcMs,
+			onIdle: () => {
+				idle++;
+			},
+		});
+		return { actor, idleCount: () => idle };
+	}
+
+	it("arms when the last capability leaves; a fresh capability cancels it", async () => {
+		const { actor, idleCount } = idleActor(stubManager(), 20);
+		await actor.capability().release();
+		// A fresh client arrives before the delay elapses: the pending idle
+		// collection is cancelled — a live capability is an attached client.
+		const again = actor.capability();
+		await delay(50);
+		expect(idleCount()).toBe(0);
+		await again.release();
+		await delay(60);
+		expect(idleCount()).toBe(1);
+	});
+
+	it("defers while the runtime is streaming, then reports idle", async () => {
+		const manager = stubManager();
+		const { actor, idleCount } = idleActor(manager, 20);
+		manager.document.status.isStreaming = true;
+		await actor.capability().release();
+		await delay(60);
+		expect(idleCount()).toBe(0); // deferred and re-armed
+		manager.document.status.isStreaming = false;
+		await delay(60);
+		expect(idleCount()).toBe(1);
+	});
+
+	it("an entry-bearing unflushed runtime waits the longer delay", async () => {
+		const manager = stubManager();
+		const { actor, idleCount } = idleActor(manager, 20, 200);
+		(manager.document.entries as Record<string, unknown>).e1 = { id: "e1" };
+		await actor.capability().release();
+		await delay(80);
+		expect(idleCount()).toBe(0); // the short delay passed; the long one has not
+		await delay(200);
+		expect(idleCount()).toBe(1);
+	});
+
+	it("armIdle covers a registration that never attached a client", async () => {
+		const { actor, idleCount } = idleActor(stubManager(), 20);
+		actor.armIdle();
+		await delay(60);
+		expect(idleCount()).toBe(1);
+	});
+
+	it("close cancels the idle timer and idle is never reported afterwards", async () => {
+		const { actor, idleCount } = idleActor(stubManager(), 20);
+		actor.armIdle();
+		await actor.close();
+		await delay(60);
+		expect(idleCount()).toBe(0);
+		expect(actor.phase).toBe("closed");
 	});
 });
 

@@ -45,6 +45,7 @@ import {
 	resolveStemPath,
 } from "./projects.ts";
 import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
+import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
 
@@ -67,13 +68,10 @@ const DEFAULT_PORT_RANGE = { start: 33334, end: 33340 }; // [33334, 33340)
 /** First page size for `sessions_changed` refreshes. */
 const SESSION_PAGE_SIZE = 10;
 /**
- * Activation GC policy (ADR 11). A durable or empty session is collected after
- * the idle delay; an entry-bearing unflushed session only after the longer cap,
- * because collecting it drops its non-durable entries. Not user-configurable;
+ * Activation GC policy (ADR 11), defaulted from the Session actor's policy
+ * constants and passed through the execution link. Not user-configurable;
  * injectable for tests.
  */
-const DEFAULT_IDLE_GC_MS = 5 * 60_000;
-const DEFAULT_UNFLUSHED_IDLE_GC_MS = 30 * 60_000;
 
 export interface DaemonOptions {
 	agentDir?: string;

@@ -299,15 +299,19 @@ The daemon can also use `push` on a Connection for registry broadcasts.
 
 ## Activation Registry
 
-`src/host/activation-registry.ts` owns the whole live-Activation lifetime —
-one state machine, in one module — behind the local ExecutionLink (the
-Daemon never touches it directly):
+`src/host/activation-registry.ts` is the index and reservation layer around
+the Session actors, behind the local ExecutionLink (the Daemon never touches
+it directly). The runtime lifetime of each Activation — admission,
+observations, terminal teardown, and the idle-collection decision — belongs
+to its Session actor (`src/host/session-actor.ts`); the registry owns what
+is addressed rather than run:
 
 ```text
 absent -> creating -> live -> collecting -> absent
 ```
 
-It maintains the Activation records (keyed by daemon-local id), the address
+describes the address. It maintains the Activation records (keyed by
+daemon-local id), the address
 index keyed by `(projectId, stem)`, pending-creation promises keyed by the
 same address, the `sessionId` ownership index, and the Connection-to-Activation
 attachment index. These are implementation state and never cross the wire. The
@@ -317,14 +321,17 @@ streaming transitions, registration/collection); it holds no Activation state
 of its own. Each registration carries its authorization (`incarnation` +
 `generation`), assigned here and never reused within the incarnation.
 
-A record's collection is terminal: `ended` is set synchronously when
-collection begins and never reset, so a stale handle reaching `collect` is
-refused — it owns nothing anymore, neither the address nor the durable-id
-claim — and can neither double-dispose the runtime nor release a newer
-registration's claims. The durable session id is released by record identity,
-not address fields, so only the registration that still holds a claim can
-drop it. Termination is also joinable: a `collect` call that finds a disposal
-already in flight awaits it (`collecting` is cleared only when the disposal
+A registration's terminal fact is its actor's phase: `collect` invokes the
+actor's close synchronously before its first await, so the phase flips to
+`closing` — and every liveness check refuses the record — from the instant
+collection begins, with no separate registry flag. A stale handle reaching
+`collect` is therefore refused — it owns nothing anymore, neither the address
+nor the durable-id claim — and can neither double-dispose the runtime nor
+release a newer registration's claims. The durable session id is released by
+record identity, not address fields, so only the registration that still
+holds a claim can drop it. Termination is also joinable: a `collect` call
+that finds a disposal already in flight awaits it (`collecting` — the
+actor's close plus the registry's index cleanup — is cleared only when both
 completed), so every caller observes the same completion — `archiveSession`
 relies on this to move a session file only after its Manager finished
 dying, not merely after its death began.
@@ -342,13 +349,15 @@ creation is tracked too
 file is allocated, so it cannot ride the per-address pending map, but the
 drain awaits the whole Manager-owning operation — including the disposal a
 refused registration performs inside it. After the flag, no admission acts:
-`reserve` and `register` refuse, `attach` refuses, `collect` and `armGc` are
-no-ops (the drain owns those records). A factory that completes after
+`reserve` and `register` refuse, `attach` refuses, and `collect` is a
+no-op (the drain owns those records). A factory that completes after
 shutdown can therefore neither register an Activation, leak a Manager, nor
 outlive the drain's return.
 
-Opening an address is resolve-or-create. An existing non-collecting Activation
-is reused and its idle timer is cancelled. An in-flight creation is shared by
+Opening an address is resolve-or-create. An existing live Activation is
+reused; the capability the following attach mints is what keeps its actor
+alive, and the actor's fire-time re-check covers the reservation window. An
+in-flight creation is shared by
 other opens for the same address. A collecting Activation is awaited and the
 address is retried after disposal, which prevents a GC race from creating a
 second Manager. Otherwise the daemon resolves the contained stem, creates a
@@ -371,25 +380,27 @@ Activation, while each Connection has at most one attachment. Attaching a
 Connection releases its former daemon attachment first, so a Connection move
 cannot leave two registry references behind. If a socket closes while an open
 or new-session operation is still in flight, the daemon does not attach the
-disposed Connection and arms normal idle collection for the Activation.
+disposed Connection and arms the actor's idle timer for the orphaned
+Activation.
 
 ## Activation Collection
 
-An idle Activation is collected only when it has no attached Connections. The
-collection check also defers while the Manager is streaming or compacting. A
-durable Session, or an empty unflushed Session, uses `idleGcMs`, whose default
-is five minutes. An unflushed Session that already has entries uses
-`unflushedIdleGcMs`, whose default is thirty minutes because disposing it can
-drop entries that have not reached disk. These delays are daemon policy and
-are injectable for tests, not client configuration.
+The idle decision belongs to the Session actor: a live capability is an
+attached client and keeps it alive, the fire-time check defers while the
+runtime streams or compacts, and a durable Session, or an empty unflushed
+Session, waits `idleGcMs` (default five minutes) while an unflushed Session
+that already has entries waits `unflushedIdleGcMs` (default thirty minutes,
+because disposing it can drop entries that have not reached disk). These
+delays are daemon policy, passed to the actor through the registry, and are
+injectable for tests, not client configuration.
 
-The timer callback rechecks attachment and streaming state under the same
-`collecting` reservation used by `openSession`. Collection calls the shared
-Manager disposal path, keeps the address reserved through async disposal,
-removes the Activation and Session ownership indexes, detaches every attached
-Connection and sends each a `session_closed` push (the terminal ownership
-boundary below), and broadcasts the resulting active-session snapshot.
-Collection never deletes a Session file.
+When the actor reports idle, the registry runs the collection choreography
+under the same `collecting` reservation `openSession` uses: the actor's
+close, the address held reserved through the async disposal, the Activation
+and Session ownership index removal, the detach-and-notify loop over every
+attached Connection (the terminal ownership boundary below), and the
+resulting active-session snapshot broadcast. Collection never deletes a
+Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
 normalizes and resolves the Project address, waits out a creation in flight
