@@ -126,7 +126,12 @@ Two halves meet in the document.
 flight under the id pi reserved for it (`isSealed: false`), streams content
 into it, and updates status. Streaming text and thinking use `append`; partial
 tool-call arguments use granular object and array diffs, with `append` for
-string suffixes. Tool execution updates replace partial content or details. A
+string suffixes. A tool execution update that progressively grows a
+single-text body appends only its suffix — a `lazy`-marked append, withheld
+from unsubscribed Connections exactly like the full-content replace it
+encodes, so the wire cost of a streamed result is linear in the body — while
+a first update, a non-extending rewrite, or a multi-block body replaces the
+partial content wholesale, and details always replace. A
 live event never writes an entry that already sealed: a delayed stream cannot
 overwrite persisted content. Every event for a persisted item carries the
 reserved `entryId`; one without it is dropped rather than addressed under an

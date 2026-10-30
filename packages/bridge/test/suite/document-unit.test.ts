@@ -1107,6 +1107,117 @@ describe("applyEvent", () => {
 			expect(e.details).toBeDefined();
 		});
 
+		it("a prefix-extending streamed body appends only its suffix (bounded wire cost)", () => {
+			// The first update installs the single text block (a full
+			// replace — the skeleton's content is null); every progressive
+			// update after it is a lazy-marked append of the new suffix, so
+			// the wire cost of a streamed tool result is linear in the body.
+			let doc = emptyDoc();
+			doc = applyPatch(
+				doc,
+				applyEvent(doc, {
+					type: "tool_execution_start",
+					entryId: "tr1",
+					toolCallId: "tc1",
+					toolName: "read",
+					args: {},
+				} as AgentSessionEvent)!.ops,
+			);
+			const first = applyEvent(doc, {
+				type: "tool_execution_update",
+				entryId: "tr1",
+				toolCallId: "tc1",
+				toolName: "read",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "chunk-1" }] },
+			} as unknown as AgentSessionEvent)!.ops;
+			expect(first).toEqual([
+				{ op: "replace", path: "/entries/tr1/content", value: [{ type: "text", text: "chunk-1" }] },
+			]);
+			doc = applyPatch(doc, first);
+
+			const second = applyEvent(doc, {
+				type: "tool_execution_update",
+				entryId: "tr1",
+				toolCallId: "tc1",
+				toolName: "read",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "chunk-1chunk-2" }] },
+			} as unknown as AgentSessionEvent)!.ops;
+			expect(second).toEqual([{ op: "append", path: "/entries/tr1/content/0/text", value: "chunk-2", lazy: true }]);
+			// Convergence: applying the suffix append yields exactly the
+			// wholesale replace's result.
+			const appended = applyPatch(doc, second);
+			const replaced = applyPatch(doc, [
+				{ op: "replace", path: "/entries/tr1/content", value: [{ type: "text", text: "chunk-1chunk-2" }] },
+			]);
+			expect((lo(appended.entries.tr1) as { content: Array<{ text: string }> }).content).toEqual(
+				(lo(replaced.entries.tr1) as { content: Array<{ text: string }> }).content,
+			);
+		});
+
+		it("a non-extending or multi-block update keeps the wholesale replace", () => {
+			let doc = emptyDoc();
+			doc = applyPatch(
+				doc,
+				applyEvent(doc, {
+					type: "tool_execution_start",
+					entryId: "tr1",
+					toolCallId: "tc1",
+					toolName: "read",
+					args: {},
+				} as AgentSessionEvent)!.ops,
+			);
+			doc = applyPatch(
+				doc,
+				applyEvent(doc, {
+					type: "tool_execution_update",
+					entryId: "tr1",
+					toolCallId: "tc1",
+					toolName: "read",
+					args: {},
+					partialResult: { content: [{ type: "text", text: "abc" }] },
+				} as unknown as AgentSessionEvent)!.ops,
+			);
+			// Not a prefix extension: the body was rewritten.
+			const rewritten = applyEvent(doc, {
+				type: "tool_execution_update",
+				entryId: "tr1",
+				toolCallId: "tc1",
+				toolName: "read",
+				args: {},
+				partialResult: { content: [{ type: "text", text: "xyz" }] },
+			} as unknown as AgentSessionEvent)!.ops;
+			expect(rewritten).toEqual([
+				{ op: "replace", path: "/entries/tr1/content", value: [{ type: "text", text: "xyz" }] },
+			]);
+			doc = applyPatch(doc, rewritten);
+			// Multiple blocks: no single text block to append onto.
+			const multiBlock = applyEvent(doc, {
+				type: "tool_execution_update",
+				entryId: "tr1",
+				toolCallId: "tc1",
+				toolName: "read",
+				args: {},
+				partialResult: {
+					content: [
+						{ type: "text", text: "xyz" },
+						{ type: "text", text: "more" },
+					],
+				},
+			} as unknown as AgentSessionEvent)!.ops;
+			expect(multiBlock).toEqual([
+				{
+					op: "replace",
+					path: "/entries/tr1/content",
+					value: [
+						{ type: "text", text: "xyz" },
+						{ type: "text", text: "more" },
+					],
+				},
+			]);
+		});
+
 		it("tool_execution_end finalizes content and isError", () => {
 			let doc = emptyDoc();
 			doc = applyPatch(
@@ -1568,6 +1679,19 @@ describe("filterPatchForSocket", () => {
 		];
 		const filtered = filterPatchForSocket(ops, new Set());
 		expect(filtered).toEqual(ops);
+	});
+
+	it("withholds a lazy-marked append (a streamed tool body) unless subscribed", () => {
+		const ops: PatchOp[] = [{ op: "append", path: "/entries/tr1/content/0/text", value: "chunk", lazy: true }];
+		// Unsubscribed: withheld exactly like the full-content replace it
+		// encodes (tool-result content is a lazy field as a whole).
+		expect(filterPatchForSocket(ops, new Set())).toEqual([]);
+		// Subscribed at the lazy root (a pull of the streaming field): the
+		// ancestor walk admits the append.
+		expect(filterPatchForSocket(ops, new Set(["/entries/tr1/content"]))).toEqual(ops);
+		// An eager append (message text) is never withheld, lazy flag or not.
+		const eager: PatchOp[] = [{ op: "append", path: "/entries/m1/content/0/text", value: "hi" }];
+		expect(filterPatchForSocket(eager, new Set())).toEqual(eager);
 	});
 
 	it("drops lazy-field ops when not subscribed (text is non-lazy, always passes)", () => {

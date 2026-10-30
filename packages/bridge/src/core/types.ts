@@ -335,6 +335,12 @@ export interface AppendOp {
 	op: "append";
 	path: string;
 	value: string;
+	/** True when this append targets a lazy field (a streamed tool body):
+	 * the emitting Connection withholds it from unsubscribed clients exactly
+	 * like the full-field replace it stands in for, matching the subscription
+	 * against the op's path and its ancestors. Appends without it (message
+	 * text and thinking deltas ride those too) are eager by path. */
+	lazy?: boolean;
 }
 
 export type PatchOp = AddOp | RemoveOp | ReplaceOp | MoveOp | AppendOp;

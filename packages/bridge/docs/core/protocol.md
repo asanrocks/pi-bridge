@@ -142,9 +142,12 @@ bridge operation `append`:
 
 `append` concatenates its string value to the string at `path`. It is used for
 streamed text, thinking, and growing string leaves in partial tool arguments.
-`move` relocates a value; sealing does not use it, because an entry's id is
-stable from its first event. All operations in one `Patch` are applied in order
-as one mirror transaction. JSON Pointer
+An append may carry `lazy: true`: it targets a lazy field (a streamed tool
+body), and the host withholds it from a Connection whose subscriptions do not
+cover the op's path or an ancestor — exactly like the full-field replace it
+encodes. `move` relocates a value; sealing does not use it, because an entry's
+id is stable from its first event. All operations in one `Patch` are applied
+in order as one mirror transaction. JSON Pointer
 paths use the standard `~1` and `~0` escaping.
 
 The host filters lazy paths per Connection before sending a live patch. It

@@ -816,6 +816,13 @@ export function filterPatchForSocket(ops: PatchOp[], subscriptions: Set<string>)
 	const result: PatchOp[] = [];
 	for (const op of ops) {
 		const path = op.op === "move" ? op.from : op.path;
+		// A lazy-marked append (a streamed tool body) is withheld exactly like
+		// the full-field replace it encodes: delivered only to a client whose
+		// subscription covers the op's path or an ancestor of it.
+		if (op.op === "append" && op.lazy === true) {
+			if (isSubscribedPath(path, subscriptions)) result.push(op);
+			continue;
+		}
 		if (isLazyFieldPath(path)) {
 			if (isSubscribedPath(path, subscriptions)) result.push(op);
 			continue;
@@ -1108,7 +1115,16 @@ export function applyEvent(doc: Document, event: SessionLifecycleEvent): Patch |
 			const id = event.entryId;
 			const prefix = `/entries/${id}`;
 			if (event.partialResult?.content !== undefined) {
-				ops.push({ op: "replace", path: `${prefix}/content`, value: jsonValue(event.partialResult.content) });
+				// The bounded encoding first: a progressively growing single-text
+				// body appends only its suffix, so the wire cost of a streamed tool
+				// result is linear in the body, not quadratic in the update count
+				// (a full-content replace per update re-sends everything so far).
+				const streamed = streamedToolContentOp(doc, id, event.partialResult.content);
+				if (streamed !== null) {
+					ops.push(streamed);
+				} else {
+					ops.push({ op: "replace", path: `${prefix}/content`, value: jsonValue(event.partialResult.content) });
+				}
 			}
 			if (event.partialResult?.details !== undefined) {
 				ops.push({ op: "replace", path: `${prefix}/details`, value: jsonValue(event.partialResult.details) });
@@ -1313,6 +1329,35 @@ function diffArray(oldArr: unknown[], newArr: unknown[], basePath: string): Patc
 	}
 
 	return ops;
+}
+
+/** The bounded encoding for a streamed tool body: when the update's
+ * content is a single text block that prefix-extends the live form's single
+ * text block, the patch appends only the suffix. The op is marked `lazy` so
+ * the Connection withholds it from unsubscribed clients exactly like the
+ * full-content replace it replaces (tool-result content is a lazy field as
+ * a whole). A first update, a non-text or multi-block body, or a body that
+ * does not extend the previous one keeps the wholesale replace. */
+function streamedToolContentOp(doc: Document, id: string, content: unknown): PatchOp | null {
+	const entry = doc.entries[id];
+	if (entry === undefined || entry.kind !== "tool_result") return null;
+	const blocks = entry.content;
+	// The live form starts with a null content (the skeleton) and falls back
+	// to the wholesale replace until the first update installs a single text
+	// block.
+	if (blocks === null || blocks.length !== 1 || blocks[0]?.type !== "text") return null;
+	const existing = blocks[0].text;
+	if (!Array.isArray(content) || content.length !== 1) return null;
+	const block = content[0] as { type?: string; text?: unknown };
+	if (block.type !== "text" || typeof block.text !== "string") return null;
+	const next = block.text;
+	if (existing === "" ? next !== "" : !next.startsWith(existing)) return null;
+	return {
+		op: "append",
+		path: `/entries/${id}/content/0/text`,
+		value: next.slice(existing.length),
+		lazy: true,
+	};
 }
 
 function toolResultSkeleton(id: string, parentId: string | null, toolCallId: string, toolName: string): JsonValue {
