@@ -344,7 +344,9 @@ attachment index. These are implementation state and never cross the wire. The
 Daemon supplies the Manager factories (open and create), the idle-collection
 delays, the pre-clamp thinking-level read, and the broadcast hooks (settlement,
 streaming transitions, registration/collection); it holds no Activation state
-of its own. Each registration carries its authorization (`incarnation` +
+of its own. The settlement and streaming hooks ride the actor's own
+observation of its runtime — the registry's records carry no runtime state.
+Each registration carries its authorization (`incarnation` +
 `generation`), assigned here and never reused within the incarnation.
 
 A registration's terminal fact is its actor's phase: `collect` invokes the

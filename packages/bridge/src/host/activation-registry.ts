@@ -70,7 +70,6 @@ export interface ActivationRecord {
 	 * reservation awaits — cleared only when the disposal completed, so the
 	 * join window is exactly its lifetime. */
 	collecting: Promise<void> | null;
-	lastStreaming: boolean;
 }
 
 export interface ActivationRegistryOptions {
@@ -278,8 +277,10 @@ export class ActivationRegistry {
 			generation: ++this.generations,
 		};
 		// The actor owns the idle decision (its live capabilities and streaming
-		// state, with the registry's policy delays); the registry owns the
-		// collection choreography once the actor says it is idle.
+		// state, with the registry's policy delays) and observes its own
+		// runtime's settlement and streaming transitions, relaying the daemon's
+		// broadcast hooks; the registry owns the collection choreography once
+		// the actor says it is idle.
 		let record: ActivationRecord | undefined;
 		const actor = createSessionActor({
 			manager,
@@ -290,6 +291,8 @@ export class ActivationRegistry {
 			onIdle: () => {
 				if (record !== undefined) void this.collect(record);
 			},
+			onSettled: () => this.options.onSettled(ref),
+			onStreamingChange: () => this.options.onStreamingChange(),
 		});
 		record = {
 			id: randomUUID(),
@@ -298,7 +301,6 @@ export class ActivationRegistry {
 			actor,
 			connections: new Set(),
 			collecting: null,
-			lastStreaming: manager.document.status.isStreaming,
 		};
 		const registered = record;
 		this.records.set(registered.id, registered);
@@ -307,15 +309,6 @@ export class ActivationRegistry {
 			recordId: registered.id,
 			projectId: ref.projectId,
 			stem: ref.stem,
-		});
-
-		manager.onSettled(() => this.options.onSettled(ref));
-		manager.onPatch(() => {
-			const streaming = manager.document.status.isStreaming;
-			if (streaming !== registered.lastStreaming) {
-				registered.lastStreaming = streaming;
-				this.options.onStreamingChange();
-			}
 		});
 
 		this.options.onRegistryChange();

@@ -172,6 +172,14 @@ export interface SessionActorOptions {
 	 * streaming nor compacting, and the policy delay elapsed. The registry's
 	 * collection choreography — never invoked once `close` began. */
 	onIdle?: () => void;
+	/** The runtime settled (its file may have just been written) — the
+	 * registry's broadcast hook, riding the actor's own observation of its
+	 * runtime. */
+	onSettled?: () => void;
+	/** The runtime's streaming flag changed — the registry's broadcast hook,
+	 * riding the actor's own observation of its runtime. The actor dedups
+	 * transitions itself; the hook fires once per real transition. */
+	onStreamingChange?: () => void;
 }
 
 export interface SessionActor {
@@ -212,6 +220,20 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	let idleTimer: ReturnType<typeof setTimeout> | null = null;
 	let phase: ActorPhase = "live";
 	let closed: Promise<void> | undefined;
+
+	// The actor observes its own runtime's lifecycle transitions and relays
+	// the two the daemon broadcasts (settlement, streaming changes), deduping
+	// streaming transitions itself — the registry's records carry no
+	// runtime state of their own (ADR 19).
+	let lastStreaming = manager.document.status.isStreaming;
+	manager.onSettled(() => options.onSettled?.());
+	manager.onPatch(() => {
+		const streaming = manager.document.status.isStreaming;
+		if (streaming !== lastStreaming) {
+			lastStreaming = streaming;
+			options.onStreamingChange?.();
+		}
+	});
 
 	const cancelIdle = (): void => {
 		if (idleTimer !== null) {
