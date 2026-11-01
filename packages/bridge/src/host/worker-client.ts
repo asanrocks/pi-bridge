@@ -436,7 +436,11 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 				observations.clear();
 				try {
 					if (ws.readyState === WebSocket.OPEN) ws.close();
-					else ws.terminate();
+					else if (ws.readyState === WebSocket.CONNECTING) ws.terminate();
+					// CLOSING: a close handshake is already in flight. Terminating
+					// here would abort it and strip the close code the peer needs —
+					// a refused registration reads its verdict from that code, so the
+					// handshake must be allowed to finish.
 				} catch {
 					// Already gone.
 				}

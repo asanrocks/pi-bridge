@@ -145,6 +145,7 @@ function workerModesFor(config: CliConfig): WorkerHostMode[] | undefined {
 }
 
 async function startDaemon(config: CliConfig): Promise<void> {
+	const workerModes = workerModesFor(config);
 	const options: DaemonOptions = {
 		dev: config.dev,
 		registrationSocketPath: config.socketPath,
@@ -153,7 +154,7 @@ async function startDaemon(config: CliConfig): Promise<void> {
 		...(config.logPath !== undefined ? { logPath: config.logPath } : {}),
 		...(config.allow.length > 0 ? { allow: config.allow } : {}),
 		...(config.agentDir !== undefined ? { agentDir: config.agentDir } : {}),
-		...(workerModesFor(config) !== undefined ? { workerModes: workerModesFor(config) } : {}),
+		...(workerModes !== undefined ? { workerModes } : {}),
 	};
 
 	const daemon = new Daemon();
@@ -180,7 +181,7 @@ async function startDaemon(config: CliConfig): Promise<void> {
  * Worker joins with. */
 function reportDaemon(config: CliConfig, daemon: Daemon): void {
 	console.log(`pi-bridge ${version} (${commit}, ${date})`);
-	console.log("role: daemon");
+	console.log(`role: ${config.mode === "daemon" ? "daemon" : "daemon+worker"}`);
 	console.log(`daemon socket: ${config.socketPath}`);
 	const hosted =
 		config.mode === "daemon" ? "none (only registered Workers)" : config.workerSpawn ? "spawned" : "in-process";

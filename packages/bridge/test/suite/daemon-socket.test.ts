@@ -40,9 +40,10 @@ function stubModelRuntime(): ModelRuntime {
 }
 
 /** One Project directory with a durable Session header, so `listSessions` has a
- * row without any Manager being constructed. */
-function projectFixture(root: string, id: string): { allow: string; sessionDir: string } {
-	const projectRoot = join(root, id);
+ * row without any Manager being constructed. `dir` defaults to the id; pass a
+ * distinct one to build two Projects that share an id but not a directory. */
+function projectFixture(root: string, id: string, dir = id): { allow: string; sessionDir: string } {
+	const projectRoot = join(root, dir);
 	mkdirSync(projectRoot, { recursive: true });
 	const [project] = buildProjects([`${id}=${projectRoot}`], root);
 	if (project === undefined) throw new Error("project fixture missing");
@@ -258,5 +259,53 @@ describe("dial-in Worker registration", () => {
 		await worker.closed;
 		expect(worker.worker.registration.id).toBeTruthy();
 		expect(daemon.registrations).toHaveLength(0);
+	});
+
+	it("stops a Worker whose Project id another registration already serves", async () => {
+		const root = workdir();
+		const socketPath = join(root, "bridge.sock");
+		// The same Project id from two different directories: the Daemon's
+		// routing conflict is under test, not the storage lock (which correctly
+		// refuses the same directory to a second process).
+		const one = projectFixture(root, "clash", "one");
+		const two = projectFixture(root, "clash", "two");
+		const daemon = await startDaemon(socketPath, root);
+
+		const first = await runWorkerClient({
+			allow: [one.allow],
+			agentDir: root,
+			endpoint: `unix:${socketPath}`,
+			managerFactory: async () => {
+				throw new Error("no Manager is needed for listing");
+			},
+			modelRuntime: stubModelRuntime(),
+		});
+		cleanups.push(() => first.dispose());
+		await waitFor(() => daemon.registrations.length === 1, "the first registration");
+
+		let links = 0;
+		const second = await runWorkerClient({
+			allow: [two.allow],
+			agentDir: root,
+			endpoint: `unix:${socketPath}`,
+			managerFactory: async () => {
+				throw new Error("no Manager is needed for listing");
+			},
+			modelRuntime: stubModelRuntime(),
+			retryMinMs: 20,
+			retryMaxMs: 50,
+			onLinkUp: () => {
+				links += 1;
+			},
+		});
+		cleanups.push(() => second.dispose());
+
+		// The refusal must carry the rejected close code, which makes it
+		// terminal: a graceful close would read as a lost link, and this Worker
+		// would reconnect against the same conflict forever — `closed` would
+		// never resolve and `links` would climb without bound.
+		await second.closed;
+		expect(links).toBe(1);
+		expect(daemon.registrations).toHaveLength(1);
 	});
 });

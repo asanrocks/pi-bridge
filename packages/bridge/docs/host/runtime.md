@@ -71,6 +71,54 @@ collected, the Worker ends its observations after the actor's close flushed
 the final patches: the `closed` frame is delivered before `collect` resolves,
 so `session_closed` precedes the close reply on the wire.
 
+## Startup Roles
+
+An invocation takes one of three roles. **auto** (the default) joins a running
+daemon as a Worker, or starts a daemon that hosts one Worker in this process.
+**daemon** (`--mode=daemon`) serves the web app and registered Workers only and
+never falls back to another role. **worker** (`--mode=worker`) registers this
+invocation's Projects with an existing daemon and fails when none answers;
+`--daemon <ws-url>` selects a remote daemon and implies the worker role.
+
+Local discovery uses one UNIX socket, `$HOME/.pi/bridge.sock`, independent of
+pi's agent directory; `--socket` overrides it. The socket carries the discovery
+probe and Worker registration only — never the browser surface — so a local
+Worker needs no port guess and the web listener stays free to move.
+
+```text
+pi-bridge                     join a live daemon as a Worker, else start both
+pi-bridge --mode=daemon       serve the web app and registered Workers only
+pi-bridge --mode=worker       register this invocation's Projects, fail if no daemon
+pi-bridge --daemon <ws-url>   register with a remote daemon (worker role)
+```
+
+A socket file proves nothing by itself. The default launch probes it with a
+one-shot `ping` handshake and takes its role from the answer: a compatible
+reply means join as a Worker, a missing path means start a Daemon, and a socket
+file nothing listens on is removed before the Daemon binds. A listener that
+fails the handshake — wrong protocol version, or not a bridge at all — is
+reported instead of silently bypassed, and a path that is not a UNIX socket is
+reported, never removed. A launch that loses the bind race joins the winner,
+which is the only case where arrival order decides the role. Disposal removes
+the socket file, so the next launch sees a missing path rather than a stale
+one.
+
+A forced `--mode=daemon` fails when the socket is already owned instead of
+changing roles. A Worker's first registration must succeed; once registered, a
+lost link is ridden out with bounded backoff — the Worker keeps its runtimes,
+so an admitted turn survives a Daemon restart — and it re-registers with the
+next Daemon. A registration the Daemon refuses (a Project id another
+registration already serves, a reserved surface name) is terminal: the Daemon
+closes the link with the rejected close code, and the Worker stops instead of
+retrying a decision that cannot change. A refusal during Daemon shutdown is the
+exception: that link closes gracefully, so a Worker that dials in mid-shutdown
+retries the next Daemon rather than dying.
+
+Startup output states the chosen role, the web address for a Daemon, and the
+accepted Project names for a Worker. A combined invocation says that it hosts
+the shared daemon in the foreground: exiting it disconnects other Workers'
+browsers while those Worker processes keep running.
+
 ## Worker deployment
 
 `src/host/worker-host.ts` is the only place a Daemon obtains a Worker. A Daemon
@@ -145,10 +193,12 @@ the Daemon would leave a separately started Worker silently online.
 ### Link liveness
 
 An idle Session produces no traffic, so silence is not evidence of a dead peer.
-The client pings on an interval and treats a link that has not ponged within
-its deadline as lost — the same close path as a socket error. Without it a
-half-open socket would pin a registration, its Projects, and its observations
-until TCP noticed, which can take hours.
+Both ends ping on an interval and treat a link that has not ponged within its
+deadline as lost — the same close path as a socket error. One direction covers
+the Daemon's registration table; the other covers a Worker serving over TCP (a
+remote `--daemon`), where a hung peer would otherwise pin its link with no
+write ever failing. Without both, a half-open socket would pin a registration,
+its Projects, and its observations until TCP noticed, which can take hours.
 
 A lost link is not a crash. Pending requests reject, every observation ends — its
 sink receives a terminal `closed` frame, so the browser's attachment ends

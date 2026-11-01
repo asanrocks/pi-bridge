@@ -28,7 +28,14 @@ import type {
 	WorkerObservationSink,
 	WorkerService,
 } from "./worker-contract.ts";
-import { parseWorkerFrame, WORKER_PROTOCOL_VERSION, type WorkerReply, type WorkerRequest } from "./worker-protocol.ts";
+import {
+	parseWorkerFrame,
+	WORKER_HEARTBEAT_INTERVAL_MS,
+	WORKER_HEARTBEAT_TIMEOUT_MS,
+	WORKER_PROTOCOL_VERSION,
+	type WorkerReply,
+	type WorkerRequest,
+} from "./worker-protocol.ts";
 
 interface ConnectionState {
 	/** Installed observations, released when the connection ends. */
@@ -45,11 +52,27 @@ interface ConnectionState {
 	accepting: boolean;
 	/** The socket is gone: sends stop and every observation is released. */
 	closed: boolean;
+	/** Link liveness from this end (see the heartbeat block below). */
+	heartbeat: ReturnType<typeof setInterval> | null;
+	lastPong: number;
+}
+
+export interface ServeWorkerConnectionOptions {
+	/** How often this end pings an idle link, and how long silence may last.
+	 * Defaults: the protocol's heartbeat constants. Injectable for tests. */
+	heartbeatIntervalMs?: number;
+	heartbeatTimeoutMs?: number;
 }
 
 /** Serve one socket. Resolves once the handshake is out and the request loop is
  * installed, so a caller can close the socket deterministically afterwards. */
-export async function serveWorkerConnection(ws: WebSocket, service: WorkerService): Promise<void> {
+export async function serveWorkerConnection(
+	ws: WebSocket,
+	service: WorkerService,
+	options: ServeWorkerConnectionOptions = {},
+): Promise<void> {
+	const heartbeatIntervalMs = options.heartbeatIntervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
+	const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? WORKER_HEARTBEAT_TIMEOUT_MS;
 	const state: ConnectionState = {
 		observations: new Map(),
 		acquiring: new Map(),
@@ -57,6 +80,8 @@ export async function serveWorkerConnection(ws: WebSocket, service: WorkerServic
 		unsubscribeEvents: () => {},
 		accepting: true,
 		closed: false,
+		heartbeat: null,
+		lastPong: 0,
 	};
 
 	const send = (frame: unknown): void => {
@@ -300,6 +325,28 @@ export async function serveWorkerConnection(ws: WebSocket, service: WorkerServic
 		}
 		send({ kind: "event", event });
 	});
+
+	// Link liveness from this end too: the peer's client pings, but a peer that
+	// went silent must not pin this connection's registrations forever — over
+	// TCP (a remote daemon) a half-open link is otherwise noticed only when a
+	// write fails, and an idle link never writes. A silent peer takes the same
+	// terminal path a socket error does; the socket is terminated afterwards
+	// because a peer that ignores pings will not complete a close handshake.
+	state.lastPong = Date.now();
+	ws.on("pong", () => {
+		state.lastPong = Date.now();
+	});
+	state.heartbeat = setInterval(() => {
+		if (Date.now() - state.lastPong > heartbeatTimeoutMs) {
+			void endConnection().finally(() => ws.terminate());
+			return;
+		}
+		try {
+			ws.ping();
+		} catch {
+			// The close handler ends the connection.
+		}
+	}, heartbeatIntervalMs);
 
 	ws.on("message", (data) => {
 		const frame = parseWorkerFrame(data.toString());

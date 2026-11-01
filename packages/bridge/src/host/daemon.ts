@@ -248,25 +248,43 @@ export class Daemon {
 	/**
 	 * One Worker dialed in. Adoption validates and wires the link; the Project
 	 * claim is then the same all-or-nothing rule a hosted registration uses, so
-	 * `/<projectId>` stays unambiguous however the Worker arrived.
-	 *
-	 * A refused registration closes with the rejected code: the Worker that
-	 * dialed in stops instead of reconnecting against a decision that cannot
-	 * change.
+	 * `/<projectId>` stays unambiguous however the Worker arrived. A refused
+	 * registration closes with the rejected code, so the Worker that dialed in
+	 * stops instead of reconnecting against a decision that cannot change.
 	 */
 	private acceptWorkerSocket(ws: WebSocket, hello: WorkerHello): void {
 		void this.adoptWorker(ws, hello).catch((error: unknown) => {
-			const reason = error instanceof Error ? error.message : String(error);
-			try {
-				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
-			} catch {
-				// The socket is already gone; the registration was never routed.
-			}
+			// An adoption that failed outside the refusal paths is a bug, not a
+			// decision the Worker could outwait: end the link with the rejected
+			// code so the Worker stops and the failure is visible instead of
+			// retried into forever.
+			this.refuseWorkerSocket(ws, error instanceof Error ? error.message : String(error));
 		});
 	}
 
+	/**
+	 * Close a registration this Daemon will not route. The close code is the
+	 * Worker's instruction: the rejected code is terminal (the same handshake
+	 * cannot succeed on a retry, so the Worker stops), while a refusal during
+	 * shutdown closes gracefully — the Worker should retry the next Daemon, not
+	 * die because this one is stopping. The code must be sent while the socket
+	 * is still open: after a disposal it can no longer be delivered, and the
+	 * Worker would mistake the refusal for a lost link and reconnect forever.
+	 */
+	private refuseWorkerSocket(ws: WebSocket, reason: string): void {
+		console.error(`Daemon: refused a Worker registration: ${reason}`);
+		try {
+			ws.close(this.disposing ? 1000 : WORKER_REJECTED_CLOSE_CODE, reason);
+		} catch {
+			// Already gone; the registration was never routed.
+		}
+	}
+
 	private async adoptWorker(ws: WebSocket, hello: WorkerHello): Promise<void> {
-		if (this.disposing) throw new Error("daemon is shutting down");
+		if (this.disposing) {
+			this.refuseWorkerSocket(ws, "daemon is shutting down");
+			return;
+		}
 		// The callbacks need the host they belong to, but the host only exists
 		// after adoption; events arriving before this assignment are dropped
 		// rather than attributed to the wrong registration.
@@ -284,17 +302,25 @@ export class Daemon {
 		});
 		holder.host = host;
 
-		try {
-			for (const project of host.info.projects) {
-				if (this.routes.has(project.id)) {
-					throw new Error(`Project id "${project.id}" is already served by another Worker registration`);
-				}
+		// Shutdown may have begun while the link was being adopted: completing the
+		// registration would install routes into a draining Daemon that nothing
+		// disposes. Refused — gracefully, so the Worker retries the next Daemon.
+		let refusal: string | null = this.disposing ? "daemon is shutting down" : null;
+		for (const project of host.info.projects) {
+			if (refusal !== null) break;
+			if (this.routes.has(project.id)) {
+				refusal = `Project id "${project.id}" is already served by another Worker registration`;
 			}
-		} catch (error) {
-			// The Worker owns its runtimes: dropping the link is the whole refusal.
+		}
+		if (refusal !== null) {
+			// Refuse before disposing: the close code must leave while the socket is
+			// open, and the host's `dispose` (closeLink) lets the in-flight close
+			// handshake finish instead of aborting it. Nothing was routed, so there
+			// is nothing to withdraw — dropping the link is the whole refusal.
+			this.refuseWorkerSocket(ws, refusal);
 			holder.host = null;
 			await host.dispose().catch(() => {});
-			throw error;
+			return;
 		}
 
 		for (const project of host.info.projects) this.routes.set(project.id, host);

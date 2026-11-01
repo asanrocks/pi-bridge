@@ -20,7 +20,7 @@ import type { WorkerObservationFrame } from "../../src/host/worker-contract.ts";
 import type { LocalManagerFactory, LocalWorker } from "../../src/host/worker-local.ts";
 import { createLocalWorker } from "../../src/host/worker-local.ts";
 import { WORKER_PROTOCOL_VERSION } from "../../src/host/worker-protocol.ts";
-import { createWorkerSocketServer } from "../../src/host/worker-server.ts";
+import { createWorkerSocketServer, serveWorkerConnection } from "../../src/host/worker-server.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -331,6 +331,46 @@ describe("worker link liveness", () => {
 		});
 
 		expect(reasons[0]).toMatch(/heartbeat timeout/);
+	});
+
+	it("ends a silent link from the Worker end too (its own heartbeat)", async () => {
+		const fixture = await makeServedWorker();
+		// A second listener for the same service, with injectable heartbeat
+		// timings: the served Worker must notice a peer that stopped answering
+		// even though nothing it owns failed — over TCP that is a half-open link
+		// an idle connection would never notice.
+		const wss = new WebSocketServer({ port: 0 });
+		cleanups.push(
+			() =>
+				new Promise<void>((resolve) => {
+					for (const ws of wss.clients) ws.terminate();
+					wss.close(() => resolve());
+				}),
+		);
+		wss.on("connection", (ws) => {
+			void serveWorkerConnection(ws, fixture.worker, { heartbeatIntervalMs: 20, heartbeatTimeoutMs: 60 });
+		});
+		await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+		const port = (wss.address() as { port: number }).port;
+
+		// `autoPong: false` is a daemon client that greets and then goes silent.
+		const silent = new WebSocket(`ws://127.0.0.1:${port}`, { autoPong: false });
+		cleanups.push(() => silent.terminate());
+		const closed = new Promise<void>((resolve) => silent.once("close", () => resolve()));
+		await new Promise<void>((resolve) => silent.once("open", () => resolve()));
+		await Promise.race([
+			closed,
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("the Worker-side heartbeat did not fire")), 3_000),
+			),
+		]);
+
+		// A peer that keeps answering stays connected.
+		const answering = new WebSocket(`ws://127.0.0.1:${port}`);
+		cleanups.push(() => answering.terminate());
+		await new Promise<void>((resolve) => answering.once("open", () => resolve()));
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(answering.readyState).toBe(WebSocket.OPEN);
 	});
 
 	it("answers an unknown request kind instead of leaving the caller pending", async () => {
