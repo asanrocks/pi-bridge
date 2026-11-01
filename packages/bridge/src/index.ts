@@ -107,6 +107,7 @@ export {
 	applyPatch,
 	BridgeClient,
 	buildInitialSync,
+	CompactCodec,
 	cacheRecordsOfDocument,
 	computeCursor,
 	computeRecoverableTurn,

@@ -156,7 +156,22 @@ export function useConnection(): { retry: () => void } {
 			}
 
 			const transport = new WsTransport(ws);
-			const client = new BridgeClient(transport);
+			const client = new BridgeClient(transport, {
+				onProtocolError: (message) => {
+					// Never silently tolerated: a frame the client cannot decode means
+					// the mirror may have missed a live patch, so the socket closes and
+					// the reconnect's initial sync repairs the stream. The toast names
+					// the reload as the fix — the app and the daemon ship together, so
+					// a repeated violation is version skew.
+					getStore()
+						.getState()
+						.pushToast(
+							"protocol-error",
+							`Incompatible message from the daemon (${message}). Reconnecting — if it repeats, reload the page.`,
+						);
+					ws.close();
+				},
+			});
 			clientRef.current = client;
 			setGlobalClient(client);
 

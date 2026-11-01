@@ -531,8 +531,11 @@ and releases its observation.
 Initial-sync frames are the observation's full state and clear its demand;
 every observation frame the Connection emits — initial sync, live patch, and the
 terminal `session_closed` — is stamped with the current attachment generation
-(ADR 19), and frames are plain JSON envelopes (there is no transport
-compaction, because a compacted frame cannot name its owner). Live patches are
+(ADR 19), and the wire carries transport compaction on the live path
+(`core/compact-codec.ts`): a run of patches that differs only in the appended
+string sends that string alone as a bare JSON string, and the client decodes
+the identical envelope — generation included — so ownership on the wire is
+preserved rather than skipped. Live patches are
 already filtered when the Connection receives them: each observation filters
 the Manager's stream against its own demand — the paths it pulled while the
 entry was live — so a Connection never holds a subscription set and a second

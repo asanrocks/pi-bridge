@@ -18,6 +18,7 @@
 
 import type { WebSocket } from "ws";
 import type { ClientMessage, JsonValue, NewSessionRequest, OpenSessionRequest, SessionRef } from "../core/index.ts";
+import { CompactCodec } from "../core/index.ts";
 import { connectionVerbHandler, type DaemonVerbs, type VerbContext } from "./connection-verbs.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
@@ -55,6 +56,10 @@ export class Connection {
 	 * observation frame this Connection emits names the attachment whose
 	 * stream it belongs to — even when the address is unchanged. */
 	private attachmentGeneration = 0;
+	/** The transport compaction pair's encode half (core/compact-codec.ts):
+	 * a run of live patches that differs only in the appended string sends
+	 * that string alone on this socket. */
+	private codec = new CompactCodec();
 	/** The operation id of the newSession transition currently in flight, if
 	 * any: the transition's attach happens synchronously inside the verb
 	 * (transitions serialize on this Connection), so the initial-sync frame
@@ -372,10 +377,12 @@ export class Connection {
 
 	private send(data: Record<string, unknown>): void {
 		try {
-			// Plain JSON frames: transport compaction is retired from the live
-			// path, because a compacted frame cannot carry the attachment
-			// generation every observation frame must name (ADR 19).
-			this.ws.send(JSON.stringify(data));
+			// Transport compaction (core/compact-codec.ts): the frame travels in
+			// full form unless it differs from the held template in exactly the
+			// appended value, in which case that value alone crosses the wire and
+			// the client decodes the identical envelope — the attachment
+			// generation included — so ownership on the wire is preserved (ADR 19).
+			this.ws.send(this.codec.encode(data));
 			this.logger?.log("out", data);
 		} catch {
 			// Socket closed

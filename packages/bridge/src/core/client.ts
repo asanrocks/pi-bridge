@@ -6,6 +6,7 @@
 // Does NOT include: WebSocket transport, rendering.
 // ============================================================================
 
+import { CompactCodec } from "./compact-codec.ts";
 import { applyPatch, getAtPath, setAtPath } from "./document.ts";
 import type {
 	Document,
@@ -40,6 +41,18 @@ export interface PullResponseItem {
 /** An op that addresses a whole entry (`/entries/<id>`), not a field in it. */
 const ENTRY_ROOT_PREFIX = "/entries/";
 const isEntryRootPath = (path: string): boolean => /^\/entries\/[^/]+$/.test(path);
+
+/** The push kinds on the wire (`ServerPushMessage`): an object frame with no
+ * `id` and a kind outside this set is a protocol violation — the daemon and
+ * the app ship together, so an unrecognized kind is version skew. */
+const PUSH_KINDS = new Set([
+	"replace",
+	"patch",
+	"sessions_changed",
+	"active_sessions_changed",
+	"pinned_models_changed",
+	"session_closed",
+]);
 
 // ---------------------------------------------------------------------------
 // DocumentMirror
@@ -162,6 +175,17 @@ export interface BridgeTransport {
 	onMessage: ((data: string) => void) | null;
 }
 
+/** Construction options. */
+export interface BridgeClientOptions {
+	/** A message the client could not decode or did not recognize: malformed
+	 * JSON, a compacted frame with no established run, or a frame shape
+	 * outside the protocol. Fired at most once per client — a violation is
+	 * never silently tolerated — and the caller owns the recovery: the web
+	 * client toasts and closes the socket, so the reconnect path's initial
+	 * sync repairs the stream. */
+	onProtocolError?: (message: string) => void;
+}
+
 // ---------------------------------------------------------------------------
 // BridgeClient — typed RPC + push demux
 // ---------------------------------------------------------------------------
@@ -177,18 +201,43 @@ export class BridgeClient {
 	private pending = new Map<string, PendingRpc>();
 	private nextId = 0;
 	private _onPush: ((msg: ServerPushMessage) => void) | null = null;
+	private onProtocolError: ((message: string) => void) | undefined;
+	/** The compact-frame decoder (core/compact-codec.ts): holds the template
+	 * the full-form frames on this socket prime. */
+	private codec = new CompactCodec();
+	/** Latched: one violation surfaces once; the caller closes the transport. */
+	private violated = false;
 
-	constructor(transport: BridgeTransport) {
+	constructor(transport: BridgeTransport, options: BridgeClientOptions = {}) {
 		this.mirror = new DocumentMirror();
 		this.transport = transport;
+		this.onProtocolError = options.onProtocolError;
 
 		this.transport.onMessage = (data: string) => {
+			let parsed: unknown;
 			try {
-				const msg = JSON.parse(data) as Record<string, unknown>;
-				this.handleMessage(msg);
+				parsed = JSON.parse(data);
 			} catch {
-				// Ignore malformed messages
+				this.protocolError("malformed message");
+				return;
 			}
+			// A bare JSON string is a compacted frame (core/compact-codec.ts):
+			// the appended value of the run the held template established.
+			if (typeof parsed === "string") {
+				const frame = this.codec.decode(parsed);
+				if (frame === null) {
+					this.protocolError("compacted frame with no established run");
+					return;
+				}
+				this.handleMessage(frame);
+				return;
+			}
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+				this.protocolError("message is not a frame");
+				return;
+			}
+			this.codec.observe(parsed as Record<string, unknown>);
+			this.handleMessage(parsed as Record<string, unknown>);
 		};
 	}
 
@@ -380,6 +429,14 @@ export class BridgeClient {
 
 	// ── Internal ─────────────────────────────────────────────────────────
 
+	/** Surface one undecodable or unrecognized message. Fired once: the
+	 * caller closes the transport, so a burst before the close cannot stack. */
+	private protocolError(message: string): void {
+		if (this.violated) return;
+		this.violated = true;
+		this.onProtocolError?.(message);
+	}
+
 	private call(body: RpcRequestBody): Promise<RpcReply> {
 		const id = String(++this.nextId);
 		const request: Record<string, unknown> = { id, ...body };
@@ -402,6 +459,12 @@ export class BridgeClient {
 	private handleMessage(msg: Record<string, unknown>): void {
 		// Push frames have no `id`
 		if (!("id" in msg) || msg.id === undefined) {
+			// The daemon and the app ship together; an unrecognized frame means a
+			// version skew nothing below this seam can recover from.
+			if (typeof msg.kind !== "string" || !PUSH_KINDS.has(msg.kind)) {
+				this.protocolError(`unknown frame kind: ${String(msg.kind)}`);
+				return;
+			}
 			const push = msg as unknown as ServerPushMessage;
 			if (push.kind === "replace") {
 				// A replace is an address-bearing initial sync: it establishes the

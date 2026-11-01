@@ -171,11 +171,35 @@ forms are address-bearing, so they establish the client's active cache key.
 An observation clears its demand when initial sync is sent. This prevents pull
 state from crossing Session boundaries.
 
-## No transport compaction
+## Transport compaction
 
-Every frame on the wire is a full JSON envelope. Transport compaction (the
-former `CompactCodec`, which encoded consecutive single-append live patches as
-bare JSON strings) is retired: a compacted frame cannot carry the attachment
-generation every observation frame must name, so ownership on the wire would
-have been optional exactly where stale frames are most dangerous. If compaction
-ever returns, it can only be as an envelope-preserving encoding.
+A streamed turn is a run of live patches that differ in exactly one thing:
+the appended string. The first frame of a run travels in full form; every
+following frame that differs from it in exactly the appended value travels
+as that value alone — a bare JSON string (`core/compact-codec.ts`).
+
+The compaction is envelope-preserving. The codec holds the last full-form
+compactable frame as a template and compacts only against it, and the
+template carries every field of the frame — the attachment generation
+included — so a frame after an attachment change can never match the stale
+template: compaction across an attachment change is structurally
+unrepresentable, and the decoded frame is the identical object the full
+encoder would have sent. Ownership on the wire (ADR 19) applies to the
+decoded frame unchanged. Any other difference — a different path, a
+different op, a multi-op patch, a replace, a broadcast, an RPC reply —
+fails the match and travels in full form, and a non-compactable frame
+never touches the template, so an interleave cannot desync the pair.
+Compaction requires message-ordered delivery (WebSocket ordering); a
+transport without it must not enable it.
+
+A message the client cannot decode or does not recognize — malformed JSON,
+a bare string with no established run, or a frame shape outside the
+protocol (an unknown push kind) — is never silently tolerated: the client
+surfaces it (`BridgeClientOptions.onProtocolError`), and the web client
+toasts and closes the socket, so the reconnect path's initial sync
+repairs the stream. The daemon and the app ship together, so a repeated
+violation is version skew and the toast names reloading the page as the
+fix. The wire carries no version negotiation by design; the one cost is
+the upgrade window: a tab left open across a daemon upgrade speaks the
+previous dialect, and its transcript may stall mid-stream until the page
+is reloaded.

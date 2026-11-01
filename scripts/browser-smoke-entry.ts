@@ -6,6 +6,7 @@ import {
 	beautifyShellCommand,
 	scanShellPieces,
 	BridgeClient,
+	CompactCodec,
 	computeCursor,
 	computeViewModel,
 	computeRecoverableTurn,
@@ -71,6 +72,23 @@ const args = validateToolArguments(
 	{ type: "toolCall", id: "1", name: "prompt", arguments: { prompt: 1 } },
 );
 const stream = createAssistantMessageEventStream();
+
+// The transport compaction pair (core/compact-codec.ts): the wire's
+// bare-string run form, encoded and decoded round-trip.
+const encodeCodec = new CompactCodec();
+const decodeCodec = new CompactCodec();
+const fullFrame = encodeCodec.encode({
+	kind: "patch",
+	generation: 1,
+	ops: [{ op: "append", path: "/entries/e1/content/0/text", value: "Hello" }],
+});
+const bareFrame = encodeCodec.encode({
+	kind: "patch",
+	generation: 1,
+	ops: [{ op: "append", path: "/entries/e1/content/0/text", value: " world" }],
+});
+decodeCodec.observe(JSON.parse(fullFrame) as Record<string, unknown>);
+const decodedFrame = decodeCodec.decode(JSON.parse(bareFrame) as string);
 
 const agent = new Agent({ initialState: { model }, streamFn: streamSimple });
 agent.steer({ role: "user", content: [{ type: "text", text: "queued" }], timestamp: 0 });
@@ -141,4 +159,6 @@ console.log(
 	typeof collapseSuperseded,
 	typeof computeLaneLayout,
 	typeof resolveLabels,
+	bareFrame.length < fullFrame.length,
+	typeof decodedFrame,
 );

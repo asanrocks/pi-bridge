@@ -15,7 +15,13 @@ import { AuthStorage, ModelRuntime, SettingsManager } from "@earendil-works/pi-c
 import { expect, vi } from "vitest";
 import WebSocket from "ws";
 import type { Document, Entry, SessionRef } from "../../src/core/index.ts";
-import { BridgeClient, type BridgeTransport, initFromEntries, isEntrySealed } from "../../src/core/index.ts";
+import {
+	BridgeClient,
+	type BridgeTransport,
+	CompactCodec,
+	initFromEntries,
+	isEntrySealed,
+} from "../../src/core/index.ts";
 import type { Manager } from "../../src/host/index.ts";
 import { createManager, Daemon } from "../../src/host/index.ts";
 import { createConnectionPipeline, type FlushScheduler } from "../../web/src/infra/net/connectionPipeline.ts";
@@ -219,10 +225,23 @@ export async function connectClient(
 		onMessage: null,
 	};
 	const client = new BridgeClient(transport);
+	// The harness records what the client processes, not the raw wire: a
+	// compacted run arrives as bare JSON strings (core/compact-codec.ts), so
+	// the recorder decodes them with its own codec before recording.
+	const recorder = new CompactCodec();
 	ws.on("message", (data) => {
 		frameSizes.push((data as { length: number }).length);
 		try {
-			frames.push(JSON.parse(data.toString()) as Record<string, unknown>);
+			const parsed: unknown = JSON.parse(data.toString());
+			if (typeof parsed === "string") {
+				const frame = recorder.decode(parsed);
+				if (frame !== null) frames.push(frame);
+			} else {
+				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+					recorder.observe(parsed as Record<string, unknown>);
+				}
+				frames.push(parsed as Record<string, unknown>);
+			}
 		} catch {
 			// non-JSON frames are not interesting here
 		}

@@ -448,4 +448,67 @@ describe("BridgeClient", () => {
 		expect(client.mirror.document.status.model).toEqual({ provider: "", modelId: "" });
 		expect(seen).toEqual([]);
 	});
+
+	// ── Compact frames and protocol violations ──────────────────────────────
+
+	function makeWatched(): { client: BridgeClient; transport: MockTransport; errors: string[] } {
+		const transport = new MockTransport();
+		const errors: string[] = [];
+		const client = new BridgeClient(transport, { onProtocolError: (m) => errors.push(m) });
+		return { client, transport, errors };
+	}
+
+	function appendOp(value: string): Record<string, unknown> {
+		return { op: "append", path: "/entries/e1/content/0/text", value };
+	}
+
+	it("decodes a compacted run onto the mirror", () => {
+		const { client, transport, errors } = makeWatched();
+		const doc = emptyDoc() as { entries: Record<string, unknown> };
+		doc.entries.e1 = { id: "e1", kind: "message", isSealed: true, ord: 0, content: [{ type: "text", text: "" }] };
+		transport.inject({ kind: "replace", session, document: doc, generation: 1 });
+		// The first frame of the run arrives in full form and primes the decoder.
+		transport.inject({ kind: "patch", ops: [appendOp("Hello")], generation: 1 });
+		// The rest arrive as bare JSON strings.
+		transport.inject(" world");
+		transport.inject("!");
+		const entry = client.mirror.document.entries.e1 as { content: Array<{ type: string; text: string }> };
+		expect(entry.content[0]?.text).toBe("Hello world!");
+		expect(errors).toEqual([]);
+	});
+
+	it("surfaces a compacted frame with no established run, exactly once", () => {
+		const { transport, errors } = makeWatched();
+		transport.inject("orphan");
+		expect(errors).toEqual(["compacted frame with no established run"]);
+		// Latched: a burst before the caller closes the transport cannot stack.
+		transport.inject("orphan again");
+		expect(errors).toHaveLength(1);
+	});
+
+	it("surfaces malformed JSON instead of ignoring it", () => {
+		const { transport, errors } = makeWatched();
+		transport.onMessage?.("not json{");
+		expect(errors).toEqual(["malformed message"]);
+	});
+
+	it("surfaces a message that is not a frame", () => {
+		const { transport, errors } = makeWatched();
+		transport.inject([1, 2, 3]);
+		expect(errors).toEqual(["message is not a frame"]);
+	});
+
+	it("surfaces an unknown push kind and keeps processing recognized frames", () => {
+		const { client, transport, errors } = makeWatched();
+		const seen: string[] = [];
+		client.onPush = (push) => seen.push(push.kind);
+		transport.inject({ kind: "sessions_changed", projectId: "p", sessions: [], hasMore: false });
+		transport.inject({ kind: "from_the_future" });
+		expect(errors).toEqual(["unknown frame kind: from_the_future"]);
+		// Latched, not blocking: the violation never silently stops the
+		// recognized traffic that shares the burst.
+		transport.inject({ kind: "active_sessions_changed", sessions: [] });
+		expect(seen).toEqual(["sessions_changed", "active_sessions_changed"]);
+		expect(errors).toHaveLength(1);
+	});
 });

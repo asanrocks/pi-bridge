@@ -10,6 +10,7 @@ export {
 } from "./cache.ts";
 export type { BridgeTransport, PullRequestItem, PullResponseItem } from "./client.ts";
 export { BridgeClient, DocumentMirror, planPull } from "./client.ts";
+export { CompactCodec } from "./compact-codec.ts";
 export {
 	__enableInvariantChecks,
 	applyEvent,

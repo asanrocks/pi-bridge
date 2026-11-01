@@ -1,16 +1,17 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Document, SessionRef } from "../../src/core/index.ts";
-import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
+import type { BridgeTransport, Document, SessionRef } from "../../src/core/index.ts";
+import { BridgeClient, MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
-import type { Manager } from "../../src/host/manager.ts";
+import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import {
 	attachTestManager,
 	collectFrames,
 	createWsPair,
 	mockDaemonVerbs,
 	mockSessionRef,
+	waitFor,
 	waitForFrame,
 	waitForOpen,
 } from "./conn-helpers.ts";
@@ -665,6 +666,78 @@ describe("Connection + Daemon", () => {
 		stream.close();
 		const closed = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "session_closed");
 		expect((closed as Record<string, unknown>).generation).toBe(2);
+
+		serverWs.close();
+		clientWs.close();
+	}, 30000);
+
+	// ── Transport compaction on the wire ──────────────────────────────────
+
+	it("compacts a streamed run to bare strings on the wire and the client decodes them", async () => {
+		const { serverWs, clientWs } = await createWsPair();
+		await waitForOpen(clientWs);
+
+		// The real client on the other end, plus the raw bytes it received.
+		const transport: BridgeTransport = { send: (data) => clientWs.send(data), onMessage: null };
+		const client = new BridgeClient(transport);
+		const raw: string[] = [];
+		clientWs.on("message", (data) => {
+			const text = data.toString();
+			raw.push(text);
+			transport.onMessage?.(text);
+		});
+
+		// A hand-built Manager whose attachment streams a run of single-append
+		// patches — the exact shape compaction exists for.
+		const document = {
+			status: {
+				leafId: null,
+				name: "",
+				model: { provider: "", modelId: "" },
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+				contextUsage: null,
+				pendingSteer: [],
+			},
+			entries: {
+				e1: { id: "e1", kind: "message", isSealed: true, ord: 0, content: [{ type: "text", text: "" }] },
+			},
+		} as unknown as Document;
+		const handles: ConnectionHandle[] = [];
+		const manager = fakeManager({
+			document,
+			addConnection: (handle) => {
+				handles.push(handle);
+				handle.onInitialSync({ kind: "replace", session: mockSessionRef, document } as never);
+			},
+			removeConnection: () => {},
+		});
+
+		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
+		await attachTestManager(conn, manager, mockSessionRef, null);
+		await waitFor(() => client.mirror.generation === 1);
+
+		const emit = (value: string): void => {
+			for (const handle of handles) {
+				handle.onPatch({ ops: [{ op: "append", path: "/entries/e1/content/0/text", value }] });
+			}
+		};
+		emit("Hello");
+		emit(" world");
+		emit("!");
+
+		await waitFor(() => {
+			const entry = client.mirror.document.entries.e1 as { content: Array<{ text: string }> } | undefined;
+			return entry?.content[0]?.text === "Hello world!";
+		});
+
+		// The wire: the first frame of the run in full form (carrying the
+		// attachment generation), the rest as bare JSON strings.
+		const fullForm = raw.find((r) => r.includes("Hello") && !r.startsWith('"'));
+		expect(fullForm).toContain("generation");
+		expect(raw.filter((r) => r.startsWith('"'))).toEqual([JSON.stringify(" world"), JSON.stringify("!")]);
 
 		serverWs.close();
 		clientWs.close();

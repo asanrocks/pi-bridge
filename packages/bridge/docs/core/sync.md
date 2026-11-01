@@ -77,8 +77,8 @@ With a valid cursor it emits a `patch` whose `session` is the supplied
    already carries; and
 3. `replace /status` with current status.
 
-The status replacement is unconditional, so this patch is never a compact
-single-append frame. Live forms are supplied even when the cache already
+The status replacement is unconditional, so this patch is multi-operation and
+never joins a compacted run. Live forms are supplied even when the cache already
 contains a persisted prefix, because later streaming patches target them.
 
 With no cursor or an invalid cursor it emits a `replace` whose `session` is the

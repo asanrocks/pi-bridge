@@ -250,9 +250,11 @@ batch, and ingests the values. Pulling an unsealed field also makes that path
 the observation's live demand; pulling a committed field is one-shot. The
 Worker filters live patches per observation demand and sanitizes lazy fields
 embedded inside parent add/replace values, so filtered replay and fresh wire
-initialization converge. There is no transport compaction on the
-live path: every frame is a full JSON envelope carrying its attachment
-generation (ADR 19), because a compacted frame cannot name its owner.
+initialization converge. The wire carries transport compaction on the live
+path (`core/compact-codec.ts`): a run of patches that differs only in the
+appended string sends that string alone, and the decoded frame is the
+identical envelope — attachment generation included — so ownership on the
+wire (ADR 19) is preserved rather than skipped.
 
 ## 6. State machines
 
