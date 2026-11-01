@@ -98,10 +98,12 @@ reply means join as a Worker, a missing path means start a Daemon, and a socket
 file nothing listens on is removed before the Daemon binds. A listener that
 fails the handshake — wrong protocol version, or not a bridge at all — is
 reported instead of silently bypassed, and a path that is not a UNIX socket is
-reported, never removed. A launch that loses the bind race joins the winner,
-which is the only case where arrival order decides the role. Disposal removes
-the socket file, so the next launch sees a missing path rather than a stale
-one.
+reported, never removed. The reply also carries the Daemon's browser base URL,
+because it is the only daemon→launcher reply and a UNIX socket path has no
+port to read; a Worker registers with an address it could not otherwise name.
+A launch that loses the bind race joins the winner, which is the only case
+where arrival order decides the role. Disposal removes the socket file, so the
+next launch sees a missing path rather than a stale one.
 
 A forced `--mode=daemon` fails when the socket is already owned instead of
 changing roles. A Worker's first registration must succeed; once registered, a
@@ -114,10 +116,16 @@ retrying a decision that cannot change. A refusal during Daemon shutdown is the
 exception: that link closes gracefully, so a Worker that dials in mid-shutdown
 retries the next Daemon rather than dying.
 
-Startup output states the chosen role, the web address for a Daemon, and the
-accepted Project names for a Worker. A combined invocation says that it hosts
-the shared daemon in the foreground: exiting it disconnects other Workers'
-browsers while those Worker processes keep running.
+Startup output is one banner in every role: the version line, the role with the
+socket it owns or dialed, the Project ids this process serves, and the
+`/@latest` address a browser opens (the alias resolves to the newest Session
+and falls back to the launcher). A Worker cannot derive the web port from its
+socket, so it takes the address from the probe; a remote Worker derives it from
+its `--daemon` URL, whose single HTTP listener serves pages and upgrades on one
+port. The banner is printed once per process; a reconnect prints one line so a
+flapping daemon cannot repeat it. A combined invocation says that it hosts the
+shared daemon in the foreground: exiting it disconnects other Workers' browsers
+while those Worker processes keep running.
 
 ## Worker deployment
 

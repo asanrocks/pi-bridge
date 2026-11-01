@@ -14,9 +14,12 @@ function decide(probe: ProbeResult, removed: { count: number }) {
 }
 
 describe("startup role discovery", () => {
-	it("joins a live daemon as a worker", async () => {
+	it("joins a live daemon as a worker and carries its web address", async () => {
 		const removed = { count: 0 };
-		await expect(decide({ kind: "live" }, removed)).resolves.toEqual({ role: "worker" });
+		await expect(decide({ kind: "live", web: "http://localhost:33334" }, removed)).resolves.toEqual({
+			role: "worker",
+			web: "http://localhost:33334",
+		});
 		expect(removed.count).toBe(0);
 	});
 

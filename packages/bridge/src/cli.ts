@@ -18,7 +18,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type CliConfig, parseCliArgs } from "./cli-args.ts";
-import { defaultDaemonSocketPath, probeDaemonSocket, removeStaleSocket } from "./host/daemon-socket.ts";
+import { type BannerInput, bannerLines } from "./cli-banner.ts";
+import {
+	defaultDaemonSocketPath,
+	probeDaemonSocket,
+	removeStaleSocket,
+	webBaseUrlFromEndpoint,
+} from "./host/daemon-socket.ts";
 import { isSocketTaken, resolveStartupRole } from "./host/discovery.ts";
 import { Daemon, type DaemonOptions } from "./host/index.ts";
 import type { WorkerHostMode } from "./host/worker-host.ts";
@@ -99,7 +105,13 @@ async function main() {
 	}
 
 	if (config.mode === "worker") {
-		await joinDaemon(config, config.remoteDaemon ?? `unix:${config.socketPath}`);
+		const remote = config.remoteDaemon;
+		const endpoint = remote ?? `unix:${config.socketPath}`;
+		await joinDaemon(
+			config,
+			endpoint,
+			remote === null ? await probeWeb(config.socketPath) : webBaseUrlFromEndpoint(remote),
+		);
 		return;
 	}
 
@@ -110,7 +122,7 @@ async function main() {
 		});
 		if ("error" in decision) fail(decision.error);
 		if (decision.role === "worker") {
-			await joinDaemon(config, `unix:${config.socketPath}`);
+			await joinDaemon(config, `unix:${config.socketPath}`, decision.web);
 			return;
 		}
 	} else {
@@ -165,7 +177,7 @@ async function startDaemon(config: CliConfig): Promise<void> {
 		// Losing the bind race is a role decision, not a failure: the winner owns
 		// the socket, so this invocation joins it.
 		if (config.mode === "auto" && isSocketTaken(err)) {
-			await joinDaemon(config, `unix:${config.socketPath}`);
+			await joinDaemon(config, `unix:${config.socketPath}`, await probeWeb(config.socketPath));
 			return;
 		}
 		throw err;
@@ -177,19 +189,26 @@ async function startDaemon(config: CliConfig): Promise<void> {
 	});
 }
 
-/** Report the chosen role, the Web address a browser opens, and the socket a
- * Worker joins with. */
+/** The Daemon's browser base URL, or null. Best effort: the registration that
+ * follows reports the real error, so a failed probe must not end the launch. */
+async function probeWeb(socketPath: string): Promise<string | null> {
+	const probe = await probeDaemonSocket(socketPath).catch(() => null);
+	return probe !== null && probe.kind === "live" ? probe.web : null;
+}
+
+function reportBanner(info: BannerInput): void {
+	for (const line of bannerLines(info)) console.log(line);
+}
+
 function reportDaemon(config: CliConfig, daemon: Daemon): void {
-	console.log(`pi-bridge ${version} (${commit}, ${date})`);
-	console.log(`role: ${config.mode === "daemon" ? "daemon" : "daemon+worker"}`);
-	console.log(`daemon socket: ${config.socketPath}`);
-	const hosted =
-		config.mode === "daemon" ? "none (only registered Workers)" : config.workerSpawn ? "spawned" : "in-process";
-	console.log(`worker: ${hosted}`);
-	if (config.mode !== "daemon") {
-		console.log("hosting: the shared daemon (exiting disconnects other workers' browsers)");
-	}
-	console.log(`web: http://localhost:${daemon.address?.port ?? 0}/`);
+	reportBanner({
+		role: `${config.mode === "daemon" ? "daemon" : "daemon+worker"} (socket unix:${config.socketPath})`,
+		projects: daemon.projectIds,
+		web: daemon.webUrl,
+		...(config.mode === "daemon"
+			? {}
+			: { note: "Note: this process hosts the shared daemon; exiting disconnects other Workers' browsers." }),
+	});
 }
 
 /**
@@ -198,16 +217,25 @@ function reportDaemon(config: CliConfig, daemon: Daemon): void {
  * that a lost link is ridden out: the runtimes stay in this process, so an
  * admitted turn survives a daemon restart.
  */
-async function joinDaemon(config: CliConfig, endpoint: string): Promise<void> {
+async function joinDaemon(config: CliConfig, endpoint: string, web: string | null): Promise<void> {
+	// The banner is a startup fact, not a per-link one: a reconnect gets one line
+	// so a flapping daemon cannot bury the terminal in identical headers.
+	let announced = false;
 	const worker = await runWorkerClient({
 		allow: config.allow.length > 0 ? config.allow : [process.cwd()],
 		endpoint,
 		...(config.agentDir !== undefined ? { agentDir: config.agentDir } : {}),
 		onLinkUp: (info) => {
-			console.log(`pi-bridge ${version} (${commit}, ${date})`);
-			console.log("role: worker");
-			console.log(`daemon: ${endpoint}`);
-			console.log(`projects: ${info.projects.map((project) => project.id).join(", ") || "(none)"}`);
+			if (announced) {
+				console.log(`pi-bridge: reconnected to ${endpoint}`);
+				return;
+			}
+			announced = true;
+			reportBanner({
+				role: `worker (connected to ${endpoint})`,
+				projects: info.projects.map((project) => project.id),
+				web,
+			});
 		},
 		onLinkLost: (error) => console.error(`pi-bridge: ${error.message}; retrying`),
 	}).catch((error: unknown) => {

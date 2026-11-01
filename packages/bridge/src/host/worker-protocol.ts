@@ -53,16 +53,20 @@ export function isWorkerProbeRequest(value: unknown): boolean {
 }
 
 /** The probe reply. `ok` is false for an incompatible peer, which the launcher
- * reports instead of guessing. */
+ * reports instead of guessing. `web` is the daemon's browser base URL: the
+ * probe is the only daemon→launcher reply that exists, and a Worker cannot
+ * derive the port from a UNIX socket path, so this is where a joining Worker
+ * learns where to look. Null while the listener is not bound yet. */
 export interface WorkerProbeReply {
 	readonly id: string;
 	readonly ok: boolean;
 	readonly protocol?: number;
 	readonly error?: string;
+	readonly web?: string | null;
 }
 
-export function workerProbeReply(): string {
-	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: WORKER_PROTOCOL_VERSION });
+export function workerProbeReply(web: string | null): string {
+	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: WORKER_PROTOCOL_VERSION, web });
 }
 
 /** How often the Daemon probes an idle link, and how long a silent link may

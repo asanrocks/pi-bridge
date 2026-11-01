@@ -186,6 +186,7 @@ export class Daemon {
 			this.registrationSocket = await startDaemonSocket({
 				socketPath: options.registrationSocketPath,
 				onWorker: (ws, hello) => this.acceptWorkerSocket(ws, hello),
+				webAddress: () => this.webUrl,
 			});
 		}
 
@@ -385,9 +386,22 @@ export class Daemon {
 		return { port: addr.port, host: addr.address };
 	}
 
+	/** The browser base URL to show a human, or null before the listener binds.
+	 * The listener serves pages and Worker protocol upgrades on one port, so this
+	 * is also the address of the WebSocket surface. */
+	get webUrl(): string | null {
+		const addr = this.address;
+		return addr === null ? null : `http://localhost:${addr.port}`;
+	}
+
 	/** The Worker registrations this Daemon accepted (diagnostics). */
 	get registrations(): Array<{ id: string; incarnation: string; generation: number }> {
 		return this.workers.map((host) => host.service.registration);
+	}
+
+	/** Every Project id this Daemon routes to a registration (diagnostics). */
+	get projectIds(): string[] {
+		return [...this.routes.keys()];
 	}
 
 	/** Stop serving and drain. Idempotent. The connection set is snapshotted

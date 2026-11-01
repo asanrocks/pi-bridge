@@ -16,7 +16,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { Daemon } from "../../src/host/daemon.ts";
-import { probeDaemonSocket, removeStaleSocket } from "../../src/host/daemon-socket.ts";
+import { probeDaemonSocket, removeStaleSocket, webBaseUrlFromEndpoint } from "../../src/host/daemon-socket.ts";
 import { buildProjects } from "../../src/host/projects.ts";
 import { runWorkerClient, type WorkerClientProcess } from "../../src/host/worker-process.ts";
 
@@ -138,8 +138,17 @@ describe("daemon socket probe", () => {
 		const socketPath = join(root, "bridge.sock");
 		const daemon = await startDaemon(socketPath, root);
 
-		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live" });
+		// The probe is the only reply a daemon sends a launcher, so it is where a
+		// joining Worker learns the address a browser should open.
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: daemon.webUrl });
 		expect(daemon.registrations).toHaveLength(0);
+	});
+
+	it("derives a remote daemon's browser address from its registration URL", () => {
+		expect(webBaseUrlFromEndpoint("ws://box:33334")).toBe("http://box:33334");
+		expect(webBaseUrlFromEndpoint("wss://box/bridge")).toBe("https://box");
+		expect(webBaseUrlFromEndpoint("unix:/run/bridge.sock")).toBeNull();
+		expect(webBaseUrlFromEndpoint("http://box")).toBeNull();
 	});
 
 	it("reports a crashed daemon's socket as stale and removes only a socket", async () => {

@@ -6,9 +6,10 @@
 // listener serves two kinds of peer:
 //
 //   probe   — a launcher's one-shot question before it commits to a role. The
-//             reply carries the worker protocol version, so a stale file, an
-//             unrelated UNIX service, and a mismatched bridge are distinct,
-//             actionable results.
+//             reply carries the worker protocol version and the Daemon's web
+//             address, so a stale file, an unrelated UNIX service, and a
+//             mismatched bridge are distinct, actionable results, and a joining
+//             Worker can name the page a browser should open.
 //   worker  — a registration: the first frame is `hello`, which is handed to
 //             the Daemon together with the socket. The peek consumes that frame,
 //             so the adoption is seeded with it rather than requiring a second
@@ -56,6 +57,21 @@ export function daemonSocketUrl(socketPath: string): string {
 /** Normalize an endpoint (`unix:/path` or a `ws://` URL) into a WebSocket URL. */
 export function endpointUrl(endpoint: string): string {
 	return endpoint.startsWith("unix:") ? daemonSocketUrl(endpoint.slice("unix:".length)) : endpoint;
+}
+
+/** The browser base URL of a remote daemon: one HTTP server carries both the
+ * page and the WebSocket upgrade, so only the scheme changes. Null for a local
+ * socket, whose port only the daemon knows. */
+export function webBaseUrlFromEndpoint(endpoint: string): string | null {
+	if (endpoint.startsWith("unix:")) return null;
+	let url: URL;
+	try {
+		url = new URL(endpoint);
+	} catch {
+		return null;
+	}
+	if (url.protocol !== "ws:" && url.protocol !== "wss:") return null;
+	return `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}`;
 }
 
 /** True when the path itself is a UNIX socket. `lstat` deliberately does not
@@ -193,7 +209,7 @@ export async function probeDaemonSocket(socketPath: string): Promise<ProbeResult
 			reason: `${socketPath} speaks pi-bridge worker protocol ${String(reply.protocol)}, this build speaks ${WORKER_PROTOCOL_VERSION}. Stop the old daemon or use a different --socket.`,
 		};
 	}
-	return { kind: "live" };
+	return { kind: "live", web: typeof reply.web === "string" ? reply.web : null };
 }
 
 export interface DaemonSocketOptions {
@@ -203,6 +219,9 @@ export interface DaemonSocketOptions {
 	 * socket's peek and is supplied here, so the host can adopt the socket
 	 * without waiting for a second `hello`. */
 	readonly onWorker: (ws: WebSocket, hello: WorkerHello) => void;
+	/** The browser base URL a probe reply advertises. Read per probe, because the
+	 * listener may bind after this socket does. */
+	readonly webAddress?: () => string | null;
 }
 
 export interface DaemonSocket {
@@ -265,7 +284,7 @@ export async function startDaemonSocket(options: DaemonSocketOptions): Promise<D
 			if (isWorkerProbeRequest(frame)) {
 				// Reply, then close once flushed: the probe needs the answer, and a
 				// socket left open for a peer that never sends again is a leak.
-				ws.send(workerProbeReply(), () => ws.close());
+				ws.send(workerProbeReply(options.webAddress?.() ?? null), () => ws.close());
 				return;
 			}
 
