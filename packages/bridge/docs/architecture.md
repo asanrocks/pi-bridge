@@ -120,7 +120,9 @@ composed for.
 `hello` push is the registration handshake and the Daemon's only source of
 Project configuration: acceptance is all-or-nothing, so a duplicate id or a
 collision with a reserved asset root closes the link instead of routing a
-partially claimed set. A Daemon may register several Workers; the join of the
+partially claimed set. Project names are claimed by the Daemon from what a
+Worker advertises; a Worker never needs to know the serving surface's
+namespace. A Daemon may register several Workers; the join of the
 accepted registrations is its routing table, a Project id is served by exactly
 one of them, and a conflicting registration fails startup rather than splitting
 an address between two execution owners. A lost link withdraws only that

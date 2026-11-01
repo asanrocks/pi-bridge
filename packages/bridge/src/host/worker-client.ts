@@ -41,6 +41,7 @@ import {
 	WORKER_HEARTBEAT_INTERVAL_MS,
 	WORKER_HEARTBEAT_TIMEOUT_MS,
 	WORKER_PROTOCOL_VERSION,
+	WORKER_REJECTED_CLOSE_CODE,
 	type WorkerPush,
 	type WorkerReply,
 	type WorkerRequestInput,
@@ -64,12 +65,22 @@ export interface WorkerHello {
 	readonly info: WorkerInfo;
 }
 
-export interface ConnectWorkerOptions {
+export interface ConnectWorkerOptions extends AdoptWorkerOptions {
 	/** `unix:/path/to.sock` or `ws://host:port`. */
 	readonly endpoint: string;
+}
+
+/** How a Daemon adopts a socket it did not dial: a Worker's registration
+ * arrives on it, so handshake validation and the heartbeat are the same as for
+ * a dialed link. */
+export interface AdoptWorkerOptions {
 	/** Validate the advertised registration; throw to reject it. A rejected
-	 * registration closes the socket and rejects `connectWorker`. */
+	 * registration closes the socket and rejects the adoption. */
 	readonly accept?: (hello: WorkerHello) => void;
+	/** The handshake frame the caller already read. A registration socket peeks
+	 * its first frame to tell a probe from a Worker, so the hello may be consumed
+	 * before adoption starts; seeding it keeps handshake ordering intact. */
+	readonly hello?: WorkerHello;
 	readonly heartbeatIntervalMs?: number;
 	readonly heartbeatTimeoutMs?: number;
 	/** Handshake deadline. */
@@ -82,6 +93,10 @@ export interface RemoteWorker extends WorkerService {
 	/** Resolves once the link is gone (socket close, error, or heartbeat loss). */
 	readonly closed: Promise<void>;
 	onUnavailable(listener: (reason: string) => void): () => void;
+	/** Drop this link without asking the Worker to stop. A Daemon disposes a
+	 * Worker it spawned; a Worker that dialed in owns its own lifetime, so losing
+	 * the Daemon must not end its runtimes. */
+	closeLink(): void;
 }
 
 interface Pending {
@@ -97,12 +112,21 @@ function connectUrl(endpoint: string): string {
 }
 
 export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWorker> {
+	return adoptWorkerConnection(new WebSocket(connectUrl(options.endpoint)), options);
+}
+
+/**
+ * Wrap a socket the caller already has — dialed by `connectWorker`, or accepted
+ * by a registration listener — as a `WorkerService`. The two directions differ
+ * only in who opened the socket: correlation, observation routing, the
+ * heartbeat, and the handshake are identical, so they share one implementation.
+ */
+export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions = {}): Promise<RemoteWorker> {
 	const heartbeatIntervalMs = options.heartbeatIntervalMs ?? WORKER_HEARTBEAT_INTERVAL_MS;
 	const heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? WORKER_HEARTBEAT_TIMEOUT_MS;
 	const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
 
 	return new Promise<RemoteWorker>((resolveConnect, rejectConnect) => {
-		const ws = new WebSocket(connectUrl(options.endpoint));
 		const pending = new Map<string, Pending>();
 		/** Live observations, with the address their terminal frame names. */
 		const observations = new Map<string, { sink: WorkerObservationSink; address: SessionAddress | null }>();
@@ -214,6 +238,48 @@ export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWork
 			if (push.kind === "unavailable") terminate(push.reason);
 		};
 
+		/** Validate one handshake and make the link live. A rejection is terminal
+		 * for the registration, so the socket closes with the rejected code and the
+		 * caller's promise rejects with `WorkerRegistrationError`. */
+		const acceptHello = (candidate: WorkerHello): void => {
+			if (hello !== null || settled) return;
+			if (candidate.protocol !== WORKER_PROTOCOL_VERSION) {
+				settled = true;
+				const reason = `worker protocol mismatch: peer ${candidate.protocol}, expected ${WORKER_PROTOCOL_VERSION}`;
+				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
+				rejectConnect(new WorkerRegistrationError(reason));
+				return;
+			}
+			try {
+				options.accept?.(candidate);
+			} catch (error) {
+				settled = true;
+				const reason = error instanceof Error ? error.message : String(error);
+				// The caller's `accept` rejected the registration: terminal, not
+				// transient, so a spawning host fails instead of polling and a
+				// dialed-in Worker stops instead of reconnecting forever.
+				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
+				rejectConnect(new WorkerRegistrationError(reason));
+				return;
+			}
+			hello = candidate;
+			settled = true;
+			clearTimeout(handshakeTimer);
+			lastPong = Date.now();
+			heartbeat = setInterval(() => {
+				if (Date.now() - lastPong > heartbeatTimeoutMs) {
+					terminate("worker link lost: heartbeat timeout");
+					return;
+				}
+				try {
+					ws.ping();
+				} catch {
+					// The close handler settles the link.
+				}
+			}, heartbeatIntervalMs);
+			resolveConnect(worker);
+		};
+
 		ws.on("message", (data) => {
 			const frame = parseWorkerFrame(data.toString());
 			if (frame === null) return;
@@ -231,47 +297,7 @@ export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWork
 
 			const push = frame as WorkerPush;
 			if (push.kind === "hello") {
-				if (hello !== null || settled) return;
-				if (push.protocol !== WORKER_PROTOCOL_VERSION) {
-					settled = true;
-					ws.close();
-					rejectConnect(
-						new WorkerRegistrationError(
-							`worker protocol mismatch: peer ${push.protocol}, expected ${WORKER_PROTOCOL_VERSION}`,
-						),
-					);
-					return;
-				}
-				const candidate: WorkerHello = {
-					protocol: push.protocol,
-					registration: push.registration,
-					info: push.info,
-				};
-				try {
-					options.accept?.(candidate);
-				} catch (error) {
-					settled = true;
-					ws.close();
-					// The caller's `accept` rejected the registration: terminal, not
-					// transient, so a spawning host fails instead of polling.
-					rejectConnect(new WorkerRegistrationError(error instanceof Error ? error.message : String(error)));
-					return;
-				}
-				hello = candidate;
-				settled = true;
-				lastPong = Date.now();
-				heartbeat = setInterval(() => {
-					if (Date.now() - lastPong > heartbeatTimeoutMs) {
-						terminate("worker link lost: heartbeat timeout");
-						return;
-					}
-					try {
-						ws.ping();
-					} catch {
-						// The close handler settles the link.
-					}
-				}, heartbeatIntervalMs);
-				resolveConnect(worker);
+				acceptHello({ protocol: push.protocol, registration: push.registration, info: push.info });
 				return;
 			}
 			handlePush(push);
@@ -307,6 +333,10 @@ export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWork
 			ws.once("close", () => clearTimeout(handshakeTimer));
 		});
 		ws.once("close", () => clearTimeout(handshakeTimer));
+
+		// A registration socket peeks its first frame and hands the hello over;
+		// validate and settle the same way an in-band handshake does.
+		const seeded = options.hello;
 
 		const worker: RemoteWorker = {
 			get registration(): WorkerRegistration {
@@ -400,6 +430,18 @@ export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWork
 				return () => eventListeners.delete(listener);
 			},
 
+			closeLink: () => {
+				if (heartbeat !== null) clearInterval(heartbeat);
+				heartbeat = null;
+				observations.clear();
+				try {
+					if (ws.readyState === WebSocket.OPEN) ws.close();
+					else ws.terminate();
+				} catch {
+					// Already gone.
+				}
+			},
+
 			dispose: async () => {
 				try {
 					await request<void>({ kind: "shutdown" });
@@ -439,6 +481,10 @@ export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWork
 				},
 			};
 		}
+
+		// Seeded after `worker` exists: `acceptHello` hands the settled link to the
+		// caller through `resolveConnect`.
+		if (seeded !== undefined) acceptHello(seeded);
 	});
 }
 

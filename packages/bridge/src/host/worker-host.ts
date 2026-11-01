@@ -14,10 +14,17 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { WebSocket } from "ws";
 import { createManager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
 import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
-import { connectWorker, type RemoteWorker, WorkerRegistrationError } from "./worker-client.ts";
+import {
+	adoptWorkerConnection,
+	connectWorker,
+	type RemoteWorker,
+	type WorkerHello,
+	WorkerRegistrationError,
+} from "./worker-client.ts";
 import type { WorkerEvent, WorkerInfo, WorkerService } from "./worker-contract.ts";
 import type { LocalManagerFactory } from "./worker-local.ts";
 import { startLocalWorker } from "./worker-local.ts";
@@ -79,6 +86,41 @@ function validateRegistration(info: WorkerInfo, reserved: Iterable<string>): voi
 		}
 		seen.add(project.id);
 	}
+}
+
+/**
+ * Adopt a Worker that dialed in: a registration socket has already read the
+ * handshake, so the link is validated here and the same callbacks the hosted
+ * modes use are wired once it is accepted. The Worker owns its own lifetime —
+ * disposing this host drops the link, it does not ask the Worker to stop, or a
+ * Daemon restart would kill in-flight turns in another process.
+ */
+export interface AdoptedWorkerOptions {
+	readonly ws: WebSocket;
+	readonly hello: WorkerHello;
+	readonly reservedProjectIds: Iterable<string>;
+	readonly onEvent: (event: WorkerEvent) => void;
+	readonly onUnavailable: (reason: string) => void;
+}
+
+export async function adoptWorkerHost(options: AdoptedWorkerOptions): Promise<WorkerHost> {
+	const reserved = [...options.reservedProjectIds];
+	const remote = await adoptWorkerConnection(options.ws, {
+		hello: options.hello,
+		accept: (hello) => validateRegistration(hello.info, reserved),
+	});
+	remote.onEvent(options.onEvent);
+	remote.onUnavailable((reason) => options.onUnavailable(reason));
+	void remote.closed.then(() => options.onUnavailable("worker link closed"));
+	return {
+		service: remote,
+		info: remote.hello.info,
+		endpoint: null,
+		dispose: async () => {
+			remote.closeLink();
+			await remote.closed;
+		},
+	};
 }
 
 export async function createWorkerHost(options: WorkerHostOptions): Promise<WorkerHost> {
@@ -170,7 +212,11 @@ async function connectRemote(
  *
  * The child runs this package's CLI with `--worker-serve`, so a single-binary
  * install needs no second entry point. An embedding host with no CLI argv cannot
- * spawn and must use connect mode instead. */
+ * spawn and must use connect mode instead.
+ *
+ * Reserved names are not passed to the child: the Daemon validates the greeting
+ * it receives (`adoptWorkerHost` for a dial-in registration, `connectRemote`
+ * here), so the Worker never needs to know the serving surface's namespace. */
 function spawnWorkerProcess(
 	options: WorkerHostOptions,
 	allow: string[],
@@ -189,7 +235,6 @@ function spawnWorkerProcess(
 		"--agent-dir",
 		options.agentDir,
 		...allow.flatMap((value) => ["--allow", value]),
-		...[...options.reservedProjectIds].flatMap((id) => ["--reserved-id", id]),
 	];
 	return spawn(process.execPath, args, {
 		// Keep the child's diagnostics visible; its stdout is not protocol.

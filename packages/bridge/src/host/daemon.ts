@@ -10,12 +10,14 @@ import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection } from "./connection.ts";
 import type { DaemonVerbs } from "./connection-verbs.ts";
+import { type DaemonSocket, startDaemonSocket } from "./daemon-socket.ts";
 import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
 import type { createManager, Manager } from "./manager.ts";
 import { buildProjects } from "./projects.ts";
 import { bindWorkerCommands } from "./session-commands.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
+import type { WorkerHello } from "./worker-client.ts";
 import type {
 	ObservedSession,
 	SessionTarget,
@@ -23,7 +25,8 @@ import type {
 	WorkerInfo,
 	WorkerObservationSink,
 } from "./worker-contract.ts";
-import { createWorkerHost, type WorkerHost, type WorkerHostMode } from "./worker-host.ts";
+import { adoptWorkerHost, createWorkerHost, type WorkerHost, type WorkerHostMode } from "./worker-host.ts";
+import { WORKER_REJECTED_CLOSE_CODE } from "./worker-protocol.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -57,6 +60,12 @@ export interface DaemonOptions {
 	 * `allow`. Several registrations may serve different Projects; the accepted
 	 * set becomes the routing table. */
 	workerModes?: WorkerHostMode[];
+	/** Bind this UNIX socket and accept Worker registrations on it. This is the
+	 * discovery address a local Worker dials, so `pi-bridge` in another terminal
+	 * can join a running Daemon with no port or URL. Omitted: no dial-in
+	 * registrations, which is what a test or an embedder that supplies
+	 * `workerModes` wants. */
+	registrationSocketPath?: string;
 	/** Injectable Manager factory (in-process Worker only). Test seam. */
 	managerFactory?: (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
 	/** Injectable embedded web assets (default: the bundle-time module).
@@ -84,6 +93,8 @@ export class Daemon {
 	private activeByHost = new Map<WorkerHost, SessionInfo[]>();
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
+	/** The dial-in registration listener, when one was requested. */
+	private registrationSocket: DaemonSocket | null = null;
 	private port: number | undefined;
 	private webRoot: string | undefined;
 	private assetSource!: AssetSource;
@@ -168,6 +179,16 @@ export class Daemon {
 		// daemon-global credential services (ASR, text polish).
 		await this.startWorkers(modes, options);
 
+		// The dial-in listener is bound before the web listener: a Worker that
+		// joins this process should be routable before a browser is told the
+		// Daemon exists.
+		if (options.registrationSocketPath !== undefined) {
+			this.registrationSocket = await startDaemonSocket({
+				socketPath: options.registrationSocketPath,
+				onWorker: (ws, hello) => this.acceptWorkerSocket(ws, hello),
+			});
+		}
+
 		await this.startServer();
 	}
 
@@ -222,6 +243,67 @@ export class Daemon {
 		}
 		this.workers = created;
 		this.activeByHost = new Map(created.map((host) => [host, []]));
+	}
+
+	/**
+	 * One Worker dialed in. Adoption validates and wires the link; the Project
+	 * claim is then the same all-or-nothing rule a hosted registration uses, so
+	 * `/<projectId>` stays unambiguous however the Worker arrived.
+	 *
+	 * A refused registration closes with the rejected code: the Worker that
+	 * dialed in stops instead of reconnecting against a decision that cannot
+	 * change.
+	 */
+	private acceptWorkerSocket(ws: WebSocket, hello: WorkerHello): void {
+		void this.adoptWorker(ws, hello).catch((error: unknown) => {
+			const reason = error instanceof Error ? error.message : String(error);
+			try {
+				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
+			} catch {
+				// The socket is already gone; the registration was never routed.
+			}
+		});
+	}
+
+	private async adoptWorker(ws: WebSocket, hello: WorkerHello): Promise<void> {
+		if (this.disposing) throw new Error("daemon is shutting down");
+		// The callbacks need the host they belong to, but the host only exists
+		// after adoption; events arriving before this assignment are dropped
+		// rather than attributed to the wrong registration.
+		const holder: { host: WorkerHost | null } = { host: null };
+		const host = await adoptWorkerHost({
+			ws,
+			hello,
+			reservedProjectIds: this.staticRoots,
+			onEvent: (event) => {
+				if (holder.host !== null) this.onWorkerEvent(holder.host, event);
+			},
+			onUnavailable: (reason) => {
+				if (holder.host !== null) void this.onWorkerUnavailable(holder.host, reason);
+			},
+		});
+		holder.host = host;
+
+		try {
+			for (const project of host.info.projects) {
+				if (this.routes.has(project.id)) {
+					throw new Error(`Project id "${project.id}" is already served by another Worker registration`);
+				}
+			}
+		} catch (error) {
+			// The Worker owns its runtimes: dropping the link is the whole refusal.
+			holder.host = null;
+			await host.dispose().catch(() => {});
+			throw error;
+		}
+
+		for (const project of host.info.projects) this.routes.set(project.id, host);
+		this.workers = [...this.workers, host];
+		this.activeByHost.set(host, []);
+		// A newly registered Worker changes the aggregate; the browser's Project
+		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
+		// reload), because the surface has no project-list push.
+		this.broadcastActiveSessions();
 	}
 
 	/**
@@ -288,6 +370,12 @@ export class Daemon {
 	 * closed settles before the daemon's teardown returns. */
 	async dispose(): Promise<void> {
 		this.disposing = true;
+		// Stop accepting registrations first: a Worker that joined during teardown
+		// would be routed to a Daemon that is already draining. Closing the
+		// listener drops the links without asking those Workers to stop — their
+		// runtimes belong to their own processes.
+		await this.registrationSocket?.close().catch(() => {});
+		this.registrationSocket = null;
 		const connections = [...this.connections];
 		await this.stopServer();
 		await Promise.allSettled(connections.map((conn) => conn.dispose()));

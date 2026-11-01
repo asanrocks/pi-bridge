@@ -85,23 +85,36 @@ browser's active-session list is republished as the aggregate of the survivors.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity.
 
-Three modes share one host implementation:
+Four modes share one host implementation:
 
-- **in-process** — the default, and what the test suites use: `startLocalWorker`
-  builds the environment and the registry inside the Daemon process.
-- **connect** — `connectWorker` attaches to a Worker already serving on a Unix
-  socket (`--worker-socket <path>`). The Daemon can restart without ending the
-  Worker's runtimes.
-- **spawn** — the Daemon starts the Worker as a child process
-  (`--worker-spawn`), passing its `--allow` entries and reserved ids, then
-  connects. The child runs this package's CLI with `--worker-serve`, so a
-  single-binary install needs no second entry point; an embedding host with no
-  CLI argv must use connect mode.
+- **dial-in** — the default for a second invocation: the Daemon binds the
+  discovery socket (`--socket`, default `$HOME/.pi/bridge.sock`) and a Worker
+  connects to it, sending `hello` as its first frame. The Daemon never dials
+  out for a local registration, which is what makes role discovery possible
+  (see [Startup Roles](#startup-roles)).
+- **in-process** — the default of a combined launch, and what the test suites
+  use: `startLocalWorker` builds the environment and the registry inside the
+  Daemon process.
+- **connect** — `connectWorker` dials a Worker that is already serving on a
+  socket. Kept for embedders and tests that supply their own endpoint; it is
+  not a CLI flag.
+- **spawn** — the internal `--worker-spawn` deployment: the Daemon starts the
+  Worker as a child process and connects to the socket it serves. The child runs
+  this package's CLI with `--worker-serve`, so a single-binary install needs no
+  second entry point; an embedding host with no CLI argv must use connect mode.
 
-`--worker-serve --socket <path>` is the Worker role: it owns Projects, storage,
-runtimes, and the repository surface, and serves them over one socket with no
-browser protocol. Signals dispose it, so a supervisor stops it without leaving
-an exclusion claim behind.
+A Worker that dialed in owns its own lifetime: when its link closes (a Daemon
+restart, a dropped socket), the Daemon drops the registration and the Worker
+keeps its runtimes, reconnecting with bounded backoff. A Worker the Daemon
+spawned is disposed with it. The internal `--worker-serve --socket <path>`
+child role serves Projects, storage, runtimes, and the repository surface over
+one socket with no browser protocol; signals dispose it, so a supervisor stops
+it without leaving an exclusion claim behind.
+
+A registration that arrives after startup joins the routing table under the
+same all-or-nothing rule. The browser learns about it on its next
+`getDaemonInfo` (a reload or reconnect): the surface has no project-list push,
+so an already-open tab does not gain the new Projects live.
 
 ### Registration and Project claiming
 

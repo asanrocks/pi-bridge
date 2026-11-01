@@ -29,6 +29,42 @@ import type {
  * misinterpret. A mismatch is a failed registration, not a best-effort parse. */
 export const WORKER_PROTOCOL_VERSION = 1;
 
+/** Close code a Daemon uses when it refuses a Worker's registration. A refused
+ * registration is terminal — the same handshake cannot succeed on a retry — so
+ * a Worker that sees this code stops instead of reconnecting forever. */
+export const WORKER_REJECTED_CLOSE_CODE = 4403;
+
+/** Discovery probe: one request/reply over a throwaway socket. The probe is not
+ * part of the worker protocol proper — it only answers "is this path a
+ * compatible pi-bridge daemon?" before a Worker or a launch commits to it. */
+export const WORKER_PROBE_ID = "probe";
+
+/** The probe request a launcher sends as the first frame on a candidate socket. */
+export function workerProbeRequest(): string {
+	return JSON.stringify({ id: WORKER_PROBE_ID, verb: "ping" });
+}
+
+/** True for the probe request. A daemon socket answers it and keeps the socket
+ * open: the probe closes it, a Worker sends `hello` next. */
+export function isWorkerProbeRequest(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const frame = value as { id?: unknown; verb?: unknown };
+	return frame.id === WORKER_PROBE_ID && frame.verb === "ping";
+}
+
+/** The probe reply. `ok` is false for an incompatible peer, which the launcher
+ * reports instead of guessing. */
+export interface WorkerProbeReply {
+	readonly id: string;
+	readonly ok: boolean;
+	readonly protocol?: number;
+	readonly error?: string;
+}
+
+export function workerProbeReply(): string {
+	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: WORKER_PROTOCOL_VERSION });
+}
+
 /** How often the Daemon probes an idle link, and how long a silent link may
  * stay open. An idle Session produces no traffic, so absence of work is not
  * evidence of a live peer. */

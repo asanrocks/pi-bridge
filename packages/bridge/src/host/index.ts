@@ -1,5 +1,15 @@
 export type { DaemonOptions } from "./daemon.ts";
 export { Daemon } from "./daemon.ts";
+export type { DaemonSocket, DaemonSocketOptions } from "./daemon-socket.ts";
+export {
+	defaultDaemonSocketPath,
+	openWorkerSocket,
+	probeDaemonSocket,
+	removeStaleSocket,
+	startDaemonSocket,
+} from "./daemon-socket.ts";
+export type { DiscoverySteps, ProbeResult, StartupRole } from "./discovery.ts";
+export { isSocketTaken, resolveStartupRole } from "./discovery.ts";
 export type { ConnectionHandle, CreateManagerOptions, Manager } from "./manager.ts";
 export { createManager } from "./manager.ts";
 export type {
@@ -47,11 +57,16 @@ export type {
 	WorkerService,
 } from "./worker-contract.ts";
 export type { WorkerHost, WorkerHostMode, WorkerHostOptions } from "./worker-host.ts";
-export { createWorkerHost } from "./worker-host.ts";
+export { adoptWorkerHost, createWorkerHost } from "./worker-host.ts";
 export type { LocalManagerFactory, LocalWorker, LocalWorkerOptions } from "./worker-local.ts";
 export { createLocalWorker, enterOfflineMode, startLocalWorker } from "./worker-local.ts";
-export type { WorkerProcess, WorkerProcessOptions } from "./worker-process.ts";
-export { runWorkerProcess } from "./worker-process.ts";
+export type {
+	WorkerClientOptions,
+	WorkerClientProcess,
+	WorkerProcess,
+	WorkerProcessOptions,
+} from "./worker-process.ts";
+export { runWorkerClient, runWorkerProcess } from "./worker-process.ts";
 export type { WorkerFrame, WorkerPush, WorkerReply, WorkerRequest } from "./worker-protocol.ts";
 export {
 	parseWorkerFrame,
