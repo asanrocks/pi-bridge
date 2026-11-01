@@ -192,7 +192,7 @@ function makeBundle(): Bundle {
 		},
 		archiveSession: async () => ({ ok: false, error: "unused" }),
 		sessionsChanged: (projectId) => sessionsChanged.push(projectId),
-		listFiles: () => [],
+		listFiles: async () => [],
 		readFile: () => {
 			throw new Error("unused");
 		},

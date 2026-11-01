@@ -30,16 +30,22 @@
 // ============================================================================
 
 import type {
+	DirectoryListing,
 	Document,
+	GitDiffFileStat,
 	ImageContent,
 	JsonValue,
+	ModelInfo,
 	ModelRef,
 	PatchOp,
+	PinnedModelInfo,
 	PrefixCursor,
+	ProjectInfo,
 	PullRequestItem,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
+	SnapshotFile,
 } from "../core/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -170,11 +176,45 @@ export interface SessionPage {
 	readonly nextCursor?: SessionListCursor;
 }
 
+/** The environment a Worker owns and a Daemon serves verbatim: Project
+ * configuration, the model catalogue, the pinned and visible scopes, and the
+ * repository read surface. The Daemon must not read Project files or keep a
+ * second model runtime, because a remote Worker's filesystem is not the
+ * Daemon's. */
+export interface WorkerInfo {
+	readonly projects: ProjectInfo[];
+	readonly models: ModelInfo[];
+	readonly pinnedModels: PinnedModelInfo[];
+	readonly visibleModels: string[];
+	readonly thinkingLevels: string[];
+}
+
+/** Worker-owned reads and daemon-global settings. Every call is addressed by
+ * Project or by absolute path, never by a runtime handle. */
+export interface WorkerEnvironment {
+	info(): Promise<WorkerInfo>;
+	/** Pin or unpin one model in the global `enabledModels` scope. */
+	setModelPinned(provider: string, modelId: string, pinned: boolean): Promise<void>;
+	/** Project-cwd path completion. */
+	listFiles(prefix: string, projectId: string): Promise<Array<{ path: string; isDirectory: boolean }>>;
+	readFile(path: string, state?: string): Promise<SnapshotFile>;
+	listDirectory(path: string, state?: string): Promise<DirectoryListing>;
+	gitShow(commit: string, cwd: string): Promise<{ output: string; truncated: boolean }>;
+	gitBase(directory: string, commit: string): Promise<{ baseline: string }>;
+	gitDiff(
+		directory: string,
+		oldState: string,
+		newState: string,
+	): Promise<{ files: GitDiffFileStat[]; filesOmitted?: number; untrackedOmitted: number }>;
+}
+
 /** What a Worker reports when its served state changes. Delivery is the
  * Daemon's job: a Worker never encodes browser frames. */
 export type WorkerEvent =
 	| { readonly kind: "sessions_changed"; readonly projectId: string; readonly page: SessionPage }
 	| { readonly kind: "active_sessions_changed"; readonly sessions: SessionInfo[] }
+	/** The global pinned list changed (a `setModelPinned` mutation). */
+	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
 	/** The Worker can serve nothing more (its execution scope is terminal).
 	 * Emitted once; the Daemon withdraws the registration instead of leaving
 	 * Projects that answer every operation with a refusal. */
@@ -198,7 +238,7 @@ export type WorkerEvent =
  *   - `release` (on an observation) and `closeSession` are the only ways a
  *     caller ends delivery; `closeSession` also ends the runtime.
  */
-export interface WorkerService {
+export interface WorkerService extends WorkerEnvironment {
 	readonly registration: WorkerRegistration;
 
 	/** Resolve-or-activate the address and start one observation. */

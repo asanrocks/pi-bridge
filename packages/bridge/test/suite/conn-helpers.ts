@@ -194,7 +194,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	closeSession: async () => ({ ok: true }),
 	archiveSession: async () => ({ ok: true }),
 	sessionsChanged: () => {},
-	listFiles: () => [],
+	listFiles: async () => [],
 	readFile: () => {
 		throw new Error("readFile not wired in mock");
 	},

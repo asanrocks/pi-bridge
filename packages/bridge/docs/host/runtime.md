@@ -1,12 +1,18 @@
 # Host Runtime
 
 The host is the Node-side owner of live Sessions and the WebSocket protocol. A
-Daemon owns the Connections, the browser attachment stream, and delivery. A
-Worker owns the Projects, Session storage, Activations, pi runtimes, and
-repository reads; the two halves run in one process today. An Activation
-contains one Manager and serves exactly one Session for its entire lifetime.
-Activations are worker-internal; the wire carries Session addresses and
-references, never an Activation.
+Daemon owns the Connections, the browser attachment stream, delivery, and the
+two daemon-global credential services (dictation, text polish). A Worker owns
+the Projects, Session storage, Activations, pi runtimes, the model catalogue,
+settings, and repository reads. An Activation contains one Manager and serves
+exactly one Session for its entire lifetime. Activations are worker-internal;
+the wire carries Session addresses and references, never an Activation.
+
+The two halves run in one process by default and may run in two. The process
+boundary is a deployment choice, not an architectural one: the Daemon reaches
+the Worker only through `WorkerService`, and the in-process Worker and the
+socket client implement the same contract. Nothing in the Daemon's routing,
+attachment, or delivery code branches on locality.
 
 ## Worker service boundary
 
@@ -14,6 +20,14 @@ references, never an Activation.
 values and opaque ids only: no `Connection`, `Manager`, `ActivationRecord`,
 filesystem handle, or registry object crosses it, so a Worker could move
 behind a socket without the Daemon branching on locality.
+
+`WorkerEnvironment` is the part of the contract that owns state rather than
+Sessions: `info()` (Projects, model catalogue, pinned and visible scopes,
+thinking levels), `setModelPinned`, and the repository surface (`listFiles`,
+`readFile`, `listDirectory`, `gitShow`, `gitBase`, `gitDiff`). The Daemon keeps
+no second model runtime and reads no Project file, because a remote Worker's
+filesystem is not the Daemon's; it forwards these calls and serves the replies
+verbatim.
 
 Three identities are distinct, and the distinction is what makes stale work
 recognizable without consulting a runtime:
@@ -56,6 +70,140 @@ and the Session's command admission are untouched. When a registration is
 collected, the Worker ends its observations after the actor's close flushed
 the final patches: the `closed` frame is delivered before `collect` resolves,
 so `session_closed` precedes the close reply on the wire.
+
+## Worker deployment
+
+`src/host/worker-host.ts` is the only place a Daemon obtains a Worker. A Daemon
+may register several, and the accepted registrations are its routing table: a
+Project id is served by exactly one Worker, so `/<projectId>` is never
+ambiguous. Registering a Project another Worker already serves fails the
+startup (the Workers created so far are disposed), and a Worker that becomes
+unavailable withdraws only its own Projects — the others keep serving, and the
+browser's active-session list is republished as the aggregate of the survivors.
+The daemon report (`getDaemonInfo`) merges every registration's Projects,
+catalogue, and pinned/visible scopes, deduped by identity.
+
+Three modes share one host implementation:
+
+- **in-process** — the default, and what the test suites use: `startLocalWorker`
+  builds the environment and the registry inside the Daemon process.
+- **connect** — `connectWorker` attaches to a Worker already serving on a Unix
+  socket (`--worker-socket <path>`). The Daemon can restart without ending the
+  Worker's runtimes.
+- **spawn** — the Daemon starts the Worker as a child process
+  (`--worker-spawn`), passing its `--allow` entries and reserved ids, then
+  connects. The child runs this package's CLI with `--worker-serve`, so a
+  single-binary install needs no second entry point; an embedding host with no
+  CLI argv must use connect mode.
+
+`--worker-serve --socket <path>` is the Worker role: it owns Projects, storage,
+runtimes, and the repository surface, and serves them over one socket with no
+browser protocol. Signals dispose it, so a supervisor stops it without leaving
+an exclusion claim behind.
+
+### Registration and Project claiming
+
+The Worker's `hello` push is the handshake, and it is the only way a Daemon
+learns what a Worker serves. It carries the `WorkerRegistration` and the
+`WorkerInfo` (Projects, catalogue, pinned and visible scopes, thinking levels).
+
+Acceptance is all-or-nothing: the Daemon rejects the registration and closes
+the socket when a Project id is empty, duplicated, or collides with a reserved
+surface name (a web asset root — the server would otherwise serve the asset
+instead of the Project's page). A rejected registration routes nothing, which
+is what makes `/<projectId>` unambiguous without a second protocol round trip.
+The accepted set is the Daemon's routing table: a Project outside it answers
+`Unknown project` even if some other Worker would serve it.
+
+The protocol version is checked at the handshake. A peer speaking a different
+version is refused rather than parsed, because a frame whose meaning changed
+cannot be handled on a best-effort basis.
+
+### Worker startup mode
+
+`startLocalWorker` establishes pi-core's offline mode
+(`PI_OFFLINE`/`PI_SKIP_VERSION_CHECK`) before it creates the model runtime or
+loads extensions. The rule lives with the Worker, not the Daemon, because a
+standalone `--worker-serve` process creates the runtimes: setting it in only
+the Daemon would leave a separately started Worker silently online.
+
+### Link liveness
+
+An idle Session produces no traffic, so silence is not evidence of a dead peer.
+The client pings on an interval and treats a link that has not ponged within
+its deadline as lost — the same close path as a socket error. Without it a
+half-open socket would pin a registration, its Projects, and its observations
+until TCP noticed, which can take hours.
+
+A lost link is not a crash. Pending requests reject, every observation ends — its
+sink receives a terminal `closed` frame, so the browser's attachment ends
+instead of waiting for content that cannot arrive — and `unavailable` listeners
+fire once. The Daemon withdraws that registration, stops advertising its
+Projects, and can reconnect as a new registration. The Worker keeps its
+runtimes, because losing a Daemon is not a reason to kill an in-flight turn.
+
+`unavailable` is terminal on both sides, not a hint. The Worker stops admitting
+requests and ends the connection's observations when it reports one; the client
+takes the same path as a socket failure, so a request admitted before the push
+is settled rather than left waiting for a reply that cannot come.
+
+### Storage exclusion
+
+A registration ends with its socket while execution continues, so it cannot be
+the exclusion primitive. Exclusion lives next to the filesystem: one lock file
+per Session directory, held by the Worker for its lifetime (`src/host/storage-lock.ts`).
+
+Two Workers writing one directory interleave JSONL appends, which no later
+reconciliation can repair, so a Worker that cannot establish exclusion refuses
+to serve rather than writing unsynchronized. The claim is an exclusively created
+file (`wx`) holding the owner's pid, host, and a random token, released by the
+holder only — a rewritten record belongs to a successor.
+
+Reclaiming a crashed owner needs a delete, and a bare check-then-unlink is
+unsafe: two reclaimers can both judge the same record stale, the winner can
+create a fresh claim, and the loser's unlink removes *that* live claim. The
+delete therefore runs inside a second exclusively created file
+(`.pi-bridge.lock.reclaim`): only the guard holder may delete, the lock is
+re-read under the guard and removed only if it is still the record that was
+judged stale, and the guard is released in `finally`. A stale guard can only
+block acquisition (availability), never permit a second holder (safety).
+Reclamation is by liveness of the pid on the same host: a lock held by another
+host is never reclaimed automatically, because a remote pid proves nothing
+here.
+
+**Limitation.** Kernel-released exclusion (an `flock`/`fcntl` lock, or one
+SQLite transaction) would remove the pid probe and the guard; it needs a native
+primitive this package does not depend on. A lock left by a crashed process on
+another host therefore requires manual removal. The claim is still fail-closed,
+which is the property that matters: no two Workers write one directory.
+
+### Request admission and shutdown
+
+The protocol server admits one request at a time and tracks every admitted
+dispatch. `shutdown` stops admission synchronously, waits for the tracked
+requests to settle, replies, and only then disposes the service — so a caller
+that awaits the reply knows the Worker finished rather than agreed to stop. A
+request arriving after admission closed is dropped instead of starting work
+nothing owns.
+
+An observation acquired while a socket is closing is released by the acquisition
+itself: the request registers a cancellable slot before it awaits, the close
+marks it, and the completion releases what it produced instead of installing it
+on a connection that no longer exists.
+
+### Environment ownership
+
+Model runtime, extensions, per-Project settings, the global `enabledModels`
+scope, and the repository surface all belong to the Worker. The Daemon's
+`getDaemonInfo` verb forwards `info()` and adds only its own `devMode`;
+`setModelPinned` is serialized inside the Worker that owns the scope, so
+concurrent pins cannot drop one another. `pinned_models_changed` reaches
+browsers as a Worker event, not a Daemon poll.
+
+Dictation credentials and text polish stay on the Daemon: the browser cannot
+mint a SAMI token, register a device, or speak the polish protocol, and neither
+service reads Project content. They are daemon-global credential services, not
+Worker execution.
 
 The canonical Session content is a `Document` owned by its Manager. The
 Document and its patch protocol are defined in [the core data model](../core/data-model.md).

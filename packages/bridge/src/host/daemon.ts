@@ -1,44 +1,29 @@
 import { createServer, type Server as HttpServer, type ServerResponse } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { extname, join } from "node:path";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import {
-	DEFAULT_THINKING_LEVEL,
-	DefaultResourceLoader,
-	findInitialModel,
-	getAgentDir,
-	ModelRuntime,
-	resolveModelScopeWithDiagnostics,
-	SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
-import type {
-	ModelInfo,
-	ModelRef,
-	PinnedModelInfo,
-	ProjectInfo,
-	SessionInfo,
-	SessionListCursor,
-	SessionRef,
-} from "../core/index.ts";
+import type { SessionInfo, SessionListCursor, SessionRef } from "../core/index.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection } from "./connection.ts";
 import type { DaemonVerbs } from "./connection-verbs.ts";
 import embeddedAssets from "./embedded-assets.ts";
-import { createLifecycleScope } from "./lifecycle-scope.ts";
 import { TrafficLogger } from "./logger.ts";
-import { createManager, type Manager } from "./manager.ts";
-import { resolveVisibleModelKeys } from "./model-visibility.ts";
-import { buildProjects, type ProjectConfig } from "./projects.ts";
-import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
-import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
+import type { createManager, Manager } from "./manager.ts";
+import { buildProjects } from "./projects.ts";
 import { bindWorkerCommands } from "./session-commands.ts";
-import { readBridgeSettings } from "./settings.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
-import type { ObservedSession, SessionTarget, WorkerEvent, WorkerObservationSink } from "./worker-contract.ts";
-import { createLocalWorker, type LocalWorker } from "./worker-local.ts";
+import type {
+	ObservedSession,
+	SessionTarget,
+	WorkerEvent,
+	WorkerInfo,
+	WorkerObservationSink,
+} from "./worker-contract.ts";
+import { createWorkerHost, type WorkerHost, type WorkerHostMode } from "./worker-host.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -54,10 +39,10 @@ const MIME_TYPES: Record<string, string> = {
 	".map": "application/json",
 };
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const DEFAULT_PORT_RANGE = { start: 33334, end: 33340 }; // [33334, 33340)
 /** First page size for `sessions_changed` refreshes. */
 const SESSION_PAGE_SIZE = 10;
+
 export interface DaemonOptions {
 	agentDir?: string;
 	port?: number;
@@ -65,14 +50,19 @@ export interface DaemonOptions {
 	logPath?: string;
 	dev?: boolean;
 	/** `--allow` entries: `<path>` or `<id>=<path>` (ADR 11). Defaults to
-	 * `[process.cwd()]`. Duplicate ids and shared session storage are rejected. */
+	 * `[process.cwd()]`. Used by the in-process and spawn Worker modes; a
+	 * connected Worker brings its own Project set. */
 	allow?: string[];
-	/** Injectable Manager factory (default: createManager). Test seam. */
+	/** How the Daemon obtains its Workers. Default: one in-process Worker over
+	 * `allow`. Several registrations may serve different Projects; the accepted
+	 * set becomes the routing table. */
+	workerModes?: WorkerHostMode[];
+	/** Injectable Manager factory (in-process Worker only). Test seam. */
 	managerFactory?: (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
 	/** Injectable embedded web assets (default: the bundle-time module).
 	 * Test seam for the embedded (single-file) serving path. */
 	embeddedAssets?: Record<string, string>;
-	/** Shared model runtime (for tests). */
+	/** Shared model runtime (in-process Worker only; tests). */
 	modelRuntime?: ModelRuntime;
 	/** Idle GC delays in ms (ADR 11). Test seam. */
 	idleGcMs?: number;
@@ -80,20 +70,18 @@ export interface DaemonOptions {
 }
 
 export class Daemon {
-	private projects = new Map<string, ProjectConfig>();
-	/** Per-project settings (pi resolves defaults from the Project cwd's
-	 * settings.json — the default model can differ per Project). */
-	private projectSettings = new Map<string, SettingsManager>();
-	/** Daemon-wide global settings (cwd-independent): the `enabledModels` scope
-	 * reported by `getDaemonInfo` for the Project home's Pinned group. */
-	private globalSettings: SettingsManager | null = null;
 	private connections = new Set<Connection>();
-	/** The Worker this Daemon routes execution to: Projects, Session storage,
-	 * the Activation registry, and pi runtimes. Constructed in start(); null
-	 * before it, so a failed startup can still be disposed. The Daemon reaches
-	 * it only through the Worker service contract, so the process boundary is
-	 * a deployment choice rather than an architecture change. */
-	private worker: LocalWorker | null = null;
+	/** Every accepted Worker registration. The Daemon holds no Project
+	 * configuration of its own: the routing table below is the join of what the
+	 * Workers advertised and this Daemon accepted. */
+	private workers: WorkerHost[] = [];
+	/** The routing table: a Project id is served by exactly one Worker. Claiming
+	 * is atomic across registrations, so `/<projectId>` is never ambiguous. */
+	private routes = new Map<string, WorkerHost>();
+	/** Each Worker's last reported active/streaming snapshot. The browser store
+	 * replaces its list on every push, so a push carries the aggregate rather
+	 * than one Worker's slice. */
+	private activeByHost = new Map<WorkerHost, SessionInfo[]>();
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
 	private port: number | undefined;
@@ -103,42 +91,48 @@ export class Daemon {
 	private logger: TrafficLogger | null = null;
 	private devMode = false;
 	private agentDir: string = "";
-	private managerFactory: NonNullable<DaemonOptions["managerFactory"]> = createManager;
-	private modelRuntime!: ModelRuntime;
-	private idleGcMs = DEFAULT_IDLE_GC_MS;
-	private unflushedIdleGcMs = DEFAULT_UNFLUSHED_IDLE_GC_MS;
 	/** Dictation credentials (device registration or SAMI minting). Created with
 	 * the Daemon so a provider failure never outlives one request; it reads the
-	 * access key from the environment at construction. */
+	 * access key from the environment at construction. Daemon-global, not
+	 * Project state: the browser cannot mint or register. */
 	private asrCredentials: AsrCredentialProvider = createAsrCredentialProvider();
 	/** Draft rewriting through the upstream text-polish service. The identity path
-	 * is resolved lazily against `agentDir`. */
+	 * is resolved lazily against `agentDir`. Daemon-global for the same reason:
+	 * the browser cannot speak the upstream protocol. */
 	private textPolish: TextPolishProvider = createTextPolishProvider({
 		identityPath: () => this.textPolishIdentityPath(),
 	});
+	/** True once `dispose` began: the Worker link closing during a clean
+	 * shutdown is expected, not a withdrawal. */
+	private disposing = false;
 
-	/** Serialized daemon-global settings mutations (see setModelPinned):
-	 * `setModelPinned` is a read-modify-write over the global `enabledModels`
-	 * scope, so two concurrent pin writes each read the pre-write list and
-	 * the later flush silently drops the earlier update. Mutations run one at
-	 * a time, in arrival order, across every Connection; the scope's chain
-	 * swallows rejections so a failed mutation cannot stall later ones. */
-	private settingsMutations = createLifecycleScope();
+	/** The Worker serving one Project, or undefined when the registration does
+	 * not cover it. */
+	private route(projectId: string): WorkerHost | undefined {
+		return this.routes.get(projectId);
+	}
+
+	/** The Worker serving one Project; throws for an unroutable address. */
+	private requirement(projectId: string): WorkerHost {
+		const host = this.route(projectId);
+		if (host === undefined) throw new Error(`Unknown project: ${projectId}`);
+		return host;
+	}
+
+	/** Every registered Worker, or an empty list once drained. */
+	private get services(): WorkerHost[] {
+		return this.workers;
+	}
 
 	async start(options: DaemonOptions = {}): Promise<void> {
-		// pi-core is always offline in the bridge: the daemon owns no background
-		// network work. pi reads these variables at call time (tool binary
-		// downloads, catalog and package refreshes), so writing them before the
-		// ModelRuntime and extensions are created covers the whole embedded runtime.
-		process.env.PI_OFFLINE = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
+		// The Worker establishes pi-core's offline mode (it is the half that
+		// creates runtimes and extensions), so a standalone Worker process is
+		// covered by the same rule as an embedded one.
 
 		this.port = options.port;
 		this.webRoot = options.webRoot;
 		this.agentDir = options.agentDir ?? getAgentDir();
 		this.devMode = options.dev ?? false;
-		this.idleGcMs = options.idleGcMs ?? DEFAULT_IDLE_GC_MS;
-		this.unflushedIdleGcMs = options.unflushedIdleGcMs ?? DEFAULT_UNFLUSHED_IDLE_GC_MS;
 
 		// Injectable embedded assets (test seam); otherwise the bundled web
 		// assets serve when no --web-root is given (single-file distribution).
@@ -155,60 +149,121 @@ export class Daemon {
 		// vite's output dir, present in every build.
 		this.staticRoots = new Set(["assets", ...this.assetSource.rootNames()]);
 
-		// Projects are static daemon configuration (ADR 11). Invalid ids,
-		// duplicate ids, shared session storage, and web-asset collisions fail
-		// startup.
-		const projects = buildProjects(options.allow ?? [process.cwd()], this.agentDir, this.staticRoots);
-		this.projects = new Map(projects.map((p) => [p.id, p]));
-		for (const project of projects) {
-			try {
-				this.projectSettings.set(project.id, SettingsManager.create(project.cwd, this.agentDir));
-			} catch {
-				// Unreadable settings degrade to the model-runtime defaults below.
-			}
-		}
-		// Global settings are cwd-independent; created even when no Projects are
-		// configured so `getDaemonInfo` can still report the global model scope.
-		try {
-			this.globalSettings = SettingsManager.create(process.cwd(), this.agentDir);
-		} catch {
-			this.globalSettings = null;
-		}
-
 		if (options.logPath) {
 			this.logger = TrafficLogger.open(options.logPath);
 		}
 
-		// Injectable deps (test seam)
-		this.modelRuntime =
-			options.modelRuntime ?? (await ModelRuntime.create({ authPath: join(this.agentDir, "auth.json") }));
-		this.managerFactory = options.managerFactory ?? createManager;
+		// The Worker modes decide who owns Project configuration and Session
+		// storage. In-process and spawn build their set from `--allow`; a connected
+		// Worker advertises its own, and each handshake is validated before any
+		// route exists.
+		const allow = options.allow ?? [process.cwd()];
+		const modes: WorkerHostMode[] = options.workerModes ?? [
+			{ kind: "in-process", projects: buildProjects(allow, this.agentDir, this.staticRoots) },
+		];
 
-		// The Worker owns the Projects, Session storage, Activation lifetime, and
-		// pi runtimes; the Daemon keeps the asset surface, the Connections, and
-		// delivery. Constructed before the server so no socket can arrive first.
-		// Its constructor validates the Project set (duplicate ids, shared
-		// storage, duplicated durable session ids) and fails startup.
-		const worker = createLocalWorker({
-			projects,
-			agentDir: this.agentDir,
-			modelRuntime: this.modelRuntime,
-			managerFactory: this.managerFactory,
-			idleGcMs: this.idleGcMs,
-			unflushedIdleGcMs: this.unflushedIdleGcMs,
-			requestedThinkingLevel: (projectId, provider, modelId) =>
-				this.requestedThinkingLevel(projectId, provider, modelId),
-		});
-		worker.onEvent((event) => this.onWorkerEvent(event));
-		this.worker = worker;
-
-		// Load extensions onto the daemon's modelRuntime so they are visible
-		// in getDaemonInfo before any session is activated.
-		await this.loadExtensions();
-
-		// No auto-created activations — created on demand via openSession/newSession.
+		// The Worker owns Projects, Session storage, the Activation lifetime, pi
+		// runtimes, the model catalogue, settings, and the repository surface. The
+		// Daemon keeps the asset surface, the Connections, delivery, and the two
+		// daemon-global credential services (ASR, text polish).
+		await this.startWorkers(modes, options);
 
 		await this.startServer();
+	}
+
+	/**
+	 * Create every registration, claiming its Project names atomically. A
+	 * registration is accepted only if every Project it advertises is free:
+	 * partial acceptance would make `/<projectId>` ambiguous, so a conflict fails
+	 * the whole start and every Worker created so far is disposed.
+	 */
+	private async startWorkers(modes: WorkerHostMode[], options: DaemonOptions): Promise<void> {
+		const created: WorkerHost[] = [];
+		try {
+			for (const mode of modes) {
+				// The callbacks need the host they belong to, but the host only
+				// exists after creation; events that arrive before this assignment
+				// are dropped rather than attributed to the wrong registration.
+				const holder: { host: WorkerHost | null } = { host: null };
+				const host = await createWorkerHost({
+					mode,
+					agentDir: this.agentDir,
+					reservedProjectIds: this.staticRoots,
+					...(options.modelRuntime !== undefined ? { modelRuntime: options.modelRuntime } : {}),
+					...(options.managerFactory !== undefined ? { managerFactory: options.managerFactory } : {}),
+					...(options.idleGcMs !== undefined ? { idleGcMs: options.idleGcMs } : {}),
+					...(options.unflushedIdleGcMs !== undefined ? { unflushedIdleGcMs: options.unflushedIdleGcMs } : {}),
+					onEvent: (event) => {
+						if (holder.host !== null) this.onWorkerEvent(holder.host, event);
+					},
+					onUnavailable: (reason) => {
+						if (holder.host !== null) void this.onWorkerUnavailable(holder.host, reason);
+					},
+				});
+				holder.host = host;
+
+				for (const project of host.info.projects) {
+					const owner = this.routes.get(project.id);
+					if (owner !== undefined) {
+						throw new Error(`Project id "${project.id}" is already served by another Worker registration`);
+					}
+				}
+				for (const project of host.info.projects) this.routes.set(project.id, host);
+				created.push(host);
+			}
+		} catch (error) {
+			for (const host of created.reverse()) await host.dispose().catch(() => {});
+			this.routes.clear();
+			throw error;
+		}
+		this.workers = created;
+		this.activeByHost = new Map(created.map((host) => [host, []]));
+	}
+
+	/**
+	 * The Worker to ask for an absolutely addressed read. Repository queries name
+	 * an absolute path, not a Project, so the owner is the registration whose
+	 * Project cwd contains it (longest match wins); a path outside every Project
+	 * falls back to the first registration, which keeps `readFile` on an
+	 * unrelated directory working when one Worker is registered.
+	 */
+	private forPath(path: string): WorkerHost {
+		let best: WorkerHost | undefined;
+		let bestLength = -1;
+		for (const host of this.workers) {
+			for (const project of host.info.projects) {
+				const cwd = project.cwd;
+				const contained = path === cwd || path.startsWith(cwd.endsWith("/") ? cwd : `${cwd}/`);
+				if (contained && cwd.length > bestLength) {
+					best = host;
+					bestLength = cwd.length;
+				}
+			}
+		}
+		const fallback = best ?? this.workers[0];
+		if (fallback === undefined) throw new Error("no worker is registered");
+		return fallback;
+	}
+
+	/** One report over every registration: the picker and Project list describe a
+	 * Daemon, not a Worker, so the rows are merged and deduped by identity. */
+	private async aggregateInfo(): Promise<WorkerInfo> {
+		const infos = await Promise.all(this.workers.map((host) => host.service.info()));
+		const models = new Map<string, WorkerInfo["models"][number]>();
+		const pinned = new Map<string, WorkerInfo["pinnedModels"][number]>();
+		const thinkingLevels = new Set<string>();
+		for (const info of infos) {
+			for (const model of info.models) models.set(`${model.provider}/${model.id}`, model);
+			for (const entry of info.pinnedModels) pinned.set(`${entry.provider}/${entry.id}`, entry);
+			for (const level of info.thinkingLevels) thinkingLevels.add(level);
+		}
+		return {
+			projects: infos.flatMap((info) => info.projects),
+			models: [...models.values()],
+			pinnedModels: [...pinned.values()],
+			visibleModels: [...new Set(infos.flatMap((info) => info.visibleModels))],
+			thinkingLevels: [...thinkingLevels],
+		};
 	}
 
 	/** Returns the address the server is listening on, or null if not started. */
@@ -218,84 +273,84 @@ export class Daemon {
 		return { port: addr.port, host: addr.address };
 	}
 
+	/** The Worker registrations this Daemon accepted (diagnostics). */
+	get registrations(): Array<{ id: string; incarnation: string; generation: number }> {
+		return this.workers.map((host) => host.service.registration);
+	}
+
 	/** Stop serving and drain. Idempotent. The connection set is snapshotted
 	 * first: every Connection's transition drain is awaited after the server
 	 * stops, so an attachment transition still in flight when the socket
-	 * closed settles before the daemon's teardown returns — the runtime
-	 * doc's claim is now a fact the teardown enforces. */
+	 * closed settles before the daemon's teardown returns. */
 	async dispose(): Promise<void> {
+		this.disposing = true;
 		const connections = [...this.connections];
 		await this.stopServer();
-		// Connection teardown: dispose is idempotent — the socket-close
-		// handler already started it for sockets that dropped — and resolves
-		// once each Connection's admitted transitions settled (a queued one
-		// is refused with "connection closed"; the registry refuses to attach
-		// a disposed Connection either way).
 		await Promise.allSettled(connections.map((conn) => conn.dispose()));
 		if (this.logger) {
 			this.logger.dispose();
 			this.logger = null;
 		}
-		if (this.worker) await this.worker.dispose();
-		// Refuse further settings mutations and wait out an in-flight flush, so
-		// a disposed daemon has no write landing after dispose() returns.
-		await this.settingsMutations.close();
+		const workers = this.workers;
+		this.workers = [];
+		this.routes.clear();
+		this.activeByHost.clear();
+		await Promise.allSettled(workers.map((host) => host.dispose()));
 	}
-
-	/**
-	 * Load disk extensions (agentDir, cwd, settings) onto the daemon's shared
-	 * modelRuntime so extension-registered providers are visible in
-	 * getDaemonInfo before any session exists.
-	 */
-	private async loadExtensions(): Promise<void> {
-		try {
-			const cwd = process.cwd();
-			const settingsManager = SettingsManager.create(cwd, this.agentDir);
-			const resourceLoader = new DefaultResourceLoader({
-				cwd,
-				agentDir: this.agentDir,
-				settingsManager,
-			});
-			await resourceLoader.reload();
-			const extensionsResult = resourceLoader.getExtensions();
-			for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
-				this.modelRuntime.registerProvider(name, config);
-			}
-			for (const { provider } of extensionsResult.runtime.pendingNativeProviderRegistrations) {
-				this.modelRuntime.registerNativeProvider(provider);
-			}
-			this.modelRuntime.setProxyResolvers(extensionsResult.runtime.proxyResolvers);
-		} catch (error) {
-			console.error(`Daemon: extension load failed: ${error instanceof Error ? error.message : String(error)}`);
-		}
-	}
-
-	// ── Session scanning ──────────────────────────────────────────────────
 
 	/** A Worker-reported state change, broadcast to every browser. The Worker
-	 * computes the payload (the page, the active snapshot) because it owns the
-	 * Documents those rows describe; the Daemon only addresses the frames. */
-	private onWorkerEvent(event: WorkerEvent): void {
+	 * computes the payload (the page, the active snapshot, the pinned list)
+	 * because it owns the state those rows describe; the Daemon only addresses
+	 * the frames. */
+	private onWorkerEvent(host: WorkerHost, event: WorkerEvent): void {
 		if (event.kind === "sessions_changed") {
 			this.pushSessionsChanged(event.projectId, event.page.sessions, event.page.hasMore, event.page.nextCursor);
 			return;
 		}
 		if (event.kind === "active_sessions_changed") {
-			this.broadcastActiveSessions(event.sessions);
+			this.activeByHost.set(host, event.sessions);
+			this.broadcastActiveSessions();
 			return;
 		}
-		// A terminal Worker: the Daemon can serve no Session for it. Until the
-		// remote link exists there is nothing to withdraw — surface the reason.
-		console.error(`Daemon: worker unavailable: ${event.reason}`);
+		if (event.kind === "pinned_models_changed") {
+			// The pinned scope is Worker-owned; the picker shows the union of what
+			// the registered Workers report, deduped by identity.
+			this.pushToAll({ kind: "pinned_models_changed", pinnedModels: event.pinnedModels });
+		}
 	}
 
-	/** The global active/streaming snapshot: the Worker owns the Documents
-	 * those rows describe, so it computes the rows. */
-	listActiveSessions(): Promise<SessionInfo[]> {
-		return this.worker!.listActiveSessions();
+	/** The Worker can serve nothing more: withdraw its routes so no browser sees
+	 * Projects that would answer every operation with a refusal. The Worker
+	 * process keeps its runtimes; a reconnect is a new registration. */
+	private async onWorkerUnavailable(host: WorkerHost, reason: string): Promise<void> {
+		// A link that closes because this Daemon is stopping is not a failure.
+		if (this.disposing) return;
+		if (!this.workers.includes(host)) return;
+		// Withdraw exactly this registration's Projects: the other Workers keep
+		// serving, so a failure is scoped to the execution that failed.
+		for (const [projectId, routed] of [...this.routes]) {
+			if (routed === host) this.routes.delete(projectId);
+		}
+		this.workers = this.workers.filter((worker) => worker !== host);
+		this.activeByHost.delete(host);
+		this.broadcastActiveSessions();
+		console.error(`Daemon: worker unavailable, routes withdrawn: ${reason}`);
+		await host.dispose().catch(() => {});
+	}
+
+	/** The global active/streaming snapshot: the Workers own the Documents those
+	 * rows describe, so each reports its own slice and the Daemon concatenates. */
+	async listActiveSessions(): Promise<SessionInfo[]> {
+		if (this.workers.length === 0) return [];
+		const slices = await Promise.all(this.workers.map((host) => host.service.listActiveSessions()));
+		return slices.flat();
 	}
 
 	// ── Broadcasts ────────────────────────────────────────────────────────
+
+	private pushToAll(frame: Record<string, unknown>): void {
+		for (const conn of this.connections) conn.push(frame);
+	}
 
 	/** Push one Project's refreshed first page to every browser. */
 	private pushSessionsChanged(
@@ -306,14 +361,16 @@ export class Daemon {
 	): void {
 		const frame: Record<string, unknown> = { kind: "sessions_changed", projectId, sessions, hasMore };
 		if (nextCursor) frame.nextCursor = nextCursor;
-		for (const conn of this.connections) conn.push(frame);
+		this.pushToAll(frame);
 	}
 
 	/** Refresh and push one Project's first page (a close or an archive changed
 	 * its ordering; a rename rewrites its row). */
 	private broadcastSessionsChanged(projectId: string): void {
-		void this.worker
-			?.listSessions(projectId, SESSION_PAGE_SIZE)
+		const host = this.route(projectId);
+		if (host === undefined) return;
+		void host.service
+			.listSessions(projectId, SESSION_PAGE_SIZE)
 			.then((page) => this.pushSessionsChanged(projectId, page.sessions, page.hasMore, page.nextCursor))
 			.catch(() => {
 				// A failed refresh is recoverable: the client still holds a
@@ -321,33 +378,11 @@ export class Daemon {
 			});
 	}
 
-	private broadcastActiveSessions(sessions: SessionInfo[]): void {
-		const frame: Record<string, unknown> = { kind: "active_sessions_changed", sessions };
-		for (const conn of this.connections) conn.push(frame);
-	}
-
-	/** Resolve pi's global `enabledModels` scope into the pinned list (ADR 15).
-	 * Project-level overrides are intentionally ignored: pinned models is one
-	 * daemon-global concept, not a per-Project setting. */
-	private async resolvePinnedModels(): Promise<PinnedModelInfo[]> {
-		const patterns = this.globalSettings?.getGlobalSettings().enabledModels;
-		if (!patterns || patterns.length === 0) return [];
-		const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
-		return resolved.map((sm) => ({
-			provider: sm.model.provider,
-			id: sm.model.id,
-			name: sm.model.name ?? sm.model.id,
-			thinkingLevel: sm.thinkingLevel,
-		}));
-	}
-
-	/** Push the daemon-global pinned list to every Connection (ADR 15). */
-	private async broadcastPinnedModels(): Promise<void> {
-		const frame: Record<string, unknown> = {
-			kind: "pinned_models_changed",
-			pinnedModels: await this.resolvePinnedModels(),
-		};
-		for (const conn of this.connections) conn.push(frame);
+	/** Push the aggregate of every Worker's last reported snapshot. A per-Worker
+	 * push would replace the browser's list with one slice. */
+	private broadcastActiveSessions(): void {
+		const sessions = this.workers.flatMap((host) => this.activeByHost.get(host) ?? []);
+		this.pushToAll({ kind: "active_sessions_changed", sessions });
 	}
 
 	/** Where the text-polish guest identity lives: the operator's override, else a
@@ -366,6 +401,7 @@ export class Daemon {
 	 * exists, so the initial sync it emits during acquisition already belongs to
 	 * the new attachment. The returned target is what its session verbs address. */
 	private async attach(
+		host: WorkerHost,
 		conn: Connection,
 		open: (sink: WorkerObservationSink) => Promise<ObservedSession>,
 	): Promise<SessionTarget> {
@@ -373,25 +409,30 @@ export class Daemon {
 			const observed = await open(sink);
 			// The commands name the target this observation serves: a later
 			// transition cannot retarget them, and the Worker refuses a target
-			// whose Activation ended instead of reaching its successor.
+			// whose Activation ended instead of reaching its successor. They are
+			// bound to the Worker that served the observation, so a command can
+			// never be sent to a different registration that happens to serve the
+			// same address.
 			return {
 				target: observed.target,
 				observation: observed.observation,
-				commands: bindWorkerCommands(this.worker!, observed.target, observed.observation),
+				commands: bindWorkerCommands(host.service, observed.target, observed.observation),
 			};
 		});
 	}
 
 	private daemonVerbs: DaemonVerbs = {
-		listSessions: (projectId, max, cursor) => this.worker!.listSessions(projectId, max, cursor ?? null),
+		listSessions: (projectId, max, cursor) =>
+			this.requirement(projectId).service.listSessions(projectId, max, cursor ?? null),
 
-		listActiveSessions: () => this.worker!.listActiveSessions(),
+		listActiveSessions: () => this.listActiveSessions(),
 
 		openSession: async (projectId, stem, conn, cursor) => {
 			try {
-				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
-				const target = await this.attach(conn, (sink) =>
-					this.worker!.observeSession({ projectId, stem }, { cursor: cursor ?? null, sink }),
+				const host = this.route(projectId);
+				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
+				const target = await this.attach(host, conn, (sink) =>
+					host.service.observeSession({ projectId, stem }, { cursor: cursor ?? null, sink }),
 				);
 				return { ok: true, session: sessionRefOf(target) };
 			} catch (err) {
@@ -401,9 +442,10 @@ export class Daemon {
 
 		newSession: async (projectId, conn, text, options) => {
 			try {
-				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
-				const target = await this.attach(conn, (sink) =>
-					this.worker!.createSession(projectId, { text, ...options, sink }),
+				const host = this.route(projectId);
+				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
+				const target = await this.attach(host, conn, (sink) =>
+					host.service.createSession(projectId, { text, ...options, sink }),
 				);
 				return { ok: true, session: sessionRefOf(target) };
 			} catch (err) {
@@ -417,8 +459,9 @@ export class Daemon {
 
 		closeSession: async (projectId, stem) => {
 			try {
-				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
-				await this.worker!.closeSession({ projectId, stem });
+				const host = this.route(projectId);
+				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
+				await host.service.closeSession({ projectId, stem });
 				// Refresh the Project's first page everywhere: the kill's flush
 				// (and an unflushed session's disappearance) reorders history.
 				this.broadcastSessionsChanged(projectId);
@@ -430,8 +473,9 @@ export class Daemon {
 
 		archiveSession: async (projectId, stem) => {
 			try {
-				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
-				await this.worker!.archiveSession({ projectId, stem });
+				const host = this.route(projectId);
+				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
+				await host.service.archiveSession({ projectId, stem });
 				// The row leaves the history pages. A live session's row already left
 				// the active snapshot via the collection broadcast.
 				this.broadcastSessionsChanged(projectId);
@@ -443,12 +487,6 @@ export class Daemon {
 
 		sessionsChanged: (projectId) => this.broadcastSessionsChanged(projectId),
 
-		listFiles: (prefix: string, projectId: string): Array<{ path: string; isDirectory: boolean }> => {
-			const project = this.projects.get(projectId);
-			if (!project) throw new Error(`Unknown project: ${projectId}`);
-			return listFiles(prefix, project.cwd);
-		},
-
 		// The browser cannot mint a SAMI token or register a device; it gets the
 		// result and never the access key. See asr-credentials.ts.
 		asrCredentials: () => this.asrCredentials.get(),
@@ -458,133 +496,29 @@ export class Daemon {
 		// text-polish.ts.
 		textPolish: (text: string) => this.textPolish.polish(text),
 
-		readFile: (path: string, state?: string) => readFileAtSnapshot(path, state ?? "worktree"),
+		// Everything below is Worker-owned: Project files, Git, the model
+		// catalogue, and the global settings scope. The Daemon forwards the request
+		// and the reply unchanged, because a remote Worker's filesystem is not
+		// reachable from here.
+		listFiles: (prefix, projectId) => this.requirement(projectId).service.listFiles(prefix, projectId),
+		readFile: (path, state) => this.forPath(path).service.readFile(path, state),
+		listDirectory: (path, state) => this.forPath(path).service.listDirectory(path, state),
+		gitShow: (commit, cwd) => this.forPath(cwd ?? process.cwd()).service.gitShow(commit, cwd ?? process.cwd()),
+		gitBase: (directory, commit) => this.forPath(directory).service.gitBase(directory, commit),
+		gitDiff: (directory, oldState, newState) =>
+			this.forPath(directory).service.gitDiff(directory, oldState, newState),
 
-		listDirectory: (path: string, state?: string) => listDirectory(path, state ?? "worktree"),
+		getDaemonInfo: async () => ({ ...(await this.aggregateInfo()), devMode: this.devMode }),
 
-		gitShow: (commit: string, cwd?: string) => runGitShow(commit, cwd ?? process.cwd()),
-
-		gitBase: (directory: string, commit: string) => resolveGitBase(directory, commit),
-
-		gitDiff: (directory: string, oldState: string, newState: string) => runGitDiff(oldState, newState, directory),
-
-		getDaemonInfo: async () => {
-			const runtime = this.modelRuntime;
-			let models: ModelInfo[] = [];
-			if (runtime) {
-				models = runtime.getAvailableSnapshot().map((m) => ({
-					provider: m.provider,
-					providerName: runtime.getProvider(m.provider)?.name,
-					id: m.id,
-					name: m.name ?? m.id,
-					reasoning: m.reasoning ?? false,
-					supportedThinkingLevels: getSupportedThinkingLevels(m),
-					contextWindow: m.contextWindow,
-				}));
-			}
-			// The pinned list is daemon-global (ADR 15): pi's global `enabledModels`,
-			// never a project override.
-			const pinnedModels = await this.resolvePinnedModels();
-			// Bridge settings own the picker's "normal" tier (ADR 15). Resolve the
-			// patterns host-side so the client needs no glob engine; an absent or
-			// empty scope means "everything normal".
-			const visiblePatterns = readBridgeSettings(this.agentDir).visibleModels ?? [];
-			const visibleModels = visiblePatterns.length > 0 ? resolveVisibleModelKeys(visiblePatterns, models) : [];
-
-			const projects: ProjectInfo[] = await Promise.all(
-				[...this.projects.values()].map(async (p) => {
-					const defaults = await this.projectDefaults(p.id);
-					return {
-						id: p.id,
-						cwd: p.cwd,
-						defaultModel: defaults.model,
-						defaultThinkingLevel: defaults.thinkingLevel,
-					};
-				}),
+		setModelPinned: (provider, modelId, pinned) => {
+			// The pinned scope is Worker-global; with several registrations the
+			// last writer would otherwise silently drop the others' view, so the
+			// mutation is broadcast to every registered Worker.
+			return Promise.all(this.services.map((host) => host.service.setModelPinned(provider, modelId, pinned))).then(
+				() => undefined,
 			);
-			return {
-				projects,
-				models,
-				pinnedModels,
-				visibleModels,
-				thinkingLevels: THINKING_LEVELS,
-				devMode: this.devMode,
-			};
-		},
-
-		setModelPinned: (provider: string, modelId: string, pinned: boolean) => {
-			// One mutation at a time, in arrival order, across every Connection —
-			// see settingsMutations. The scope's chain swallows rejections so a
-			// failed mutation cannot stall later ones; the caller still sees the
-			// error reply.
-			return this.settingsMutations.run(async (): Promise<void> => {
-				const settings = this.globalSettings;
-				if (!settings) throw new Error("No global settings available");
-				// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
-				// same way on save), then add or remove this one model.
-				const patterns = settings.getGlobalSettings().enabledModels ?? [];
-				const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, this.modelRuntime);
-				const key = `${provider}/${modelId}`;
-				const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
-				const next = pinned
-					? ids.some((id) => id.toLowerCase() === key.toLowerCase())
-						? ids
-						: [...ids, key]
-					: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
-				settings.setEnabledModels(next.length > 0 ? next : undefined);
-				await settings.flush();
-				await this.broadcastPinnedModels();
-			});
 		},
 	};
-
-	/** The model and thinking level a fresh session in `projectId` resolves
-	 * to — the same `findInitialModel` call a fresh Manager's session performs
-	 * (scopedModels empty, not continuing, the Project's settings). The level
-	 * is the pre-clamp resolution (per-model override for the default model,
-	 * else the settings default, else `DEFAULT_THINKING_LEVEL`); the client
-	 * clamps it to the displayed model's supported levels, which is what the
-	 * session runs at (`createAgentSession` clamps the same way at creation).
-	 * A `newSession` model pick resolves its own level through
-	 * `requestedThinkingLevel`, so a display for a picked model matches the run
-	 * except when the pick has a per-model override of its own — the one known
-	 * gap, documented on `ProjectInfo.defaultThinkingLevel`. */
-	private async projectDefaults(projectId: string): Promise<{ model: ModelRef | null; thinkingLevel: string | null }> {
-		const settings = this.projectSettings.get(projectId);
-		const result = await findInitialModel({
-			scopedModels: [],
-			isContinuing: false,
-			...(settings
-				? {
-						defaultProvider: settings.getDefaultProvider(),
-						defaultModelId: settings.getDefaultModel(),
-						defaultThinkingLevel: settings.getDefaultThinkingLevel(),
-						modelThinkingLevels: settings.getAllModelThinkingLevels(),
-					}
-				: {}),
-			modelRuntime: this.modelRuntime,
-		});
-		return {
-			model: result.model ? { provider: result.model.provider, modelId: result.model.id } : null,
-			thinkingLevel: result.model ? result.thinkingLevel : null,
-		};
-	}
-
-	/** The thinking level a fresh session on `provider/modelId` resolves to
-	 * before clamping to the model's supported levels: the per-model override,
-	 * else the Project's settings default, else `DEFAULT_THINKING_LEVEL` — the
-	 * chain `createAgentSession` applies for a session created on that model.
-	 * `newSession` uses it for a model pick without an explicit level, so the
-	 * level the Project home displayed is the level the session runs at
-	 * (`manager.setThinkingLevel` clamps to the picked model). */
-	private requestedThinkingLevel(projectId: string, provider: string, modelId: string): string {
-		const settings = this.projectSettings.get(projectId);
-		return (
-			settings?.getModelThinkingLevel(provider, modelId) ??
-			settings?.getDefaultThinkingLevel() ??
-			DEFAULT_THINKING_LEVEL
-		);
-	}
 
 	// ── Server ────────────────────────────────────────────────────────────
 

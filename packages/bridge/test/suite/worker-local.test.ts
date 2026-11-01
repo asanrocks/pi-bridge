@@ -158,7 +158,7 @@ const stubVerbs: DaemonVerbs = {
 	closeSession: async () => ({ ok: false, error: "unused" }),
 	archiveSession: async () => ({ ok: false, error: "unused" }),
 	sessionsChanged: () => {},
-	listFiles: () => [],
+	listFiles: async () => [],
 	readFile: () => {
 		throw new Error("unused");
 	},

@@ -22,16 +22,32 @@
 // ============================================================================
 
 import { randomUUID } from "node:crypto";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import {
+	DEFAULT_THINKING_LEVEL,
+	DefaultResourceLoader,
+	findInitialModel,
+	type ModelRuntime,
+	ModelRuntime as ModelRuntimeImpl,
+	resolveModelScopeWithDiagnostics,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import {
 	filterPatchForSocket,
+	type ModelInfo,
+	type ModelRef,
+	type PinnedModelInfo,
 	type PrefixCursor,
+	type ProjectInfo,
 	type PullRequestItem,
 	type SessionInfo,
 	type SessionListCursor,
 } from "../core/index.ts";
 import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
+import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, createManager, Manager } from "./manager.ts";
+import { resolveVisibleModelKeys } from "./model-visibility.ts";
 import {
 	archiveStemFile,
 	normalizeStem,
@@ -39,6 +55,7 @@ import {
 	resolveStemPath,
 	stemFromSessionPath,
 } from "./projects.ts";
+import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
 import {
 	DEFAULT_IDLE_GC_MS,
 	DEFAULT_UNFLUSHED_IDLE_GC_MS,
@@ -47,10 +64,13 @@ import {
 	type SessionCapability,
 } from "./session-actor.ts";
 import { assertNoSessionIdConflicts, type CatalogLiveEntry, createSessionCatalog } from "./session-catalog.ts";
+import { readBridgeSettings } from "./settings.ts";
+import { acquireStorageLock, type StorageLock } from "./storage-lock.ts";
 import type {
 	SessionPage,
 	SessionTarget,
 	WorkerEvent,
+	WorkerInfo,
 	WorkerObservation,
 	WorkerObservationFrame,
 	WorkerObservationSink,
@@ -61,6 +81,9 @@ import type {
 
 /** First page size for `sessions_changed` refreshes. */
 const SESSION_PAGE_SIZE = 10;
+
+/** Thinking levels pi's models expose; reported to the picker. */
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export type LocalManagerFactory = (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
 
@@ -73,9 +96,18 @@ export interface LocalWorkerOptions {
 	/** Idle-collection delays (ADR 11 policy; defaults from the actor). */
 	idleGcMs?: number;
 	unflushedIdleGcMs?: number;
+	/** Per-Project settings, created from `agentDir` when absent (test seam). */
+	projectSettings?: Map<string, SettingsManager>;
+	/** The daemon-global settings (the `enabledModels` scope), created from
+	 * `agentDir` when absent (test seam). */
+	globalSettings?: SettingsManager | null;
 	/** The thinking level a fresh session on a picked model resolves to before
-	 * clamping (the Project-settings read). */
-	requestedThinkingLevel: (projectId: string, provider: string, modelId: string) => string;
+	 * clamping. Defaults to the Project-settings chain this Worker owns. */
+	requestedThinkingLevel?: (projectId: string, provider: string, modelId: string) => string;
+	/** Session-directory exclusion claims this Worker holds (see
+	 * `storage-lock.ts`). Released when the Worker disposes; a Worker built
+	 * without them serves unsynchronized and is only safe in tests. */
+	storageLocks?: StorageLock[];
 }
 
 /** The in-process Worker: the contract plus the registry it owns. Callers that
@@ -84,6 +116,8 @@ export interface LocalWorker extends WorkerService {
 	readonly registration: WorkerRegistration;
 	/** Live records, for tests and diagnostics. */
 	liveRecords(): ActivationRecord[];
+	/** The Projects this Worker serves (the Daemon routes by id). */
+	projects(): ProjectConfig[];
 }
 
 interface ObservationState {
@@ -125,6 +159,85 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		registry.live().map((record) => ({ ref: record.ref, metadata: record.actor.metadata() }));
 
 	const catalog = createSessionCatalog(projects);
+
+	// ── Environment: settings, catalogue, repository ───────────────────
+	//
+	// These belong to the Worker, not the Daemon: a remote Worker's filesystem
+	// and model catalogue are not reachable from the Daemon, so the Daemon serves
+	// the Worker's report verbatim (commit 8 of the Worker split).
+	const projectSettings = options.projectSettings ?? new Map<string, SettingsManager>();
+	if (options.projectSettings === undefined) {
+		for (const project of projects.values()) {
+			try {
+				projectSettings.set(project.id, SettingsManager.create(project.cwd, options.agentDir));
+			} catch {
+				// Unreadable settings degrade to the model-runtime defaults.
+			}
+		}
+	}
+	let globalSettings: SettingsManager | null = options.globalSettings ?? null;
+	if (options.globalSettings === undefined) {
+		try {
+			globalSettings = SettingsManager.create(process.cwd(), options.agentDir);
+		} catch {
+			globalSettings = null;
+		}
+	}
+	/** One mutation at a time, in arrival order: `setModelPinned` is a
+	 * read-modify-write over the global scope, so concurrent writes would drop
+	 * one another. */
+	const settingsMutations = createLifecycleScope();
+
+	const requestedThinkingLevelOf = (projectId: string, provider: string, modelId: string): string => {
+		const injected = options.requestedThinkingLevel?.(projectId, provider, modelId);
+		if (injected !== undefined) return injected;
+		const settings = projectSettings.get(projectId);
+		return (
+			settings?.getModelThinkingLevel(provider, modelId) ??
+			settings?.getDefaultThinkingLevel() ??
+			DEFAULT_THINKING_LEVEL
+		);
+	};
+
+	/** Resolve pi's global `enabledModels` scope into the pinned list (ADR 15).
+	 * Project-level overrides are intentionally ignored: pinned models is one
+	 * daemon-global concept. */
+	const resolvePinnedModels = async (): Promise<PinnedModelInfo[]> => {
+		const patterns = globalSettings?.getGlobalSettings().enabledModels;
+		if (!patterns || patterns.length === 0) return [];
+		const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, options.modelRuntime);
+		return resolved.map((sm) => ({
+			provider: sm.model.provider,
+			id: sm.model.id,
+			name: sm.model.name ?? sm.model.id,
+			thinkingLevel: sm.thinkingLevel,
+		}));
+	};
+
+	/** The model and thinking level a fresh session in a Project resolves to —
+	 * the same `findInitialModel` call a fresh Manager's session performs. */
+	const projectDefaults = async (
+		projectId: string,
+	): Promise<{ model: ModelRef | null; thinkingLevel: string | null }> => {
+		const settings = projectSettings.get(projectId);
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			...(settings
+				? {
+						defaultProvider: settings.getDefaultProvider(),
+						defaultModelId: settings.getDefaultModel(),
+						defaultThinkingLevel: settings.getDefaultThinkingLevel(),
+						modelThinkingLevels: settings.getAllModelThinkingLevels(),
+					}
+				: {}),
+			modelRuntime: options.modelRuntime,
+		});
+		return {
+			model: result.model ? { provider: result.model.provider, modelId: result.model.id } : null,
+			thinkingLevel: result.model ? result.thinkingLevel : null,
+		};
+	};
 
 	const emitActiveSessions = (): void => {
 		if (disposed) return;
@@ -350,7 +463,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 						await manager.setModel(model.provider, model.modelId);
 						if (thinkingLevel === undefined) {
 							await manager.setThinkingLevel(
-								options.requestedThinkingLevel(project.id, model.provider, model.modelId),
+								requestedThinkingLevelOf(project.id, model.provider, model.modelId),
 							);
 						}
 					}
@@ -408,12 +521,76 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			catalog.listSessions(projectId, max, cursor ?? null, liveEntries()),
 		listActiveSessions: async (): Promise<SessionInfo[]> => catalog.listActiveSessions(liveEntries()),
 
+		// ── Environment (Worker-owned reads and settings) ───────────────
+		info: async (): Promise<WorkerInfo> => {
+			const models: ModelInfo[] = options.modelRuntime.getAvailableSnapshot().map((m) => ({
+				provider: m.provider,
+				providerName: options.modelRuntime.getProvider(m.provider)?.name,
+				id: m.id,
+				name: m.name ?? m.id,
+				reasoning: m.reasoning ?? false,
+				supportedThinkingLevels: getSupportedThinkingLevels(m),
+				contextWindow: m.contextWindow,
+			}));
+			const visiblePatterns = readBridgeSettings(options.agentDir).visibleModels ?? [];
+			const visibleModels = visiblePatterns.length > 0 ? resolveVisibleModelKeys(visiblePatterns, models) : [];
+			const projectInfos: ProjectInfo[] = await Promise.all(
+				[...projects.values()].map(async (p) => {
+					const defaults = await projectDefaults(p.id);
+					return {
+						id: p.id,
+						cwd: p.cwd,
+						defaultModel: defaults.model,
+						defaultThinkingLevel: defaults.thinkingLevel,
+					};
+				}),
+			);
+			return {
+				projects: projectInfos,
+				models,
+				pinnedModels: await resolvePinnedModels(),
+				visibleModels,
+				thinkingLevels: THINKING_LEVELS,
+			};
+		},
+
+		setModelPinned: (provider: string, modelId: string, pinned: boolean) =>
+			settingsMutations.run(async (): Promise<void> => {
+				const settings = globalSettings;
+				if (!settings) throw new Error("No global settings available");
+				// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
+				// same way on save), then add or remove this one model.
+				const patterns = settings.getGlobalSettings().enabledModels ?? [];
+				const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, options.modelRuntime);
+				const key = `${provider}/${modelId}`;
+				const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
+				const next = pinned
+					? ids.some((id) => id.toLowerCase() === key.toLowerCase())
+						? ids
+						: [...ids, key]
+					: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
+				settings.setEnabledModels(next.length > 0 ? next : undefined);
+				await settings.flush();
+				if (disposed) return;
+				emit({ kind: "pinned_models_changed", pinnedModels: await resolvePinnedModels() });
+			}),
+
+		listFiles: async (prefix: string, projectId: string) => listFiles(prefix, requireProject(projectId).cwd),
+		readFile: async (path: string, state?: string) => readFileAtSnapshot(path, state ?? "worktree"),
+		listDirectory: async (path: string, state?: string) => listDirectory(path, state ?? "worktree"),
+		gitShow: async (commit: string, cwd: string) => runGitShow(commit, cwd),
+		gitBase: async (directory: string, commit: string) => resolveGitBase(directory, commit),
+		gitDiff: async (directory: string, oldState: string, newState: string) =>
+			runGitDiff(oldState, newState, directory),
+
 		onEvent: (listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
 
 		liveRecords: () => registry.live(),
+
+		projects: () => [...projects.values()],
 
 		dispose: async () => {
 			if (disposed) return;
@@ -426,6 +603,92 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			}
 			listeners.clear();
 			await registry.dispose();
+			await settingsMutations.close();
+			// Exclusion is released last: every runtime is gone before the
+			// directory can be served by a successor.
+			for (const lock of options.storageLocks ?? []) await lock.release().catch(() => {});
 		},
 	};
+}
+
+/**
+ * pi-core runs offline in the bridge: the Worker owns no background network
+ * work. pi reads these variables at call time (tool binary downloads, catalog
+ * and package refreshes), so they must be set before the ModelRuntime or any
+ * extension exists.
+ *
+ * This lives with the Worker, not the Daemon: a standalone `--worker-serve`
+ * process creates the runtimes, so it must establish the mode itself. Setting
+ * it in only one entry point would leave the other silently online.
+ */
+export function enterOfflineMode(): void {
+	process.env.PI_OFFLINE = "1";
+	process.env.PI_SKIP_VERSION_CHECK = "1";
+}
+
+/** Build a Worker with the environment it owns: the model runtime (created
+ * when the caller did not inject one), the extension-registered providers, and
+ * the Session-directory exclusion claims.
+ *
+ * This is the entry the Worker process and the in-process Daemon both use, so
+ * neither of them has to know how pi's runtime or its extensions are set up.
+ * A caller that already holds a runtime (tests, an embedding host) keeps
+ * passing it and skips creation.
+ *
+ * Exclusion is acquired here, before any Manager can exist: a directory already
+ * served by a live owner fails the start rather than being written
+ * unsynchronized. */
+export async function startLocalWorker(
+	options: Omit<LocalWorkerOptions, "modelRuntime" | "storageLocks"> & {
+		modelRuntime?: ModelRuntime;
+		/** Skip exclusion (tests that build throwaway fixtures). */
+		skipStorageLock?: boolean;
+	},
+): Promise<LocalWorker> {
+	// Offline before anything can reach the network (see `enterOfflineMode`).
+	enterOfflineMode();
+	const modelRuntime =
+		options.modelRuntime ?? (await ModelRuntimeImpl.create({ authPath: join(options.agentDir, "auth.json") }));
+	await loadExtensionProviders(modelRuntime, options.agentDir);
+
+	const storageLocks: StorageLock[] = [];
+	if (options.skipStorageLock !== true) {
+		try {
+			// One claim per distinct Session directory: two Projects may not share
+			// storage (validated below), but the dedupe keeps the claim count honest.
+			const directories = new Set(options.projects.map((project) => project.sessionDir));
+			for (const directory of directories) storageLocks.push(await acquireStorageLock(directory));
+		} catch (error) {
+			for (const lock of storageLocks) await lock.release().catch(() => {});
+			throw error;
+		}
+	}
+	try {
+		return createLocalWorker({ ...options, modelRuntime, storageLocks });
+	} catch (error) {
+		for (const lock of storageLocks) await lock.release().catch(() => {});
+		throw error;
+	}
+}
+
+/** Register the providers disk extensions add, so `info()` reports them before
+ * any Session exists. A broken extension degrades to the plain catalogue
+ * instead of failing startup. */
+async function loadExtensionProviders(modelRuntime: ModelRuntime, agentDir: string): Promise<void> {
+	try {
+		const cwd = process.cwd();
+		const settingsManager = SettingsManager.create(cwd, agentDir);
+		const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+		await resourceLoader.reload();
+		const extensionsResult = resourceLoader.getExtensions();
+		for (const { name, config } of extensionsResult.runtime.pendingProviderRegistrations) {
+			modelRuntime.registerProvider(name, config);
+		}
+		for (const { provider } of extensionsResult.runtime.pendingNativeProviderRegistrations) {
+			modelRuntime.registerNativeProvider(provider);
+		}
+		modelRuntime.setProxyResolvers(extensionsResult.runtime.proxyResolvers);
+	} catch (error) {
+		console.error(`Worker: extension load failed: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }

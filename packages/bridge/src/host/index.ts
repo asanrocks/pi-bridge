@@ -18,6 +18,17 @@ export { assertNoSessionIdConflicts, createSessionCatalog } from "./session-cata
 export type { SessionCommandSurface, SessionCommands } from "./session-commands.ts";
 export { bindSessionCommands, bindWorkerCommands } from "./session-commands.ts";
 export type {
+	AcquireStorageLockOptions,
+	StorageLock,
+} from "./storage-lock.ts";
+export { acquireStorageLock, storageLockPath, storageReclaimPath } from "./storage-lock.ts";
+export type {
+	ConnectWorkerOptions,
+	RemoteWorker,
+	WorkerHello,
+} from "./worker-client.ts";
+export { connectWorker, WorkerRegistrationError } from "./worker-client.ts";
+export type {
 	CreateSessionOptions,
 	ObservationId,
 	ObservedSession,
@@ -25,7 +36,9 @@ export type {
 	SessionAddress,
 	SessionPage,
 	SessionTarget,
+	WorkerEnvironment,
 	WorkerEvent,
+	WorkerInfo,
 	WorkerObservation,
 	WorkerObservationFrame,
 	WorkerObservationSink,
@@ -33,5 +46,18 @@ export type {
 	WorkerRegistration,
 	WorkerService,
 } from "./worker-contract.ts";
-export type { LocalManagerFactory, LocalWorker } from "./worker-local.ts";
-export { createLocalWorker } from "./worker-local.ts";
+export type { WorkerHost, WorkerHostMode, WorkerHostOptions } from "./worker-host.ts";
+export { createWorkerHost } from "./worker-host.ts";
+export type { LocalManagerFactory, LocalWorker, LocalWorkerOptions } from "./worker-local.ts";
+export { createLocalWorker, enterOfflineMode, startLocalWorker } from "./worker-local.ts";
+export type { WorkerProcess, WorkerProcessOptions } from "./worker-process.ts";
+export { runWorkerProcess } from "./worker-process.ts";
+export type { WorkerFrame, WorkerPush, WorkerReply, WorkerRequest } from "./worker-protocol.ts";
+export {
+	parseWorkerFrame,
+	WORKER_HEARTBEAT_INTERVAL_MS,
+	WORKER_HEARTBEAT_TIMEOUT_MS,
+	WORKER_PROTOCOL_VERSION,
+} from "./worker-protocol.ts";
+export type { WorkerSocketServerOptions } from "./worker-server.ts";
+export { createWorkerSocketServer, serveWorkerConnection } from "./worker-server.ts";

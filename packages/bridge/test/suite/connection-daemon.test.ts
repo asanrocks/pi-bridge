@@ -222,7 +222,7 @@ describe("Connection + Daemon", () => {
 		const calls: Array<[string, string]> = [];
 		const verbs = {
 			...mockDaemonVerbs,
-			listFiles: (prefix: string, projectId: string) => {
+			listFiles: async (prefix: string, projectId: string) => {
 				calls.push([prefix, projectId]);
 				return [{ path: "src/index.ts", isDirectory: false }];
 			},

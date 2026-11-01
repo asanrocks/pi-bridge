@@ -102,19 +102,33 @@ the RPC demux; it sends initial sync before later live patches and stamps every
 observation frame with the attachment generation. Lazy demand and the filtering
 it implies belong to the observation (the Worker), so a Connection holds no
 subscription set: `pull` reads through its observation, which also decides
-which later patches that stream receives. The Daemon owns
-Projects, Connection registration, Project/session queries, and HTTP serving,
-and routes Session execution through one seam (`src/host/worker-contract.ts`):
-the Activation registry, Manager creation, the per-session choreography, and
-the Session catalog sit behind the Worker service contract
-(`src/host/worker-local.ts` today), with an authorization identity
-(incarnation + generation) per registration. The contract is values and opaque
-ids only — registration, Session target, observation, and frame identities —
-so a Worker can move behind a socket without the Daemon branching on
-locality, and a command names the Activation it was composed for. The
-repository read surface (snapshot reads, listings, the diff
- directive, `git show`, path completion) is its own module
-(`src/host/repository.ts`), shared by whichever link serves it.
+which later patches that stream receives. The Daemon owns Connection
+registration, the browser attachment stream, delivery, HTTP serving, and two
+daemon-global credential services (dictation, text polish). Everything that
+executes — Projects, Session storage, the Activation registry, Manager
+creation, pi runtimes, the model catalogue, settings, and the repository read
+surface — belongs to the Worker behind one seam
+(`src/host/worker-contract.ts`), with an authorization identity (incarnation +
+generation) per registration. The contract is values and opaque ids only —
+registration, Session target, observation, and frame identities — so the Worker
+runs in-process, behind a Unix socket, or as a spawned child without the
+Daemon branching on locality, and a command names the Activation it was
+composed for.
+
+`src/host/worker-host.ts` is the deployment seam that produces a Worker, and
+`src/host/worker-protocol.ts` is the only encoding of the contract. The
+`hello` push is the registration handshake and the Daemon's only source of
+Project configuration: acceptance is all-or-nothing, so a duplicate id or a
+collision with a reserved asset root closes the link instead of routing a
+partially claimed set. A Daemon may register several Workers; the join of the
+accepted registrations is its routing table, a Project id is served by exactly
+one of them, and a conflicting registration fails startup rather than splitting
+an address between two execution owners. A lost link withdraws only that
+registration's Projects; it does not kill the Worker's runtimes or disturb the
+others. Because a registration cannot outlive execution, exclusion is a
+Session-directory claim (`src/host/storage-lock.ts`) held by the Worker itself,
+reclaimed only under a single-winner guard, and a Worker that cannot claim its
+directory refuses to serve rather than writing JSONL unsynchronized.
 
 **Web.** `BridgeClient` is the only browser-side wire envelope owner. Its
 DocumentMirror applies `replace` and `patch` pushes with immutable structural
@@ -354,7 +368,10 @@ guarded against.
 | Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution, creation transitions | Admission is gated by intent ownership: a superseded transition sends nothing and settles its caller; a completion carries the admitting message's epoch and the step compares; a creation's initial sync carries its operation id and commits only while its creation is the newest intent | `close()` — drains messages, effects, completions |
 | Session actor (`host/session-actor.ts`) | Session commands, observations, and the idle-collection decision against one registration | Commands capture the target; admission rejects once `close` began; a live capability is an attached observation and cancels idle collection | `close()` — disposes the runtime exactly once, drains tracked work, releases every observation |
 | `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
-| `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
+| `LifecycleScope` (settings mutations) | Worker-global `enabledModels` writes | Arrival order | Worker `dispose()` awaits `close()` |
+| Worker client (`host/worker-client.ts`) | Requests, observation frames, and Worker events over one socket | A link that misses its heartbeat deadline is lost; a late reply finds no pending entry and is dropped; `unavailable` and a socket failure take the same terminal path, settling pending requests and ending observations with a `closed` frame | `dispose()` — shutdown request, heartbeat stopped, pending requests rejected, observations ended |
+| Worker server (`host/worker-server.ts`) | One connection's observation table, its acquisitions, and its admitted dispatch | Admission closes synchronously at `shutdown`/withdrawal; an acquisition whose socket closed releases what it produced instead of installing it | `shutdown`/socket close — admitted work drained, observations released, event subscription removed |
+| Storage lock (`host/storage-lock.ts`) | Session-directory exclusion for one Worker lifetime | Reclaimed only when a same-host owner is provably dead; a foreign-host claim is never reclaimed | `release()` — holder-only delete; the Worker releases it after disposing every runtime |
 | `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` *before* the runtime is disposed, so every drained observation appends to a live runtime |
 | ActivationRegistry | Creation reservations, the address and durable-session-id indexes, and the collection choreography | Address-keyed reservations; the actor's phase is terminal per registration | `collect()`/`dispose()` — joinable: a second caller awaits the in-flight disposal / the memoized drain |
 | Manager teardown | Runtime disposal, observation-scope drain | — | `dispose()` — idempotent and joinable; the observation scope drains before the runtime goes |

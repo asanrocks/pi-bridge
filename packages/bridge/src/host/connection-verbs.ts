@@ -133,7 +133,7 @@ export interface DaemonVerbs {
 	/** Path completion (ADR 12): resolved against `projectId`'s cwd, so it does
 	 * not require an attachment (the Project home completes pre-send). Throws
 	 * on an unknown Project. */
-	listFiles: (prefix: string, projectId: string) => Array<{ path: string; isDirectory: boolean }>;
+	listFiles: (prefix: string, projectId: string) => Promise<Array<{ path: string; isDirectory: boolean }>>;
 	/** Read one absolute path at one repository state (ADR 14). A missing path
 	 * is an `absent` value, not a throw; an invalid state/path or a spawn
 	 * failure throws (converted to an ok:false reply). An omitted state reads
@@ -373,7 +373,7 @@ const daemonVerbs: Record<string, VerbHandler> = {
 		const m = msg as unknown as ListFilesRequest;
 		if (typeof m.prefix !== "string") throw new Error("Missing `prefix`");
 		if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-		const entries = ctx.daemonVerbs.listFiles(m.prefix, m.projectId);
+		const entries = await ctx.daemonVerbs.listFiles(m.prefix, m.projectId);
 		ctx.send({ id: msg.id, ok: true, entries });
 	},
 	// Attachment-free (ADR 14): the path is absolute, so no Session is needed
