@@ -203,8 +203,15 @@ Model runtime, extensions, per-Project settings, the global `enabledModels`
 scope, and the repository surface all belong to the Worker. The Daemon's
 `getDaemonInfo` verb forwards `info()` and adds only its own `devMode`;
 `setModelPinned` is serialized inside the Worker that owns the scope, so
-concurrent pins cannot drop one another. `pinned_models_changed` reaches
-browsers as a Worker event, not a Daemon poll.
+concurrent pins cannot drop one another. With several registrations the Daemon
+broadcasts the mutation to every Worker and reports the deduped union of
+their lists; that aggregate is only coherent while the registrations share
+one settings file, so several Workers over distinct agent directories is not a
+supported configuration — a partial write failure or divergent scopes would
+leave the reports disagreeing, and giving the pinned scope one authoritative
+owner across registrations is deferred until multi-Worker deployment is an
+actual goal. `pinned_models_changed` reaches browsers as a Worker event, not a
+Daemon poll.
 
 Dictation credentials and text polish stay on the Daemon: the browser cannot
 mint a SAMI token, register a device, or speak the polish protocol, and neither
