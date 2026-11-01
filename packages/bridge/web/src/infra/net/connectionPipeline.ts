@@ -167,8 +167,9 @@ export function createConnectionPipeline(client: BridgeClient, scheduler: FlushS
 	const onPush = (push: ServerPushMessage) => {
 		if (disposed) return;
 		const store = getStore();
-		// ADR 13: while viewing through an alias (`/@latest`) the URL keeps the
-		// alias form — address-bearing frames commit the store address only.
+		// ADR 13: while viewing through an alias (`/@latest` or
+		// `/<project>/@latest`) the URL keeps the alias form — address-bearing
+		// frames commit the store address only.
 
 		// Project-scoped session-list refresh (ADR 11). The sidebar folder
 		// cache is the only consumer: refresh a page that is already cached;

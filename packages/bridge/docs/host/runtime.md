@@ -117,15 +117,17 @@ exception: that link closes gracefully, so a Worker that dials in mid-shutdown
 retries the next Daemon rather than dying.
 
 Startup output is one banner in every role: the version line, the role with the
-socket it owns or dialed, the Project ids this process serves, and the
-`/@latest` address a browser opens (the alias resolves to the newest Session
-and falls back to the launcher). A Worker cannot derive the web port from its
-socket, so it takes the address from the probe; a remote Worker derives it from
-its `--daemon` URL, whose single HTTP listener serves pages and upgrades on one
-port. The banner is printed once per process; a reconnect prints one line so a
-flapping daemon cannot repeat it. A combined invocation says that it hosts the
-shared daemon in the foreground: exiting it disconnects other Workers' browsers
-while those Worker processes keep running.
+socket it owns or dialed, the Project ids this process serves, and the alias
+address a browser opens (ADR 13). A process serving exactly one Project links
+that Project's alias, `/<project>/@latest`; anything else links the root form,
+which spans Projects. Either resolves to the newest Session and falls back to
+the scope's home (the Project home, or the launcher). A Worker cannot derive the
+web port from its socket, so it takes the address from the probe; a remote
+Worker derives it from its `--daemon` URL, whose single HTTP listener serves
+pages and upgrades on one port. The banner is printed once per process; a
+reconnect prints one line so a flapping daemon cannot repeat it. A combined
+invocation says that it hosts the shared daemon in the foreground: exiting it
+disconnects other Workers' browsers while those Worker processes keep running.
 
 ## Worker deployment
 

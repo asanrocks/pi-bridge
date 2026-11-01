@@ -582,10 +582,10 @@ the target seed, not the old Document.
 the address-to-session identity for each row. The first page is ten rows; the
 page's compound cursor is retained for load-more requests.
 
-`latestSession.ts` resolves the `/@latest` target: the most recently active
-live Session from the global snapshot, else the most recent durable Session
-across Projects (each Project's first `listSessions` row), which the open then
-activates.
+`latestSession.ts` resolves the `@latest` target inside the alias's scope: the
+most recently active live Session there from the global snapshot, else the most
+recent durable Session there (the Project's first `listSessions` row, or each
+Project's for the root form), which the open then activates.
 
 ### Lazy pull loop
 
@@ -693,7 +693,9 @@ leaves the draft in memory.
 
 ```text
 /                         launcher
-/@latest                  alias — resolved at boot, never redirected (ADR 13)
+/@latest                  alias — cross-Project, resolved at boot, never
+                          redirected (ADR 13)
+/$proj/@latest            alias — that Project's newest Session, same rules
 /$proj                    Project home
 /$proj/$stem              Session, including nested stems
 ```
@@ -706,18 +708,22 @@ Project home is unattached and provides the Project-scoped first-prompt
 surface. A successful address-bearing initial sync commits the open Session
 address and its cache identity; a failed open lands on the Project home.
 
-Aliases (ADR 13) are single-segment routes beginning with `@` — a prefix no
-Project id may carry, so the namespaces cannot collide. Boot
-resolves `@latest` to the most recently active live Session from the global
-active snapshot already fetched by initialization; when none is live it
-falls back to the most recent durable Session across Projects (each Project's
-first `listSessions` row) and opens it, which activates it — only when no
-Session exists at all does it land on the launcher. While the alias view
+Aliases (ADR 13) are segments beginning with `@` — a prefix no Project id may
+carry, so the namespaces cannot collide — and their position is their scope:
+the root form spans Projects, a Project's last segment resolves inside that
+Project. Boot resolves `@latest` to the most recently active live Session in
+scope from the global active snapshot already fetched by initialization; when
+none is live it falls back to the most recent durable Session in scope (the
+Project's first `listSessions` row, or each Project's for the root form) and
+opens it, which activates it — only when no Session exists at all does it land
+on the scope's home (the Project home, or the launcher for the root form).
+While the alias view
 holds, navigation suppresses the route write on the initial-sync commit, so
 the URL keeps the alias form and the store holds the resolved address. Any explicit navigation (open, Project switch, detach, first prompt)
 clears the alias view and commits a real URL; a reload re-resolves, possibly
 onto a newer session. The alias never enters the address index or the cache
-key.
+key. Because the sigil owns its segment, a Session stem may not begin with
+`@` at the scoped position.
 
 Other `infra/lib` modules have narrow boundaries:
 
@@ -785,7 +791,7 @@ supplies what memory would have. The service worker completes the picture at
 the delivery layer: a reload while the daemon is down loads the cached app
 shell, and the local restore renders the session from the IndexedDB cache.
 The scope is session-content recovery on a direct open. The launcher,
-session listing, alias resolution (`/@latest` needs the daemon), and
+session listing, alias resolution (`@latest` needs the daemon), and
 switching to a different session all require the wire and show their down
 states without it; lazy fields of cached entries render unloaded until a
 reconnect's initial sync re-registers them.

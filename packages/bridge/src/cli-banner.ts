@@ -31,8 +31,18 @@ export function bannerLines(info: BannerInput): string[] {
 	const lines = [`pi-bridge ${version} (${commit}, ${date})`, `Role: ${info.role}`];
 	if (info.projects.length > 0) lines.push(`Projects: ${info.projects.join(", ")}`);
 	lines.push(
-		info.web === null ? "Visit: unavailable (the daemon reported no web address)" : `Visit: ${info.web}/@latest`,
+		info.web === null
+			? "Visit: unavailable (the daemon reported no web address)"
+			: `Visit: ${info.web}${latestPath(info.projects)}`,
 	);
 	if (info.note !== undefined) lines.push(info.note);
 	return lines;
+}
+
+/** The alias path for the Projects this process serves: one Project scopes the
+ * alias to it, so the link opens that Project's newest Session; several (or
+ * none yet) use the root form, which spans Projects. */
+function latestPath(projects: readonly string[]): string {
+	const only = projects.length === 1 ? projects[0] : undefined;
+	return only === undefined ? "/@latest" : `/${only}/@latest`;
 }

@@ -4,20 +4,21 @@
 
 ## Context
 
-Users want a bookmarkable address that always opens the most recent session,
-across all Projects — "show me the live one" — without hunting through the
-launcher after every daemon restart. The URL model (ADR 11) makes the URL the
-navigation source of truth: it is read at boot and every reconnect, and
-address-bearing initial-sync frames commit `(projectId, stem)` back into it.
-A cross-Project "latest" target is time-dependent, which cuts against two
-invariants if done naively: the URL would have to redirect to the resolved
-address (breaking bookmarkability — the bookmark degenerates to a one-shot),
-or the URL would stop determining what is displayed.
+Users want a bookmarkable address that always opens the most recent session —
+"show me the live one" — without hunting through the launcher after every
+daemon restart. Two scopes are wanted: across all Projects, and inside one
+Project (the address a running Worker can hand out for what it serves). The URL
+model (ADR 11) makes the URL the navigation source of truth: it is read at boot
+and every reconnect, and address-bearing initial-sync frames commit
+`(projectId, stem)` back into it. A "latest" target is time-dependent, which
+cuts against two invariants if done naively: the URL would have to redirect to
+the resolved address (breaking bookmarkability — the bookmark degenerates to a
+one-shot), or the URL would stop determining what is displayed.
 
 ## Decision
 
-An **alias** is a first URL segment beginning with `@`, forming a second
-address namespace alongside Project ids:
+An **alias** is a segment beginning with `@`, forming a second address
+namespace alongside Project ids. Its position is its scope:
 
 - `/@latest` resolves, once per boot/reconnect, to the most recently active
   **live** session — the first row of the global active-session snapshot the
@@ -26,10 +27,15 @@ address namespace alongside Project ids:
   a daemon restart) it falls back to the most recent **durable** session
   across Projects — each Project's first `listSessions` row — and opens it,
   which activates it; only when no session exists at all does it fall back to
-  the launcher. **No daemon-side support exists**: no new verb, no reply
-  field; the fallback reuses the Project-scoped `listSessions` verb the client
-  already has. (The launcher's Latest row — the live snapshot's first row —
-  still disappears when nothing is active.)
+  the launcher.
+- `/<projectId>/@latest` is the same resolution scoped to one Project: the
+  most recently active live Session of that Project, else its first
+  `listSessions` row, else that Project's home. Since the alias is a terminal
+  segment, a Session stem may not begin with `@` at that position.
+- **No daemon-side support exists**: no new verb, no reply field; both forms
+  reuse the Project-scoped `listSessions` verb the client already has. (The
+  launcher's Latest row — the live snapshot's first row — still disappears
+  when nothing is active.)
 - **The URL never redirects.** While the session was reached through the
   alias, the store holds the resolved address and the pipeline suppresses the
   route write on address-bearing initial-sync frames. The URL stays `/@latest`
@@ -46,8 +52,9 @@ address namespace alongside Project ids:
 - **No reservation.** Project ids match `^[a-z0-9]+(-[a-z0-9]+)*$`; `@` is
   outside that charset, so the alias namespace is structurally disjoint from
   Project ids. A Project literally named "latest" keeps working, including
-  its `/latest` home URL. Aliases are single-segment; `/@x/...` is not an
-  alias route and falls back to the launcher.
+  its `/latest` home URL. An alias is a whole segment: nothing may follow it,
+  so `/@x/...` is not an alias route and falls back to the launcher, and
+  deeper segments (a nested stem) keep their meaning.
 
 ## Alternatives considered
 
@@ -84,4 +91,6 @@ address namespace alongside Project ids:
   recent durable session (activating it). This costs one `listSessions` call
   per Project, paid only on the no-live-session path.
 - A new alias is a cross-cutting change (route grammar, boot path, launcher)
-  and a glossary claim first.
+  and a glossary claim first. Scope came for free from the grammar: the
+  position of the alias segment decides what "latest" means, so a Worker
+  banner can hand out `/spiral/@latest` without a second alias name.

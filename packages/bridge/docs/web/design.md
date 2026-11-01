@@ -199,7 +199,10 @@ The global launcher at `/` lists configured Projects with their working
 directories and active Sessions, ordered newest-activity-first. Above the
 Project list, a plain Latest button (ADR 13) reads "Latest session" plus the
 owning Project's id — selecting it navigates to `/@latest`, which resolves
-to the newest active session without redirecting. It is deliberately not an
+to the newest active session without redirecting. The same alias is available
+scoped to a Project (`/<projectId>/@latest`): deep links and the CLI banner
+use that form, which resolves inside the Project and falls back to its home.
+It is deliberately not an
 active-row duplicate: no liveness dot, preview, or time. It exists only
 while something is active. Active rows
 show a liveness dot, name or first-message fallback, Project, relative time

@@ -63,6 +63,32 @@ describe("resolveLatestSession", () => {
 		expect(await resolveLatestSession(client, [project("p1")], [])).toBeNull();
 	});
 
+	it("scopes the live preference to the alias's Project", async () => {
+		const { client } = fakeClient({ p1: [row("p1", "durable", "2025-06-01T00:00:00.000Z")] });
+		const active = [row("p2", "elsewhere", "2026-01-01T00:00:00.000Z", { active: true })];
+		expect(await resolveLatestSession(client, [project("p1"), project("p2")], active, "p1")).toMatchObject({
+			projectId: "p1",
+			stem: "durable",
+		});
+	});
+
+	it("scopes the durable fallback to the alias's Project", async () => {
+		const { client, listSessions } = fakeClient({
+			p1: [row("p1", "a", "2025-06-01T00:00:00.000Z")],
+			p2: [row("p2", "newer", "2030-01-01T00:00:00.000Z")],
+		});
+		const target = await resolveLatestSession(client, [project("p1"), project("p2")], [], "p1");
+		expect(target?.stem).toBe("a");
+		// A scoped alias reads its own Project, not every Project.
+		expect(listSessions).toHaveBeenCalledTimes(1);
+		expect(listSessions).toHaveBeenCalledWith("p1", 1);
+	});
+
+	it("scopes an emptied Project to null", async () => {
+		const { client } = fakeClient({ p1: [row("p1", "a", "2025-06-01T00:00:00.000Z")], p2: [] });
+		expect(await resolveLatestSession(client, [project("p1"), project("p2")], [], "p2")).toBeNull();
+	});
+
 	it("ignores failed project replies", async () => {
 		const { client } = fakeClient({ p1: [row("p1", "a", "2025-01-01T00:00:00.000Z")] }, false);
 		expect(await resolveLatestSession(client, [project("p1")], [])).toBeNull();

@@ -194,24 +194,32 @@ function errorText(error: unknown, fallback: string): string {
 type NavigationMessage =
 	// User navigation: sidebar, history, alias button. `mode` distinguishes
 	// the navigate staging (candidate switch, rollback) from the boot
-	// staging (mirror seeding, Project-home fallback); the /@latest flow
+	// staging (mirror seeding, Project-home fallback); the `@latest` flow
 	// stages with boot semantics after its resolution.
 	| {
 			kind: "open";
 			view: NavigationView & { kind: "session" };
 			sessionIdHint?: string;
-			viaAlias?: boolean;
 			mode?: "navigate" | "boot";
 			reply?: Reply;
 	  }
 	// Route/reconnect-driven open (the URL already names the target).
-	| { kind: "boot"; view: NavigationView & { kind: "session" }; viaAlias?: boolean; reply?: Reply }
+	| { kind: "boot"; view: NavigationView & { kind: "session" }; reply?: Reply }
 	// Alias resolution (user press / boot-reconnect). The completion of the
 	// lookup effect: it carries the epoch of the intent that started it, so
-	// a resolution that lands after a newer intent commits nothing.
-	| { kind: "latest"; reply?: Reply }
-	| { kind: "bootLatest"; reply?: Reply }
-	| { kind: "latestResolved"; epoch: number; boot: boolean; target: SessionInfo | null; reply?: Reply }
+	// a resolution that lands after a newer intent commits nothing. The alias's
+	// scope is part of the intent: the root form spans Projects, a Project's
+	// `@latest` resolves inside it.
+	| { kind: "latest"; aliasProjectId: string | null; reply?: Reply }
+	| { kind: "bootLatest"; aliasProjectId: string | null; reply?: Reply }
+	| {
+			kind: "latestResolved";
+			epoch: number;
+			boot: boolean;
+			aliasProjectId: string | null;
+			target: SessionInfo | null;
+			reply?: Reply;
+	  }
 	// Cache-prepare completion: carries the transition it belongs to, the
 	// target it captured at staging, and the cached prefix it read. The step
 	// seeds (or, when superseded, settles the caller and admits nothing —
@@ -276,7 +284,7 @@ export interface NavigationDeps {
 	port: NavigationViewPort;
 	lookupSessionId(projectId: string, stem: string): string | undefined;
 	loadSession(sessionId: string): Promise<{ records: CacheEntryRecord[]; hint: SessionStatusHint | null }>;
-	resolveLatest(client: BridgeClient): Promise<SessionInfo | null>;
+	resolveLatest(client: BridgeClient, projectId: string | null): Promise<SessionInfo | null>;
 }
 
 const defaultDeps: NavigationDeps = {
@@ -287,8 +295,8 @@ const defaultDeps: NavigationDeps = {
 	// The alias resolution's default reads the directory slices the store
 	// holds (projects, active sessions) — directory input, not view
 	// authority; the seam itself is injectable.
-	resolveLatest: (client) =>
-		resolveLatestSession(client, getStore().getState().projects, getStore().getState().activeSessions),
+	resolveLatest: (client, projectId) =>
+		resolveLatestSession(client, getStore().getState().projects, getStore().getState().activeSessions, projectId),
 };
 
 // ---------------------------------------------------------------------------
@@ -435,13 +443,14 @@ function createRpcEffect(
 	};
 }
 
-/** Resolve the /@latest alias target (ADR 13): the most recently active live
- * Session, else the most recent durable Session across Projects. Value-only:
- * the resolution returns as a completion carrying the epoch of the intent
- * that started it, so a lookup that lands after a newer intent is ignored
- * by one comparison — it cannot re-enter as a fresh intent. */
+/** Resolve the `@latest` alias target (ADR 13) inside its scope: the most
+ * recently active live Session in scope, else the most recent durable Session
+ * there. Value-only: the resolution returns as a completion carrying the epoch
+ * of the intent that started it, so a lookup that lands after a newer intent is
+ * ignored by one comparison — it cannot re-enter as a fresh intent. */
 function latestEffect(
 	boot: boolean,
+	aliasProjectId: string | null,
 	epoch: number,
 	reply: Reply | undefined,
 	deps: NavigationDeps,
@@ -449,25 +458,25 @@ function latestEffect(
 	return {
 		run: async () => {
 			// Every path settles the caller: with no target (or a lookup
-			// failure) a boot lands on the Launcher and a user press is a
+			// failure) a boot lands on its scope and a user press is a
 			// silent no-op (the old behavior); with a target, the reply
 			// settles at the staged transition's own settlement.
 			try {
 				const client = deps.getClient();
 				if (!client) {
 					reply?.({ ok: true });
-					return { kind: "latestResolved", epoch, boot, target: null, reply };
+					return { kind: "latestResolved", epoch, boot, aliasProjectId, target: null, reply };
 				}
 				try {
-					const row = await deps.resolveLatest(client);
-					return { kind: "latestResolved", epoch, boot, target: row, reply };
+					const row = await deps.resolveLatest(client, aliasProjectId);
+					return { kind: "latestResolved", epoch, boot, aliasProjectId, target: row, reply };
 				} catch {
 					reply?.({ ok: true });
-					return { kind: "latestResolved", epoch, boot, target: null, reply };
+					return { kind: "latestResolved", epoch, boot, aliasProjectId, target: null, reply };
 				}
 			} catch {
 				reply?.({ ok: true });
-				return { kind: "latestResolved", epoch, boot, target: null, reply };
+				return { kind: "latestResolved", epoch, boot, aliasProjectId, target: null, reply };
 			}
 		},
 	};
@@ -556,12 +565,13 @@ function stageOpen(
 	view: NavigationView & { kind: "session" },
 	options: {
 		mode: "navigate" | "boot";
-		viaAlias: boolean;
+		/** Non-null when the view is reached through an alias: the route keeps
+		 * the alias form and initial-sync frames do not rewrite it (ADR 13).
+		 * Its `projectId` is the scope the URL should carry. */
+		alias: { projectId: string | null } | null;
 		/** User actions publish the URL at staging; a boot's URL already
 		 * names the target. */
 		writesRoute: boolean;
-		/** The alias press writes the alias route form (ADR 13). */
-		routeAlias: boolean;
 		sessionIdHint?: string;
 		reply?: Reply;
 	},
@@ -579,16 +589,19 @@ function stageOpen(
 		openEpoch: null,
 		view,
 		mode: options.mode,
-		viaAlias: options.viaAlias,
+		viaAlias: options.alias !== null,
 		previous: state.current,
 		reply: options.reply,
 		synced: false,
 	};
-	port.setAddressViaAlias(options.viaAlias);
+	port.setAddressViaAlias(options.alias !== null);
 	port.stageAddress(view.projectId, view.stem);
 	if (options.writesRoute) {
-		if (options.routeAlias) port.writeRoute({ kind: "alias", alias: "latest" });
-		else port.writeRoute({ kind: "session", projectId: view.projectId, stem: view.stem });
+		if (options.alias !== null) {
+			port.writeRoute({ kind: "alias", alias: "latest", projectId: options.alias.projectId });
+		} else {
+			port.writeRoute({ kind: "session", projectId: view.projectId, stem: view.stem });
+		}
 	}
 	return {
 		state: { ...state, pending, abandoned, intentEpoch: epoch },
@@ -642,21 +655,20 @@ function navigationStep(
 	switch (message.kind) {
 		case "open":
 		case "boot": {
-			const viaAlias = message.viaAlias === true;
 			// `mode` picks the failure fallback and the seeding style:
 			// navigate restores the last committed view and seeds a
 			// candidate; boot seeds the live mirror and lands on the
-			// Project home. The alias press stages like a user navigation
-			// (it writes the alias route) but opens like a boot.
+			// Project home. Neither is alias-addressed: a resolved alias
+			// target arrives as `latestResolved`, which stages with boot
+			// semantics.
 			const mode: "navigate" | "boot" = message.kind === "open" ? (message.mode ?? "navigate") : "boot";
 			return stageOpen(
 				state,
 				message.view,
 				{
 					mode,
-					viaAlias,
+					alias: null,
 					writesRoute: message.kind === "open",
-					routeAlias: viaAlias,
 					sessionIdHint: message.kind === "open" ? message.sessionIdHint : undefined,
 					reply: message.reply,
 				},
@@ -742,7 +754,7 @@ function navigationStep(
 			const boot = message.kind === "bootLatest";
 			return {
 				state: { ...state, intentEpoch: context.epoch },
-				effects: [latestEffect(boot, context.epoch, message.reply, deps)],
+				effects: [latestEffect(boot, message.aliasProjectId, context.epoch, message.reply, deps)],
 			};
 		}
 
@@ -756,9 +768,14 @@ function navigationStep(
 			}
 			if (!message.target) {
 				if (message.boot) {
+					// Nothing to open: land on what the alias scoped itself to —
+					// its Project home, or the Launcher for the root form.
+					message.reply?.({ ok: true });
+					if (message.aliasProjectId !== null) {
+						return { state: { ...state, current: landProjectHome(message.aliasProjectId, deps.port) } };
+					}
 					deps.port.clearSession();
 					deps.port.writeRoute({ kind: "launcher" });
-					message.reply?.({ ok: true });
 					return { state: { ...state, current: { view: { kind: "launcher" }, sessionId: null } } };
 				}
 				// A user press with nothing to open: a silent no-op — but the
@@ -774,9 +791,8 @@ function navigationStep(
 				view,
 				{
 					mode: "boot",
-					viaAlias: true,
+					alias: { projectId: message.aliasProjectId },
 					writesRoute: !message.boot,
-					routeAlias: true,
 					reply: message.reply,
 				},
 				context.epoch,
@@ -1208,25 +1224,26 @@ export function navigationBoot(target: NavigationTarget): Promise<NavigationResu
 	);
 }
 
-/** Open the `/@latest` alias (user action): resolve, then open the target
- * without leaving the alias URL. Resolves when the resolved target's
- * transition settles; a superseded resolution is a silent no-op. */
-export function navigationLatest(): Promise<NavigationResult> {
+/** Open the `@latest` alias (user action): resolve inside the alias's scope,
+ * then open the target without leaving the alias URL. Resolves when the
+ * resolved target's transition settles; a superseded resolution is a silent
+ * no-op. */
+export function navigationLatest(aliasProjectId: string | null = null): Promise<NavigationResult> {
 	return settled(
 		new Promise<NavigationResult>((resolve) => {
-			void runtime.reactor.send({ kind: "latest", reply: resolve });
+			void runtime.reactor.send({ kind: "latest", aliasProjectId, reply: resolve });
 		}),
 	);
 }
 
-/** Resolve the alias at boot/reconnect: with no target, land on the
- * Launcher. Resolves when the resolved target's transition settles (or the
- * Launcher landing is applied), so a caller gates "connected" on the same
- * completion the old boot path had. */
-export function navigationBootLatest(): Promise<NavigationResult> {
+/** Resolve the alias at boot/reconnect: with no target, land on the alias's
+ * scope (its Project home, or the Launcher for the root form). Resolves when
+ * the resolved target's transition settles (or the landing is applied), so a
+ * caller gates "connected" on the same completion the old boot path had. */
+export function navigationBootLatest(aliasProjectId: string | null = null): Promise<NavigationResult> {
 	return settled(
 		new Promise<NavigationResult>((resolve) => {
-			void runtime.reactor.send({ kind: "bootLatest", reply: resolve });
+			void runtime.reactor.send({ kind: "bootLatest", aliasProjectId, reply: resolve });
 		}),
 	);
 }

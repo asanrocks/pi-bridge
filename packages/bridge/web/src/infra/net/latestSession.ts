@@ -1,10 +1,12 @@
-// resolveLatestSession — the `/@latest` alias target (ADR 13).
+// resolveLatestSession — the `@latest` alias target (ADR 13).
 //
-// The most recently active live Session from the global snapshot; with none
-// live, the most recent durable Session across Projects (each Project's first
+// The scope comes from the alias's position in the URL: the root form spans
+// Projects, a Project's `@latest` resolves inside that Project. Within the
+// scope: the most recently active live Session from the global snapshot; with
+// none live, the most recent durable Session (each in-scope Project's first
 // `listSessions` row, ordered by its durable sort time). The caller opens the
-// result, which activates a durable Session. Returns null when no Session
-// exists at all.
+// result, which activates a durable Session. Returns null when nothing exists
+// in scope.
 
 import type { BridgeClient, ListSessionsReply, ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import { sortByLastActivity } from "../lib/sortByLastActivity.ts";
@@ -20,11 +22,15 @@ export async function resolveLatestSession(
 	client: BridgeClient,
 	projects: ProjectInfo[],
 	activeSessions: SessionInfo[],
+	/** The alias's scope: a Project id, or null for the cross-Project form. */
+	projectId: string | null = null,
 ): Promise<SessionInfo | null> {
-	const live = sortByLastActivity(activeSessions)[0];
+	const inScope = projectId === null ? activeSessions : activeSessions.filter((row) => row.projectId === projectId);
+	const live = sortByLastActivity(inScope)[0];
 	if (live) return live;
 
-	const rows = await Promise.all(projects.map((project) => firstSession(client, project.id)));
+	const ids = projectId === null ? projects.map((project) => project.id) : [projectId];
+	const rows = await Promise.all(ids.map((id) => firstSession(client, id)));
 	let best: SessionInfo | null = null;
 	for (const row of rows) {
 		if (row && (!best || Date.parse(row.timestamp) > Date.parse(best.timestamp))) best = row;

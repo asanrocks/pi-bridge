@@ -8,7 +8,7 @@ import { bannerLines } from "../../src/cli-banner.ts";
 const WEB = "http://localhost:33339";
 
 describe("startup banner", () => {
-	it("names the role, its Projects, and the @latest address", () => {
+	it("names the role, its Projects, and the scoped @latest address", () => {
 		const lines = bannerLines({
 			role: "worker (connected to unix:/home/hugh/.pi/bridge.sock)",
 			projects: ["spiral"],
@@ -18,18 +18,20 @@ describe("startup banner", () => {
 		expect(lines.slice(1)).toEqual([
 			"Role: worker (connected to unix:/home/hugh/.pi/bridge.sock)",
 			"Projects: spiral",
-			"Visit: http://localhost:33339/@latest",
+			"Visit: http://localhost:33339/spiral/@latest",
 		]);
 	});
 
-	it("joins several Projects on one line", () => {
+	it("joins several Projects on one line and links the root alias", () => {
 		const lines = bannerLines({ role: "worker (connected to unix:/s.sock)", projects: ["one", "two"], web: WEB });
 		expect(lines).toContain("Projects: one, two");
+		expect(lines).toContain("Visit: http://localhost:33339/@latest");
 	});
 
-	it("omits the Projects line when this process serves none", () => {
+	it("omits the Projects line when this process serves none and links the root alias", () => {
 		const lines = bannerLines({ role: "daemon (socket unix:/s.sock)", projects: [], web: WEB });
 		expect(lines.some((line) => line.startsWith("Projects:"))).toBe(false);
+		expect(lines).toContain("Visit: http://localhost:33339/@latest");
 	});
 
 	it("says the address is unknown instead of guessing a port", () => {

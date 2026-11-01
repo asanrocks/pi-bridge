@@ -29,16 +29,37 @@ describe("parseRoute", () => {
 	});
 
 	it("parses the alias namespace (ADR 13)", () => {
-		expect(parseRoute("/@latest")).toEqual({ kind: "alias", alias: "latest" });
+		expect(parseRoute("/@latest")).toEqual({ kind: "alias", alias: "latest", projectId: null });
 		// %40 decodes to @ — one decode, like any segment.
-		expect(parseRoute("/%40latest")).toEqual({ kind: "alias", alias: "latest" });
-		// Aliases are single-segment; a @ segment can never be a Project id.
+		expect(parseRoute("/%40latest")).toEqual({ kind: "alias", alias: "latest", projectId: null });
+		// Aliases are a whole segment; a @ segment can never be a Project id.
 		expect(parseRoute("/@latest/stem")).toEqual({ kind: "launcher" });
 		// Alias names follow the Project-id charset (minus the sigil).
 		expect(parseRoute("/@BAD")).toEqual({ kind: "launcher" });
 		expect(parseRoute("/@")).toEqual({ kind: "launcher" });
-		expect(parseRoute(aliasPath("latest"))).toEqual({ kind: "alias", alias: "latest" });
+		expect(parseRoute(aliasPath("latest"))).toEqual({ kind: "alias", alias: "latest", projectId: null });
 		expect(aliasPath("latest")).toBe("/@latest");
+	});
+
+	it("scopes an alias by its position (ADR 13)", () => {
+		// A Project's last segment names that Project's latest, not a stem.
+		expect(parseRoute("/spiral/@latest")).toEqual({ kind: "alias", alias: "latest", projectId: "spiral" });
+		expect(parseRoute("/spiral/%40latest")).toEqual({ kind: "alias", alias: "latest", projectId: "spiral" });
+		expect(aliasPath("latest", "spiral")).toBe("/spiral/@latest");
+		expect(parseRoute(aliasPath("latest", "my proj"))).toEqual({
+			kind: "alias",
+			alias: "latest",
+			projectId: "my proj",
+		});
+		// An alias is a terminal segment: nothing follows it.
+		expect(parseRoute("/spiral/@latest/stem")).toEqual({
+			kind: "session",
+			projectId: "spiral",
+			stem: "@latest/stem",
+		});
+		// Only the scoped position is reserved; deeper @ segments stay stems.
+		expect(parseRoute("/spiral/a/@b")).toEqual({ kind: "session", projectId: "spiral", stem: "a/@b" });
+		expect(parseRoute("/spiral/@BAD")).toEqual({ kind: "launcher" });
 	});
 
 	it("round-trips through the path builders", () => {

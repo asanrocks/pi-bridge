@@ -84,15 +84,17 @@ What exists, how it is named, how long it lives. Owned by
    rule is stable; the mechanism is not — ADR 11 introduced idle timers,
    which the Session actor now owns as a capability-count decision (ADR 19).) A Session with no Activation
    is dormant.
-7. An **alias** *(bound)* is a first URL segment beginning with `@` — a
-   prefix no Project id may carry, so the two namespaces cannot collide and
-   no id is reserved — that names a cross-Project target
-   resolved once per boot: `/@latest` resolves to the most recently active
-   live Session (the global active snapshot); with none live it falls back
-   to the most recent durable Session across Projects and opens it
-   (activating it), and only with no Session at all falls back to the
-   launcher. The URL keeps the alias form; the client state holds the
-   resolved address until an explicit navigation commits a real one. A reload
+7. An **alias** *(bound)* is a URL segment beginning with `@` — a prefix no
+   Project id may carry, so the two namespaces cannot collide and no id is
+   reserved — that names a Session target resolved once per boot. Its
+   position in the URL is its scope: at the root (`/@latest`) it spans
+   Projects, as a Project's last segment (`/<project>/@latest`) it is that
+   Project's. Either form resolves to the most recently active live Session
+   in scope; with none live it falls back to the most recent durable Session
+   in scope and opens it (activating it), and only with no Session at all
+   does it fall back to the scope's home — the Launcher, or the Project
+   home. The URL keeps the alias form; the client state holds the resolved
+   address until an explicit navigation commits a real one. A reload
    re-resolves, possibly onto a newer Session. The alias set is closed: new
    aliases are new claims in this document first.
 

@@ -107,8 +107,11 @@ export function useConnection(): { retry: () => void } {
 			} else if (route.kind === "alias") {
 				// ADR 13: resolve the alias once per boot/reconnect — the URL
 				// keeps the alias form while the store holds the resolved
-				// address. No resolvable target lands on the Launcher.
-				if (route.alias === "latest") await navigationBootLatest();
+				// address. The alias's position is its scope: the root form spans
+				// Projects, a Project's `@latest` resolves inside it and lands on
+				// that Project's home when it has no Session.
+				const scoped = route.projectId === null || (info.projects ?? []).some((p) => p.id === route.projectId);
+				if (route.alias === "latest" && scoped) await navigationBootLatest(route.projectId);
 				else await navigationLauncher("boot");
 			} else if (route.kind === "project") {
 				const known = (info.projects ?? []).some((p) => p.id === route.projectId);

@@ -98,7 +98,8 @@ export interface ProtocolSlice {
 	devMode: boolean;
 
 	/** True while the current session was reached through an alias address
-	 * (ADR 13): the URL keeps the alias form (`/@latest`), so address-bearing
+	 * (ADR 13): the URL keeps the alias form (`/@latest` or
+	 * `/<project>/@latest`), so address-bearing
 	 * initial-sync frames must not rewrite it. Cleared by boot re-evaluation,
 	 * the alias teardown, and every explicit navigation. */
 	addressViaAlias: boolean;

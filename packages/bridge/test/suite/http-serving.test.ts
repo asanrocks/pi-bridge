@@ -69,7 +69,8 @@ function request(port: number, path: string): Promise<Reply> {
 }
 
 /** Address-shaped paths (the client resolves them): the Project home, one
- * session with a nested stem, the alias, and an unknown first segment. */
+ * session with a nested stem, both alias scopes, and an unknown first
+ * segment. */
 const addressRoutes = (pid: string) => [
 	"/",
 	`/${pid}`,
@@ -77,6 +78,7 @@ const addressRoutes = (pid: string) => [
 	`/${pid}/nested/stem`,
 	"/@latest",
 	"/%40latest",
+	`/${pid}/@latest`,
 	"/not-a-project",
 	"///",
 ];

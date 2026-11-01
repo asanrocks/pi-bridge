@@ -467,6 +467,47 @@ describe("Navigation", () => {
 		expect(getStore().getState().addressViaAlias).toBe(true);
 	});
 
+	it("a Project-scoped alias resolves inside that Project and keeps its URL", async () => {
+		const fake = fakeClient();
+		const resolveLatest = vi.fn(async () => ({ projectId: "proj", stem: "a", sessionId: "id-a" }) as SessionInfo);
+		resetNavigationForTests({ getClient: () => fake.client, resolveLatest });
+		const booted = navigationBootLatest("proj");
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
+		// The scope reached the resolver, and the resolved address is not written
+		// back: the URL keeps the alias form.
+		expect(resolveLatest).toHaveBeenCalledWith(fake.client, "proj");
+		expect(fake.openCalls[0]).toMatchObject({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		expect((await booted).ok).toBe(true);
+		expect(replaceState.mock.calls.filter((c) => c[2] === "/proj/a")).toHaveLength(0);
+		expect(getStore().getState().addressViaAlias).toBe(true);
+	});
+
+	it("a Project-scoped alias press writes the scoped URL", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			resolveLatest: async () => ({ projectId: "proj", stem: "a", sessionId: "id-a" }) as SessionInfo,
+		});
+		const opened = navigationLatest("proj");
+		await vi.waitFor(() => expect(routeWritten()).toBe("/proj/@latest"));
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		expect((await opened).ok).toBe(true);
+		expect(getStore().getState().addressViaAlias).toBe(true);
+	});
+
+	it("a Project-scoped alias with nothing to open lands on that Project home", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client, resolveLatest: async () => null });
+		const booted = navigationBootLatest("proj");
+		expect((await booted).ok).toBe(true);
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBeNull();
+		expect(s.addressViaAlias).toBe(false);
+		expect(routeWritten()).toBe("/proj");
+	});
+
 	it("an alias resolution superseded by a newer intent commits nothing", async () => {
 		// F2: the lookup re-entered as a fresh intent overrode the successor.
 		const fake = fakeClient();
