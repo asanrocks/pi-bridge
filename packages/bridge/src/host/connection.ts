@@ -144,8 +144,11 @@ export class Connection {
 	}
 
 	/** Deliver one Worker frame, stamped with the attachment generation that
-	 * produced it. A terminal frame ends the attachment: the client learns the
-	 * runtime is gone instead of waiting for a view that can never progress. */
+	 * produced it. A terminal frame always crosses the wire — the client's
+	 * generation rule drops a stale one — but only the current attachment's
+	 * terminal frame may end the attachment: a close of the observation a
+	 * switch just left (its release can race a concurrent closeSession) must
+	 * not detach the successor server-side. */
 	private deliverObservation(frame: WorkerObservationFrame, generation: number): void {
 		if (frame.kind === "replace") {
 			this.send({
@@ -170,8 +173,11 @@ export class Connection {
 			return;
 		}
 		this.send({ kind: "session_closed", projectId: frame.address.projectId, stem: frame.address.stem, generation });
-		// The Worker already ended the observation; releasing is idempotent and
-		// keeps the Connection from holding a dead stream.
+		// Only the current attachment's terminal frame ends it: a stale one names
+		// a generation the attachment has advanced past. The Worker already ended
+		// that observation; releasing the current one is idempotent and keeps the
+		// Connection from holding a dead stream.
+		if (generation !== this.attachmentGeneration) return;
 		const current = this.attachment;
 		this.attachment = null;
 		void current?.observation.release();

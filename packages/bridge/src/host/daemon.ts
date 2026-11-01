@@ -201,6 +201,11 @@ export class Daemon {
 					},
 				});
 				holder.host = host;
+				// The host joins the cleanup set before its Projects are validated:
+				// the registration whose claim fails must be disposed with the rest,
+				// or a spawned Worker leaks past the failed startup — alive, holding
+				// its socket and its session-directory claims.
+				created.push(host);
 
 				for (const project of host.info.projects) {
 					const owner = this.routes.get(project.id);
@@ -209,7 +214,6 @@ export class Daemon {
 					}
 				}
 				for (const project of host.info.projects) this.routes.set(project.id, host);
-				created.push(host);
 			}
 		} catch (error) {
 			for (const host of created.reverse()) await host.dispose().catch(() => {});

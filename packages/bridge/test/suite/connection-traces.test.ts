@@ -442,4 +442,71 @@ describe("Connection protocol traces", () => {
 		const replyIndex = frames.findIndex((f) => (f as Record<string, unknown>).id === "c1");
 		expect(closedIndex).toBeLessThan(replyIndex);
 	});
+
+	it("a stale terminal frame never detaches the successor attachment", async () => {
+		const bundle = makeBundle();
+		const { serverWs, clientWs } = await createWsPair();
+		await waitForOpen(clientWs);
+		const frames = collectFrames(clientWs);
+		const conn = new Connection(serverWs, bundle.verbs, null, false);
+		cleanups.push(() => {
+			serverWs.close();
+			clientWs.close();
+		});
+
+		const writeHeader = (stem: string) => {
+			writeFileSync(
+				join(bundle.project.sessionDir, `${stem}.jsonl`),
+				`${JSON.stringify({ type: "session", version: 3, id: stem, timestamp: "2026-01-01T00:00:00Z", cwd: bundle.project.cwd })}\n`,
+			);
+		};
+		// The Daemon's attach shape, with the observation's sink captured so the
+		// test can deliver a terminal frame by hand — exactly as the Worker does
+		// when a closeSession of the switched-away session races the switch.
+		const attach = async (stem: string, capture: { sink?: WorkerObservationSink }) => {
+			await conn.attach(async (sink) => {
+				capture.sink = sink;
+				const observed = await bundle.worker.observeSession({ projectId: "proj", stem }, { cursor: null, sink });
+				return {
+					target: observed.target,
+					observation: observed.observation,
+					commands: bindWorkerCommands(bundle.worker, observed.target, observed.observation),
+				};
+			});
+		};
+
+		writeHeader("stale-a");
+		writeHeader("stale-b");
+		const a: { sink?: WorkerObservationSink } = {};
+		const b: { sink?: WorkerObservationSink } = {};
+		await attach("stale-a", a);
+		await attach("stale-b", b);
+		expect(conn.attachedSession?.stem).toBe("stale-b");
+
+		// A's late terminal frame (generation 1) crosses the wire — the client
+		// drops it there by its generation — and must not detach B server-side.
+		a.sink!({ kind: "closed", address: { projectId: "proj", stem: "stale-a" } });
+		const staleClosed = (await waitForFrame(
+			frames,
+			(f) => (f as Record<string, unknown>).kind === "session_closed",
+		)) as Record<string, unknown>;
+		expect(staleClosed.stem).toBe("stale-a");
+		expect(staleClosed.generation).toBe(1);
+		expect(conn.isAttached).toBe(true);
+		expect(conn.attachedSession?.stem).toBe("stale-b");
+
+		// B's attachment still serves commands.
+		clientWs.send(JSON.stringify({ id: "d1", verb: "discardSteer" }));
+		const reply = await replyFor(frames, "d1");
+		expect(reply.ok).toBe(true);
+
+		// The current attachment's terminal frame (generation 2) does end it.
+		b.sink!({ kind: "closed", address: { projectId: "proj", stem: "stale-b" } });
+		const currentClosed = (await waitForFrame(
+			frames,
+			(f) => (f as Record<string, unknown>).kind === "session_closed" && f !== staleClosed,
+		)) as Record<string, unknown>;
+		expect(currentClosed.generation).toBe(2);
+		expect(conn.isAttached).toBe(false);
+	});
 });

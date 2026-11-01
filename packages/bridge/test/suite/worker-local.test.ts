@@ -416,4 +416,63 @@ describe("LocalWorker (contract)", () => {
 		).rejects.toThrow(/shutting down/);
 		expect(worker.liveRecords()).toHaveLength(0);
 	});
+
+	it("a second dispose joins the in-flight drain instead of returning early", async () => {
+		const root = join(tmpdir(), `pi-bridge-join-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const sessionDir = join(root, "sessions");
+		mkdirSync(sessionDir, { recursive: true });
+		const project: ProjectConfig = { id: "proj", cwd: root, sessionDir };
+		writeFileSync(
+			join(sessionDir, "join-1.jsonl"),
+			`${JSON.stringify({ type: "session", version: 3, id: "join-1", timestamp: "2026-01-01T00:00:00Z", cwd: root })}\n`,
+		);
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+
+		// One manager whose disposal stays open until the test releases it, so
+		// the drain is observably in flight while the second caller arrives (the
+		// socket shutdown and the Worker process's signal handler overlap
+		// exactly this way).
+		let release: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const managers: StubManager[] = [];
+		const factory: LocalManagerFactory = async (opts) => {
+			const tm = stubManager(opts?.sessionPath);
+			const original = tm.dispose.bind(tm);
+			tm.dispose = async () => {
+				await gate;
+				await original();
+			};
+			managers.push(tm);
+			return tm;
+		};
+		const worker = createLocalWorker({
+			projects: [project],
+			agentDir: root,
+			modelRuntime: {} as ModelRuntime,
+			managerFactory: factory,
+			idleGcMs: 60_000,
+			unflushedIdleGcMs: 60_000,
+			requestedThinkingLevel: () => "off",
+		});
+
+		await worker.observeSession({ projectId: "proj", stem: "join-1" }, { cursor: null, sink: () => {} });
+
+		const first = worker.dispose();
+		let secondSettled = false;
+		const second = worker.dispose().then(() => {
+			secondSettled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		// The drain is still gated, so the second caller must still be waiting —
+		// a "has disposal begun" flag would have answered it already.
+		expect(secondSettled).toBe(false);
+
+		release();
+		await Promise.all([first, second]);
+		expect(secondSettled).toBe(true);
+		// Exactly one disposal, observed by both callers.
+		expect(managers[0]!.disposeCalls()).toBe(1);
+	});
 });

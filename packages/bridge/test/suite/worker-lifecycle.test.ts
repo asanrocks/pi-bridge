@@ -274,6 +274,21 @@ describe("worker shutdown drain", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(service.order.filter((entry) => entry === "list:start")).toHaveLength(before);
 	});
+
+	it("the shutdown reply arrives only after the service finished disposing", async () => {
+		const service = fakeWorker();
+		const endpoint = await serve(service);
+		const { ws, frames } = await openRaw(endpoint);
+		await waitUntil(() => frames.some((frame) => frame.kind === "hello"), "the handshake");
+
+		ws.send(JSON.stringify({ id: "stop", kind: "shutdown" }));
+		await waitUntil(() => frames.some((frame) => frame.id === "stop" && frame.ok === true), "the shutdown reply");
+
+		// A spawned parent kills the child on this reply, so it must mean the
+		// Worker finished — runtimes disposed, exclusion claims released — not
+		// merely that it agreed to stop.
+		expect(service.order).toContain("dispose");
+	});
 });
 
 describe("worker offline mode", () => {

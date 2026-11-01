@@ -144,6 +144,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	const observations = new Map<string, ObservationState>();
 	const listeners = new Set<(event: WorkerEvent) => void>();
 	let disposed = false;
+	/** The memoized disposal drain: a second `dispose()` joins the first
+	 * caller's drain instead of returning as if disposal had finished. The
+	 * Worker process's socket shutdown and its signal handler both dispose —
+	 * without the join, whichever ran second could proceed (and exit) before
+	 * the runtime drain and the storage-claim releases completed. */
+	let disposeDrain: Promise<void> | null = null;
 
 	const emit = (event: WorkerEvent): void => {
 		for (const listener of listeners) {
@@ -592,21 +598,24 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 
 		projects: () => [...projects.values()],
 
-		dispose: async () => {
-			if (disposed) return;
+		dispose: (): Promise<void> => {
+			if (disposeDrain !== null) return disposeDrain;
 			disposed = true;
-			for (const state of [...observations.values()]) {
-				state.released = true;
-				observations.delete(state.id);
-				void state.observation?.release();
-				void state.capability?.release();
-			}
-			listeners.clear();
-			await registry.dispose();
-			await settingsMutations.close();
-			// Exclusion is released last: every runtime is gone before the
-			// directory can be served by a successor.
-			for (const lock of options.storageLocks ?? []) await lock.release().catch(() => {});
+			disposeDrain = (async () => {
+				for (const state of [...observations.values()]) {
+					state.released = true;
+					observations.delete(state.id);
+					void state.observation?.release();
+					void state.capability?.release();
+				}
+				listeners.clear();
+				await registry.dispose();
+				await settingsMutations.close();
+				// Exclusion is released last: every runtime is gone before the
+				// directory can be served by a successor.
+				for (const lock of options.storageLocks ?? []) await lock.release().catch(() => {});
+			})();
+			return disposeDrain;
 		},
 	};
 }

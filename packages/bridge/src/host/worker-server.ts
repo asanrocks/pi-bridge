@@ -312,15 +312,21 @@ export async function serveWorkerConnection(ws: WebSocket, service: WorkerServic
 
 		if (request.kind === "shutdown") {
 			// Shutdown is not ordinary admitted work: it stops admission, drains
-			// everything already admitted, and only then replies and disposes. The
-			// reply comes after the drain so a caller that awaits it knows the
-			// Worker finished, not merely that it agreed to stop.
+			// everything already admitted, disposes the service, and only then
+			// replies. The reply means the Worker finished — runtimes disposed,
+			// exclusion claims released — not merely that it agreed to stop; a
+			// spawned parent kills the child on that reply, so it must not outrun
+			// the drain. (The reply precedes `endConnection`, which seals the
+			// socket for further sends.)
 			state.accepting = false;
 			void (async () => {
 				await Promise.allSettled([...state.inflight]);
+				await service.dispose().catch(() => {
+					// A failed disposal still ends the link; the reply must not hang
+					// a caller that wanted the Worker gone.
+				});
 				replyOk(request.id, null);
 				await endConnection();
-				await service.dispose();
 			})();
 			return;
 		}

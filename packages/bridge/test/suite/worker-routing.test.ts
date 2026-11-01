@@ -15,7 +15,7 @@ import type { Document } from "../../src/core/index.ts";
 import { Daemon } from "../../src/host/daemon.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import { buildProjects, type ProjectConfig } from "../../src/host/projects.ts";
-import { createLocalWorker } from "../../src/host/worker-local.ts";
+import { createLocalWorker, type LocalWorker } from "../../src/host/worker-local.ts";
 import { createWorkerSocketServer } from "../../src/host/worker-server.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -113,6 +113,8 @@ interface Fixture {
 	endpoint: string;
 	project: ProjectConfig;
 	managers: StubManager[];
+	/** The Worker service behind the endpoint. */
+	worker: LocalWorker;
 	/** Drop the Worker link (a crash, from the Daemon's point of view). */
 	close(): Promise<void>;
 }
@@ -152,6 +154,7 @@ async function serveWorker(projectId = "worker-proj"): Promise<Fixture> {
 		endpoint: server.endpoint,
 		project,
 		managers,
+		worker,
 		close: async () => {
 			await server.close();
 		},
@@ -257,10 +260,20 @@ describe("daemon routing through several workers", () => {
 		expect(second.managers).toHaveLength(0);
 	});
 
-	it("refuses a second registration that claims a Project already served", async () => {
+	it("refuses a second registration that claims a Project already served, and disposes the claim's loser", async () => {
 		const first = await serveWorker("alpha");
 		const second = await serveWorker("alpha");
 		await expect(startDaemon(first.endpoint, second.endpoint)).rejects.toThrow(/already served/);
+
+		// The claim's loser is withdrawn with the rest: its link was disposed, so
+		// a spawned Worker cannot leak past a failed startup holding its socket
+		// and its session-directory claims. A refused observeSession is how a
+		// disposed service answers.
+		for (const fixture of [first, second]) {
+			await expect(
+				fixture.worker.observeSession({ projectId: "alpha", stem: "s1" }, { cursor: null, sink: () => {} }),
+			).rejects.toThrow(/shutting down/);
+		}
 	});
 
 	it("withdraws only the failed Worker's Projects", async () => {

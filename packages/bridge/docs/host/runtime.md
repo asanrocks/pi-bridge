@@ -77,8 +77,10 @@ so `session_closed` precedes the close reply on the wire.
 may register several, and the accepted registrations are its routing table: a
 Project id is served by exactly one Worker, so `/<projectId>` is never
 ambiguous. Registering a Project another Worker already serves fails the
-startup (the Workers created so far are disposed), and a Worker that becomes
-unavailable withdraws only its own Projects — the others keep serving, and the
+startup — every Worker created so far is disposed, including the one whose
+claim failed, so a spawned Worker cannot leak past a failed startup holding
+its socket and its storage claims — and a Worker that becomes
+unavailable withdraws only its own Projects; the others keep serving, and the
 browser's active-session list is republished as the aggregate of the survivors.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity.
@@ -181,8 +183,12 @@ which is the property that matters: no two Workers write one directory.
 
 The protocol server admits one request at a time and tracks every admitted
 dispatch. `shutdown` stops admission synchronously, waits for the tracked
-requests to settle, replies, and only then disposes the service — so a caller
-that awaits the reply knows the Worker finished rather than agreed to stop. A
+requests to settle, disposes the service, and only then replies — so a caller
+that awaits the reply knows the Worker finished (runtimes disposed, exclusion
+claims released) rather than agreed to stop; a spawned parent kills the child
+on that reply, so it must not outrun the drain. The Worker's own disposal is
+joinable: a second `dispose()` awaits the memoized drain, so the socket
+shutdown and the process's signal handler cannot race an exit past it. A
 request arriving after admission closed is dropped instead of starting work
 nothing owns.
 
@@ -455,13 +461,18 @@ reads through the attached observation and registers that demand.
 
 Attachment changes mint the next **attachment generation** (ADR 19): every
 observation frame the Connection emits — the initial sync, live patches, and
-the terminal `session_closed` the registry hands it after detaching it
-(`pushSessionClosed`) — names the attachment whose stream it belongs to, and
+the terminal `session_closed` the Worker delivers when the observation's
+registration ends — names the attachment whose stream it belongs to, and
 a `pull` reply names the generation current when its request was admitted.
 The client mirror admits a live frame only while it matches the established
 generation, so a frame from an older attachment cannot touch the successor's
 state even when the address is unchanged; the rule and the wire field are
-specified in [core protocol](../core/protocol.md).
+specified in [core protocol](../core/protocol.md). The Connection keeps the
+same rule server-side: a terminal frame always crosses the wire (the client
+drops a stale one by its generation), but only the current attachment's
+terminal frame ends the Connection's attachment — a close of the observation
+a switch just left, whose release can race a concurrent `closeSession`, must
+not detach the successor.
 
 The Connection demultiplexes RPC frames by verb. Every verb that is not an
 attachment transition is a typed handler in
