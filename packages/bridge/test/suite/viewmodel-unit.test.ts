@@ -1222,6 +1222,73 @@ describe("segmentBlocks", () => {
 			expect(segs[0].key).toBe("e1:0");
 		}
 	});
+
+	// The renderer carries its previous result into the next call (a per-turn
+	// ref): unchanged groups must keep their identity, or every memoized group
+	// view re-renders on every streaming delta.
+	it("reuses unchanged segments and action lists when given the previous result", () => {
+		const text = { blockType: "text" as const, entryId: "e1", blockIndex: 0, text: "Hi", isProvisional: false };
+		const think = {
+			blockType: "thinking" as const,
+			entryId: "e1",
+			blockIndex: 1,
+			thinking: "hmm",
+			isProvisional: false,
+			redacted: false,
+		};
+		const tool = {
+			blockType: "tool" as const,
+			entryId: "e1",
+			blockIndex: 2,
+			toolName: "read",
+			toolCallId: "tc1",
+			arguments: null,
+			result: null,
+			summary: "read: a",
+			status: "pending" as const,
+		};
+		const first = segmentBlocks([text, think]);
+
+		// Same blocks, extended at the tail (a streaming append): the text
+		// segment and the group survive by identity, the group's action array too.
+		const second = segmentBlocks([text, think, tool], first);
+		expect(second).toHaveLength(2);
+		expect(second[0]).toBe(first[0]);
+		expect(second[1].kind).toBe("group");
+		if (second[1].kind === "group" && first[1].kind === "group") {
+			// The group grew, so the segment is new — but its surviving prefix is
+			// not: the array is rebuilt only because its length changed.
+			expect(second[1]).not.toBe(first[1]);
+			expect(second[1].actions).toHaveLength(2);
+			expect(second[1].actions[0]).toBe(first[1].actions[0]);
+		}
+
+		// A later delta that leaves the same list: everything is reused.
+		const third = segmentBlocks([text, think, tool], second);
+		expect(third[0]).toBe(second[0]);
+		expect(third[1]).toBe(second[1]);
+	});
+
+	it("does not reuse a previous grouping that no longer matches", () => {
+		const text = { blockType: "text" as const, entryId: "e1", blockIndex: 0, text: "Hi", isProvisional: false };
+		const toolA = {
+			blockType: "tool" as const,
+			entryId: "e1",
+			blockIndex: 1,
+			toolName: "read",
+			toolCallId: "tc1",
+			arguments: null,
+			result: null,
+			summary: "read: a",
+			status: "pending" as const,
+		};
+		const toolB = { ...toolA, blockIndex: 2, toolCallId: "tc2" };
+		const first = segmentBlocks([text, toolA]);
+		const second = segmentBlocks([text, toolB], first);
+		expect(second[0]).toBe(first[0]);
+		expect(second[1]).not.toBe(first[1]);
+		if (second[1].kind === "group") expect(second[1].key).toBe("e1:2");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -2107,6 +2174,38 @@ describe("git identity fold", () => {
 		);
 		const vm2 = computeViewModel({ document: doc, models: [] }, vm1);
 		expect(markOf(vm2)).toEqual(["a1:0"]);
+	});
+
+	it("reuses a group's stamp list when the turn grows past it", () => {
+		// Same carry as segmentBlocks: a memoized group view keys on its
+		// gitChanges array, so an unchanged group must not get a fresh array when
+		// a later group is added.
+		const segments = segmentBlocks([
+			{
+				blockType: "tool" as const,
+				entryId: "a1",
+				blockIndex: 0,
+				toolName: "read",
+				toolCallId: "tc1",
+				arguments: null,
+				result: null,
+				summary: "read: x",
+				status: "done" as const,
+			},
+		]);
+		const stamp = {
+			entryId: "s1",
+			timestamp: "",
+			identity: { commit: SHA1, branch: "main" },
+			commitSubject: null,
+			anchor: "tool_end" as const,
+			isInitial: false,
+			afterBlockKey: "a1:b0",
+		};
+		const first = assignGroupGitChanges(segments, [stamp]);
+		const second = assignGroupGitChanges(segments, [stamp], first);
+		expect(second.byGroup.get("a1:0")).toBe(first.byGroup.get("a1:0"));
+		expect(second.unattached).toBe(first.unattached);
 	});
 });
 

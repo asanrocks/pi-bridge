@@ -77,34 +77,30 @@ export const ActionGroupView = memo(function ActionGroupView({
 	const isExpanded = useStore(useCallback((s) => s.expandedActionGroups.has(groupKey), [groupKey]));
 	const isFrozen = useStore(useCallback((s) => s.frozenActionGroups.has(groupKey), [groupKey]));
 
-	// ADR 09: the collapsed header names only edit/write files — bash and
-	// read render as counts, which need no arguments — so only those kinds
-	// pull `arguments` at group level. Action views register their own
-	// arguments pulls when rendered (ToolActionView), so expanded rows
-	// keep their live summaries.
-	// The pullTick subscription re-registers pulls after pull failures and
-	// refreshes summaries after ingests.
-	useStore((s) => s.pullTick);
-	enqueuePulls(
-		actions.flatMap((s) => {
-			if (s.blockType !== "tool") return [];
-			const kind = kindForTool((s as ToolActionVM).toolName);
-			return kind === "edit" || kind === "write" ? actionPulls(s, false) : [];
-		}),
-	);
-
 	// During streaming, the trailing group auto-expands — actions appear,
 	// details stay collapsed — unless the user froze it by toggling manually.
 	const effectiveExpanded = isExpanded || (isTrailing && !isFrozen);
 
+	// ADR 09: the collapsed header names only edit/write files — bash and
+	// read render as counts, which need no arguments — so only those kinds pull
+	// `arguments` at group level. Action views register their own arguments
+	// pulls when rendered (ToolActionView), so expanded rows keep their live
+	// summaries.
+	//
 	// Compute the label from live store data so it updates as tool call
 	// arguments stream in (the VM cache key does not include argument values).
 	// Only the path basename is extracted — edit/write are the sole named
 	// categories; every other tool is counted by name alone.
-	const label = useStore(
+	//
+	// The slice also reports whether this group still owes a pull (an edit/write
+	// argument that has not arrived yet): the pull registration below subscribes
+	// to the pull tick only while that is true, so a settled group is not
+	// re-rendered by unrelated ingests.
+	const slice = useStore(
 		useCallback(
 			(s) => {
 				const entries = s.document.entries;
+				let pending = false;
 				const items: ActionSummaryItem[] = actions.map((h) => {
 					if (h.blockType === "thinking") {
 						return { toolName: "thinking", basename: null };
@@ -112,30 +108,49 @@ export const ActionGroupView = memo(function ActionGroupView({
 					const entry = entries[h.entryId];
 					const block = entry?.kind === "message" ? entry.content[h.blockIndex] : null;
 					const liveArgs = block?.type === "toolCall" ? block.arguments : (h as ToolActionVM).arguments;
+					const toolName = (h as ToolActionVM).toolName;
+					const kind = kindForTool(toolName);
+					// Only the kinds below register a group-level pull; only they can
+					// still be waiting on it.
+					if (liveArgs === null && (kind === "edit" || kind === "write")) pending = true;
 					const recArgs =
 						liveArgs !== null && typeof liveArgs === "object" ? (liveArgs as Record<string, unknown>) : null;
 					const rawPath = recArgs ? ((recArgs.path as string) ?? (recArgs.filePath as string) ?? null) : null;
 					// apply_patch has no `path` arg — its named file is the first
 					// path in the envelope (the group lists it with the edit family).
 					let basename = rawPath ? rawPath.split("/").pop() || rawPath : null;
-					if (basename === null && (h as ToolActionVM).toolName === "apply_patch") {
+					if (basename === null && toolName === "apply_patch") {
 						const input = applyPatchInput(liveArgs);
 						const first = input !== null ? extractApplyPatchPaths(input)[0] : undefined;
 						basename = first !== undefined ? first.split("/").pop() || first : null;
 					}
-					return {
-						toolName: (h as ToolActionVM).toolName,
-						basename,
-					};
+					return { toolName, basename };
 				});
-				return formatGroupSummary(
+				const summary = formatGroupSummary(
 					items,
 					gitChanges?.map((c) => c.identity),
 				);
+				return `${pending ? "1" : "0"}${summary}`;
 			},
 			[actions, gitChanges],
 		),
 	);
+	const pendingPull = slice[0] === "1";
+	const label = slice.slice(1);
+
+	// A pending pull needs the tick to retry after a failure and to refresh once
+	// the ingest lands; enqueuePulls is idempotent (planPull filters populated
+	// and in-flight fields).
+	useStore(useCallback((s) => (pendingPull ? s.pullTick : 0), [pendingPull]));
+	if (pendingPull) {
+		enqueuePulls(
+			actions.flatMap((h) => {
+				if (h.blockType !== "tool") return [];
+				const kind = kindForTool((h as ToolActionVM).toolName);
+				return kind === "edit" || kind === "write" ? actionPulls(h, false) : [];
+			}),
+		);
+	}
 
 	const hues = useMemo(() => groupDots(actions, gitChanges), [actions, gitChanges]);
 

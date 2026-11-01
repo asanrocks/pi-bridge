@@ -216,6 +216,14 @@ selects only the thinking's first line, so once that line is complete its slice
 is stable and neither later deltas nor unrelated pull completions re-render it
 (the pull tick is subscribed only while the field is still null).
 
+Renderer-side grouping carries the same identity discipline. `segmentBlocks`
+and `assignGroupGitChanges` are prefix-stable — a group only gains actions at
+its end and a git stamp only attaches after the action it follows — so
+`AssistantTurnView` passes its previous result back in and unchanged segments,
+action lists, and per-group stamp lists keep their identity. Rebuilding them
+per delta would defeat every `ActionGroupView`'s memo and re-render the whole
+transcript on each streaming commit.
+
 The same discipline applies to chrome around the transcript, which is at risk
 for a different reason: App hosts the projection and re-renders on every
 document write, so anything it renders must bail on identical props — the
@@ -224,9 +232,10 @@ and the shared icons are memoized over primitive props. The composer samples
 its ledger through a primitive-valued selector (the cost label string) rather
 than subscribing the entries object — whose identity changes per delta — with
 the per-model breakdown computed only inside the transient popover that shows
-it. The streaming turn's own shell (turn view, group headers) does re-render
-per delta by design: the projection rebuilds that turn's blocks, and the leaf
-views bail.
+it. The streaming turn's own shell (the turn view) still re-renders per delta
+by design: the projection rebuilds that turn's blocks. Its groups do not — only
+the group whose actions changed (the trailing one) receives new references, so
+settled group headers bail.
 
 User turns compute sibling user messages with the same `parentId`, ordered by
 timestamp. `newestLeafInSubtree` chooses the newest leaf when a sibling is
@@ -260,7 +269,10 @@ honest pair, no diff offer.
 text remains a separate segment. `actionPulls` declares thinking and tool-call
 fields needed by visible actions, and `resultPullPaths` declares the lazy tool
 result fields needed by an expanded action. These functions are the sole
-ViewModel-to-pull mapping. Display helpers that need no Document access live
+ViewModel-to-pull mapping. A view subscribes to `pullTick` only while it still
+owes a pull (a missing field): a settled view must not re-render when an
+unrelated ingest lands, which at group level would mean every group in the
+transcript. Display helpers that need no Document access live
 beside the projection: the apply-patch module parses Codex-style
 `apply_patch` envelopes (streaming-tolerant, no disk access) into per-file
 sections for the web card, and feeds the action summary/header (`patch: <file>

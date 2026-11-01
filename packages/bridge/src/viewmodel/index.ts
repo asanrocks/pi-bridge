@@ -2179,31 +2179,54 @@ export function liveActivityPhase(vm: ViewModel): ActivityPhase {
 export type TurnSegment = { kind: "text"; block: TextBlockVM } | { kind: "group"; key: string; actions: ActionVM[] };
 
 /**
+ * Return the previous array when the new one only repeats it element-by-element.
+ *
+ * Grouping outputs are prefix-stable: a group only ever gains actions at its
+ * end, git stamps only attach after the action they follow, and the projection
+ * reuses unchanged block references. So an element-wise identical list is the
+ * same list — and keeping its identity is what lets the memoized group view
+ * skip a re-render on every streaming delta. Rebuilding these arrays per delta
+ * re-renders every group in the transcript instead.
+ */
+function reuseShallow<T>(next: T[], prev: T[] | undefined): T[] {
+	if (prev === undefined || prev.length !== next.length) return next;
+	for (let i = 0; i < next.length; i++) {
+		if (prev[i] !== next[i]) return next;
+	}
+	return prev;
+}
+
+/**
  * Split an AssistantTurn's flat block list into text blocks and maximal
  * groups of consecutive actions. The group key is the first action's
  * `${entryId}:${blockIndex}` — stable under seal (block indices are
  * append-only; entry-id renames go through migrateExpandKeys).
+ *
+ * `prev` is the previous result for the same turn (the caller's render
+ * cache): unchanged segments and groups are returned by identity, so only the
+ * groups a delta actually touched get new references.
  */
-export function segmentBlocks(blocks: AssistantBlockVM[]): TurnSegment[] {
+export function segmentBlocks(blocks: AssistantBlockVM[], prev?: TurnSegment[]): TurnSegment[] {
 	const segments: TurnSegment[] = [];
 	let i = 0;
 	while (i < blocks.length) {
 		const block = blocks[i];
+		const before = prev?.[segments.length];
 		if (block.blockType === "text") {
-			segments.push({ kind: "text", block });
+			segments.push(before?.kind === "text" && before.block === block ? before : { kind: "text", block });
 			i++;
 			continue;
 		}
-		const actions: ActionVM[] = [];
-		while (i < blocks.length && blocks[i].blockType !== "text") {
-			actions.push(blocks[i] as ActionVM);
-			i++;
+		const start = i;
+		while (i < blocks.length && blocks[i].blockType !== "text") i++;
+		const actions = blocks.slice(start, i) as ActionVM[];
+		const key = `${actions[0].entryId}:${actions[0].blockIndex}`;
+		if (before?.kind === "group" && before.key === key) {
+			const reused = reuseShallow(actions, before.actions);
+			segments.push(reused === before.actions ? before : { kind: "group", key, actions: reused });
+		} else {
+			segments.push({ kind: "group", key, actions });
 		}
-		segments.push({
-			kind: "group",
-			key: `${actions[0].entryId}:${actions[0].blockIndex}`,
-			actions,
-		});
 	}
 	return segments;
 }
@@ -2225,7 +2248,14 @@ export interface GroupGitChanges {
  * (and therefore its DOM parent) as the turn grows. Resolving against the
  * turn's last group instead would let a stamp hop groups mid-stream, which
  * remounts its card. */
-export function assignGroupGitChanges(segments: TurnSegment[], stamps: InlineGitStamp[]): GroupGitChanges {
+export function assignGroupGitChanges(
+	segments: TurnSegment[],
+	stamps: InlineGitStamp[],
+	/** Previous result for the same turn: per-group stamp lists that only
+	 * repeat it keep their identity, so a memoized group view does not re-render
+	 * on unrelated deltas (see `reuseShallow`). */
+	prev?: GroupGitChanges,
+): GroupGitChanges {
 	const byGroup = new Map<string, InlineGitStamp[]>();
 	const unattached: InlineGitStamp[] = [];
 	if (stamps.length === 0) return { byGroup, unattached };
@@ -2251,7 +2281,11 @@ export function assignGroupGitChanges(segments: TurnSegment[], stamps: InlineGit
 			else byGroup.set(key, [stamp]);
 		}
 	}
-	return { byGroup, unattached };
+	for (const [key, list] of byGroup) {
+		const before = prev?.byGroup.get(key);
+		if (before !== undefined) byGroup.set(key, reuseShallow(list, before));
+	}
+	return { byGroup, unattached: reuseShallow(unattached, prev?.unattached) };
 }
 
 // ============================================================================

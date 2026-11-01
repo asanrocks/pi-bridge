@@ -39,6 +39,11 @@ export function useSidebarShell() {
 		openRef: newSessionRef,
 	});
 
+	// Stable callbacks: App re-renders on every document write (it hosts the
+	// projection), and an inline arrow here would defeat Sidebar's memo on every
+	// streaming delta.
+	const showLauncher = useCallback(() => void rpc.detach(), [rpc]);
+
 	// Opening a session is an attach, not a retarget (ADR 11): the daemon
 	// resolves-or-creates the activation and rebinds this connection — the
 	// previously attached session keeps streaming headless, so there is no
@@ -56,7 +61,7 @@ export function useSidebarShell() {
 			onOpenProject={rpc.openProject}
 			onCloseSession={rpc.closeSession}
 			onArchiveSession={rpc.archiveSession}
-			onShowLauncher={() => void rpc.detach()}
+			onShowLauncher={showLauncher}
 			onLoadFolder={rpc.loadFolderSessions}
 			onLoadMoreFolder={rpc.loadMoreFolderSessions}
 			mode={mode}

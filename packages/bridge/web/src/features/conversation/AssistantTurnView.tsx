@@ -5,13 +5,15 @@
 // into action groups (renderer-owned grouping) sharing a vertical line.
 // Padding matches the user tinted row so headers/text align.
 
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import {
 	type AssistantTurn,
 	assignGroupGitChanges,
+	type GroupGitChanges,
 	type ParsedProviderError,
 	segmentBlocks,
 	type TurnRecovery,
+	type TurnSegment,
 } from "../../../../src/viewmodel/index.ts";
 import { formatTimestamp } from "../../infra/lib/time.ts";
 import { useStore } from "../../infra/state/store.tsx";
@@ -49,7 +51,14 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const isDimmed = useStore(useCallback((s) => s.draft.kind === "edit" && turn.index >= s.draft.index, [turn.index]));
 	const isFocused = useStore(useCallback((s) => s.focusedTurnId === turn.turnKey, [turn.turnKey]));
 
-	const segments = useMemo(() => segmentBlocks(turn.blocks), [turn.blocks]);
+	// Grouping and stamp assignment are renderer-owned but carry their previous
+	// result forward: unchanged segments/groups keep their identity, so only the
+	// groups a delta actually touched re-render. Without the carry, a new
+	// segments array per delta would defeat every group's memo (see
+	// segmentBlocks).
+	const segmentsRef = useRef<TurnSegment[] | null>(null);
+	const segments = useMemo(() => segmentBlocks(turn.blocks, segmentsRef.current ?? undefined), [turn.blocks]);
+	segmentsRef.current = segments;
 	// The recovery buttons dock beside the error row's line — the one
 	// recovery surface (ADR 16). Computed once for whichever branch below
 	// renders the row.
@@ -65,7 +74,12 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	// ADR 10 v2: mid-turn inline git stamps fold into the groups they render in —
 	// summary segment + in-group card. Inline git stamps with no group (a text-only turn)
 	// fall back to standalone cards after the segments.
-	const groupGit = useMemo(() => assignGroupGitChanges(segments, turn.gitChanges ?? []), [segments, turn.gitChanges]);
+	const groupGitRef = useRef<GroupGitChanges | null>(null);
+	const groupGit = useMemo(
+		() => assignGroupGitChanges(segments, turn.gitChanges ?? [], groupGitRef.current ?? undefined),
+		[segments, turn.gitChanges],
+	);
+	groupGitRef.current = groupGit;
 	const lastIdx = segments.length - 1;
 	const ts = formatTimestamp(turn.timestamp);
 	const models = useStore(useCallback((s) => s.models, []));

@@ -72,11 +72,13 @@ const ToolActionView = memo(function ToolActionView({
 	// argument values). ADR 09: the group header only pulls edit/write
 	// arguments, so this action registers its own pending pull whenever it renders
 	// (collapsed rows need the summary too); ActionDetails adds the result
-	// pulls when expanded. The pullTick subscription re-registers pulls
-	// after pull failures and refreshes after ingests.
-	useStore((s) => s.pullTick);
-	enqueuePulls(actionPulls(action, false));
+	// pulls when expanded. The pullTick subscription re-registers a pull after a
+	// failure and refreshes after an ingest — only while the arguments are still
+	// missing, so a settled row is not re-rendered by unrelated ingests.
 	const args = useLiveArgs(action);
+	const needsArgs = args === null;
+	useStore(useCallback((s) => (needsArgs ? s.pullTick : 0), [needsArgs]));
+	if (needsArgs) enqueuePulls(actionPulls(action, false));
 	const liveSummary = makeActionSummary(action.toolName, args, cwd);
 	const header = makeActionHeader(action.toolName, args, cwd);
 	const recArgs = args && typeof args === "object" && !Array.isArray(args) ? (args as ToolArgs) : null;
