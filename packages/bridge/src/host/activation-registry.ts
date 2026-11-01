@@ -27,11 +27,10 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import type { PrefixCursor, SessionRef } from "../core/index.ts";
-import type { Connection } from "./connection.ts";
+import type { SessionRef } from "../core/index.ts";
 import type { Manager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
-import { createSessionActor, type SessionActor, type SessionCapability } from "./session-actor.ts";
+import { createSessionActor, type SessionActor, type SessionAdmission } from "./session-actor.ts";
 
 /** Address key: (projectId, stem) — the client-facing address of a Session. */
 export function addressKey(projectId: string, stem: string): string {
@@ -57,12 +56,14 @@ export interface ActivationRecord {
 	authorization: ActivationAuthorization;
 	/** The one owner of this Session's runtime lifetime: admission,
 	 * observation registration, and terminal disposal all go through it. The
-	 * record holds it; the daemon's listing reads go through
-	 * `actor.metadata()`, never the runtime itself. */
+	 * record holds it; listing reads go through `actor.metadata()`, never the
+	 * runtime itself. */
 	actor: SessionActor;
-	/** Attached Connections. The actor's capability count is the liveness
-	 * signal; this set drives the terminal detach-and-notify loop. */
-	connections: Set<Connection>;
+	/** The registration-scoped admission the Worker admits target-addressed
+	 * commands through. It owns no observation and no client liveness, so it
+	 * cannot keep the Activation alive; it rejects once the actor began
+	 * closing. */
+	admission: SessionAdmission;
 	/** In-flight registration disposal (the actor's close plus this
 	 * registry's index cleanup); null once it completes. Transient
 	 * bookkeeping, never a state: the actor's phase is the terminal fact, and
@@ -89,6 +90,12 @@ export interface ActivationRegistryOptions {
 	onStreamingChange: () => void;
 	/** An Activation was registered or finished collecting. */
 	onRegistryChange: () => void;
+	/** An Activation's indexes are gone: its address and durable-id claims are
+	 * released. The Worker ends the observations it installed on the record
+	 * here — after the actor's close delivered the teardown's final patches,
+	 * and before `collect` resolves, so a close reply implies the client was
+	 * told the runtime is gone. */
+	onCollected?: (record: ActivationRecord) => void;
 }
 
 export class ActivationRegistry {
@@ -106,8 +113,6 @@ export class ActivationRegistry {
 	 * record identity — a stale record can never release a newer
 	 * registration's claim even when the address fields match. */
 	private sessionOwnerById = new Map<string, { recordId: string; projectId: string; stem: string }>();
-	/** The Connection → Activation attachment index. */
-	private connectionActivation = new Map<Connection, ActivationRecord>();
 	/** Monotonic registration counter: a generation is never reused within
 	 * the registry's incarnation. */
 	private generations = 0;
@@ -154,11 +159,6 @@ export class ActivationRegistry {
 			if (record.actor.phase === "live") out.push(record);
 		}
 		return out;
-	}
-
-	/** The Activation a Connection is attached to, if any. */
-	attachmentOf(conn: Connection): ActivationRecord | undefined {
-		return this.connectionActivation.get(conn);
 	}
 
 	// ── Creation ──────────────────────────────────────────────────────────
@@ -224,25 +224,16 @@ export class ActivationRegistry {
 	}
 
 	/**
-	 * Open an address for a Connection: reserve, then attach, as one
-	 * operation. A close or a kill can collect the reserved record between
-	 * the reservation resolving and the attach — attaching a collected record
-	 * would pin a disposed Manager — so the open re-reserves until it holds a
-	 * live one. The check and the attach are one synchronous block, so nothing
-	 * can interleave between them.
+	 * Open an address for an observation: reserve, then confirm the record is
+	 * still live, as one operation. A close or a kill can collect the reserved
+	 * record between the reservation resolving and the caller installing its
+	 * observation — observing a collected record would pin a disposed runtime —
+	 * so the open re-reserves until it holds a live one.
 	 */
-	async open(
-		conn: Connection,
-		project: ProjectConfig,
-		stem: string,
-		abs: string,
-		cursor: PrefixCursor | null,
-	): Promise<ActivationRecord> {
+	async open(project: ProjectConfig, stem: string, abs: string): Promise<ActivationRecord> {
 		for (;;) {
 			const record = await this.reserve(project, stem, abs);
-			if (record.actor.phase !== "live") continue;
-			this.attach(conn, record, cursor);
-			return record;
+			if (record.actor.phase === "live") return record;
 		}
 	}
 
@@ -299,7 +290,7 @@ export class ActivationRegistry {
 			ref,
 			authorization,
 			actor,
-			connections: new Set(),
+			admission: actor.admission(),
 			collecting: null,
 		};
 		const registered = record;
@@ -315,16 +306,16 @@ export class ActivationRegistry {
 		return registered;
 	}
 
-	// ── Attachment ────────────────────────────────────────────────────
+	// ── Creation tracking ────────────────────────────────────────────────
 
 	/**
 	 * Run one Manager-owning operation under shutdown tracking. Fresh-session
-	 * creation (the daemon's newSession) builds a Manager whose address is not
-	 * known until the Manager has allocated its file, so it cannot sit in the
-	 * per-address pending map the drain already covers — but it must not
-	 * outlive the drain either. The drain awaits the operation, and the
-	 * operation owns its cleanup: a registration refused because shutdown
-	 * began disposes the Manager it produced inside the tracked promise.
+	 * creation builds a Manager whose address is not known until the Manager
+	 * has allocated its file, so it cannot sit in the per-address pending map
+	 * the drain already covers — but it must not outlive the drain either. The
+	 * drain awaits the operation, and the operation owns its cleanup: a
+	 * registration refused because shutdown began disposes the Manager it
+	 * produced inside the tracked promise.
 	 */
 	async runCreation<T>(op: () => Promise<T>): Promise<T> {
 		const promise = (async () => op())();
@@ -334,51 +325,6 @@ export class ActivationRegistry {
 		} finally {
 			this.creations.delete(promise);
 		}
-	}
-	// ── Attachment ────────────────────────────────────────────────────────────
-
-	/** Issue the capability a Connection's attachment runs through. Validity
-	 * is the registration's: commands are admitted only while the record is
-	 * live (not collecting) and the registry has not begun shutdown, so a
-	 * command admitted during disposal is rejected before it reaches a
-	 * runtime being torn down. */
-	private capabilityFor(record: ActivationRecord): SessionCapability {
-		return record.actor.capability();
-	}
-
-	attach(conn: Connection, record: ActivationRecord, cursor: PrefixCursor | null): void {
-		if (this.disposed) throw new Error("daemon is shutting down");
-		// A non-live actor owns nothing anymore: attaching it would pin a
-		// disposed runtime with a Connection nothing would release. Callers that
-		// can retry (open) re-reserve instead.
-		if (record.actor.phase !== "live") throw new Error("session is closing");
-		// A socket that closed while its openSession/newSession RPC was in
-		// flight: the close handler already ran (and released nothing — the
-		// connection was not yet attached), so attaching now would pin the
-		// activation forever with an unreleasable Connection. Arm the actor's
-		// idle timer instead; the orphaned activation collects on the normal
-		// idle path.
-		if (conn.isDisposed) {
-			record.actor.armIdle();
-			return;
-		}
-		this.release(conn);
-		// The minted capability raises the actor's live-client count, which
-		// cancels its idle timer — the count-based arming fires again when the
-		// Connection later releases it.
-		conn.attachCapability(this.capabilityFor(record), cursor);
-		record.connections.add(conn);
-		this.connectionActivation.set(conn, record);
-	}
-
-	/** Release a Connection's attachment. The actor's idle arming is not
-	 * driven from here: it happens when the Connection releases its
-	 * capability (conn.detach), the signal the actor counts. */
-	release(conn: Connection): void {
-		const record = this.connectionActivation.get(conn);
-		if (!record) return;
-		this.connectionActivation.delete(conn);
-		record.connections.delete(conn);
 	}
 
 	// ── Collection ────────────────────────────────────────────────────────
@@ -443,22 +389,13 @@ export class ActivationRegistry {
 		if (owner && owner.recordId === record.id) {
 			this.sessionOwnerById.delete(record.ref.sessionId);
 		}
-		// Sever the Connection→activation mappings so a later detach/release on
-		// a still-attached Connection cannot arm GC on the disposed activation.
-		// Terminal ownership: a closed Activation must not leave a Connection
-		// holding its (now disposed) Manager. `detach` severs the Manager handle
-		// and the attachment fields, so a session command that arrives afterwards
-		// fails with "no session attached" instead of reaching a disposed runtime,
-		// and the `session_closed` frame tells the client the runtime is gone —
-		// without it a view can stall until a reconnect re-resolves the address.
-		// Sent after disposal, so the flush's final patches land on the socket
-		// first, and before the close reply (collect resolves with this loop).
-		for (const conn of record.connections) {
-			this.connectionActivation.delete(conn);
-			conn.detach();
-			conn.pushSessionClosed(record.ref.projectId, record.ref.stem);
-		}
-		record.connections.clear();
+		// The addresses are gone; the Worker ends the observations it installed
+		// on this registration here. The actor's close already delivered the
+		// teardown's final patches (its observers were still installed) and
+		// released the handles, so this is the terminal `closed` notification a
+		// client needs to stop waiting for a runtime that no longer exists —
+		// delivered before `collect` resolves, hence before a close reply.
+		this.options.onCollected?.(record);
 	}
 
 	/**
@@ -475,7 +412,7 @@ export class ActivationRegistry {
 	dispose(): Promise<void> {
 		if (this.disposeDrain !== null) return this.disposeDrain;
 		this.disposed = true;
-		const actors: SessionActor[] = [];
+		const closing: ActivationRecord[] = [];
 		const draining: Promise<unknown>[] = [];
 		for (const record of this.records.values()) {
 			// A mid-collection activation already owns its disposal; awaiting it
@@ -483,7 +420,7 @@ export class ActivationRegistry {
 			// An idle actor's pending timer is cleared by its own close — the
 			// drain invokes it below.
 			if (record.collecting) draining.push(record.collecting);
-			else actors.push(record.actor);
+			else closing.push(record);
 		}
 		// In-flight creations: they settle (register refuses and disposes the
 		// Manager) before this returns, so nothing can appear after shutdown.
@@ -496,11 +433,14 @@ export class ActivationRegistry {
 		this.byAddress.clear();
 		this.pending.clear();
 		this.sessionOwnerById.clear();
-		this.connectionActivation.clear();
 		this.disposeDrain = (async () => {
 			await Promise.allSettled(draining);
-			for (const actor of actors) {
-				await actor.close();
+			// Every remaining actor closes here (its own observers receive the
+			// final patches), and the Worker ends their observations after it,
+			// exactly as a collection does — no stream outlives the drain.
+			for (const record of closing) {
+				await record.actor.close();
+				this.options.onCollected?.(record);
 			}
 		})();
 		return this.disposeDrain;

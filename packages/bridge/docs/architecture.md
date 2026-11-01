@@ -76,7 +76,7 @@ pi runtime
 Manager: canonical Document for one Session
   | unfiltered patches and initial-sync frame
   v
-Connection: one WebSocket, subscriptions, RPC demux
+Connection: one WebSocket, attachment, RPC demux
   | replace/patch pushes, registry pushes, RPC replies
   v
 BridgeClient + DocumentMirror: browser-side replica and typed RPC
@@ -97,16 +97,23 @@ requests. Neither layer knows about WebSockets, the DOM, or the filesystem.
 
 **Host.** The Manager subscribes to pi, applies live events, and installs
 persisted entries from pi's entry list through one refresh boundary; it sends
-patches to its listeners. A Connection owns one WebSocket and one attachment. It filters
-lazy paths using its own subscriptions, handles `pull`, demultiplexes typed
-RPC verbs, and sends initial sync before later live patches. The Daemon owns
+patches to its listeners. A Connection owns one WebSocket, one attachment, and
+the RPC demux; it sends initial sync before later live patches and stamps every
+observation frame with the attachment generation. Lazy demand and the filtering
+it implies belong to the observation (the Worker), so a Connection holds no
+subscription set: `pull` reads through its observation, which also decides
+which later patches that stream receives. The Daemon owns
 Projects, Connection registration, Project/session queries, and HTTP serving,
-and routes Session execution through one seam (`src/host/execution-link.ts`):
-the Activation registry, Manager creation, and the per-session choreography
-sit behind the `ExecutionLink` interface, with a local in-process
-implementation and an authorization identity (incarnation + generation) per
-registration. The repository read surface (snapshot reads, listings, the diff
-directive, `git show`, path completion) is its own module
+and routes Session execution through one seam (`src/host/worker-contract.ts`):
+the Activation registry, Manager creation, the per-session choreography, and
+the Session catalog sit behind the Worker service contract
+(`src/host/worker-local.ts` today), with an authorization identity
+(incarnation + generation) per registration. The contract is values and opaque
+ids only — registration, Session target, observation, and frame identities —
+so a Worker can move behind a socket without the Daemon branching on
+locality, and a command names the Activation it was composed for. The
+repository read surface (snapshot reads, listings, the diff
+ directive, `git show`, path completion) is its own module
 (`src/host/repository.ts`), shared by whichever link serves it.
 
 **Web.** `BridgeClient` is the only browser-side wire envelope owner. Its
@@ -223,11 +230,11 @@ falls back to replace.
 
 The web ViewModel declares pending lazy paths while rendering. One pull-loop
 drainer deduplicates them against the mirror and in-flight requests, sends one
-batch, and ingests the values. Pulling an unsealed field also subscribes the
-Connection to later updates on that path; pulling a committed field is
-one-shot. The Connection filters live patches per subscription and sanitizes
-lazy fields embedded inside parent add/replace values, so filtered replay and
-fresh wire initialization converge. There is no transport compaction on the
+batch, and ingests the values. Pulling an unsealed field also makes that path
+the observation's live demand; pulling a committed field is one-shot. The
+Worker filters live patches per observation demand and sanitizes lazy fields
+embedded inside parent add/replace values, so filtered replay and fresh wire
+initialization converge. There is no transport compaction on the
 live path: every frame is a full JSON envelope carrying its attachment
 generation (ADR 19), because a compacted frame cannot name its owner.
 
@@ -285,7 +292,7 @@ These are the load-bearing rules for changes across layers:
    no competing turn lifecycle.
 6. **A Manager serves exactly one Session.** An Activation is never rebound;
    Project/stem resolution and activation reservations enforce exclusivity.
-   A Connection reaches a Session only through a registry-issued capability,
+   A Connection reaches a Session only through a target-bound command surface,
    and the Session actor owns the work admitted against that registration:
    mutations serialize in admission order, turns/aborts/reads run immediately
    but tracked, and its terminal `close` is the one disposal path —
@@ -304,7 +311,9 @@ These are the load-bearing rules for changes across layers:
 12. **The pull loop is the sole fetcher.** Components declare pending paths;
     no component calls the pull RPC directly.
 13. **Filtered delivery converges.** Lazy filtering sanitizes parent values as
-    well as leaf operations, so filtered replay matches a fresh projection.
+    well as leaf operations, so filtered replay matches a fresh projection. The
+    filter is the observation's: its demand is the only subscription set, and an
+    initial sync clears it.
 14. **Wire frames have one owner.** BridgeClient and Connection construct the
     envelopes; feature code uses typed methods and push data. Every
     observation frame carries the attachment generation that produced it —
@@ -343,7 +352,7 @@ guarded against.
 | Owner | Admits | Supersede rule | Terminal |
 | --- | --- | --- | --- |
 | Reactor (`core/reactor.ts`) | Navigation transitions, alias resolution, creation transitions | Admission is gated by intent ownership: a superseded transition sends nothing and settles its caller; a completion carries the admitting message's epoch and the step compares; a creation's initial sync carries its operation id and commits only while its creation is the newest intent | `close()` — drains messages, effects, completions |
-| Session actor (`host/session-actor.ts`) | Session commands, observations, and the idle-collection decision against one registration | Commands capture the capability; admission rejects once `close` began; a live capability is an attached client and cancels idle collection | `close()` — disposes the runtime exactly once, drains tracked work, releases every observation |
+| Session actor (`host/session-actor.ts`) | Session commands, observations, and the idle-collection decision against one registration | Commands capture the target; admission rejects once `close` began; a live capability is an attached observation and cancels idle collection | `close()` — disposes the runtime exactly once, drains tracked work, releases every observation |
 | `LifecycleScope` (Connection transitions) | `openSession`/`newSession`/`detach` per socket | Arrival order; a disposed Connection refuses admission | `dispose()` — the awaited drain |
 | `LifecycleScope` (settings mutations) | Daemon-global `enabledModels` writes | Arrival order | Daemon `dispose()` awaits `close()` |
 | `LifecycleScope` (git-stamp observations) | Serialized stamp observations per bind | Observation order | `GitStampExtensionBundle.end()` — called by `Manager.dispose()` *before* the runtime is disposed, so every drained observation appends to a live runtime |
@@ -351,6 +360,7 @@ guarded against.
 | Manager teardown | Runtime disposal, observation-scope drain | — | `dispose()` — idempotent and joinable; the observation scope drains before the runtime goes |
 | Connection pipeline | Push ingestion, cache write-through, coalescing | `disposed` freezes writes; deltas gate on the committed session id | `cleanup()` — pending ops dropped, in-flight cache writes gated |
 | Pull loop | Lazy-value pulls | Reply admitted only for unchanged seal state and unfetched fields | `cancelPullRetry()` at teardown; reconnect replaces the client |
+| Worker service (`host/worker-contract.ts`) | Observations and target-addressed commands across the Daemon → Worker boundary | Address-keyed reservations; a command names its target's activation and is refused once it ended; an observation is released independently | `dispose()` — stop admission, drain observations and admitted work, dispose every runtime |
 
 ## 8. Test design
 

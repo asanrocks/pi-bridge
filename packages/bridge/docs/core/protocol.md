@@ -85,7 +85,7 @@ the Document, when applicable, arrive as pushes before or independently of
 the reply. A reply is therefore acknowledgement or query data, not a second
 state channel.
 
-Every attached-session verb captures the Session capability it addresses at
+Every attached-session verb captures the Session target it addresses at
 handler entry, before any await: a transition that completes while the
 command runs cannot retarget it, so the command executes against — and its
 reply reports on — the session that was attached when the request arrived,
@@ -104,7 +104,7 @@ immediately but tracked (see [host runtime](../host/runtime.md)).
 | `setThinkingLevel` | Attached Session | `{ ok: true }`; status and any silent entry are refreshed. Invalid levels fail. |
 | `renameSession` | Attached Session | `{ ok: true }`; the session name change and Project session-list refresh are pushed. |
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
-| `pull` | Attached Session and this Connection's subscription set | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become live subscriptions; committed paths are one-shot. |
+| `pull` | Attached Session and its observation's demand | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become the observation's live demand; committed paths are one-shot. |
 | `openSession` | Project plus `stem`; reattaches this Connection | `{ ok: true, session: SessionRef }`. The initial `replace` or cursor patch is pushed before the reply. An optional `PrefixCursor` selects the delta path. |
 | `newSession` | Project; first prompt text and an `operationId` are required | `{ ok: true, session: SessionRef, operationId }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn and the operation id. Refused admission leaves no empty live Session. A missing `operationId` is refused — an unattributed creation cannot be admitted by a selection owner. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
@@ -143,15 +143,15 @@ bridge operation `append`:
 `append` concatenates its string value to the string at `path`. It is used for
 streamed text, thinking, and growing string leaves in partial tool arguments.
 An append may carry `lazy: true`: it targets a lazy field (a streamed tool
-body), and the host withholds it from a Connection whose subscriptions do not
+body), and the host withholds it from an observation whose demand does not
 cover the op's path or an ancestor — exactly like the full-field replace it
 encodes. `move` relocates a value; sealing does not use it, because an entry's
 id is stable from its first event. All operations in one `Patch` are applied
 in order as one mirror transaction. JSON Pointer
 paths use the standard `~1` and `~0` escaping.
 
-The host filters lazy paths per Connection before sending a live patch. It
-never changes the canonical document. An entry-root or content-block operation
+The host filters lazy paths per observation before a live patch leaves the
+Worker. It never changes the canonical document. An entry-root or content-block operation
 is sanitized as well, so a parent value cannot smuggle an unsubscribed lazy
 field to the client.
 
@@ -168,8 +168,8 @@ The initial-sync contract is cursor-aware:
 The cursor is checked against the session file's ordered ids and the referenced
 `sessionId`; it does not authenticate arbitrary client cache contents. Both
 forms are address-bearing, so they establish the client's active cache key.
-A Connection clears its lazy subscriptions when initial sync is sent. This
-prevents pull state from crossing Session boundaries.
+An observation clears its demand when initial sync is sent. This prevents pull
+state from crossing Session boundaries.
 
 ## No transport compaction
 

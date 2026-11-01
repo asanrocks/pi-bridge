@@ -3,17 +3,17 @@
 // (ADR 19).
 //
 // A verb handler is a seam function: it validates the request shape,
-// captures its target before any await (the attachment capability, at
+// captures its target before any await (the attachment's commands, at
 // handler entry), and replies through the context. It receives no socket,
-// no transition state, and no runtime — the Session path is the capability's
-// typed verbs, and the daemon path is the DaemonVerbs seam. The three
+// no transition state, and no runtime — the Session path is the target-bound
+// commands, and the daemon path is the DaemonVerbs seam. The three
 // attachment-changing transitions (openSession, newSession, detach) are not
 // handlers: they are the Connection's serialized transition line and stay in
 // connection.ts.
 //
-// `pull` is Connection-local (glossary B.6): it reads through the attached
-// capability and registers live lazy-path subscriptions on the context — the
-// subscription set is Connection state.
+// `pull` is Connection-local (glossary B.6): it reads the attached
+// observation and registers live demand on it. Lazy filtering belongs to the
+// observation, so a Connection never holds a subscription set of its own.
 // ============================================================================
 
 import type {
@@ -55,7 +55,8 @@ import type {
 } from "../core/index.ts";
 import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../core/index.ts";
 import type { Connection } from "./connection.ts";
-import type { SessionCapability } from "./session-actor.ts";
+import type { SessionCommands } from "./session-commands.ts";
+import type { SessionTarget } from "./worker-contract.ts";
 
 // ============================================================================
 // DaemonVerbs — the Connection → Daemon seam (ADR 11)
@@ -98,7 +99,7 @@ export interface DaemonVerbs {
 		cursor?: SessionListCursor | null,
 	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
 	/** Global active/streaming snapshot. */
-	listActiveSessions: () => SessionInfo[];
+	listActiveSessions: () => Promise<SessionInfo[]>;
 	/** Resolve-or-activate `(projectId, stem)` and attach this Connection. */
 	openSession: (
 		projectId: string,
@@ -163,27 +164,26 @@ export interface DaemonVerbs {
 // Handlers
 // ============================================================================
 
-/** What a verb handler may touch: the daemon seam, the attachment capability,
- * subscription registration, the reply path, and the attachment generation
- * current at admission — nothing else of the Connection's state, and no
- * runtime. */
+/** What a verb handler may touch: the daemon seam, the attachment's commands
+ * and target, the reply path, and the attachment generation current at
+ * admission — nothing else of the Connection's state, and no runtime. */
 export interface VerbContext {
 	/** The Daemon's verb implementation (ADR 11). */
 	readonly daemonVerbs: DaemonVerbs;
 	readonly devMode: boolean;
-	/** The attachment a session verb addresses, captured at handler entry —
-	 * before any await. A transition that completes while the command runs
-	 * cannot retarget it: the command executes against, and reports on, the
-	 * session that was attached when the request arrived. */
-	requireAttachment(): SessionCapability;
+	/** The target-bound commands a session verb addresses, captured at handler
+	 * entry — before any await. They name the Activation they were composed for,
+	 * so a transition that completes while the command runs cannot retarget it,
+	 * and the owning Worker refuses a target whose Activation ended. */
+	requireCommands(): SessionCommands;
+	/** The attachment's target: the address, identity, and reported cwd a verb
+	 * needs for attachment-bound reads. */
+	requireTarget(): SessionTarget;
 	/** The attachment generation current when the request was admitted
 	 * (ADR 19): the generation its reply's payload describes (a pull reads
 	 * the attachment that was current at admission; a reattach supersedes
 	 * it, so the client drops the reply). */
 	readonly attachmentGeneration: number;
-	/** Register a live lazy-path subscription (a pull on an unsealed entry:
-	 * later patches on that path keep flowing to this Connection). */
-	subscribe(fieldPath: string): void;
 	/** The acknowledgement or error reply. */
 	reply(id: string, ok: boolean, error?: string): void;
 	/** A typed reply frame (query data, command results). */
@@ -196,7 +196,7 @@ export type VerbHandler = (ctx: VerbContext, msg: ClientMessage) => Promise<void
 
 const sessionVerbs: Record<string, VerbHandler> = {
 	prompt: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		const m = msg as unknown as PromptRequest;
 		if (typeof m.text !== "string") throw new Error("Missing `text`");
 		// Light shape validation: images are opaque base64 blobs relayed
@@ -218,87 +218,86 @@ const sessionVerbs: Record<string, VerbHandler> = {
 		) {
 			throw new Error("Invalid `images`");
 		}
-		await capability.prompt(m.text, images);
+		await commands.prompt(m.text, images);
 		ctx.reply(msg.id, true);
 	},
 	abort: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
-		await capability.abort();
+		const commands = ctx.requireCommands();
+		await commands.abort();
 		ctx.reply(msg.id, true);
 	},
 	discardSteer: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
-		await capability.discardSteer();
+		const commands = ctx.requireCommands();
+		await commands.discardSteer();
 		ctx.reply(msg.id, true);
 	},
 	setModel: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		const m = msg as unknown as SetModelRequest;
-		await capability.setModel(m.provider, m.model);
+		await commands.setModel(m.provider, m.model);
 		ctx.reply(msg.id, true);
 	},
 	setThinkingLevel: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		const m = msg as unknown as SetThinkingLevelRequest;
-		await capability.setThinkingLevel(m.level);
+		await commands.setThinkingLevel(m.level);
 		ctx.reply(msg.id, true);
 	},
 	renameSession: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
+		// Captured before the await: the refresh broadcast belongs to the session
+		// this command named, not to whatever a concurrent transition attached.
+		const target = ctx.requireTarget();
 		const m = msg as unknown as RenameSessionRequest;
 		if (typeof m.name !== "string") throw new Error("Missing `name`");
-		await capability.renameSession(m.name);
+		await commands.renameSession(m.name);
 		ctx.reply(msg.id, true);
-		// The refresh broadcast belongs to the command's target — read from
-		// the capture, never from the live attachment, which a transition
-		// completing during the rename may have moved.
-		ctx.daemonVerbs.sessionsChanged(capability.ref.projectId);
+		ctx.daemonVerbs.sessionsChanged(target.projectId);
 	},
 	setLabel: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		const m = msg as unknown as SetLabelRequest;
 		if (typeof m.entryId !== "string") throw new Error("Missing `entryId`");
 		if (typeof m.label !== "string") throw new Error("Missing `label`");
-		await capability.setLabel(m.entryId, m.label);
+		await commands.setLabel(m.entryId, m.label);
 		ctx.reply(msg.id, true);
 	},
 	navigate: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		const m = msg as unknown as NavigateRequest;
 		if (m.entryId !== null && typeof m.entryId !== "string") throw new Error("Missing `entryId`");
-		await capability.navigate(m.entryId);
+		await commands.navigate(m.entryId);
 		ctx.reply(msg.id, true);
 	},
 	recoverTurn: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
+		const commands = ctx.requireCommands();
 		// The runtime re-derives the boundary and refuses when the tail is
 		// not recoverable; `action` reports which repair ran.
-		const action = await capability.recoverTurn();
+		const action = await commands.recoverTurn();
 		ctx.send({ id: msg.id, ok: true, action: action as unknown as JsonValue });
 	},
 	gitShow: async (ctx, msg) => {
 		const m = msg as unknown as GitShowRequest;
 		if (typeof m.commit !== "string" || m.commit === "") throw new Error("Missing `commit`");
 		// Requires an attachment: the recorded commit belongs to the attached
-		// session's repository, so its cwd is the query base.
-		const capability = ctx.requireAttachment();
-		const result = await ctx.daemonVerbs.gitShow(m.commit, capability.cwd);
+		// session's repository, so its reported cwd is the query base. The target
+		// is captured before the await for the same reason every verb is.
+		const target = ctx.requireTarget();
+		const result = await ctx.daemonVerbs.gitShow(m.commit, target.cwd);
 		ctx.send({ id: msg.id, ok: true, ...result });
 	},
-	// Connection-local (glossary B.6): reads the attached runtime's lazy
-	// values and subscribes the live paths.
+	// Connection-local (glossary B.6): reads the attached observation's lazy
+	// values. A live value becomes that observation's demand (it filters the
+	// patches it delivers), so the Connection holds no subscription state.
 	pull: async (ctx, msg) => {
-		const capability = ctx.requireAttachment();
 		const m = msg as unknown as PullRequest;
 		if (!m.requests || !Array.isArray(m.requests)) throw new Error("Missing `requests` array");
-		const values = await capability.pull(m.requests);
-		const out: Array<{ entryId: string; fieldPath: string; value: JsonValue }> = [];
-		for (const value of values) {
-			out.push({ entryId: value.entryId, fieldPath: value.fieldPath, value: value.value });
-			// A live value streams further updates: the subscription keeps
-			// later patches on that path flowing to this Connection.
-			if (value.live) ctx.subscribe(value.fieldPath);
-		}
+		const values = await ctx.requireCommands().pull(m.requests);
+		const out: Array<{ entryId: string; fieldPath: string; value: JsonValue }> = values.map((value) => ({
+			entryId: value.entryId,
+			fieldPath: value.fieldPath,
+			value: value.value,
+		}));
 		ctx.send({ id: msg.id, ok: true, values: out, generation: ctx.attachmentGeneration });
 	},
 };
@@ -334,7 +333,7 @@ const daemonVerbs: Record<string, VerbHandler> = {
 		ctx.send(reply);
 	},
 	listActiveSessions: async (ctx, msg) => {
-		ctx.send({ id: msg.id, ok: true, sessions: ctx.daemonVerbs.listActiveSessions() });
+		ctx.send({ id: msg.id, ok: true, sessions: await ctx.daemonVerbs.listActiveSessions() });
 	},
 	getDaemonInfo: async (ctx, msg) => {
 		const info = await ctx.daemonVerbs.getDaemonInfo();

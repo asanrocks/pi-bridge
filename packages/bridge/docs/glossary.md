@@ -111,33 +111,47 @@ does not claim it.
 Which processes and links exist. Defined by [host runtime](host/runtime.md)
 and [core protocol](core/protocol.md).
 
-1. A **Daemon** *(bound)* is the server process: it owns the Projects, the
-   activation registry, and the Connections.
-2. A **Connection** *(bound)* is one client's link to the Daemon.
-3. A Connection is attached to at most one Activation.
-4. An Activation is implemented by a Manager *(bound)*.
-5. A **verb** *(bound, after HTTP)* is an RPC request type. Verbs are
+1. A **Daemon** *(bound)* is the serving process half that faces clients: it
+   owns the Connections, the browser attachment stream, HTTP delivery, and
+   Worker routing.
+2. A **Worker** *(bound)* is the serving process half that owns execution: the
+   Projects, Session storage, Activations, pi runtimes, and repository reads.
+   One process may be both halves; the Worker service contract is what makes
+   the split a deployment choice rather than an architecture change.
+3. A **Connection** *(bound)* is one client's link to the Daemon.
+4. A Connection is attached to at most one Activation.
+5. An Activation is implemented by a Manager *(bound)*.
+6. A **verb** *(bound, after HTTP)* is an RPC request type. Verbs are
    session, navigation, or query verbs.
-6. A Connection demultiplexes verbs: attached Session verbs route to its
-   Manager, daemon verbs route to the Daemon, and `pull` is Connection-local.
-   Each handler owns its asynchronous work and replies through the same
-   Connection.
-7. A **capability** *(bound)* is one client's handle for one Activation
-   registration: it is the only path to that Session's runtime — commands,
-   mutations, and observation registration — and it rejects once its
-   registration ended. The registry issues capabilities; it never hands out
-   a Manager.
-8. A **reactor** *(bound)* is a serialized state machine over one lifetime:
-   typed messages are applied one at a time by a synchronous step, and
-   admitted effects return as ordinary messages carrying the epoch of the
-   message that admitted them.
-9. An **actor** *(bound, after the actor model)* is one lifetime made one
-   owner: a reactor whose state names the resources the lifetime holds, where
-   every transition is one applied message and every asynchronous completion
-   returns as one. Its close is the terminal drain of state and resources
-   together. The Session, Connection, and browser view actors are built over
-   these seam terms; their contracts live in the host runtime and web
-   architecture documents.
+7. A Connection demultiplexes verbs: attached Session verbs address the
+   attached Session target, daemon verbs route to the Daemon, and `pull` is
+   Connection-local. Each handler owns its asynchronous work and replies
+   through the same Connection.
+8. A **capability** *(bound)* is an actor's counted handle for one Activation
+   registration: it owns observations and is what keeps the Activation alive.
+   Clients reach a runtime through a **Session target** and the commands bound
+   to it (B.9); the capability itself is worker-internal, and the Worker never
+   hands out a Manager.
+9. A **Session target** *(bound)* names one Activation for work: the
+   `(project, stem)` address, the durable session id, the Worker registration
+   that resolved it, and that registration's activation generation. A command
+   runs against the target it names and is refused once that Activation ended
+   — never retargeted at a successor.
+10. An **observation** *(bound)* is one Document sync of one target: an
+    independently releasable stream with its own lazy demand, identified by an
+    id that its frames, pulls, and release name. Two observations of one
+    Session are independent.
+11. A **reactor** *(bound)* is a serialized state machine over one lifetime:
+    typed messages are applied one at a time by a synchronous step, and
+    admitted effects return as ordinary messages carrying the epoch of the
+    message that admitted them.
+12. An **actor** *(bound, after the actor model)* is one lifetime made one
+    owner: a reactor whose state names the resources the lifetime holds, where
+    every transition is one applied message and every asynchronous completion
+    returns as one. Its close is the terminal drain of state and resources
+    together. The Session, Connection, and browser view actors are built over
+    these seam terms; their contracts live in the host runtime and web
+    architecture documents.
 
 ## C. Document sync
 

@@ -1,27 +1,61 @@
 # Host Runtime
 
 The host is the Node-side owner of live Sessions and the WebSocket protocol. A
-Daemon owns static Projects, live Activations, and Connections. An Activation
+Daemon owns the Connections, the browser attachment stream, and delivery. A
+Worker owns the Projects, Session storage, Activations, pi runtimes, and
+repository reads; the two halves run in one process today. An Activation
 contains one Manager and serves exactly one Session for its entire lifetime.
-Activations are daemon-internal; the wire carries Session addresses and
+Activations are worker-internal; the wire carries Session addresses and
 references, never an Activation.
 
-Session execution sits behind one seam: `src/host/execution-link.ts`. The
-Daemon owns configuration, catalogues, scanning, broadcasts, and the
-HTTP/WebSocket surface, and routes every session-lifecycle verb through the
-`ExecutionLink` interface — open, create, awaitSettled, collect, release,
-live, dispose. The local implementation owns the Activation registry and the
-per-session choreography (Manager creation, registration, the pre-attach
-model/thinking choices, first-prompt admission); a future remote
-implementation (a Worker process over a socket) can implement the same
-contract without the Daemon branching on locality. Every Activation
-registration carries an authorization — the link's `incarnation` (one daemon
-run) plus the registration's `generation` within it — so work composed against
-a registration names an identity a replaced registration never inherits; in
-the local link a new generation is always a new Manager and a new attachment.
+## Worker service boundary
+
+`src/host/worker-contract.ts` is the Daemon → Worker contract. It carries
+values and opaque ids only: no `Connection`, `Manager`, `ActivationRecord`,
+filesystem handle, or registry object crosses it, so a Worker could move
+behind a socket without the Daemon branching on locality.
+
+Three identities are distinct, and the distinction is what makes stale work
+recognizable without consulting a runtime:
+
+- `WorkerRegistration` names one Daemon↔Worker link: an `id`, the serving
+  run's `incarnation`, and the registration's `generation` within it.
+- `SessionTarget` names one Activation for work: `(projectId, stem)`, the
+  durable `sessionId`, the `SessionRef`'s reported `cwd` for attachment-bound
+  repository reads, the `worker` registration that resolved it, and that
+  registration's activation generation. A command runs against the target it
+  names; a target whose Activation ended is refused, never retargeted.
+- An **observation** names one Document sync of one target, with its own lazy
+demand and its own release. Two Connections observing the same Session hold
+two observations; releasing one leaves the other delivering.
+
+The Worker's frame stream is attachment-generation-free (`replace`, `patch`,
+`closed`), because a Worker serves many attachments and never encodes a
+client's identity. The Daemon mints one attachment generation per browser
+attach and stamps the frames it forwards, which is the rule in
+[core protocol](../core/protocol.md).
+
+`src/host/worker-local.ts` is that contract's in-process implementation. It
+owns the Activation registry, the per-session choreography (Manager creation,
+registration, the pre-attach model/thinking choices, first-prompt admission),
+the Session catalog (`src/host/session-catalog.ts`: directory scan, durable
+metadata parse, live overlay), and the observation table. The Daemon holds no
+Activation state and never sees a Manager: it resolves a Project, asks the
+Worker for an observation, and stamps the frames the observation delivers.
 The repository read surface (`src/host/repository.ts`: snapshot reads,
-directory listings, the review diff directive, `git show`, path completion)
-is likewise its own module, shared by whichever link serves it.
+directory listings, the review diff directive, `git show`, path completion of
+the Project home) is its own module, shared by whichever side serves the
+request.
+
+An observation is installed as one unit: one actor capability (the counted
+liveness signal that keeps the Activation alive) plus one observer handle over
+the Manager's patch stream. The initial sync is emitted synchronously during
+acquisition, so a caller never receives an observation without its baseline.
+Releasing it removes that handle and that capability — sibling observations
+and the Session's command admission are untouched. When a registration is
+collected, the Worker ends its observations after the actor's close flushed
+the final patches: the `closed` frame is delivered before `collect` resolves,
+so `session_closed` precedes the close reply on the wire.
 
 The canonical Session content is a `Document` owned by its Manager. The
 Document and its patch protocol are defined in [the core data model](../core/data-model.md).
@@ -182,8 +216,8 @@ synchronously emits exactly one initial-sync frame before later live patches.
 The frame is a cursor-aware patch when the supplied prefix cursor validates
 against the current Session; otherwise it is a full replace. Both initial-sync
 forms carry the supplied `SessionRef`. `removeConnection` removes the handle.
-The Manager sends unfiltered patches; each Connection applies its own lazy
-subscription filtering.
+The Manager sends unfiltered patches; the Worker's observation applies the
+lazy-demand filtering when it forwards them.
 
 Each Manager bundles the hidden `pi-bridge.git-stamp` extension once. The
 bundle remains bound to that Manager's runtime and its host trigger never
@@ -204,7 +238,7 @@ releasable `ObservationCapability`. The Manager stays private to the actor:
 the daemon's listing reads go through `metadata()` (the typed facts derived
 from the canonical Document), and raw Manager access belongs to the creation
 paths only — the factory, the stem derivation, and the pre-attach choices in
-the ExecutionLink's fresh-session choreography. That pre-registration window
+the local Worker's fresh-session choreography. That pre-registration window
 is the one sanctioned raw access: the runtime has no owner to admit work
 through until the actor exists. The actor is created around a built runtime,
 so its phase begins `live`; `creating` names that window.
@@ -236,32 +270,40 @@ it.
 
 ## Connection
 
-A Connection owns exactly one WebSocket. It starts detached and can be attached
-through at most one **Session capability** at a time: the Activation registry
-issues the Session actor's `SessionCapability` for one registration, and it is
-the only path to the Session's runtime — the Connection never holds the
-Manager itself, so a command cannot be written that bypasses the registration's
-admission check. `attachCapability` first releases the current capability
-(removing its observer from that runtime and ending its admission), records
-the new capability, mints the next attachment generation, and registers
-the capability's observer, which asks the Manager for initial sync. `detach`
-releases the capability without disposing the Activation. A capability
-rejects commands once its registration ended
-— collection, replacement, or daemon shutdown — including the mid-collection
-window before the terminal `session_closed` push. A command admitted before
-its registration ended still completes against the runtime it captured, so the
-reply the client trusts describes the session that was attached when the
-request arrived. A socket close disposes the Connection and releases its daemon
-attachment.
+A Connection owns exactly one WebSocket. It starts detached and holds at most
+one attachment: a `SessionTarget` (the address, the durable session id, the
+Worker registration, and the activation generation), the Worker observation
+delivering its Document, and the `SessionCommands` bound to that target. The
+Connection never holds a Manager or an admission object, so a command cannot be
+written that bypasses the owner's check.
 
-Initial-sync frames are sent unfiltered and clear lazy subscriptions; every
-observation frame the Connection emits — initial sync, live patch, and the
+`attach(open)` is the one attachment path. The Connection mints the next
+attachment generation, hands `open` the frame sink, and only then records what
+the transition produced — so an initial sync emitted during acquisition already
+names the new attachment, and a failed open leaves the previous attachment
+installed. The predecessor observation is released before `attach` resolves.
+`detach` releases the observation without disposing the Activation.
+
+Commands are target-addressed: `src/host/session-commands.ts` binds the typed
+verbs to the target they serve, and the owning Worker resolves the target to the
+registration that still holds that activation generation and durable session
+id. A command admitted before its Activation ended still completes against the
+runtime it captured; one that names a replaced activation, a replaced
+registration, or a different Session at the same address is refused — never
+retargeted at the successor. That is what lets the reply the client trusts
+describe the Session the request named. A socket close disposes the Connection
+and releases its observation.
+
+Initial-sync frames are the observation's full state and clear its demand;
+every observation frame the Connection emits — initial sync, live patch, and the
 terminal `session_closed` — is stamped with the current attachment generation
 (ADR 19), and frames are plain JSON envelopes (there is no transport
 compaction, because a compacted frame cannot name its owner). Live patches are
-filtered by those subscriptions before the Connection sends them. A `pull`
-request reads values from the attached Manager's canonical Document; pulling
-an unsealed lazy path also registers that path for subsequent live patches.
+already filtered when the Connection receives them: each observation filters
+the Manager's stream against its own demand — the paths it pulled while the
+entry was live — so a Connection never holds a subscription set and a second
+observation of the same Session receives exactly what it asked for. A `pull`
+reads through the attached observation and registers that demand.
 
 Attachment changes mint the next **attachment generation** (ADR 19): every
 observation frame the Connection emits — the initial sync, live patches, and
@@ -278,13 +320,13 @@ attachment transition is a typed handler in
 `src/host/connection-verbs.ts`: a seam function that validates the request
 shape, captures its target at handler entry (before any await), and replies
 through a `VerbContext` exposing only the daemon seam, the attachment
-capability, subscription registration, and the reply path — no socket, no
-transition state, no runtime. Attached Session verbs are:
+target-bound commands, and the reply path — no socket, no transition state,
+no runtime. Attached Session verbs are:
 `prompt`, `abort`, `discardSteer`, `setModel`, `setThinkingLevel`,
 `renameSession`, `setLabel`, `navigate`, and `recoverTurn`. They require an
-attachment and are issued through the capability's typed verbs — the two
+attachment and are issued through the target-bound commands — the two
 admission classes (immediate commands, serialized mutations) are the
-Session actor's. Each handler captures the capability at handler entry,
+Session actor's. Each handler captures the target at handler entry,
 before any await, so a transition
 that completes while the command runs cannot retarget it: the command
 executes against, and reports on, the session attached when the request
@@ -315,9 +357,9 @@ Connection's attachment, and are not serialized against it. Query verbs are `lis
 `listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),
 so their base travels in the request and they need no attachment. `gitShow`
 alone remains attachment-bound: it reads the attached Session's Project cwd.
-`pull` is Connection-local: it reads the attached runtime's lazy values
-through the capability and registers the live (unsealed) paths as
-subscriptions, so later patches on those paths keep flowing. `console` is
+`pull` is Connection-local: it reads the attached observation's lazy values
+and registers the live (unsealed) paths as that observation's demand, so later
+patches on those paths keep flowing. `console` is
 accepted only when the daemon is in
 dev mode and is a no-op acknowledgement.
 
@@ -328,8 +370,8 @@ The daemon can also use `push` on a Connection for registry broadcasts.
 ## Activation Registry
 
 `src/host/activation-registry.ts` is the index and reservation layer around
-the Session actors, behind the local ExecutionLink (the Daemon never touches
-it directly). The runtime lifetime of each Activation — admission,
+the Session actors, behind the local Worker (the Daemon never touches it
+directly). The runtime lifetime of each Activation — admission,
 observations, terminal teardown, and the idle-collection decision — belongs
 to its Session actor (`src/host/session-actor.ts`); the registry owns what
 is addressed rather than run:
@@ -341,12 +383,12 @@ absent -> creating -> live -> collecting -> absent
 describes the address. It maintains the Activation records (keyed by
 daemon-local id), the address
 index keyed by `(projectId, stem)`, pending-creation promises keyed by the
-same address, the `sessionId` ownership index, and the Connection-to-Activation
-attachment index. These are implementation state and never cross the wire. The
-Daemon supplies the Manager factories (open and create), the idle-collection
-delays, the pre-clamp thinking-level read, and the broadcast hooks (settlement,
-streaming transitions, registration/collection); it holds no Activation state
-of its own. The settlement and streaming hooks ride the actor's own
+same address, and the `sessionId` ownership index. These are implementation
+state and never cross the wire; attachment is the Worker's observation table,
+not the registry's. The Worker supplies the Manager factories (open and
+create), the idle-collection delays, the pre-clamp thinking-level read, and the
+broadcast hooks (settlement, streaming transitions, registration/collection),
+and reports changes as Worker events the Daemon forwards. The settlement and streaming hooks ride the actor's own
 observation of its runtime — the registry's records carry no runtime state.
 Each registration carries its authorization (`incarnation` +
 `generation`), assigned here and never reused within the incarnation.
@@ -385,7 +427,7 @@ shutdown can therefore neither register an Activation, leak a Manager, nor
 outlive the drain's return.
 
 Opening an address is resolve-or-create. An existing live Activation is
-reused; the capability the following attach mints is what keeps its actor
+reused; the observation the following attach installs is what keeps its actor
 alive, and the actor's fire-time re-check covers the reservation window. An
 in-flight creation is shared by
 other opens for the same address. A collecting Activation is awaited and the
@@ -415,7 +457,7 @@ Activation.
 
 ## Activation Collection
 
-The idle decision belongs to the Session actor: a live capability is an
+The idle decision belongs to the Session actor: a live observation's capability is an
 attached client and keeps it alive, the fire-time check defers while the
 runtime streams or compacts, and a durable Session, or an empty unflushed
 Session, waits `idleGcMs` (default five minutes) while an unflushed Session

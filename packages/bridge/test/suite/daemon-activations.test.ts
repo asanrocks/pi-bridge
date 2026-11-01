@@ -944,7 +944,7 @@ describe("daemon: session activation", () => {
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("Model not found");
 		// Nothing survives: the activation was disposed, not left for idle GC.
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		ws.close();
 	});
@@ -971,7 +971,7 @@ describe("daemon: session activation", () => {
 		expect(reply.error).toContain("no model selected");
 		// No empty session survives: the activation was disposed, not left for
 		// idle GC.
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		// A later retry works (the address was released cleanly).
 		refuseAdmission = false;
@@ -1018,7 +1018,7 @@ describe("daemon: session activation", () => {
 			expect(reply.error).toMatch(errorRe);
 		}
 		// Nothing was created — text is a precondition, not an option.
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		ws.close();
 	});
@@ -1203,14 +1203,14 @@ describe("daemon: session activation", () => {
 		// The creation is in flight (the factory is gated).
 		await settle();
 		expect(factoryCalls).toBe(1);
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		ws.close();
 		// Shutdown while the factory is still pending: the drain parks on the
 		// in-flight creation instead of clearing the registry and returning.
 		const disposePromise = daemon.dispose();
 		await settle(100);
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		// The factory completes after shutdown. The registration must be
 		// refused — nothing appears in the active snapshot — and the Manager
@@ -1218,7 +1218,7 @@ describe("daemon: session activation", () => {
 		releaseFactory();
 		await disposePromise;
 		await settle();
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 		expect(stubRef.current?.handles.disposed()).toBe(true);
 
 		// Idempotent: the afterEach drain runs dispose again.
@@ -1260,7 +1260,7 @@ describe("daemon: session activation", () => {
 		// The fresh-session creation is in flight (the factory is gated) and
 		// has no address yet — there is nothing in the active snapshot for the
 		// drain to see.
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 
 		ws.close();
 		const disposePromise = daemon.dispose();
@@ -1272,7 +1272,7 @@ describe("daemon: session activation", () => {
 		releaseFactory();
 		await disposePromise;
 		expect(stubRef.current?.handles.disposed()).toBe(true);
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 	}, 10000);
 
 	it("dispose disposes every live manager exactly once and admits nothing afterwards", async () => {
@@ -1303,7 +1303,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem2 }))).ok).toBe(true);
-		expect(daemon.listActiveSessions()).toHaveLength(2);
+		expect(await daemon.listActiveSessions()).toHaveLength(2);
 
 		ws.close();
 		await daemon.dispose();
@@ -1311,7 +1311,7 @@ describe("daemon: session activation", () => {
 
 		expect(disposals).toHaveLength(2);
 		expect(new Set(disposals).size).toBe(2);
-		expect(daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listActiveSessions()).toHaveLength(0);
 	}, 10000);
 });
 

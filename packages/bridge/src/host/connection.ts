@@ -2,7 +2,7 @@
 // Connection — the serialized protocol actor for one WebSocket.
 //
 // It owns the socket, RPC correlation, its own attachment-transition line,
-// and the SessionCapability that is its current attachment. It interprets no
+// and the observation that is its current attachment. It interprets no
 // Session state and enforces no navigation policy: every verb that is not an
 // attachment transition is a typed handler in connection-verbs.ts, reached
 // through a context that exposes only the daemon seam, the attachment
@@ -13,36 +13,44 @@
 //   Connection transitions (openSession, newSession, detach): serialized
 //     among themselves, in arrival order (this.transitions).
 //   Session work (commands, mutations): serialized by the Session actor
-//     behind the capability; the Connection adds no ordering of its own.
+//     behind the target-bound commands; the Connection adds no ordering of its own.
 // ============================================================================
 
 import type { WebSocket } from "ws";
-import type {
-	ClientMessage,
-	JsonValue,
-	NewSessionRequest,
-	OpenSessionRequest,
-	PrefixCursor,
-	SessionRef,
-} from "../core/index.ts";
-import { filterPatchForSocket, type Patch } from "../core/index.ts";
+import type { ClientMessage, JsonValue, NewSessionRequest, OpenSessionRequest, SessionRef } from "../core/index.ts";
 import { connectionVerbHandler, type DaemonVerbs, type VerbContext } from "./connection-verbs.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { TrafficLogger } from "./logger.ts";
-import type { ConnectionHandle } from "./manager.ts";
-import type { SessionCapability } from "./session-actor.ts";
+import type { SessionCommands } from "./session-commands.ts";
+import type {
+	SessionTarget,
+	WorkerObservation,
+	WorkerObservationFrame,
+	WorkerObservationSink,
+} from "./worker-contract.ts";
+
+/** One attached Session: the target its verbs address, the Worker observation
+ * delivering its Document, and the typed commands bound to that target. The
+ * Connection holds no runtime and no admission object — only these. */
+export interface AttachedSession {
+	readonly target: SessionTarget;
+	readonly observation: WorkerObservation;
+	readonly commands: SessionCommands;
+}
+
+/** What an attachment transition supplies: given the frame sink the Connection
+ * will deliver on, establish the observation and report what it attached. */
+export type SessionOpener = (sink: WorkerObservationSink) => Promise<AttachedSession>;
 
 export class Connection {
 	private ws: WebSocket;
 	private daemonVerbs: DaemonVerbs;
 	private logger: TrafficLogger | null;
 	private devMode: boolean;
-	private subscriptions = new Set<string>();
-	private handle: ConnectionHandle;
-	/** The current attachment: a Session actor-issued capability, never the
-	 * Session's runtime itself. Raw Manager access is a type error by
+	/** The current attachment: a Worker observation and the target it serves,
+	 * never a Session runtime. Raw Manager access is a type error by
 	 * construction. */
-	private capability: SessionCapability | null = null;
+	private attachment: AttachedSession | null = null;
 	/** The attachment generation (ADR 19): minted per attach, so every
 	 * observation frame this Connection emits names the attachment whose
 	 * stream it belongs to — even when the address is unchanged. */
@@ -65,33 +73,6 @@ export class Connection {
 		this.logger = logger;
 		this.devMode = devMode;
 
-		// The Manager-facing handle (ADR 09). Initial-sync frames are sent
-		// unfiltered — construction already stripped lazy fields — and reset
-		// connection-local lazy subscriptions.
-		this.handle = {
-			onPatch: (patch: Patch) => {
-				const filtered = filterPatchForSocket(patch.ops, this.subscriptions);
-				if (filtered.length > 0) {
-					const frame = { kind: "patch", ops: filtered, generation: this.attachmentGeneration };
-					this.send(frame);
-				}
-			},
-			onInitialSync: (frame) => {
-				this.subscriptions.clear();
-				// A creation's initial sync carries its operation id, so the
-				// client's selection owner can attribute the frame (see
-				// NewSessionRequest.operationId), and every observation frame carries
-				// the attachment generation that produced it (ADR 19): the client's
-				// mirror admits only the current attachment's live frames.
-				const attributed = {
-					...frame,
-					generation: this.attachmentGeneration,
-					...(this.syncAttribution !== null ? { operationId: this.syncAttribution } : {}),
-				};
-				this.send(attributed as unknown as Record<string, unknown>);
-			},
-		};
-
 		// A Connection starts unattached. The Daemon attaches it via openSession.
 		ws.on("message", (data) => {
 			try {
@@ -106,14 +87,22 @@ export class Connection {
 
 	// ── Attachment state ──────────────────────────────────────────────────
 
-	/** True while a Session capability is held. */
+	/** True while an observation is held. */
 	get isAttached(): boolean {
-		return this.capability !== null;
+		return this.attachment !== null;
 	}
 
 	/** The address + identity of the attached session (ADR 11). */
 	get attachedSession(): SessionRef | null {
-		return this.capability?.ref ?? null;
+		const target = this.attachment?.target;
+		return target === undefined
+			? null
+			: { projectId: target.projectId, stem: target.stem, sessionId: target.sessionId };
+	}
+
+	/** The edit target a session verb addresses (this slice's admission seam). */
+	get attachedTarget(): SessionTarget | null {
+		return this.attachment?.target ?? null;
 	}
 
 	/** True once the socket closed and the Connection was disposed. A disposed
@@ -123,23 +112,76 @@ export class Connection {
 		return this._disposed;
 	}
 
-	/** Accept a Session actor-issued capability as this Connection's
-	 * attachment. The generation is minted before the observer is installed,
-	 * so the initial-sync frame the installation emits already names the new
-	 * attachment (ADR 19). */
-	attachCapability(capability: SessionCapability, cursor: PrefixCursor | null): void {
-		this.detach();
-		this.attachmentGeneration++;
-		this.capability = capability;
-		capability.observe(this.handle, cursor);
+	/** Establish this Connection's attachment. The generation is minted before
+	 * the opening transition runs, so the initial-sync frame it emits during
+	 * acquisition already names the new attachment (ADR 19); a socket that
+	 * closed while the transition was in flight releases the observation it
+	 * produced instead of pinning a runtime nothing would ever release. */
+	async attach(open: SessionOpener): Promise<SessionTarget> {
+		// The generation is minted before the transition runs, so the frames the
+		// new observation emits during acquisition already belong to it. The
+		// previous attachment stays installed until the new one exists: a failed
+		// open must leave the Connection on the Session it still holds.
+		const generation = this.attachmentGeneration + 1;
+		const attached = await open((frame) => this.deliverObservation(frame, generation));
+		if (this._disposed) {
+			await attached.observation.release();
+			throw new Error("connection closed");
+		}
+		const previous = this.attachment;
+		this.attachmentGeneration = generation;
+		this.attachment = attached;
+		// The predecessor is released before the transition resolves: a caller
+		// that follows an attach with a stream observation must not still see the
+		// old stream delivering (the Worker filters per observation, so a held
+		// predecessor would keep its own demand alive).
+		try {
+			await previous?.observation.release();
+		} catch {
+			// An already-released observation (a terminal close) is not an error.
+		}
+		return attached.target;
 	}
 
-	/** Release the current attachment: the capability removes its observer from
-	 * the runtime and ends its admission; the activation stays alive for idle
-	 * collection. */
+	/** Deliver one Worker frame, stamped with the attachment generation that
+	 * produced it. A terminal frame ends the attachment: the client learns the
+	 * runtime is gone instead of waiting for a view that can never progress. */
+	private deliverObservation(frame: WorkerObservationFrame, generation: number): void {
+		if (frame.kind === "replace") {
+			this.send({
+				...frame,
+				generation,
+				...(this.syncAttribution !== null ? { operationId: this.syncAttribution } : {}),
+			} as unknown as Record<string, unknown>);
+			return;
+		}
+		if (frame.kind === "patch") {
+			// Already filtered for the observation's demand by the Worker. An
+			// address-bearing delta (the initial sync) also carries its SessionRef
+			// and, for a creation, the operation id that admitted it.
+			const attributed = {
+				...frame,
+				generation,
+				...(frame.session !== undefined && this.syncAttribution !== null
+					? { operationId: this.syncAttribution }
+					: {}),
+			};
+			this.send(attributed as unknown as Record<string, unknown>);
+			return;
+		}
+		this.send({ kind: "session_closed", projectId: frame.address.projectId, stem: frame.address.stem, generation });
+		// The Worker already ended the observation; releasing is idempotent and
+		// keeps the Connection from holding a dead stream.
+		const current = this.attachment;
+		this.attachment = null;
+		void current?.observation.release();
+	}
+
+	/** Release the current attachment: the observation ends and its actor capability
+	 * leaves, so the Activation idles out if nothing else holds it. */
 	detach(): void {
-		void this.capability?.release();
-		this.capability = null;
+		void this.attachment?.observation.release();
+		this.attachment = null;
 	}
 
 	/** Release the current attachment and drain the transition chain.
@@ -159,14 +201,6 @@ export class Connection {
 	/** Push a daemon-originated frame (sessions_changed / active_sessions_changed). */
 	push(frame: Record<string, unknown>): void {
 		this.send(frame);
-	}
-
-	/** The terminal ownership push for the address this Connection's last
-	 * attachment served (ADR 19): stamped with that attachment's generation,
-	 * so a client can tell a close of its current observation from a stale
-	 * one. Sent by the registry after it detached the connection. */
-	pushSessionClosed(projectId: string, stem: string): void {
-		this.send({ kind: "session_closed", projectId, stem, generation: this.attachmentGeneration });
 	}
 
 	// ── Message handler ──────────────────────────────────────────────────
@@ -211,9 +245,19 @@ export class Connection {
 	 * cannot retarget it: the command executes against, and reports on, the
 	 * session that was attached when the request arrived.
 	 */
-	private requireAttachment(): SessionCapability {
-		if (!this.capability) throw new Error("no session attached");
-		return this.capability;
+	/** The commands of the attachment a session verb addresses, captured at
+	 * handler entry. They name the target they were bound to, so a transition
+	 * that completes while a command runs cannot retarget it. */
+	private requireCommands(): SessionCommands {
+		if (!this.attachment) throw new Error("no session attached");
+		return this.attachment.commands;
+	}
+
+	/** The attachment's target: the address, identity, and reported cwd a verb
+	 * needs for attachment-bound reads. */
+	private requireTarget(): SessionTarget {
+		if (!this.attachment) throw new Error("no session attached");
+		return this.attachment.target;
 	}
 
 	/** The verb handlers' context for one request: the daemon seam, the
@@ -224,10 +268,8 @@ export class Connection {
 		return {
 			daemonVerbs: this.daemonVerbs,
 			devMode: this.devMode,
-			requireAttachment: () => this.requireAttachment(),
-			subscribe: (fieldPath) => {
-				this.subscriptions.add(fieldPath);
-			},
+			requireCommands: () => this.requireCommands(),
+			requireTarget: () => this.requireTarget(),
 			reply: (id, ok, error) => this.sendReply(id, ok, error),
 			send: (data) => this.send(data),
 			attachmentGeneration,

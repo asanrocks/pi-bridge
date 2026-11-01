@@ -1,8 +1,6 @@
-import { Buffer } from "node:buffer";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { createServer, type Server as HttpServer, type ServerResponse } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
-import { basename, extname, join, sep } from "node:path";
+import { extname, join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
 	DEFAULT_THINKING_LEVEL,
@@ -21,32 +19,26 @@ import type {
 	ProjectInfo,
 	SessionInfo,
 	SessionListCursor,
+	SessionRef,
 } from "../core/index.ts";
-import type { ActivationRecord } from "./activation-registry.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
 import { Connection } from "./connection.ts";
 import type { DaemonVerbs } from "./connection-verbs.ts";
 import embeddedAssets from "./embedded-assets.ts";
-import { createLocalExecutionLink, type ExecutionLink } from "./execution-link.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import { TrafficLogger } from "./logger.ts";
 import { createManager, type Manager } from "./manager.ts";
 import { resolveVisibleModelKeys } from "./model-visibility.ts";
-import {
-	archiveStemFile,
-	buildProjects,
-	containedSessionFile,
-	isArchivedStem,
-	normalizeStem,
-	type ProjectConfig,
-	resolveStemPath,
-} from "./projects.ts";
+import { buildProjects, type ProjectConfig } from "./projects.ts";
 import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
-import { clampPreview, DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
+import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
+import { bindWorkerCommands } from "./session-commands.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
+import type { ObservedSession, SessionTarget, WorkerEvent, WorkerObservationSink } from "./worker-contract.ts";
+import { createLocalWorker, type LocalWorker } from "./worker-local.ts";
 
 const MIME_TYPES: Record<string, string> = {
 	".html": "text/html",
@@ -66,12 +58,6 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 const DEFAULT_PORT_RANGE = { start: 33334, end: 33340 }; // [33334, 33340)
 /** First page size for `sessions_changed` refreshes. */
 const SESSION_PAGE_SIZE = 10;
-/**
- * Activation GC policy (ADR 11), defaulted from the Session actor's policy
- * constants and passed through the execution link. Not user-configurable;
- * injectable for tests.
- */
-
 export interface DaemonOptions {
 	agentDir?: string;
 	port?: number;
@@ -93,22 +79,6 @@ export interface DaemonOptions {
 	unflushedIdleGcMs?: number;
 }
 
-interface FileMeta {
-	sessionId: string;
-	name?: string;
-	firstMessageText?: string;
-	lastMessageText?: string;
-	lastActivityAt?: string;
-	messageCount?: number;
-}
-
-interface ScanEntry {
-	stem: string;
-	abs: string;
-	sortTimeMs: number;
-	active?: ActivationRecord;
-}
-
 export class Daemon {
 	private projects = new Map<string, ProjectConfig>();
 	/** Per-project settings (pi resolves defaults from the Project cwd's
@@ -118,12 +88,12 @@ export class Daemon {
 	 * reported by `getDaemonInfo` for the Project home's Pinned group. */
 	private globalSettings: SettingsManager | null = null;
 	private connections = new Set<Connection>();
-	/** The execution link: everything that runs a Session (the
-	 * Activation registry, Manager creation, per-session choreography) sits
-	 * behind this interface, so the Daemon depends on the contract, not on
-	 * execution locality. Constructed in start(); null before it, so a failed
-	 * startup can still be disposed. */
-	private execution: ExecutionLink | null = null;
+	/** The Worker this Daemon routes execution to: Projects, Session storage,
+	 * the Activation registry, and pi runtimes. Constructed in start(); null
+	 * before it, so a failed startup can still be disposed. The Daemon reaches
+	 * it only through the Worker service contract, so the process boundary is
+	 * a deployment choice rather than an architecture change. */
+	private worker: LocalWorker | null = null;
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
 	private port: number | undefined;
@@ -147,8 +117,6 @@ export class Daemon {
 		identityPath: () => this.textPolishIdentityPath(),
 	});
 
-	/** Per-file mtime cache: only re-read session files whose mtime changed. */
-	private sessionMetaCache = new Map<string, { mtimeMs: number; meta: FileMeta }>();
 	/** Serialized daemon-global settings mutations (see setModelPinned):
 	 * `setModelPinned` is a read-modify-write over the global `enabledModels`
 	 * scope, so two concurrent pin writes each read the pre-write list and
@@ -207,10 +175,6 @@ export class Daemon {
 			this.globalSettings = null;
 		}
 
-		// Duplicate session ids are unsupported input: fail startup rather than
-		// serve two addresses that would collide in the activation registry.
-		this.assertNoSessionIdConflicts();
-
 		if (options.logPath) {
 			this.logger = TrafficLogger.open(options.logPath);
 		}
@@ -220,36 +184,23 @@ export class Daemon {
 			options.modelRuntime ?? (await ModelRuntime.create({ authPath: join(this.agentDir, "auth.json") }));
 		this.managerFactory = options.managerFactory ?? createManager;
 
-		// The execution link owns Activation lifetime and the per-session
-		// choreography; the daemon keeps only the pushes and the Manager factory
-		// seam. Constructed before the server so no socket can arrive first.
-		this.execution = createLocalExecutionLink({
-			openManager: (project, abs) =>
-				this.managerFactory({
-					cwd: project.cwd,
-					agentDir: this.agentDir,
-					modelRuntime: this.modelRuntime,
-					sessionPath: abs,
-				}),
-			createManager: (project) =>
-				this.managerFactory({
-					cwd: project.cwd,
-					agentDir: this.agentDir,
-					modelRuntime: this.modelRuntime,
-				}),
+		// The Worker owns the Projects, Session storage, Activation lifetime, and
+		// pi runtimes; the Daemon keeps the asset surface, the Connections, and
+		// delivery. Constructed before the server so no socket can arrive first.
+		// Its constructor validates the Project set (duplicate ids, shared
+		// storage, duplicated durable session ids) and fails startup.
+		const worker = createLocalWorker({
+			projects,
+			agentDir: this.agentDir,
+			modelRuntime: this.modelRuntime,
+			managerFactory: this.managerFactory,
 			idleGcMs: this.idleGcMs,
 			unflushedIdleGcMs: this.unflushedIdleGcMs,
 			requestedThinkingLevel: (projectId, provider, modelId) =>
 				this.requestedThinkingLevel(projectId, provider, modelId),
-			onSettled: (ref) => {
-				// The first settle after newSession flushes the file — rescan so
-				// the session moves to mtime ordering and its metadata appears.
-				this.broadcastSessionsChanged(ref.projectId);
-				this.broadcastActiveSessions();
-			},
-			onStreamingChange: () => this.broadcastActiveSessions(),
-			onRegistryChange: () => this.broadcastActiveSessions(),
 		});
+		worker.onEvent((event) => this.onWorkerEvent(event));
+		this.worker = worker;
 
 		// Load extensions onto the daemon's modelRuntime so they are visible
 		// in getDaemonInfo before any session is activated.
@@ -285,7 +236,7 @@ export class Daemon {
 			this.logger.dispose();
 			this.logger = null;
 		}
-		if (this.execution) await this.execution.dispose();
+		if (this.worker) await this.worker.dispose();
 		// Refuse further settings mutations and wait out an in-flight flush, so
 		// a disposed daemon has no write landing after dispose() returns.
 		await this.settingsMutations.close();
@@ -321,230 +272,57 @@ export class Daemon {
 
 	// ── Session scanning ──────────────────────────────────────────────────
 
-	/**
-	 * Startup check (ADR 11): a `sessionId` claimed by two distinct
-	 * `(projectId, stem)` addresses is unsupported input. Header-only read, so
-	 * a large history costs one short read per file, not a full parse.
-	 */
-	private assertNoSessionIdConflicts(): void {
-		const owners = new Map<string, string>();
-		for (const project of this.projects.values()) {
-			let rels: string[];
-			try {
-				rels = readdirSync(project.sessionDir, { recursive: true }) as string[];
-			} catch {
-				continue;
-			}
-			for (const rel of rels) {
-				if (!rel.endsWith(".jsonl")) continue;
-				const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-				// Archived sessions are outside discovery, so they must not
-				// participate in the uniqueness invariant either: a manual copy into
-				// `.archive/` would otherwise fail daemon startup.
-				if (isArchivedStem(stem)) continue;
-				// A symlinked `.jsonl` that escapes the namespace must not leak a
-				// foreign session id into the conflict registry.
-				const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
-				if (real === null) continue;
-				const sessionId = readSessionHeaderId(real);
-				if (sessionId === null) continue;
-				const address = `${project.id}/${stem}`;
-				const owner = owners.get(sessionId);
-				if (owner !== undefined && owner !== address) {
-					throw new Error(`Duplicate session id "${sessionId}" in ${owner} and ${address}`);
-				}
-				owners.set(sessionId, address);
-			}
+	/** A Worker-reported state change, broadcast to every browser. The Worker
+	 * computes the payload (the page, the active snapshot) because it owns the
+	 * Documents those rows describe; the Daemon only addresses the frames. */
+	private onWorkerEvent(event: WorkerEvent): void {
+		if (event.kind === "sessions_changed") {
+			this.pushSessionsChanged(event.projectId, event.page.sessions, event.page.hasMore, event.page.nextCursor);
+			return;
 		}
+		if (event.kind === "active_sessions_changed") {
+			this.broadcastActiveSessions(event.sessions);
+			return;
+		}
+		// A terminal Worker: the Daemon can serve no Session for it. Until the
+		// remote link exists there is nothing to withdraw — surface the reason.
+		console.error(`Daemon: worker unavailable: ${event.reason}`);
 	}
 
-	/** Recursively discover session files plus live (possibly unflushed)
-	 * activations, keyed by stem. Active entries win over disk rows. */
-	private scanProjectSessions(project: ProjectConfig): ScanEntry[] {
-		const byStem = new Map<string, ScanEntry>();
-
-		let rels: string[] = [];
-		try {
-			rels = readdirSync(project.sessionDir, { recursive: true }) as string[];
-		} catch {
-			rels = [];
-		}
-		for (const rel of rels) {
-			if (!rel.endsWith(".jsonl")) continue;
-			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-			// The archive prefix is a storage namespace, not discovery: an
-			// archived session is not listed and has no address.
-			if (isArchivedStem(stem)) continue;
-			// Containment first: statSync follows symlinks, so a symlinked file
-			// pointing outside the namespace would otherwise expose foreign
-			// metadata (name, first message) in listSessions (ADR 11 boundary).
-			const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
-			if (real === null) continue;
-			let st: ReturnType<typeof statSync>;
-			try {
-				st = statSync(real);
-			} catch {
-				continue;
-			}
-			byStem.set(stem, { stem, abs: real, sortTimeMs: st.mtimeMs });
-		}
-
-		for (const activation of this.execution!.live()) {
-			if (activation.ref.projectId !== project.id) continue;
-			const meta = activation.actor.metadata();
-			let sortTimeMs = Date.parse(meta.createdAt);
-			if (existsSync(meta.sessionFile)) {
-				try {
-					sortTimeMs = statSync(meta.sessionFile).mtimeMs;
-				} catch {
-					// fall back to the header creation time
-				}
-			}
-			byStem.set(activation.ref.stem, {
-				stem: activation.ref.stem,
-				abs: meta.sessionFile,
-				sortTimeMs,
-				active: activation,
-			});
-		}
-
-		return [...byStem.values()];
-	}
-
-	private async listSessionsFor(
-		projectId: string,
-		max?: number,
-		cursor?: SessionListCursor | null,
-	): Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }> {
-		const project = this.projects.get(projectId);
-		if (!project) throw new Error(`Unknown project: ${projectId}`);
-
-		const all = this.scanProjectSessions(project);
-		// Total order: sort time desc, then canonical stem desc (ADR 11).
-		all.sort((a, b) => {
-			if (a.sortTimeMs !== b.sortTimeMs) return b.sortTimeMs - a.sortTimeMs;
-			if (a.stem === b.stem) return 0;
-			return a.stem < b.stem ? 1 : -1;
-		});
-		const after = cursor
-			? all.filter(
-					(e) => e.sortTimeMs < cursor.sortTimeMs || (e.sortTimeMs === cursor.sortTimeMs && e.stem < cursor.stem),
-				)
-			: all;
-
-		const limit = max !== undefined && max > 0 ? max : after.length;
-		const sliced = after.slice(0, limit);
-		const hasMore = after.length > sliced.length;
-		const sessions = sliced.map((e) => this.toSessionInfo(project, e));
-		const last = sliced[sliced.length - 1];
-		return {
-			sessions,
-			hasMore,
-			nextCursor: last ? { sortTimeMs: last.sortTimeMs, stem: last.stem } : undefined,
-		};
-	}
-
-	/** Global active/streaming snapshot over the execution link. */
-	listActiveSessions(): SessionInfo[] {
-		const out: SessionInfo[] = [];
-		for (const activation of this.execution!.live()) {
-			const project = this.projects.get(activation.ref.projectId);
-			if (!project) continue;
-			const meta = activation.actor.metadata();
-			let sortTimeMs = Date.parse(meta.createdAt);
-			if (existsSync(meta.sessionFile)) {
-				try {
-					sortTimeMs = statSync(meta.sessionFile).mtimeMs;
-				} catch {
-					// fall back to the header creation time
-				}
-			}
-			out.push(
-				this.toSessionInfo(project, {
-					stem: activation.ref.stem,
-					abs: meta.sessionFile,
-					sortTimeMs,
-					active: activation,
-				}),
-			);
-		}
-		out.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
-		return out;
-	}
-
-	private toSessionInfo(project: ProjectConfig, entry: ScanEntry): SessionInfo {
-		const activation = entry.active;
-		// A durable file is the metadata source even while active; only an
-		// unflushed activation has no file to read, so its document is used.
-		const durable = existsSync(entry.abs);
-		const meta = durable ? this.readFileMeta(entry.abs) : null;
-		if (!meta && !activation) {
-			// Unreadable file: surface a minimal row rather than dropping it.
-			return {
-				projectId: project.id,
-				sessionId: entry.stem,
-				stem: entry.stem,
-				active: false,
-				isStreaming: false,
-				timestamp: new Date(entry.sortTimeMs).toISOString(),
-			};
-		}
-		// The actor's typed read surface (ADR 19): the daemon never reaches
-		// the runtime itself.
-		const live = activation?.actor.metadata();
-		return {
-			projectId: project.id,
-			sessionId: meta?.sessionId ?? activation?.ref.sessionId ?? entry.stem,
-			stem: entry.stem,
-			active: activation !== undefined,
-			isStreaming: live ? live.isStreaming : false,
-			name: meta?.name ?? live?.name,
-			timestamp: new Date(entry.sortTimeMs).toISOString(),
-			firstMessageText: meta?.firstMessageText ?? live?.firstMessageText,
-			// The live preview/activity win over the last flush for an active row;
-			// an inactive row has only the file scan.
-			lastMessageText: live?.lastMessageText ?? meta?.lastMessageText,
-			lastActivityAt: live?.lastActivityAt ?? meta?.lastActivityAt,
-			messageCount: meta?.messageCount ?? live?.messageCount,
-		};
-	}
-
-	private readFileMeta(filePath: string): FileMeta | null {
-		let mtimeMs: number;
-		try {
-			mtimeMs = statSync(filePath).mtimeMs;
-		} catch {
-			return null;
-		}
-		const cached = this.sessionMetaCache.get(filePath);
-		if (cached && cached.mtimeMs === mtimeMs) return cached.meta;
-		const meta = parseSessionFile(filePath);
-		if (meta) this.sessionMetaCache.set(filePath, { mtimeMs, meta });
-		return meta;
+	/** The global active/streaming snapshot: the Worker owns the Documents
+	 * those rows describe, so it computes the rows. */
+	listActiveSessions(): Promise<SessionInfo[]> {
+		return this.worker!.listActiveSessions();
 	}
 
 	// ── Broadcasts ────────────────────────────────────────────────────────
 
+	/** Push one Project's refreshed first page to every browser. */
+	private pushSessionsChanged(
+		projectId: string,
+		sessions: SessionInfo[],
+		hasMore: boolean,
+		nextCursor?: SessionListCursor,
+	): void {
+		const frame: Record<string, unknown> = { kind: "sessions_changed", projectId, sessions, hasMore };
+		if (nextCursor) frame.nextCursor = nextCursor;
+		for (const conn of this.connections) conn.push(frame);
+	}
+
+	/** Refresh and push one Project's first page (a close or an archive changed
+	 * its ordering; a rename rewrites its row). */
 	private broadcastSessionsChanged(projectId: string): void {
-		void this.listSessionsFor(projectId, SESSION_PAGE_SIZE)
-			.then((page) => {
-				const frame: Record<string, unknown> = {
-					kind: "sessions_changed",
-					projectId,
-					sessions: page.sessions,
-					hasMore: page.hasMore,
-				};
-				if (page.nextCursor) frame.nextCursor = page.nextCursor;
-				for (const conn of this.connections) conn.push(frame);
-			})
+		void this.worker
+			?.listSessions(projectId, SESSION_PAGE_SIZE)
+			.then((page) => this.pushSessionsChanged(projectId, page.sessions, page.hasMore, page.nextCursor))
 			.catch(() => {
 				// A failed refresh is recoverable: the client still holds a
 				// previous page and will re-query on the next navigation.
 			});
 	}
 
-	private broadcastActiveSessions(): void {
-		const frame: Record<string, unknown> = { kind: "active_sessions_changed", sessions: this.listActiveSessions() };
+	private broadcastActiveSessions(sessions: SessionInfo[]): void {
+		const frame: Record<string, unknown> = { kind: "active_sessions_changed", sessions };
 		for (const conn of this.connections) conn.push(frame);
 	}
 
@@ -583,21 +361,39 @@ export class Daemon {
 
 	// ── Daemon verbs (called by Connection) ───────────────────────────────
 
-	private daemonVerbs: DaemonVerbs = {
-		listSessions: (projectId, max, cursor) => this.listSessionsFor(projectId, max, cursor),
+	/** Attach `conn` to one Worker observation: the Connection mints the
+	 * attachment generation and supplies the frame sink before the observation
+	 * exists, so the initial sync it emits during acquisition already belongs to
+	 * the new attachment. The returned target is what its session verbs address. */
+	private async attach(
+		conn: Connection,
+		open: (sink: WorkerObservationSink) => Promise<ObservedSession>,
+	): Promise<SessionTarget> {
+		return conn.attach(async (sink) => {
+			const observed = await open(sink);
+			// The commands name the target this observation serves: a later
+			// transition cannot retarget them, and the Worker refuses a target
+			// whose Activation ended instead of reaching its successor.
+			return {
+				target: observed.target,
+				observation: observed.observation,
+				commands: bindWorkerCommands(this.worker!, observed.target, observed.observation),
+			};
+		});
+	}
 
-		listActiveSessions: () => this.listActiveSessions(),
+	private daemonVerbs: DaemonVerbs = {
+		listSessions: (projectId, max, cursor) => this.worker!.listSessions(projectId, max, cursor ?? null),
+
+		listActiveSessions: () => this.worker!.listActiveSessions(),
 
 		openSession: async (projectId, stem, conn, cursor) => {
 			try {
-				const project = this.projects.get(projectId);
-				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
-				const normalized = normalizeStem(stem);
-				const abs = resolveStemPath(project.sessionDir, normalized);
-				// Reserve and attach as one execution operation: a close that lands
-				// between them re-reserves instead of pinning a disposed Manager.
-				const activation = await this.execution!.open(conn, project, normalized, abs, cursor ?? null);
-				return { ok: true, session: activation.ref };
+				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
+				const target = await this.attach(conn, (sink) =>
+					this.worker!.observeSession({ projectId, stem }, { cursor: cursor ?? null, sink }),
+				);
+				return { ok: true, session: sessionRefOf(target) };
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
 			}
@@ -605,37 +401,24 @@ export class Daemon {
 
 		newSession: async (projectId, conn, text, options) => {
 			try {
-				const project = this.projects.get(projectId);
-				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
-				// The whole Manager-owning phase — creation, registration, the
-				// pre-attach choices, and the attach — runs inside the execution
-				// link, so a factory that completes after shutdown began is disposed
-				// within the operation the link's drain awaits.
-				const activation = await this.execution!.create(conn, project, text, options);
-				return { ok: true, session: activation.ref };
+				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
+				const target = await this.attach(conn, (sink) =>
+					this.worker!.createSession(projectId, { text, ...options, sink }),
+				);
+				return { ok: true, session: sessionRefOf(target) };
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
 			}
 		},
 
 		detach: (conn) => {
-			this.execution!.release(conn);
+			conn.detach();
 		},
 
 		closeSession: async (projectId, stem) => {
 			try {
-				const project = this.projects.get(projectId);
-				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
-				const normalized = normalizeStem(stem);
-				// Wait out a creation in flight for the address: the Activation it is
-				// building is the one this kill must reach, and reporting "not
-				// active" while a Manager is still being constructed would leave the
-				// address live right after a successful close.
-				const activation = await this.execution!.awaitSettled(projectId, normalized);
-				if (!activation || activation.collecting !== null) {
-					return { ok: false, error: `Session is not active: ${normalized}` };
-				}
-				await this.execution!.collect(activation);
+				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
+				await this.worker!.closeSession({ projectId, stem });
 				// Refresh the Project's first page everywhere: the kill's flush
 				// (and an unflushed session's disappearance) reorders history.
 				this.broadcastSessionsChanged(projectId);
@@ -647,21 +430,8 @@ export class Daemon {
 
 		archiveSession: async (projectId, stem) => {
 			try {
-				const project = this.projects.get(projectId);
-				if (!project) return { ok: false, error: `Unknown project: ${projectId}` };
-				// Rejects the archive prefix itself, so an archived stem can never be
-				// re-addressed (see ARCHIVE_DIR).
-				const normalized = normalizeStem(stem);
-				// Wait out a creation in flight for the address before closing and
-				// moving the file: the completing creation would otherwise register a
-				// Manager for an address whose file had already been archived.
-				const activation = await this.execution!.awaitSettled(projectId, normalized);
-				// Close first, unconditionally: disposal finalizes an in-flight turn,
-				// which can create or advance the file, so the move must follow it.
-				// A dormant session has no activation — the close is then a no-op and
-				// only the move remains.
-				if (activation) await this.execution!.collect(activation);
-				archiveStemFile(project.sessionDir, normalized);
+				if (!this.projects.has(projectId)) return { ok: false, error: `Unknown project: ${projectId}` };
+				await this.worker!.archiveSession({ projectId, stem });
 				// The row leaves the history pages. A live session's row already left
 				// the active snapshot via the collection broadcast.
 				this.broadcastSessionsChanged(projectId);
@@ -901,8 +671,9 @@ export class Daemon {
 			this.connections.add(conn);
 
 			ws.on("close", () => {
-				this.execution!.release(conn);
-				conn.dispose();
+				// Disposing the Connection releases its observation, which is what
+				// ends its attachment (and lets the Activation idle out).
+				void conn.dispose();
 				this.connections.delete(conn);
 			});
 		});
@@ -940,142 +711,8 @@ export class Daemon {
 	}
 }
 
-// ── Lightweight session file parser (avoids SessionManager.list re-read) ─
-
-interface FileSessionEntry {
-	type?: string;
-	id?: string;
-	name?: string;
-	message?: { role?: string; content?: unknown; timestamp?: number };
-	timestamp?: string;
-	[key: string]: unknown;
+/** The wire identity of an addressed Session: the address plus the durable id
+ * the Worker resolved. */
+function sessionRefOf(target: SessionTarget): SessionRef {
+	return { projectId: target.projectId, stem: target.stem, sessionId: target.sessionId };
 }
-
-/** Cap for the header-only scan. A pi session header is a single short line. */
-const HEADER_SCAN_BYTES = 64 * 1024;
-
-/** Read just the session id from a file's first line, or null. */
-function readSessionHeaderId(filePath: string): string | null {
-	let fd: number | undefined;
-	try {
-		const st = statSync(filePath);
-		const len = Math.min(st.size, HEADER_SCAN_BYTES);
-		const buf = Buffer.alloc(len);
-		fd = openSync(filePath, "r");
-		readSync(fd, buf, 0, len, 0);
-		const firstLine = buf.toString("utf8").split("\n", 1)[0]?.trim();
-		if (!firstLine) return null;
-		const entry = JSON.parse(firstLine) as FileSessionEntry;
-		if (entry.type !== "session") return null;
-		return typeof entry.id === "string" ? entry.id : null;
-	} catch {
-		return null;
-	} finally {
-		if (fd !== undefined) closeSync(fd);
-	}
-}
-
-function parseSessionFile(filePath: string): FileMeta | null {
-	try {
-		const content = readFileSync(filePath, "utf8");
-		const lines = content.split("\n");
-
-		let sessionId: string | null = null;
-		let name: string | undefined;
-		let firstMessageText: string | undefined;
-		let lastMessageText: string | undefined;
-		let lastActivityAt: string | undefined;
-		let messageCount = 0;
-		let foundHeader = false;
-
-		for (const raw of lines) {
-			const line = raw.trim();
-			if (!line) continue;
-			try {
-				const entry = JSON.parse(line) as FileSessionEntry;
-
-				if (!foundHeader) {
-					if (entry.type !== "session") return null;
-					// Durable session id from the header (ADR 09) — the client cache
-					// key. Never the file path: paths change across session dirs.
-					sessionId = typeof entry.id === "string" ? entry.id : null;
-					foundHeader = true;
-					continue;
-				}
-
-				if (entry.type === "session_info") {
-					if (entry.name !== undefined) {
-						name = typeof entry.name === "string" ? entry.name.trim() || undefined : undefined;
-					}
-				}
-
-				if (typeof entry.timestamp === "string" && entry.timestamp) {
-					if (!lastActivityAt || entry.timestamp > lastActivityAt) lastActivityAt = entry.timestamp;
-				}
-
-				if (entry.type !== "message") continue;
-				messageCount++;
-
-				const msg = entry.message;
-				if (msg?.role === "user" && !firstMessageText) {
-					firstMessageText = extractSimpleText(msg.content);
-				}
-				// Most recent user/assistant text; thinking and tool-result blocks are
-				// ignored so the preview matches the live-document extractor.
-				if (msg?.role === "user" || msg?.role === "assistant") {
-					const text = firstTextBlock(msg.content);
-					if (text) lastMessageText = text;
-				}
-			} catch {
-				// skip malformed lines
-			}
-		}
-
-		if (!foundHeader) return null;
-
-		return {
-			sessionId: sessionId ?? basename(filePath),
-			name,
-			firstMessageText: firstMessageText || undefined,
-			lastMessageText: lastMessageText ? clampPreview(lastMessageText) : undefined,
-			lastActivityAt,
-			messageCount: messageCount || undefined,
-		};
-	} catch {
-		return null;
-	}
-}
-
-function extractSimpleText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		const parts: string[] = [];
-		for (const item of content) {
-			const block = item as { type?: string; text?: string; thinking?: string };
-			if (block.type === "text") {
-				if (block.text) parts.push(block.text);
-			} else if (block.type === "thinking") {
-				if (block.thinking) parts.push(block.thinking);
-			}
-		}
-		return parts.join(" ");
-	}
-	return "";
-}
-
-/** First `text` block of a durable message content. Thinking blocks are
- * ignored so the preview matches the live-document extractor. */
-function firstTextBlock(content: unknown): string | undefined {
-	if (typeof content === "string") return content || undefined;
-	if (Array.isArray(content)) {
-		for (const item of content) {
-			const block = item as { type?: string; text?: string };
-			if (block.type === "text" && block.text) return block.text;
-		}
-	}
-	return undefined;
-}
-
-// ── Document-derived metadata (unflushed active sessions) ────────────────
-// The live-Document summary lives in the Session actor (`metadata()`); the
-// durable-file parser below keeps its own extraction over the jsonl lines.

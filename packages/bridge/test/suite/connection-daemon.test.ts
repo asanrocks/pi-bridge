@@ -5,8 +5,8 @@ import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { Manager } from "../../src/host/manager.ts";
-import { issueDirectCapability } from "../../src/host/session-actor.ts";
 import {
+	attachTestManager,
 	collectFrames,
 	createWsPair,
 	mockDaemonVerbs,
@@ -82,7 +82,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		const replace = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 		expect(replace).toBeDefined();
@@ -109,7 +109,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		// Wait for initial replace
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
@@ -142,7 +142,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		const images = Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => ({
@@ -170,7 +170,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
 		const images = [{ type: "image", data: "a".repeat(MAX_IMAGE_BASE64_LENGTH + 1), mimeType: "image/png" }];
@@ -196,7 +196,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		// Wait for replace
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
@@ -273,7 +273,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -304,7 +304,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -341,7 +341,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -372,7 +372,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -399,7 +399,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 
@@ -438,7 +438,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		// Wait for replace push (proves Connection listener is attached)
 		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
@@ -474,7 +474,7 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 
 		const replace = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 		const session = (replace as { session: Record<string, unknown> }).session;
@@ -520,14 +520,14 @@ describe("Connection + Daemon", () => {
 			...mockDaemonVerbs,
 			openSession: async (_projectId, _stem, conn) => {
 				await openGate;
-				conn.attachCapability(issueDirectCapability(managerB, refB), null);
+				await attachTestManager(conn, managerB, refB, null);
 				return { ok: true, session: refB };
 			},
 			sessionsChanged: (projectId) => sessionsChanged.push(projectId),
 		};
 
 		const conn = new Connection(serverWs, verbs, null, false);
-		conn.attachCapability(issueDirectCapability(managerA, refA), null);
+		await attachTestManager(conn, managerA, refA, null);
 		await waitForOpen(clientWs);
 
 		clientWs.send(JSON.stringify({ id: "1", verb: "openSession", projectId: "proj-b", stem: "b" }));
@@ -649,20 +649,20 @@ describe("Connection + Daemon", () => {
 		const clientFrames = collectFrames(clientWs);
 
 		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		const first = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 		expect((first as Record<string, unknown>).generation).toBe(1);
 
 		// A reattach mints the next generation: the new initial sync already
 		// names the new attachment, even though the address is unchanged.
 		clientFrames.length = 0;
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		const stream = await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		const second = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
 		expect((second as Record<string, unknown>).generation).toBe(2);
 
 		// The terminal close names the attachment it severed.
 		clientFrames.length = 0;
-		conn.pushSessionClosed(mockSessionRef.projectId, mockSessionRef.stem);
+		stream.close();
 		const closed = await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "session_closed");
 		expect((closed as Record<string, unknown>).generation).toBe(2);
 

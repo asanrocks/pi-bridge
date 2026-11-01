@@ -2,8 +2,13 @@
 // (connection-daemon.test.ts, initial-sync-integration.test.ts).
 
 import WebSocket, { WebSocketServer } from "ws";
-import type { SessionInfo, SessionRef } from "../../src/core/index.ts";
+import { filterPatchForSocket, type PrefixCursor, type SessionInfo, type SessionRef } from "../../src/core/index.ts";
+import type { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
+import type { Manager } from "../../src/host/manager.ts";
+import { createSessionActor } from "../../src/host/session-actor.ts";
+import { bindSessionCommands } from "../../src/host/session-commands.ts";
+import type { WorkerObservation } from "../../src/host/worker-contract.ts";
 
 /** Create an in-process WebSocket pair (server + client). */
 export function createWsPair(): Promise<{ serverWs: WebSocket; clientWs: WebSocket }> {
@@ -76,6 +81,86 @@ export function waitFor(cond: () => boolean, timeout = 5000, what = "condition")
 	});
 }
 
+/** Attach a hand-built Manager to a Connection through the real attachment
+ * seam: one observation over a Session actor, exactly as the Worker installs
+ * one. Tests exercise the Connection protocol, not the Worker. */
+export async function attachTestManager(
+	conn: Connection,
+	manager: Manager,
+	ref: SessionRef,
+	cursor: PrefixCursor | null = null,
+): Promise<{ close: () => void }> {
+	const actor = createSessionActor({
+		manager,
+		ref,
+		authorization: { incarnation: "test", generation: 1 },
+	});
+	const capability = actor.capability();
+	const admission = actor.admission();
+	const target = {
+		projectId: ref.projectId,
+		stem: ref.stem,
+		sessionId: ref.sessionId,
+		cwd: manager.cwd,
+		worker: { id: "test-worker", incarnation: "test", generation: 1 },
+		activation: 1,
+	} as const;
+	let endStream: (() => void) | null = null;
+	// One observation's lazy demand, filtered here exactly as the Worker does
+	// it: the Connection holds no subscription set of its own.
+	const demand = new Set<string>();
+	await conn.attach(async (sink) => {
+		endStream = () => sink({ kind: "closed", address: { projectId: ref.projectId, stem: ref.stem } });
+		const observation = capability.observe(
+			{
+				onPatch: (patch) => {
+					const ops = filterPatchForSocket([...patch.ops], demand);
+					if (ops.length > 0) sink({ kind: "patch", ops });
+				},
+				onInitialSync: (frame) => {
+					demand.clear();
+					if (frame.kind === "replace")
+						sink({ kind: "replace", session: frame.session, document: frame.document });
+					else sink({ kind: "patch", session: frame.session, ops: frame.ops });
+				},
+			},
+			cursor,
+		);
+		const stream: WorkerObservation = {
+			id: "test-observation",
+			target,
+			pull: async (requests) => {
+				const values = await capability.pull([...requests]);
+				// A live value becomes this observation's demand, exactly as the
+				// Worker's observation does it.
+				for (const value of values) if (value.live) demand.add(value.fieldPath);
+				return values;
+			},
+			release: async () => {
+				await observation.release();
+				await capability.release();
+			},
+		};
+		return {
+			target,
+			observation: stream,
+			commands: bindSessionCommands(target, {
+				prompt: (text, images) => admission.prompt(text, images),
+				abort: () => admission.abort(),
+				discardSteer: () => admission.discardSteer(),
+				setModel: (provider, modelId) => admission.setModel(provider, modelId),
+				setThinkingLevel: (level) => admission.setThinkingLevel(level),
+				renameSession: (name) => admission.renameSession(name),
+				setLabel: (entryId, label) => admission.setLabel(entryId, label),
+				navigate: (entryId) => admission.navigate(entryId),
+				recoverTurn: () => admission.recoverTurn(),
+				pull: (requests) => stream.pull(requests),
+			}),
+		};
+	});
+	return { close: () => endStream?.() };
+}
+
 export const mockSessionRef: SessionRef = { projectId: "proj", sessionId: "s1", stem: "2024-01-01_s1" };
 
 const stubSession: SessionInfo = {
@@ -91,7 +176,7 @@ const stubSession: SessionInfo = {
 
 export const mockDaemonVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [stubSession], hasMore: false }),
-	listActiveSessions: () => [],
+	listActiveSessions: async () => [],
 	getDaemonInfo: async () => ({
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],

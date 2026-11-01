@@ -24,8 +24,15 @@ import type {
 import { isEntrySealed } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from "../../src/host/index.ts";
-import { issueDirectCapability } from "../../src/host/session-actor.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitFor, waitForFrame } from "./conn-helpers.ts";
+import {
+	attachTestManager,
+	collectFrames,
+	createWsPair,
+	mockDaemonVerbs,
+	mockSessionRef,
+	waitFor,
+	waitForFrame,
+} from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -92,7 +99,7 @@ describe("initial sync: attach", () => {
 		const pairA = await createWsPair();
 		const framesA = collectFrames(pairA.clientWs);
 		const connA = new Connection(pairA.serverWs, mockDaemonVerbs, null, false);
-		connA.attachCapability(issueDirectCapability(bh.manager, ref), null);
+		await attachTestManager(connA, bh.manager, ref, null);
 
 		const replace = (await waitForFrame(framesA, (f) => (f as { kind?: string }).kind === "replace")) as {
 			session: SessionRef;
@@ -115,7 +122,7 @@ describe("initial sync: attach", () => {
 		const pairB = await createWsPair();
 		const framesB = collectFrames(pairB.clientWs);
 		const connB = new Connection(pairB.serverWs, mockDaemonVerbs, null, false);
-		connB.attachCapability(issueDirectCapability(bh.manager, ref), cursor);
+		await attachTestManager(connB, bh.manager, ref, cursor);
 
 		const delta = (await waitForFrame(framesB, (f) => (f as { kind?: string }).kind === "patch")) as PatchMessage;
 		expect(delta.session).toEqual(ref);
@@ -173,7 +180,7 @@ describe("initial sync: attach", () => {
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), {
+		await attachTestManager(conn, bh.manager, mockSessionRef, {
 			sessionId: bh.manager.liveSessionId,
 			lastKnownId: "no-such-entry",
 			entryCount: 1,
@@ -198,7 +205,7 @@ describe("initial sync: attach", () => {
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		const firstReplace = (await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace")) as {
 			document: Document;
 		};
@@ -220,7 +227,7 @@ describe("initial sync: attach", () => {
 		const pair2 = await createWsPair();
 		const frames2 = collectFrames(pair2.clientWs);
 		const conn2 = new Connection(pair2.serverWs, mockDaemonVerbs, null, false);
-		conn2.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn2, bh.manager, mockSessionRef, null);
 
 		const frame = await waitForFrame(frames2, (f) => (f as { kind?: string }).kind === "replace");
 		const doc = (frame as { document: Document }).document;
@@ -357,7 +364,7 @@ describe("initial sync: subscription reset", () => {
 		const pair = await createWsPair();
 		const frames = collectFrames(pair.clientWs);
 		const conn = new Connection(pair.serverWs, mockDaemonVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(manager, mockSessionRef), null);
+		await attachTestManager(conn, manager, mockSessionRef, null);
 		await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace");
 
 		const lazyPatch: Patch = {
@@ -384,7 +391,7 @@ describe("initial sync: subscription reset", () => {
 		// Re-attach: the initial sync resets subscriptions, so the same lazy
 		// patch is filtered again.
 		const mark = frames.length;
-		conn.attachCapability(issueDirectCapability(manager, mockSessionRef), null);
+		await attachTestManager(conn, manager, mockSessionRef, null);
 		await waitForFrame(frames, (f) => (f as { kind?: string }).kind === "replace" && frames.indexOf(f) >= mark);
 		for (const h of handles) h.onPatch(lazyPatch);
 		// WS delivery is async — allow time for a frame that must not arrive.

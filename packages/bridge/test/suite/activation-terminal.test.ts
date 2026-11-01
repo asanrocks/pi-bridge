@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Document, SessionRef } from "../../src/core/index.ts";
 import { ActivationRegistry } from "../../src/host/activation-registry.ts";
-import type { Connection } from "../../src/host/connection.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 
@@ -107,13 +106,17 @@ describe("Activation terminal state", () => {
 		await registry.dispose();
 	});
 
-	it("attaching an ended record is refused", async () => {
+	it("an ended record's admission is refused, not retargeted", async () => {
 		const registry = makeRegistry();
 		const ref: SessionRef = { projectId: "p", sessionId: "S", stem: "a" };
 		const m1 = stubManager("S");
 		const r1 = await registry.register(m1, ref);
+		const admission = r1.admission;
 		await registry.collect(r1);
-		expect(() => registry.attach({} as unknown as Connection, r1, null)).toThrow("session is closing");
+		// The registration-scoped admission is the one path to the runtime;
+		// once the actor closed it rejects instead of reaching a disposed
+		// Manager, so a stale handle cannot command a successor either.
+		await expect(admission.renameSession("late")).rejects.toThrow("session is closed");
 		await registry.dispose();
 	});
 

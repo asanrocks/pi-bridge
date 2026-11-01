@@ -16,8 +16,14 @@ import type { WebSocket } from "ws";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import { MAX_READ_FILE_BYTES, readFileAtSnapshot } from "../../src/host/repository.ts";
-import { issueDirectCapability } from "../../src/host/session-actor.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
+import {
+	attachTestManager,
+	collectFrames,
+	createWsPair,
+	mockDaemonVerbs,
+	mockSessionRef,
+	waitForFrame,
+} from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -51,7 +57,7 @@ describe("readFile verb", () => {
 		const frames = collectFrames(clientWs);
 		const conn = new Connection(serverWs, readFileVerbs, null, false);
 		if (attach) {
-			conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+			await attachTestManager(conn, bh.manager, mockSessionRef, null);
 			await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace");
 		} else {
 			await new Promise<void>((resolve) => clientWs.once("open", resolve));

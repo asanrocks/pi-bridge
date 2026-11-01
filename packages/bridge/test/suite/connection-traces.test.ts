@@ -1,21 +1,24 @@
 // Connection protocol traces — the cross-boundary acceptance cases for the
-// lease-based attachment model: a close that lands while a command runs, a
-// switch that completes under a running command, a pull reply that describes
+// observation-based attachment model: a close that lands while a command runs,
+// a switch that completes under a running command, a pull reply that describes
 // the session it was issued against, and the terminal-ownership ordering of
-// `session_closed` against command replies. These run the real verb →
-// ExecutionLink → registry path, not stubs of it.
+// `session_closed` against command replies. These run the real verb → Worker
+// → registry path, not stubs of it.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import type { Document, SessionRef } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
-import { createLocalExecutionLink, type ExecutionLink } from "../../src/host/execution-link.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
+import { bindWorkerCommands } from "../../src/host/session-commands.ts";
+import type { ObservedSession, WorkerObservationSink } from "../../src/host/worker-contract.ts";
+import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
 import { collectFrames, createWsPair, waitForFrame, waitForOpen } from "./conn-helpers.ts";
 
 // ---------------------------------------------------------------------------
@@ -104,7 +107,7 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 }
 
 interface Bundle {
-	link: ExecutionLink;
+	worker: LocalWorker;
 	project: ProjectConfig;
 	managers: Map<string, TraceManager>;
 	verbs: DaemonVerbs;
@@ -119,26 +122,28 @@ function makeBundle(): Bundle {
 	const managers = new Map<string, TraceManager>();
 	const sessionsChanged: string[] = [];
 	let freshCount = 0;
-	const link = createLocalExecutionLink({
-		openManager: async (_p, abs) => {
-			const stem = basename(abs, ".jsonl");
+	const factory: LocalManagerFactory = async (opts) => {
+		const resumed = opts?.sessionPath;
+		if (resumed) {
+			const stem = basename(resumed, ".jsonl");
 			const tm = traceManager(stem);
 			managers.set(stem, tm);
 			return tm.manager;
-		},
-		createManager: async () => {
-			freshCount += 1;
-			const stem = `new-${freshCount}`;
-			const tm = traceManager(stem, join(sessionDir, `${stem}.jsonl`));
-			managers.set(stem, tm);
-			return tm.manager;
-		},
+		}
+		freshCount += 1;
+		const stem = `new-${freshCount}`;
+		const tm = traceManager(stem, join(sessionDir, `${stem}.jsonl`));
+		managers.set(stem, tm);
+		return tm.manager;
+	};
+	const worker = createLocalWorker({
+		projects: [project],
+		agentDir: root,
+		modelRuntime: {} as ModelRuntime,
+		managerFactory: factory,
 		idleGcMs: 60_000,
 		unflushedIdleGcMs: 60_000,
 		requestedThinkingLevel: () => "off",
-		onSettled: () => {},
-		onStreamingChange: () => {},
-		onRegistryChange: () => {},
 	});
 	cleanups.push(() => rmSync(root, { recursive: true, force: true }));
 
@@ -153,7 +158,7 @@ function makeBundle(): Bundle {
 
 	const verbs: DaemonVerbs = {
 		listSessions: async () => ({ sessions: [], hasMore: false }),
-		listActiveSessions: () => [],
+		listActiveSessions: async () => [],
 		getDaemonInfo: async () => ({
 			projects: [],
 			models: [],
@@ -166,20 +171,24 @@ function makeBundle(): Bundle {
 		asrCredentials: async () => ({ kind: "device", deviceId: "d" }),
 		textPolish: async (text: string) => text,
 		openSession: async (_projectId, stem, conn, cursor) => {
-			const abs = writeSession(stem);
-			const activation = await link.open(conn, project, stem, abs, cursor ?? null);
-			return { ok: true, session: activation.ref };
+			writeSession(stem);
+			const ref = await attachObserved(conn, worker, (sink) =>
+				worker.observeSession({ projectId: "proj", stem }, { cursor: cursor ?? null, sink }),
+			);
+			return { ok: true, session: ref };
 		},
-		newSession: async (_projectId, conn, text, options) => {
-			const activation = await link.create(conn, project, text, options);
-			return { ok: true, session: activation.ref };
+		newSession: async (_projectId, conn, text) => {
+			const ref = await attachObserved(conn, worker, (sink) => worker.createSession("proj", { text, sink }));
+			return { ok: true, session: ref };
 		},
-		detach: (conn) => link.release(conn),
+		detach: (conn) => conn.detach(),
 		closeSession: async (projectId, stem) => {
-			const activation = await link.awaitSettled(projectId, stem);
-			if (!activation) return { ok: false, error: `Session is not active: ${stem}` };
-			await link.collect(activation);
-			return { ok: true };
+			try {
+				await worker.closeSession({ projectId, stem });
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
 		},
 		archiveSession: async () => ({ ok: false, error: "unused" }),
 		sessionsChanged: (projectId) => sessionsChanged.push(projectId),
@@ -201,7 +210,25 @@ function makeBundle(): Bundle {
 		},
 	};
 
-	return { link, project, managers, verbs, sessionsChanged };
+	return { worker, project, managers, verbs, sessionsChanged };
+}
+
+/** The Daemon's attach shape: the Connection supplies the sink before the
+ * observation exists, so the initial sync already belongs to the attachment. */
+async function attachObserved(
+	conn: Connection,
+	worker: LocalWorker,
+	open: (sink: WorkerObservationSink) => Promise<ObservedSession>,
+): Promise<SessionRef> {
+	const target = await conn.attach(async (sink) => {
+		const observed = await open(sink);
+		return {
+			target: observed.target,
+			observation: observed.observation,
+			commands: bindWorkerCommands(worker, observed.target, observed.observation),
+		};
+	});
+	return { projectId: target.projectId, stem: target.stem, sessionId: target.sessionId };
 }
 
 const cleanups: Array<() => void> = [];
@@ -227,7 +254,9 @@ async function connect(
 			abs,
 			`${JSON.stringify({ type: "session", version: 3, id: stem, timestamp: "2026-01-01T00:00:00Z", cwd: bundle.project.cwd })}\n`,
 		);
-	await bundle.link.open(conn, bundle.project, stem, abs, null);
+	await attachObserved(conn, bundle.worker, (sink) =>
+		bundle.worker.observeSession({ projectId: "proj", stem }, { cursor: null, sink }),
+	);
 	return { conn, clientWs, frames };
 }
 
@@ -258,13 +287,13 @@ describe("Connection protocol traces", () => {
 		// The kill lands while the command runs: disposal aborts the turn, the
 		// admitted command settles against the runtime it captured, and the
 		// terminal ownership boundary follows.
-		await bundle.link.collect(bundle.link.byAddressAny("proj", "s1")!);
+		await bundle.worker.closeSession({ projectId: "proj", stem: "s1" });
 
 		const promptReply = await replyFor(frames, "p1");
 		expect(promptReply.ok).toBe(true);
 		const closed = await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
 		expect((closed as Record<string, unknown>).stem).toBe("s1");
-		// The Connection no longer holds the dead runtime's lease.
+		// The Connection no longer holds the dead runtime's observation.
 		expect(conn.isAttached).toBe(false);
 		expect(tm.disposeCalls()).toBe(1);
 	});
@@ -315,11 +344,11 @@ describe("Connection protocol traces", () => {
 	it("a Session's full lifecycle crosses every owner exactly once", async () => {
 		const bundle = makeBundle();
 		// Connection 1 opens the address; Connection 2 joins the same
-		// Activation (shared registration, two leases).
+		// Activation (one registration, two observations).
 		const c1 = await connect(bundle, "life");
 		const c2 = await connect(bundle, "life");
 		const tm = bundle.managers.get("life")!;
-		expect(bundle.link.live()).toHaveLength(1);
+		expect(bundle.worker.liveRecords()).toHaveLength(1);
 
 		// A turn runs on conn 1; conn 2 reads a lazy value while it streams.
 		c1.clientWs.send(JSON.stringify({ id: "p1", verb: "prompt", text: "hi" }));
@@ -336,9 +365,9 @@ describe("Connection protocol traces", () => {
 		expect(pullReply.values.length).toBe(1);
 
 		// The close crosses the terminal boundary: the admitted turn settles
-		// (disposal aborts it), both leases end, both clients learn, and the
-		// runtime is disposed exactly once.
-		await bundle.link.collect(bundle.link.byAddressAny("proj", "life")!);
+		// (disposal aborts it), both observations end, both clients learn, and
+		// the runtime is disposed exactly once.
+		await bundle.worker.closeSession({ projectId: "proj", stem: "life" });
 		const promptReply = await replyFor(c1.frames, "p1");
 		expect(promptReply.ok).toBe(true);
 		await waitForFrame(c1.frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
@@ -353,9 +382,8 @@ describe("Connection protocol traces", () => {
 		expect(late.ok).toBe(false);
 		expect(late.error).toBe("no session attached");
 
-		// Shutdown drains what remains: nothing registers afterwards and the
-		// drain awaits any in-flight creation.
-		await bundle.link.dispose();
+		// Shutdown drains what remains: nothing registers afterwards.
+		await bundle.worker.dispose();
 		expect(tm.disposeCalls()).toBe(1);
 	});
 

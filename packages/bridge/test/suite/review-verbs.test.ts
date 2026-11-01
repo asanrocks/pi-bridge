@@ -20,8 +20,14 @@ import type { WebSocket } from "ws";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import { MAX_UNTRACKED_FILES, readFileAtSnapshot, runGitDiff } from "../../src/host/repository.ts";
-import { issueDirectCapability } from "../../src/host/session-actor.ts";
-import { collectFrames, createWsPair, mockDaemonVerbs, mockSessionRef, waitForFrame } from "./conn-helpers.ts";
+import {
+	attachTestManager,
+	collectFrames,
+	createWsPair,
+	mockDaemonVerbs,
+	mockSessionRef,
+	waitForFrame,
+} from "./conn-helpers.ts";
 import type { BridgeHarness } from "./harness.ts";
 import { createBridgeHarness } from "./harness.ts";
 
@@ -46,7 +52,7 @@ describe("gitDiff / readFile verbs", () => {
 		const { serverWs, clientWs } = await createWsPair();
 		const frames = collectFrames(clientWs);
 		const conn = new Connection(serverWs, reviewVerbs, null, false);
-		conn.attachCapability(issueDirectCapability(bh.manager, mockSessionRef), null);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
 		await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace");
 		try {
 			await fn(clientWs, frames);

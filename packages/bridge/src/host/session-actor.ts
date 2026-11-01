@@ -9,7 +9,7 @@
 // through `metadata()` — the typed facts derived from the canonical
 // Document. Raw Manager access belongs to the creation paths only (the
 // factory, the stem derivation, and the pre-attach choices in the
-// ExecutionLink's fresh-session choreography): that window is the one
+// local Worker's fresh-session choreography): that window is the one
 // sanctioned raw access, because the runtime has no owner to admit work
 // through until the actor exists. The actor is created around a built
 // runtime, so its phase begins `live`; `creating` names that pre-registration
@@ -67,6 +67,7 @@ import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
+import type { WorkerPulledValue } from "./worker-contract.ts";
 
 /** Idle-collection policy defaults (ADR 11): a durable or empty session is
  * collected after five idle minutes; an entry-bearing unflushed session only
@@ -115,23 +116,15 @@ export interface ObservationCapability {
  * the entry it came from is still live (unsealed) — a live value keeps
  * streaming, so later patches on that path must keep flowing to the
  * pulling client. */
-export interface PulledValue {
-	readonly entryId: string;
-	readonly fieldPath: string;
-	readonly value: JsonValue;
-	readonly live: boolean;
-}
+export type PulledValue = WorkerPulledValue;
 
-/** One client's handle for one Activation registration: the only path to
- * that Session's runtime. The typed verbs are the Connection's session
- * commands — a command admitted before its registration ended completes
- * against the runtime it captured, so the reply the client trusts describes
- * the session that was attached when the request arrived — and observation
- * registration returns its own independently releasable capability. The
- * generic `command`/`mutate` admission stays for reads and tests. Everything
- * rejects once the registration ended: release, collection, replacement, or
- * daemon shutdown. */
-export interface SessionCapability {
+/** The registration-scoped admission surface of one Activation: the typed
+ * session verbs, lazy reads, and the generic `command`/`mutate` seam for
+ * anything else. It is valid while the actor is live and rejects once `close`
+ * began, but it is not a client: it neither counts as an attached client nor
+ * owns an observation. The Worker holds one per registration and admits
+ * target-addressed commands through it. */
+export interface SessionAdmission {
 	readonly ref: SessionRef;
 	readonly authorization: ActivationAuthorization;
 	/** The Session's working directory — identity data for attachment-bound
@@ -150,12 +143,19 @@ export interface SessionCapability {
 	navigate(entryId: string | null): Promise<void>;
 	/** Recover the broken tail turn (ADR 16); `action` reports the repair. */
 	recoverTurn(): Promise<"retry" | "continue">;
-	/** Read lazy values at field paths (the pull verb); a live value's later
-	 * patches are the pulling client's to receive. */
+	/** Read lazy values at field paths (the pull verb). */
 	pull(requests: PullRequestItem[]): Promise<PulledValue[]>;
 	// ── Admission for everything else (reads, tests) ─────────────────
 	command<T>(operation: (session: Manager) => Promise<T>): Promise<T>;
 	mutate<T>(operation: (session: Manager) => Promise<T>): Promise<T>;
+}
+
+/** One client's handle for one Activation registration: the admission surface
+ * plus the observations it owns. It is the client-side unit of liveness — a
+ * held capability is an attached client, which keeps the actor alive — and it
+ * rejects once the registration ended: release, collection, replacement, or
+ * shutdown. */
+export interface SessionCapability extends SessionAdmission {
 	observe(observer: SessionObserver, cursor: PrefixCursor | null): ObservationCapability;
 	release(): Promise<void>;
 }
@@ -191,9 +191,14 @@ export interface SessionActor {
 	/** Listing facts derived from the canonical Document (see
 	 * `ActorMetadata`): the daemon's read surface over a live Session. */
 	metadata(): ActorMetadata;
-	/** Mint one client handle for this registration. Every capability shares
-	 * the actor's admission; each releases independently. A live capability
-	 * is an attached client and keeps the actor alive (glossary A.6). */
+	/** The registration-scoped admission surface: typed verbs for the Worker,
+	 * valid while the actor is live, owning no observation and no client
+	 * liveness. One is created with the actor. */
+	admission(): SessionAdmission;
+	/** Mint one client handle for this registration. The capability adds
+	 * liveness and independently releasable observations to the admission; a
+	 * live capability is an attached client and keeps the actor alive
+	 * (glossary A.6). */
 	capability(): SessionCapability;
 	/** Arm the idle timer for a registration that never attached a client
 	 * (an orphaned creation whose Connection closed mid-transition): the
@@ -289,12 +294,11 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 		return record;
 	};
 
-	const capability = (): SessionCapability => {
-		liveCapabilities++;
-		cancelIdle();
-		let released = false;
-		const owned = new Set<{ stop(): void }>();
-		const admissible = (): boolean => !released && phase === "live";
+	/** The admission surface one handle exposes, gated by `admissible`. The
+	 * gate is the handle's: a capability release, a close, or the actor's
+	 * phase — so a registration-scoped admission and a client capability share
+	 * one implementation and differ only in what keeps them alive. */
+	const admissionOf = (admissible: () => boolean): SessionAdmission => {
 		const commandOp = <T>(operation: (session: Manager) => Promise<T>): Promise<T> => {
 			if (!admissible()) return Promise.reject(new Error("session is closed"));
 			// Admission is promise-shaped: an operation that fails before
@@ -352,6 +356,21 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				}),
 			command: commandOp,
 			mutate: mutateOp,
+		};
+	};
+
+	/** The registration-scoped admission: one per actor, valid while the actor
+	 * is live, owning no observation and no client liveness. */
+	const admission = admissionOf(() => phase === "live");
+
+	const capability = (): SessionCapability => {
+		liveCapabilities++;
+		cancelIdle();
+		let released = false;
+		const owned = new Set<{ stop(): void }>();
+		const base = admissionOf(() => !released && phase === "live");
+		return {
+			...base,
 			observe(observer: SessionObserver, cursor: PrefixCursor | null): ObservationCapability {
 				// The registration check is synchronous with the installation: a
 				// released capability, or one whose actor began closing, must not
@@ -403,6 +422,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			};
 		},
 		capability,
+		admission: () => admission,
 		armIdle,
 		close(): Promise<void> {
 			if (closed !== undefined) return closed;
@@ -430,18 +450,6 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			return closed;
 		},
 	};
-}
-
-/** Test seam: a capability over a hand-built Manager with no registry behind
- * it — always admissible, so tests exercise the Connection protocol and the
- * actor's admission ordering, not the registry. The capability never closes
- * the actor; the caller owns the runtime's disposal. */
-export function issueDirectCapability(
-	manager: Manager,
-	ref: SessionRef,
-	authorization: ActivationAuthorization = { incarnation: "test", generation: 1 },
-): SessionCapability {
-	return createSessionActor({ manager, ref, authorization }).capability();
 }
 
 // ── Listing summary (the daemon's preview derivation, owned here) ───────
