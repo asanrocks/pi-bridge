@@ -17,7 +17,18 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
+    <!-- Status-bar/toolbar tinting. theme-color follows the OS theme because
+         Firefox and Chromium both honor `media` on it; it tints the browser
+         toolbar in normal browsing and the status bar in installed Chromium
+         PWAs. Firefox never exposes the OS status bar to the page. The
+         apple-* status-bar tag only matters once installed to the iOS home
+         screen: black-translucent extends the web view under a transparent
+         status bar, so the top bar (see --color-sidebar) shows through;
+         PaneShell already pads for env(safe-area-inset-top). -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f0ede8" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#242119" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="pi-bridge" />
     <title>pi-bridge</title>
   </head>

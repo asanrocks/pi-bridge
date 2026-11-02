@@ -1422,14 +1422,26 @@ a dark counterpart, every dark declaration must exist in `@theme`, every
 of the app.
 
 The installed-app surface is the one place where the token boundary stops:
-there is no `theme-color` meta and no `<style>`-themed asset, because the OS
-chrome and the launcher tile are painted before any stylesheet or media query
-of ours runs and cannot follow the app's ladder. The manifest carries the light
-page tone (`background_color`, `theme_color`) and the icon generator carries
-the brand pigments (`web/build-icons.ts`, next to the mark's 4×4 cell grid);
-both are install metadata consumed outside the document, not renderable colors,
-so neither belongs in `@theme`. A `theme-color` pair would be the opposite — a
-second declaration site for `--color-background` — and is deliberately absent.
+there is no `<style>`-themed asset, because the OS chrome and the launcher
+tile are painted before any stylesheet or media query of ours runs and cannot
+follow the app's ladder. The manifest carries install-time tones
+(`background_color` is the light page tone for the install splash;
+`theme_color` matches `--color-sidebar` so an installed app's status bar
+blends with the top bar) and the icon generator carries the brand pigments
+(`web/build-icons.ts`, next to the mark's 4×4 cell grid); both are install
+metadata consumed outside the document, not renderable colors, so neither
+belongs in `@theme`. `web/index.html` adds a `theme-color` meta pair split by
+`prefers-color-scheme` with the same `--color-sidebar` values: browsers honor
+`media` on it, so the toolbar tint — and, in installed Chromium apps, the
+status bar — follows the OS ladder without script-controlled theme state.
+The literals duplicate `@theme` deliberately: they address browser/OS chrome
+outside the cascade, so `scripts/check-bridge-styling-tokens.mjs` (scoped to
+`web/src`) does not see them. The last piece is
+`apple-mobile-web-app-status-bar-style: black-translucent`: in an installed
+iOS web app the view extends under a transparent status bar, and `PaneShell`'s
+`env(safe-area-inset-top)` padding lets the top bar paint that strip. In
+normal Firefox browsing none of this reaches the OS status bar — it belongs
+to the browser, not the page.
 
 Colors that come from JavaScript do not use inline `color`. The Shiki
 highlighter is theme-agnostic: it emits each token's light color as `--code-c`
