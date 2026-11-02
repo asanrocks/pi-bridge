@@ -123,6 +123,8 @@ function makeStubManager(opts: {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
+		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
+		onActivityChange: () => () => {},
 		addConnection(handle, session: SessionRef) {
 			events.push("attach");
 			connectionHandles.add(handle);

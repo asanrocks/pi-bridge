@@ -67,6 +67,7 @@ import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, Manager } from "./manager.ts";
+import type { SessionActivity } from "./process-title.ts";
 import type { WorkerPulledValue } from "./worker-contract.ts";
 
 /** Idle-collection policy defaults (ADR 11): a durable or empty session is
@@ -180,6 +181,9 @@ export interface SessionActorOptions {
 	 * riding the actor's own observation of its runtime. The actor dedups
 	 * transitions itself; the hook fires once per real transition. */
 	onStreamingChange?: () => void;
+	/** The runtime's activity phase changed (see `Manager.activity()`) — the
+	 * same relay shape as `onStreamingChange`, for the process title. */
+	onActivityChange?: () => void;
 }
 
 export interface SessionActor {
@@ -191,6 +195,8 @@ export interface SessionActor {
 	/** Listing facts derived from the canonical Document (see
 	 * `ActorMetadata`): the daemon's read surface over a live Session. */
 	metadata(): ActorMetadata;
+	/** What this Session's runtime is doing right now, for the process title. */
+	activity(): SessionActivity;
 	/** The registration-scoped admission surface: typed verbs for the Worker,
 	 * valid while the actor is live, owning no observation and no client
 	 * liveness. One is created with the actor. */
@@ -232,6 +238,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	// runtime state of their own (ADR 19).
 	let lastStreaming = manager.document.status.isStreaming;
 	manager.onSettled(() => options.onSettled?.());
+	manager.onActivityChange(() => options.onActivityChange?.());
 	manager.onPatch(() => {
 		const streaming = manager.document.status.isStreaming;
 		if (streaming !== lastStreaming) {
@@ -420,6 +427,9 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				lastMessageText: summary.lastMessageText,
 				lastActivityAt: summary.lastActivityAt,
 			};
+		},
+		activity(): SessionActivity {
+			return manager.activity();
 		},
 		capability,
 		admission: () => admission,

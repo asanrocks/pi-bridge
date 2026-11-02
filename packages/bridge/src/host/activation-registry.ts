@@ -88,6 +88,8 @@ export interface ActivationRegistryOptions {
 	onSettled: (ref: SessionRef) => void;
 	/** A live Activation's streaming flag changed. */
 	onStreamingChange: () => void;
+	/** A live Activation's activity phase changed (the process title's source). */
+	onActivityChange?: () => void;
 	/** An Activation was registered or finished collecting. */
 	onRegistryChange: () => void;
 	/** An Activation's indexes are gone: its address and durable-id claims are
@@ -284,6 +286,7 @@ export class ActivationRegistry {
 			},
 			onSettled: () => this.options.onSettled(ref),
 			onStreamingChange: () => this.options.onStreamingChange(),
+			onActivityChange: () => this.options.onActivityChange?.(),
 		});
 		record = {
 			id: randomUUID(),

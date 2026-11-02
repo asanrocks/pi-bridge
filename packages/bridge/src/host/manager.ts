@@ -35,6 +35,7 @@ import {
 } from "../core/index.ts";
 import { buildInterruptedToolsRelay } from "../core/recovery.ts";
 import { createGitStampExtensionWithTrigger, type GitStampDeps, type GitStampTrigger } from "./git-stamp-extension.ts";
+import { resolveActivity, type SessionActivity, type SessionPhase } from "./process-title.ts";
 
 // ============================================================================
 // Helpers
@@ -140,6 +141,16 @@ export interface Manager {
 	 * Returns unsubscribe function.
 	 */
 	onSettled(listener: () => void): () => void;
+	/**
+	 * What this Session is doing right now, as pi's event stream reports it.
+	 * Derived from the events themselves rather than from the projection: the
+	 * process title needs one word, and building a ViewModel per delta for it
+	 * would cost more than the title is worth.
+	 */
+	activity(): SessionActivity;
+	/** Register a listener for real activity transitions (deduped here, so one
+	 * turn's token stream is a handful of calls). Returns unsubscribe. */
+	onActivityChange(listener: () => void): () => void;
 
 	// ── Session verbs ─────────────────────────────────────────────────────
 
@@ -209,6 +220,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 
 	const patchListeners = new Set<(patch: Patch) => void>();
 	const settledListeners = new Set<() => void>();
+	const activityListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
 	// for its lifetime (ADR 11), so the host trigger never rebinds.
@@ -241,6 +253,73 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		for (const h of connectionHandles) h.onPatch(patch);
 	};
 
+	// ── Live phase (see `activity()` below) ──
+	//
+	// pi reports the phase implicitly, through the shape of its events: a
+	// thinking delta, a text delta, a tool call being written, a tool running.
+	// This is the same story the browser's `liveActivityPhase` tells from the
+	// projection; both start at pi's stream, and the title only needs the
+	// coarse version.
+	let phase: SessionPhase = "idle";
+	let phaseTool: string | null = null;
+	/** The tool the events last started, kept past the phase word so a settle
+	 * that races a running tool cannot erase its name. */
+	let activeTool: string | null = null;
+	const setPhase = (next: SessionPhase, tool: string | null): void => {
+		if (next === "tool" && tool !== null) activeTool = tool;
+		if (next === "tool" && tool === null && phase !== "tool") activeTool = null;
+		if (next === phase && tool === phaseTool) return;
+		phase = next;
+		phaseTool = tool;
+		for (const l of activityListeners) l();
+	};
+	const trackActivity = (event: AgentSessionEvent): void => {
+		switch (event.type) {
+			case "agent_start":
+			case "turn_start":
+			case "message_start":
+				setPhase("wait", null);
+				break;
+			case "message_update": {
+				const delta = event.assistantMessageEvent.type;
+				if (delta.startsWith("thinking")) setPhase("think", null);
+				else if (delta.startsWith("text")) setPhase("stream", null);
+				else if (delta.startsWith("toolcall")) setPhase("tool", null);
+				break;
+			}
+			case "tool_execution_start":
+				setPhase("tool", event.toolName);
+				break;
+			case "tool_execution_end":
+				// The tool's result goes back to the model: the run waits on the
+				// provider again, it is not idle.
+				activeTool = null;
+				setPhase("wait", null);
+				break;
+			case "compaction_start":
+				setPhase("compact", null);
+				break;
+			case "compaction_end":
+				setPhase("wait", null);
+				break;
+			case "auto_retry_start":
+				setPhase("retry", null);
+				break;
+			case "auto_retry_end":
+				setPhase("wait", null);
+				break;
+			case "turn_end":
+			case "agent_end":
+				setPhase("wait", null);
+				break;
+			case "agent_settled":
+				setPhase("idle", null);
+				break;
+			default:
+				break;
+		}
+	};
+
 	const processEvent = (event: AgentSessionEvent) => {
 		// Ephemeral in-flight anchor — bridge-only, never persisted. A whole-object
 		// replace avoids toolCallId path escaping (ids are opaque). The client
@@ -263,6 +342,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// The projection already applied its ops to the canonical Document.
 			const ops = [...(livePatch?.ops ?? []), ...inFlightOps];
 			if (inFlightOps.length > 0) state.document = applyPatch(state.document, inFlightOps);
+			// After this event's Document state, so a listener reading `activity()`
+			// sees the phase and the liveness anchors it is reconciled against
+			// (`isStreaming`, `inFlightTools`) agree with each other.
+			trackActivity(event);
 			// Emit before the boundary refresh runs: a later patch mutates the
 			// canonical Document, and a mirror that received this one only must
 			// still match it at this point.
@@ -521,6 +604,21 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		onSettled(listener) {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
+		},
+		activity() {
+			const status = state.document.status;
+			return resolveActivity({
+				phase,
+				tool: activeTool ?? phaseTool,
+				streaming: status.isStreaming,
+				compacting: status.isCompacting,
+				toolRunning: inFlightStart.size > 0,
+				recoverable: (status.recoverableTurn ?? null) !== null,
+			});
+		},
+		onActivityChange(listener) {
+			activityListeners.add(listener);
+			return () => activityListeners.delete(listener);
 		},
 
 		async prompt(text: string, images?: ImageContent[]) {

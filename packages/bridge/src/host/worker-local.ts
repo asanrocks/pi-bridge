@@ -48,6 +48,7 @@ import { type ActivationRecord, ActivationRegistry } from "./activation-registry
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, createManager, Manager } from "./manager.ts";
 import { resolveVisibleModelKeys } from "./model-visibility.ts";
+import { setWorkerTitle } from "./process-title.ts";
 import {
 	archiveStemFile,
 	normalizeStem,
@@ -118,6 +119,9 @@ export interface LocalWorker extends WorkerService {
 	liveRecords(): ActivationRecord[];
 	/** The Projects this Worker serves (the Daemon routes by id). */
 	projects(): ProjectConfig[];
+	/** Report the Daemon link's state to the process title: a dialed-out Worker
+	 * that lost its Daemon is neither idle nor busy, and the title says so. */
+	setLink(state: "up" | "down"): void;
 }
 
 interface ObservationState {
@@ -144,6 +148,9 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	const observations = new Map<string, ObservationState>();
 	const listeners = new Set<(event: WorkerEvent) => void>();
 	let disposed = false;
+	/** The Daemon link, as the dialed-out deployment sees it (always `up` for an
+	 * in-process or socket-served Worker: those have no link of their own). */
+	let link: "up" | "down" = "up";
 	/** The memoized disposal drain: a second `dispose()` joins the first
 	 * caller's drain instead of returning as if disposal had finished. The
 	 * Worker process's socket shutdown and its signal handler both dispose —
@@ -280,11 +287,37 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// session moves to mtime ordering and its metadata appears.
 			emitSessionsChanged(ref.projectId);
 			emitActiveSessions();
+			refreshTitle();
 		},
-		onStreamingChange: () => emitActiveSessions(),
-		onRegistryChange: () => emitActiveSessions(),
+		onStreamingChange: () => {
+			emitActiveSessions();
+			refreshTitle();
+		},
+		onRegistryChange: () => {
+			emitActiveSessions();
+			refreshTitle();
+		},
+		onActivityChange: () => refreshTitle(),
 		onCollected: (record) => endObservations(record),
 	});
+
+	/**
+	 * Publish this Worker's half of the process title.
+	 *
+	 * The phase is read from the live Sessions at publish time rather than
+	 * tracked here: one Worker serves many Sessions and the interesting one is
+	 * "whichever is furthest along", a decision that belongs to the formatter.
+	 */
+	function refreshTitle(): void {
+		if (disposed) return;
+		setWorkerTitle({
+			projects: [...projects.keys()],
+			sessions: registry.live().map((record) => record.actor.activity()),
+			link,
+		});
+	}
+
+	refreshTitle();
 
 	assertNoSessionIdConflicts(projects);
 
@@ -598,9 +631,16 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 
 		projects: () => [...projects.values()],
 
+		setLink: (state) => {
+			if (state === link) return;
+			link = state;
+			refreshTitle();
+		},
+
 		dispose: (): Promise<void> => {
 			if (disposeDrain !== null) return disposeDrain;
 			disposed = true;
+			setWorkerTitle(null);
 			disposeDrain = (async () => {
 				for (const state of [...observations.values()]) {
 					state.released = true;

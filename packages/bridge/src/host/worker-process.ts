@@ -156,6 +156,7 @@ export async function runWorkerClient(options: WorkerClientOptions): Promise<Wor
 		});
 		socket = ws;
 		await serveWorkerConnection(ws, worker);
+		worker.setLink("up");
 		return { ws, lost };
 	};
 
@@ -176,6 +177,7 @@ export async function runWorkerClient(options: WorkerClientOptions): Promise<Wor
 			const outcome = await current.lost;
 			socket = null;
 			if (stopping) break;
+			worker.setLink("down");
 			if (outcome.code === WORKER_REJECTED_CLOSE_CODE) {
 				terminal = new Error(outcome.reason === "" ? "worker registration refused" : outcome.reason);
 				break;

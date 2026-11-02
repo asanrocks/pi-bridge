@@ -14,6 +14,7 @@ import { type DaemonSocket, startDaemonSocket } from "./daemon-socket.ts";
 import embeddedAssets from "./embedded-assets.ts";
 import { TrafficLogger } from "./logger.ts";
 import type { createManager, Manager } from "./manager.ts";
+import { setDaemonTitle } from "./process-title.ts";
 import { buildProjects } from "./projects.ts";
 import { bindWorkerCommands } from "./session-commands.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
@@ -135,6 +136,14 @@ export class Daemon {
 		return this.workers;
 	}
 
+	/** Publish this Daemon's half of the process title: how many Worker
+	 * registrations it routes. The Worker half, when this process hosts one,
+	 * arrives from the same title owner and the two compose into
+	 * `daemon+worker`. */
+	private publishTitle(): void {
+		setDaemonTitle({ workers: this.workers.length });
+	}
+
 	async start(options: DaemonOptions = {}): Promise<void> {
 		// The Worker establishes pi-core's offline mode (it is the half that
 		// creates runtimes and extensions), so a standalone Worker process is
@@ -244,6 +253,7 @@ export class Daemon {
 		}
 		this.workers = created;
 		this.activeByHost = new Map(created.map((host) => [host, []]));
+		this.publishTitle();
 	}
 
 	/**
@@ -327,6 +337,7 @@ export class Daemon {
 		for (const project of host.info.projects) this.routes.set(project.id, host);
 		this.workers = [...this.workers, host];
 		this.activeByHost.set(host, []);
+		this.publishTitle();
 		// A newly registered Worker changes the aggregate; the browser's Project
 		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
 		// reload), because the surface has no project-list push.
@@ -427,6 +438,7 @@ export class Daemon {
 		this.workers = [];
 		this.routes.clear();
 		this.activeByHost.clear();
+		setDaemonTitle(null);
 		await Promise.allSettled(workers.map((host) => host.dispose()));
 	}
 
@@ -465,6 +477,7 @@ export class Daemon {
 		}
 		this.workers = this.workers.filter((worker) => worker !== host);
 		this.activeByHost.delete(host);
+		this.publishTitle();
 		this.broadcastActiveSessions();
 		console.error(`Daemon: worker unavailable, routes withdrawn: ${reason}`);
 		await host.dispose().catch(() => {});

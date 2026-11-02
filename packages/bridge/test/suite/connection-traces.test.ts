@@ -75,6 +75,8 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
+		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
+		onActivityChange: () => () => {},
 		prompt: async () => {
 			calls.push("prompt");
 			await gate(); // released by disposal (the abort path) or by hand

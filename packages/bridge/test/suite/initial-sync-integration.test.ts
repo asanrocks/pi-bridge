@@ -338,6 +338,8 @@ describe("initial sync: subscription reset", () => {
 			createdAt: new Date(0).toISOString(),
 			onPatch: () => () => {},
 			onSettled: () => () => {},
+			activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
+			onActivityChange: () => () => {},
 			addConnection(handle) {
 				handles.add(handle);
 				handle.onInitialSync({ kind: "replace", session: mockSessionRef, document });

@@ -129,6 +129,50 @@ reconnect prints one line so a flapping daemon cannot repeat it. A combined
 invocation says that it hosts the shared daemon in the foreground: exiting it
 disconnects other Workers' browsers while those Worker processes keep running.
 
+## Process title
+
+Every process reports what it is doing in its own title, so a process listing
+answers "which Worker, on what, doing what" without a browser
+(`src/host/process-title.ts`):
+
+```text
+pi-bridge@acme: worker, idle              one Project, nothing running
+pi-bridge@acme: worker, tool Bash         a tool executing
+pi-bridge@acme: worker, stream            assistant text streaming
+pi-bridge@acme,beta: daemon+worker, think  combined launch, this Worker thinking
+pi-bridge@acme: worker, recover           idle with a recoverable broken tail
+pi-bridge@acme: worker, offline           dialed-out Worker lost its Daemon
+pi-bridge: daemon, wait                   no Worker registration yet
+pi-bridge: daemon, serve 2                two Worker registrations routed
+```
+
+The title reads as an address: the Project names before the colon (how a
+process is found), then role and phase after it. The phase is read from the
+canonical Document's live Session set, so a Worker serving several Sessions
+reports the furthest-along one; more than three Projects collapse the tail into
+`+N`. The phase word comes from pi's event stream, but the Document is the
+authority it is reconciled against: `isStreaming` and `status.inFlightTools`
+outrank a decayed event word, so a run that settles while a tool it dispatched
+is still executing keeps saying `tool`, and a streaming Session never claims to
+be `idle`. The Daemon has no Projects to name and reports how many Worker
+registrations it routes; in a combined launch the two halves compose into
+`daemon+worker`. `--no-process-title` (or `PI_BRIDGE_PROCESS_TITLE=0`) keeps
+the fixed `pi-bridge` title and reports no state.
+
+Two mechanisms make this work, both native to Node. `process.title` rewrites
+the argv memory in place, which is what `/proc/<pid>/cmdline` — the `htop`
+Command column — and the 15-byte `comm` report. The writable width is exactly
+the original command line's byte count, and a bundle launch (`./pi-bridge`) is
+16 bytes, which cannot hold a role at all. So bootstrap re-execs through
+`process.execve` with a padded argv0 and an injected `--title`, reserving 96
+bytes: the same trick as postgres' `save_ps_display_args`, except `execve`
+keeps the PID, so a Daemon's spawned-Worker handles survive it. The re-exec is
+skipped when a debugger holds the inspector port, when `--title`/
+`NODE_OPTIONS` already named the process (an explicit title wins, and is
+therefore also how a deployment names a whole tree), and on Windows, where no
+title mechanism exists at all. Titles are hints, not a contract: the arguments
+are gone from the command line, so `pkill -f -- '--mode=daemon'` cannot match.
+
 ## Worker deployment
 
 `src/host/worker-host.ts` is the only place a Daemon obtains a Worker. A Daemon

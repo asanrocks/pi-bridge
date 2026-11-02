@@ -79,6 +79,8 @@ function stubManager(sessionPath: string | undefined): StubManager {
 			connectionHandles.delete(handle);
 		},
 		onSettled: () => () => {},
+		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
+		onActivityChange: () => () => {},
 		prompt: async () => {},
 		promptAdmitted: async () => {},
 		executeBash: async () => {},

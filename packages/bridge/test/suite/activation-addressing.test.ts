@@ -52,6 +52,8 @@ function gatedStub(sessionId: string, sessionFile: string, opts?: { holdDispose?
 		createdAt: new Date(0).toISOString(),
 		onPatch: () => () => {},
 		onSettled: () => () => {},
+		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
+		onActivityChange: () => () => {},
 		addConnection(handle: ConnectionHandle, session: Parameters<Manager["addConnection"]>[1]) {
 			connectionHandles.add(handle);
 			handle.onInitialSync({ kind: "replace", session, document });

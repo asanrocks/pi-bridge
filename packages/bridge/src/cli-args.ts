@@ -30,6 +30,9 @@ export interface CliConfig {
 	readonly logPath: string | undefined;
 	readonly dev: boolean;
 	readonly agentDir: string | undefined;
+	/** Report role, Project, and phase in the process title (`htop`). Off via
+	 * `--no-process-title` or `PI_BRIDGE_PROCESS_TITLE=0`. */
+	readonly processTitle: boolean;
 	/** Internal: run the socket-serving child role. */
 	readonly workerServe: boolean;
 	/** Internal: the Daemon spawns its Worker instead of hosting it. */
@@ -80,6 +83,7 @@ export function parseCliArgs(argv: readonly string[], defaults: { socketPath: st
 	let logPath: string | undefined;
 	let dev = false;
 	let agentDir: string | undefined;
+	let processTitle = true;
 	let workerServe = false;
 	let workerSpawn = false;
 
@@ -159,6 +163,9 @@ export function parseCliArgs(argv: readonly string[], defaults: { socketPath: st
 			case "--dev":
 				dev = true;
 				break;
+			case "--no-process-title":
+				processTitle = false;
+				break;
 			case "--worker-serve":
 				workerServe = true;
 				break;
@@ -207,6 +214,7 @@ export function parseCliArgs(argv: readonly string[], defaults: { socketPath: st
 			logPath,
 			dev,
 			agentDir,
+			processTitle,
 			workerServe,
 			workerSpawn,
 		},

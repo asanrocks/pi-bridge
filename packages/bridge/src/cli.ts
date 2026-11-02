@@ -27,13 +27,14 @@ import {
 } from "./host/daemon-socket.ts";
 import { isSocketTaken, resolveStartupRole } from "./host/discovery.ts";
 import { Daemon, type DaemonOptions } from "./host/index.ts";
+import { bootstrapProcessTitle } from "./host/process-title.ts";
 import type { WorkerHostMode } from "./host/worker-host.ts";
 import { runWorkerClient, runWorkerProcess } from "./host/worker-process.ts";
 import { commit, date, piCore, version } from "./version.ts";
 
 const USAGE = `Usage: pi-bridge [--mode=auto|daemon|worker] [--socket <path>] [--daemon <ws-url>]
                  [--allow <[id=]dir>]... [--port <port>] [--web-root <dir>]
-                 [--log <path>] [--dev] [--agent-dir <dir>]
+                 [--log <path>] [--dev] [--agent-dir <dir>] [--no-process-title]
 
 Options:
   --mode=auto|daemon|worker  Role to take (default: auto)
@@ -45,6 +46,8 @@ Options:
   --log <path>               Record WebSocket traffic as JSONL
   --dev                      Enable the browser console relay
   --agent-dir <dir>          pi agent directory for the Worker role
+  --no-process-title         Keep the process title fixed instead of reporting role
+                             and Session state (see PI_BRIDGE_PROCESS_TITLE)
   -v, --version              Print versions
   -h, --help                 Print this help
 
@@ -82,7 +85,6 @@ function installShutdown(stop: () => Promise<void>): () => boolean {
 }
 
 async function main() {
-	process.title = "pi-bridge";
 	const parsed = parseCliArgs(process.argv.slice(2), { socketPath: defaultDaemonSocketPath() });
 	if (parsed.kind === "error") fail(parsed.message);
 	if (parsed.kind === "help") {
@@ -95,6 +97,9 @@ async function main() {
 		return;
 	}
 	const config = parsed.config;
+	// Before anything observable exists: the title may re-exec this process to
+	// widen the writable window, and the title must not race real startup work.
+	bootstrapProcessTitle({ enabled: config.processTitle });
 
 	// Internal child role: serve this process's Projects on an explicit socket
 	// for a Daemon that spawned it. Not part of the role model.

@@ -86,6 +86,11 @@ describe("cli role model", () => {
 		expect(error(["stray"])).toContain("unknown argument");
 	});
 
+	it("reports the process title as on unless --no-process-title says otherwise", () => {
+		expect(config([]).processTitle).toBe(true);
+		expect(config(["--no-process-title"]).processTitle).toBe(false);
+	});
+
 	it("recognizes help and version as actions", () => {
 		expect(parse(["--help"]).kind).toBe("help");
 		expect(parse(["-h"]).kind).toBe("help");
