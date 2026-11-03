@@ -31,11 +31,13 @@ import { useStore } from "../../infra/state/store.tsx";
 import { CaretIcon } from "../../render/icons.tsx";
 import styles from "./actions.module.css";
 import { withFoldLanding } from "./foldLanding.ts";
+import { formatGroupSpan } from "./formatGroupSpan.ts";
 import type { ActionSummaryItem } from "./formatGroupSummary.ts";
 import { formatGroupSummary } from "./formatGroupSummary.ts";
 import { GitChangeCard } from "./GitChangeCard.tsx";
 import { ThinkActionView } from "./ThinkActionView.tsx";
 import { ToolActionView } from "./ToolActionView.tsx";
+import { useTurnClock } from "./useTurnClock.ts";
 
 /** Dot entries for the left-edge dot legend: tool hues (in stable
  * precedence order, matching formatGroupSummary's category order) plus the
@@ -154,6 +156,37 @@ export const ActionGroupView = memo(function ActionGroupView({
 
 	const hues = useMemo(() => groupDots(actions, gitChanges), [actions, gitChanges]);
 
+	// Group span, right-aligned in the header. Only the trailing group can hold
+	// a running call, so only it needs the per-second clock; a settled group's
+	// span is a function of entry seals and never changes. The selector returns
+	// the rendered string, so an unchanged span does not re-render the group on
+	// unrelated ingests.
+	const spanNow = useTurnClock(isTrailing);
+	const span = useStore(
+		useCallback(
+			(s) => {
+				const entries = s.document.entries;
+				const inFlight = s.document.status.inFlightTools;
+				return formatGroupSpan(
+					actions
+						.filter((h): h is ToolActionVM => h.blockType === "tool")
+						.map((h) => {
+							const resultEntryId = h.result?.entryId;
+							return {
+								status: h.status,
+								callSealedAt: entries[h.entryId]?.timestamp ?? "",
+								resultSealedAt: resultEntryId ? (entries[resultEntryId]?.timestamp ?? "") : "",
+								durationMs: h.result?.durationMs ?? null,
+								runningElapsedMs: inFlight?.[h.toolCallId],
+							};
+						}),
+					spanNow,
+				);
+			},
+			[actions, spanNow],
+		),
+	);
+
 	return (
 		<div className={styles.actionGroup}>
 			<button
@@ -169,7 +202,7 @@ export const ActionGroupView = memo(function ActionGroupView({
 					)
 				}
 				aria-expanded={effectiveExpanded}
-				aria-label={`${effectiveExpanded ? "Collapse" : "Expand"} action group: ${label}`}
+				aria-label={`${effectiveExpanded ? "Collapse" : "Expand"} action group: ${label}${span ? `, ${span}` : ""}`}
 			>
 				<span className={styles.collapseTri}>
 					<CaretIcon size={12} direction={effectiveExpanded ? "down" : "right"} />
@@ -187,6 +220,7 @@ export const ActionGroupView = memo(function ActionGroupView({
 					</span>
 				)}
 				<span className={styles.actionGroupSummary}>{label}</span>
+				{span && <span className={styles.actionGroupSpan}>{span}</span>}
 			</button>
 			{effectiveExpanded && (
 				<div className={styles.groupLine}>

@@ -107,6 +107,17 @@
 	white-space: nowrap;
 }
 
+/* Group span ("took 20s" / "running 4s") — right-aligned by the summary's
+   flex remainder, never by its own margin. Tabular numerals so a ticking live
+   span does not shift the header, and it never shrinks: losing the time is
+   worse than truncating the summary, which already ellipsizes. */
+.actionGroupSpan {
+	flex-shrink: 0;
+	color: var(--color-muted-foreground);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
 /* Hue dots — the group's left-edge legend, always visible (stable
    landmark; the tinted rows below are the expanded detail, the dots are the
    summary). One dot per hue present, colored by the same

@@ -792,7 +792,10 @@ user-versus-assistant surface distinction.
 Consecutive thinking and tool blocks form one renderer-owned action group;
 text blocks always break a group and remain inline in their original position.
 The group header is a neutral summary with a collapse triangle and one
-kind-colored dot per present tool hue. A single action uses the same group
+kind-colored dot per present tool hue, plus the group's elapsed time
+dright-aligned (`took 20s`, or `running 4s` while a call in the group still
+runs) — an estimate anchored on the earliest call and the latest result, so
+parallel calls count once. A single action uses the same group
 header as a multi-action group. Expanding a group reveals a flat vertical
 list, not a nested tree.
 
@@ -1007,7 +1010,7 @@ for new buttons, chips, action rows, and Markdown hosts.
   render, which would freeze a memoized row. Durations are a separate
   classifier: `formatDuration(ms)` (`1.2s`, `30s`, `2m 03s`, `10m`) for a
   measured tool run, `formatSpan(ms)` (`<1s`, `12s`, `2m 3s`, `1h 5m`) for an
-  estimated turn span. Never route an instant through either. A live turn span
+  estimated turn or action-group span. Never route an instant through either. A live turn span
   ticks every second (`useTurnClock`) because it is not a label and cannot
   afford a minute of staleness. Locale is pinned `en-US` and instants are
   device-local;
