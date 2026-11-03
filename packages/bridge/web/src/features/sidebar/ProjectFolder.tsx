@@ -9,7 +9,7 @@
 import { memo, useEffect, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
-import { CaretIcon, PlusIcon } from "../../render/icons.tsx";
+import { CaretIcon, ChevronDownIcon, PlusIcon } from "../../render/icons.tsx";
 import { SessionRow } from "./SessionRow.tsx";
 import styles from "./Sidebar.module.css";
 import { groupSessions } from "./timeUtils.ts";
@@ -157,8 +157,19 @@ export const ProjectFolder = memo(function ProjectFolder({
 									</div>
 								))}
 							{page?.kind === "ready" && page.hasMore && (
-								<button type="button" className={styles.sidebarLoadMore} onClick={() => onLoadMore(project.id)}>
-									Load more
+								/* Continuation, not an action on an object, and "more below"
+								 * is the one meaning a chevron already carries outside this
+								 * pane's fold carets — which sit on the folder row above the
+								 * rows they fold, not at the list's end. The glyph carries the
+								 * affordance, so the control needs no boundary. */
+								<button
+									type="button"
+									className={styles.sidebarLoadMore}
+									onClick={() => onLoadMore(project.id)}
+									aria-label="Load more sessions"
+									title="Load more sessions"
+								>
+									<ChevronDownIcon size={14} />
 								</button>
 							)}
 						</div>

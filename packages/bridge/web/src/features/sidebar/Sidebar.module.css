@@ -320,18 +320,27 @@ difference between them. */
 	}
 }
 
-/* Load-more control: a text verb, so the `outlined` tier carries its boundary,
-   ink step, and no restated states. */
+/* Load-more control: a continuation rather than an action on an object, and
+   "there is more below" is a meaning a chevron already carries — so the glyph
+   rather than the word, and with it the chromeless `dim` tier instead of a
+   boundary, because a glyph marks itself as actionable. It spans the list so
+   the continuation reads as the list's own edge rather than as one more row,
+   and the mark centres in the row action's box. Coarse pointers get a taller
+   band: the mark is the whole target here, so a 24px strip is what a thumb
+   would be aiming at. */
 .sidebarLoadMore {
-	composes: outlined from "../../render/buttons.module.css";
+	composes: dim from "../../render/buttons.module.css";
 	display: flex;
 	width: 100%;
-	justify-content: flex-start;
-	text-align: left;
+	justify-content: center;
+	height: var(--control-box-xs);
 	margin-top: 2px;
-	padding: 4px 10px;
-	font-size: var(--fs-sm);
-	font-family: inherit;
+}
+
+@media (pointer: coarse) {
+	.sidebarLoadMore {
+		height: 40px;
+	}
 }
 
 /* Fold-all toggle: the section header's label doubles as the button that

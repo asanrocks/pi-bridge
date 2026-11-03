@@ -276,8 +276,11 @@ Folder children:
   never carries identity — it is a fold control, not a target.
 - Dormant Session history is fetched when a folder unfolds, ordered into
   `Today`, `This week`, and `Earlier`, and shown with relative timestamps.
-  `Load more` requests the next page. A dormant row has a muted status dot
-  and no close action.
+  A chevron at the list's end requests the next page: the continuation is the
+  one sidebar control drawn as a glyph rather than words, because "more below"
+  is the meaning a chevron already carries, and this one sits below the content
+  it extends while the pane's fold carets sit on the row above theirs. A dormant
+  row has a muted status dot and no close action.
 
 The active rows and history rows open Sessions. A row menu exposes `Close`
 without confirmation on live rows and `Archive` on any durable row — archive
@@ -943,7 +946,7 @@ for new buttons, chips, action rows, and Markdown hosts.
   cards by accident. App link behavior belongs in `AppMarkdown` and its link
   renderer.
 - **Capitalization follows string role.** Sentence case for actions, controls,
-  tooltips, and empty states (`Show all`, `Retry now`, `Load more`). Uppercase —
+  tooltips, and empty states (`Show all`, `Retry now`). Uppercase —
   only via `text-transform`, never typed caps — for short structural labels
   (section headers, mode badges), always with small positive tracking. Data
   (timestamps, paths, model names, status values) takes natural formatting with
@@ -1219,7 +1222,7 @@ for that reason.
 control that is words without being a verb-style button: the `Projects` fold-all
 label, which has to sit in its header as a label and not as a chip. Every other
 text control is `outlined` — the file browser's header verbs and its review
-bar's, `Load more`, `Load failed — retry`, the whole-file toggle, the git card's
+bar's, `Load failed — retry`, the whole-file toggle, the git card's
 `Review`, RecoveryBar's `Retry` and `Edit`, a dialog's cancel — so the boundary
 is a property of carrying words rather than of the host that happens to contain
 the control. Fills stay with the glyph-only controls and with the rows, which
@@ -1270,7 +1273,7 @@ states:
 | ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn toolbar |
 | `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's chevrons, the topbar's changes badge |
 | `quiet` | `dim` without the hover fill | the one text control that is a label rather than a verb — the `Projects` fold-all toggle |
-| outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load more`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
+| outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
 | filled | accent fill, `--color-on-accent` | the primary command *of the surface* — Send, Stop, `Retry now`, a dialog's confirm, the compare menu's `Apply` |
 
 The two variants are the tier's ink steps, not tiers of their own: they declare
@@ -1372,20 +1375,24 @@ grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
 | Tool card | the `Full output` chip, the uncommitted count | Values, not actions. |
 | Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
 | Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
-| Sidebar list | `Load more` | The outlined tier's own example — a continuation, not an action on an object. |
 | Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
 | Sidebar row menu | `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
 
-Three rules keep the glyph rows honest. **One kind per surface**: a tool surface
+Four rules keep the glyph rows honest. **One kind per surface**: a tool surface
 (the composer card, a card toolbar, the file browser header) is all glyphs, and a
 decision surface (a dialog footer) is all words, because a single glyph beside a
-single word reads as a mistake in one of them. **A pane name pairs with a close
-glyph, never with a word**: the file tree is `Files` while it is closed and its
-dismiss is the `CloseIcon`, because a name and a verb are different kinds and a
-pair must be one. **One consequence per glyph**: the dictation row discards a
-recording with `CloseIcon` (the audio is gone) and cancels a pending polish with
-`StopIcon` (the transcript is intact), because a single glyph for both would
-leave the row unable to say which of the two a click performs.
+single word reads as a mistake in one of them. **A glyph whose meaning is
+universal is legal in a words surface**: the sidebar list's continuation is a
+chevron while its failed-load row stays `Load failed — retry`, because the
+chevron states only "more of the same, below" — a meaning it cannot get wrong —
+whereas the retry row has to name the failure and the mechanism. **A pane name
+pairs with a close glyph, never with a word**: the file tree is `Files` while it
+is closed and its dismiss is the `CloseIcon`, because a name and a verb are
+different kinds and a pair must be one. **One consequence per glyph**: the
+dictation row discards a recording with `CloseIcon` (the audio is gone) and
+cancels a pending polish with `StopIcon` (the transcript is intact), because a
+single glyph for both would leave the row unable to say which of the two a click
+performs.
 
 **Implementation.** One spec, one file: `web/src/render/buttons.module.css`
 holds the ghost control, its two ink variants, and the outlined and filled
