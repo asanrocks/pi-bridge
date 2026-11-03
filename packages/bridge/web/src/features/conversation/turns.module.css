@@ -84,10 +84,12 @@
 	flex-shrink: 0;
 }
 
-/* Turn timing ("thought for" / "worked for" / "tools …"). Sits after the
-   role label, dimmed to muted so the timestamp+role remain the primary
-   signal. A leading "·" separates it from the role; the timing string itself
-   joins total/tool with "·". nowrap so the header stays one line. */
+/* Turn timing — the header's turn span ("thought for 5s", "worked for 12s ·
+   tools 4s", live "working for 12s · 2 running") and the context occupancy
+   chip ("26% (+1%)"). Sits after the role label, dimmed to muted so the
+   timestamp+role remain the primary signal. A leading "·" separates it from
+   the role; a composite span joins its parts with "·" itself. nowrap so the
+   header stays one line. */
 .msgTiming {
 	color: var(--color-muted-foreground);
 	white-space: nowrap;

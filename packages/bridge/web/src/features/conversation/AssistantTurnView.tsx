@@ -20,10 +20,12 @@ import { useNow } from "../../infra/lib/useNow.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
+import { formatTurnSpan } from "./format.ts";
 import { GitChangeView } from "./GitChangeView.tsx";
 import { RecoveryActions, recoveryNotice } from "./RecoveryBar.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
 import styles from "./turns.module.css";
+import { useTurnClock } from "./useTurnClock.ts";
 
 export const AssistantTurnView = memo(function AssistantTurnView({
 	turn,
@@ -87,6 +89,22 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	const models = useStore(useCallback((s) => s.models, []));
 	const modelLabel = turn.model ? displayModelLabel(turn.provider ?? "", turn.model, models) : "";
 
+	// Turn span — an estimate derived from seals (see AssistantTurn.totalMs), so
+	// it includes queueing and inter-request latency, not just model time. The
+	// live branch ticks once a second: a streaming turn's header must move even
+	// when no content delta arrives.
+	const liveNow = useTurnClock(isStreaming);
+	const timing = formatTurnSpan({
+		isStreaming,
+		turnStartedAt: turn.turnStartedAt,
+		totalMs: turn.totalMs,
+		toolMs: turn.toolMs,
+		runningTools: turn.blocks.filter(
+			(b) => b.blockType === "tool" && (b.status === "pending" || b.status === "running"),
+		).length,
+		now: liveNow,
+	});
+
 	// Context occupancy for this turn: "26%" absolute, "(+1%)" the change
 	// vs. the previous valid reading (omitted below the 1pp threshold;
 	// negative — the compaction drop — always renders). Rounded to whole
@@ -119,6 +137,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 						</time>
 					)}
 					{modelLabel && <span className={styles.msgRole}>{modelLabel}</span>}
+					{timing && <span className={styles.msgTiming}>{timing}</span>}
 					{contextFrag && <span className={styles.msgTiming}>{contextFrag}</span>}
 				</span>
 			</div>

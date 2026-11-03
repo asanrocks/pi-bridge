@@ -9,7 +9,7 @@ import { type MutableRefObject, memo, useCallback, useRef, useState } from "reac
 import type { Entry } from "../../../../src/core/index.ts";
 import { newestLeafInSubtree, type UserTurn } from "../../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../../infra/lib/clipboard.ts";
-import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { formatSpan, formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
 import { useNow } from "../../infra/lib/useNow.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
@@ -52,6 +52,9 @@ export const UserTurnView = memo(function UserTurnView({
 	const hasSiblings = turn.siblings && turn.siblings.length > 1;
 	const now = useNow();
 	const ts = formatWhen(turn.timestamp, now);
+	// The user's deliberation interval — an estimate from the previous assistant
+	// completion to this send (see UserTurn.thoughtForMs).
+	const thoughtFor = formatSpan(turn.thoughtForMs);
 	const gitStamp = turn.gitIdentity ? formatGitIdentity(turn.gitIdentity) : "";
 	const baseline = turn.gitIdentity?.commit ?? null;
 	const transitions = turn.gitTransitions;
@@ -116,6 +119,7 @@ export const UserTurnView = memo(function UserTurnView({
 						</time>
 					)}
 					<span className={styles.msgRole}>You</span>
+					{thoughtFor && <span className={styles.msgTiming}>{`thought for ${thoughtFor}`}</span>}
 					{gitStamp &&
 						(canReviewGit ? (
 							<>

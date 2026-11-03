@@ -733,7 +733,9 @@ keyboard focus and scroll anchors remain stable.
 
 ### Turn types
 
-- **User turns** show the shared time label, `You`, an
+- **User turns** show the shared time label, `You`, the deliberation interval
+  (`thought for 5s` — the wall-clock gap from the previous assistant
+  completion, across branches, to this send), an
   optional git-state chip, and the message's Markdown and images. A user-
   defined label (a bookmark set from pi's tree selector or in-app) renders
   as a `#`-prefixed tag chip in the header, left-aligned after the git-state
@@ -745,8 +747,15 @@ keyboard focus and scroll anchors remain stable.
   The header
   toolbar contains copy, the sibling pager, and Edit. The toolbar is revealed
   on hover/focus-capable inputs and always visible on touch.
-- **Assistant turns** show the shared time label, the display model, and context
-  occupancy when known. Each text block has its own copy
+- **Assistant turns** show the shared time label, the display model, the turn
+  span, and context
+  occupancy when known. The span is an estimate derived from seals: `worked for
+  12s` (`· tools 4s` once it exceeds a second) when sealed, and a live `working
+  for 12s · 2 running` while the turn streams — the one progress signal that
+  does not wait for a content delta. Because it is wall clock rather than a
+  pi-recorded value, it includes queueing and inter-request latency; the
+  per-message and per-tool durations pi records stay on the cards. Each text
+  block has its own copy
   action because one assistant turn may contain several messages; that chip is
   shown as a control only when it can be used (see the reveal rule below).
   Streaming
@@ -996,8 +1005,12 @@ for new buttons, chips, action rows, and Markdown hosts.
   stays available on hover and on touch. Labels depend on the clock: hosts read
   `useNow()` (one shared 60s ticker per page) and never `Date.now()` during
   render, which would freeze a memoized row. Durations are a separate
-  classifier, `formatDuration(ms)` (`1.2s`, `30s`, `2m 03s`, `10m`); never route
-  an instant through it. Locale is pinned `en-US` and instants are device-local;
+  classifier: `formatDuration(ms)` (`1.2s`, `30s`, `2m 03s`, `10m`) for a
+  measured tool run, `formatSpan(ms)` (`<1s`, `12s`, `2m 3s`, `1h 5m`) for an
+  estimated turn span. Never route an instant through either. A live turn span
+  ticks every second (`useTurnClock`) because it is not a label and cannot
+  afford a minute of staleness. Locale is pinned `en-US` and instants are
+  device-local;
   relative wording is app microcopy, so it is not delegated to
   `Intl.RelativeTimeFormat`, while calendar parts come from `Intl` so DST and
   month lengths are never computed by hand. Session buckets read the same

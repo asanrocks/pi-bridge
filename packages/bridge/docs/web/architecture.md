@@ -208,7 +208,12 @@ becomes the conversation ViewModel. It joins tool-result entries to their tool
 calls, keeps lazy values nullable until pulled, and returns display
 descriptors for user, assistant, system, user-bash, and git-change turns.
 The joined tool-result descriptor carries pi's `durationMs` verbatim for the
-card status line; the projection derives no timing of its own.
+card status line; the projection derives no tool timing of its own. It does
+carry one estimate: each assistant turn's span (`turnStartedAt`, `totalMs`,
+`toolMs`) and each user turn's deliberation interval (`thoughtForMs`), all
+wall-clock differences over entry seals — pi records no turn total, and the
+header needs one. The tool split subtracts the assistant-generation windows, so
+parallel tools count once (the per-batch maximum), not once each.
 An upstream entry type the projection cannot classify becomes an unrecognized
 system turn naming the source type and carrying the raw source entry; an
 extension-owned custom entry becomes an extension turn; a named

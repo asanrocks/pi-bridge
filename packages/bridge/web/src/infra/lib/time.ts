@@ -123,3 +123,21 @@ export function formatDuration(ms: number): string {
 	const mins = minutes % 60;
 	return mins === 0 ? `${hours}h` : `${hours}h ${String(mins).padStart(2, "0")}m`;
 }
+
+/** Estimated span for a turn header ("worked for 12s", "tools 4s"): coarser
+ *  than formatDuration, because it is a wall-clock estimate rather than a
+ *  measured run. Sub-second reads as "<1s" so a fast turn is never "0s";
+ *  minutes drop the zero-padding ("2m 3s") to keep the header short. "" for
+ *  unusable input. */
+export function formatSpan(ms: number | undefined): string {
+	if (ms === undefined || !Number.isFinite(ms) || ms < 0) return "";
+	if (ms < 1000) return "<1s";
+	const totalSec = Math.round(ms / 1000);
+	if (totalSec < 60) return `${totalSec}s`;
+	const totalMin = Math.floor(totalSec / 60);
+	const remSec = totalSec % 60;
+	if (totalMin < 60) return remSec ? `${totalMin}m ${remSec}s` : `${totalMin}m`;
+	const hours = Math.floor(totalMin / 60);
+	const remMin = totalMin % 60;
+	return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
+}

@@ -7,7 +7,7 @@
 // weekday, then a date.
 
 import { describe, expect, test } from "vitest";
-import { classifyInstant, formatDuration, formatWhen, formatWhenFull } from "./time.ts";
+import { classifyInstant, formatDuration, formatSpan, formatWhen, formatWhenFull } from "./time.ts";
 
 /** Local wall-clock instant as ISO. */
 function iso(y: number, m: number, d: number, h: number, min: number): string {
@@ -91,6 +91,26 @@ describe("formatWhenFull — the hover and accessible truth", () => {
 	test("unparseable input writes nothing", () => {
 		expect(formatWhenFull("")).toBe("");
 		expect(formatWhenFull("nope")).toBe("");
+	});
+});
+
+describe("formatSpan — the turn-header estimate", () => {
+	test("is coarser than a measured run: no sub-second decimal", () => {
+		expect(formatSpan(400)).toBe("<1s");
+		expect(formatSpan(12000)).toBe("12s");
+	});
+
+	test("keeps minutes and hours short", () => {
+		expect(formatSpan(60000)).toBe("1m");
+		expect(formatSpan(123000)).toBe("2m 3s");
+		expect(formatSpan(3600000)).toBe("1h");
+		expect(formatSpan(3900000)).toBe("1h 5m");
+	});
+
+	test("writes nothing for a missing or unusable span", () => {
+		expect(formatSpan(undefined)).toBe("");
+		expect(formatSpan(-1)).toBe("");
+		expect(formatSpan(Number.NaN)).toBe("");
 	});
 });
 
