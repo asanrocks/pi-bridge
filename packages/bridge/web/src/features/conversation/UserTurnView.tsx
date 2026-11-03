@@ -9,7 +9,8 @@ import { type MutableRefObject, memo, useCallback, useRef, useState } from "reac
 import type { Entry } from "../../../../src/core/index.ts";
 import { newestLeafInSubtree, type UserTurn } from "../../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../../infra/lib/clipboard.ts";
-import { formatTimestamp } from "../../infra/lib/time.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
 import { BranchIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, PencilIcon } from "../../render/icons.tsx";
@@ -49,7 +50,8 @@ export const UserTurnView = memo(function UserTurnView({
 	const [copied, setCopied] = useState(false);
 
 	const hasSiblings = turn.siblings && turn.siblings.length > 1;
-	const ts = formatTimestamp(turn.timestamp);
+	const now = useNow();
+	const ts = formatWhen(turn.timestamp, now);
 	const gitStamp = turn.gitIdentity ? formatGitIdentity(turn.gitIdentity) : "";
 	const baseline = turn.gitIdentity?.commit ?? null;
 	const transitions = turn.gitTransitions;
@@ -108,7 +110,11 @@ export const UserTurnView = memo(function UserTurnView({
 		>
 			<div className={styles.msgHeader}>
 				<span className={styles.msgHeaderLeft}>
-					{ts && <span className={styles.msgTime}>{ts}</span>}
+					{ts && (
+						<time className={styles.msgTime} dateTime={turn.timestamp} title={formatWhenFull(turn.timestamp)}>
+							{ts}
+						</time>
+					)}
 					<span className={styles.msgRole}>You</span>
 					{gitStamp &&
 						(canReviewGit ? (

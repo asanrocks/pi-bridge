@@ -800,8 +800,15 @@ Other `infra/lib` modules have narrow boundaries:
   publication on the document element (consumed by the `--fs-*` tokens in
   `app/index.css`), the `localStorage` device preference, and the touch
   pinch/double-tap handlers installed from `main.tsx`. Geometry that is
-  px-measured and text-coupled (the History row pitch) reads it through
-  `useZoomScale`.
+  px-measured and text-coupled (the History row pitch and time column) reads it
+  through `useZoomScale`.
+- `time.ts` is the one place a time is written: `formatWhen` (the label
+  ladder), `formatWhenFull` (the hover/accessible instant), and
+  `formatDuration`. `useNow.ts` is the clock behind them — one module-level
+  interval per page, running only while something is subscribed, resampled when
+  a backgrounded tab becomes visible. The single ladder (relative → clock →
+  weekday → date) is normative in the web design doc; session buckets read the
+  same classifier, so a heading never contradicts a row's label.
 
 ## Reconnect Invariants
 

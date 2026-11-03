@@ -9,6 +9,7 @@
 
 import { memo } from "react";
 import type { GitIdentity, GitStampAnchor } from "../../../../src/core/index.ts";
+import { formatWhenFull } from "../../infra/lib/time.ts";
 import { gitBaseRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { projectCwdOf } from "../../infra/state/ui.ts";
@@ -77,7 +78,7 @@ export const GitChangeRow = memo(function GitChangeRow({ change }: { change: Git
 		change.isInitial ? "initial git state" : "git state observed",
 		ANCHOR_LABEL[change.anchor],
 		commit ?? "no commit",
-		change.timestamp,
+		formatWhenFull(change.timestamp),
 	]
 		.filter(Boolean)
 		.join(" · ");

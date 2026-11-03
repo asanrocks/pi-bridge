@@ -198,10 +198,12 @@
 
 /* Time column — fixed-width, left-aligned immediately after the graph so
    every row's timestamp aligns in a crisp vertical column regardless of
-   preview length. Tabular numerals keep 09:07 and 23:59 the same width. */
+   preview length. The width is the label ladder's longest form, published from
+   the row geometry (scaled with the display zoom); the fallback matches the
+   unscaled constant. Tabular numerals keep 09:07 and 23:59 the same width. */
 .timeCol {
 	flex: 0 0 auto;
-	width: var(--time-col-w, 44px);
+	width: var(--time-col-w, 84px);
 	min-width: 0;
 	overflow: hidden;
 }

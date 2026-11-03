@@ -8,9 +8,10 @@
 
 import { memo, useState } from "react";
 import type { SessionInfo } from "../../../../src/core/index.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { MoreIcon } from "../../render/icons.tsx";
 import styles from "./Sidebar.module.css";
-import { relativeTime } from "./timeUtils.ts";
 
 export const SessionRow = memo(function SessionRow({
 	session,
@@ -38,6 +39,7 @@ export const SessionRow = memo(function SessionRow({
 	onArchive?: (session: SessionInfo) => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
+	const now = useNow();
 	const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
 	const dotCls = [
 		styles.sidebarLiveDot,
@@ -57,7 +59,13 @@ export const SessionRow = memo(function SessionRow({
 				<span className={dotCls} aria-hidden="true" />
 				<span className={styles.sidebarItemRow}>
 					<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
-					<span className={styles.sidebarItemTime}>{relativeTime(session.timestamp)}</span>
+					<time
+						className={styles.sidebarItemTime}
+						dateTime={session.timestamp}
+						title={formatWhenFull(session.timestamp)}
+					>
+						{formatWhen(session.timestamp, now)}
+					</time>
 				</span>
 			</button>
 			{(onClose || onArchive) && (

@@ -6,7 +6,8 @@
 
 import { memo, useCallback, useState } from "react";
 import type { SystemTurn } from "../../../../src/viewmodel/index.ts";
-import { formatTimestamp } from "../../infra/lib/time.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CodeSnippet } from "../../render/CodeSnippet.tsx";
@@ -52,7 +53,10 @@ const SystemPromptCard = memo(function SystemPromptCard({ turn, isDimmed }: { tu
 		enqueuePulls([{ entryId: turn.entryId, fieldPath: `/entries/${turn.entryId}/sections` }]);
 	}
 	const text = promptText(turn.detail);
-	const ts = formatTimestamp(turn.detail?.timestamp ?? "");
+	const now = useNow();
+	const timestamp = turn.detail?.timestamp ?? "";
+	const ts = formatWhen(timestamp, now);
+	const fullTs = formatWhenFull(timestamp);
 	const name = SYSTEM_LABEL[turn.type];
 	// The row is named (like a tool card's summary), not a list of sections; the
 	// changed sections are the header detail inside the card.
@@ -75,7 +79,9 @@ const SystemPromptCard = memo(function SystemPromptCard({ turn, isDimmed }: { tu
 			</div>
 			{expanded && (
 				<div className={actionStyles.detailsCard}>
-					<div className={actionStyles.cardHeader}>{headerLine}</div>
+					<div className={actionStyles.cardHeader} title={fullTs || undefined}>
+						{headerLine}
+					</div>
 					{text !== null && (
 						<div className={actionStyles.actionDetailsWrap}>
 							<div className={actionStyles.actionDetails}>

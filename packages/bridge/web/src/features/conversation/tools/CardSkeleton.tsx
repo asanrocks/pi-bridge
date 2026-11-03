@@ -8,6 +8,7 @@
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import { copyToClipboard } from "../../../infra/lib/clipboard.ts";
+import { formatDuration } from "../../../infra/lib/time.ts";
 import {
 	CheckIcon,
 	ChevronDownIcon,
@@ -46,14 +47,19 @@ export const CardStatusLine = memo(function CardStatusLine({
 	if (status === "pending") return null;
 	// pi's measured duration wins once the result exists (it can precede the
 	// seal, so status may still read "running"); otherwise the live anchor.
+	// Both go through the shared duration spec, so a card never renders its own
+	// "1.2s" arithmetic.
+	const took = durationMs === null ? "" : formatDuration(durationMs);
+	const elapsed = elapsedMs === null ? "" : formatDuration(elapsedMs);
+	const timeoutText = timeout === null ? "" : formatDuration(timeout * 1000);
 	let text: string | null = null;
-	if (durationMs !== null) text = `Took ${(durationMs / 1000).toFixed(1)}s`;
-	else if (elapsedMs !== null) text = `Elapsed ${(elapsedMs / 1000).toFixed(1)}s`;
+	if (took) text = `Took ${took}`;
+	else if (elapsed) text = `Elapsed ${elapsed}`;
 	return (
 		<div className={styles.cardMeta}>
 			<span className={styles.cardStatusLight} data-status={status} />
 			{text && <span className={styles.cardStatusText}>{text}</span>}
-			{timeout !== null && <span className={styles.cardStatusText}>{`timeout ${timeout}s`}</span>}
+			{timeoutText && <span className={styles.cardStatusText}>{`timeout ${timeoutText}`}</span>}
 			{chips?.map((chip) => (
 				<span key={chip.text} className={styles.cardStatusChip} data-tone={chip.tone}>
 					{chip.text}

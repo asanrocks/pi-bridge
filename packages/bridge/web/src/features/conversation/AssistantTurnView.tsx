@@ -15,7 +15,8 @@ import {
 	type TurnRecovery,
 	type TurnSegment,
 } from "../../../../src/viewmodel/index.ts";
-import { formatTimestamp } from "../../infra/lib/time.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
@@ -81,7 +82,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	);
 	groupGitRef.current = groupGit;
 	const lastIdx = segments.length - 1;
-	const ts = formatTimestamp(turn.timestamp);
+	const now = useNow();
+	const ts = formatWhen(turn.timestamp, now);
 	const models = useStore(useCallback((s) => s.models, []));
 	const modelLabel = turn.model ? displayModelLabel(turn.provider ?? "", turn.model, models) : "";
 
@@ -111,7 +113,11 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 		>
 			<div className={styles.msgHeader}>
 				<span className={styles.msgHeaderLeft}>
-					{ts && <span className={styles.msgTime}>{ts}</span>}
+					{ts && (
+						<time className={styles.msgTime} dateTime={turn.timestamp} title={formatWhenFull(turn.timestamp)}>
+							{ts}
+						</time>
+					)}
 					{modelLabel && <span className={styles.msgRole}>{modelLabel}</span>}
 					{contextFrag && <span className={styles.msgTiming}>{contextFrag}</span>}
 				</span>

@@ -8,6 +8,7 @@
 
 import { memo, useEffect, useMemo } from "react";
 import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, ChevronDownIcon, PlusIcon } from "../../render/icons.tsx";
 import { SessionRow } from "./SessionRow.tsx";
@@ -74,7 +75,10 @@ export const ProjectFolder = memo(function ProjectFolder({
 		() => (page?.kind === "ready" ? page.sessions.filter((s) => !activeIds.has(s.sessionId)) : []),
 		[page, activeIds],
 	);
-	const groups = useMemo(() => groupSessions(history), [history]);
+	// Bucket boundaries are a function of the clock, so the grouping re-derives
+	// when the shared label clock ticks.
+	const now = useNow();
+	const groups = useMemo(() => groupSessions(history, now), [history, now]);
 
 	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
 

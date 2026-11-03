@@ -10,6 +10,8 @@
 //
 // All functions are pure; co-located tests pin each format variant.
 
+import { formatDuration } from "../../../infra/lib/time.ts";
+
 // ---------------------------------------------------------------------------
 // Paragraph splitting
 // ---------------------------------------------------------------------------
@@ -128,7 +130,7 @@ export function bashStatusChip(status: BashStatus): StatusChip {
 		case "exit":
 			return { text: `exit ${status.code}`, tone: "error" };
 		case "timeout":
-			return { text: `timed out after ${status.secs}s`, tone: "error" };
+			return { text: `timed out after ${formatDuration(status.secs * 1000)}`, tone: "error" };
 		case "aborted":
 			return { text: "aborted", tone: "error" };
 	}

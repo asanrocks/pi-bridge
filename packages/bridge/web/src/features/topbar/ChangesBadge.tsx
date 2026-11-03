@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GitDiffFileStat } from "../../../../src/core/index.ts";
+import { formatWhenFull } from "../../infra/lib/time.ts";
 import { gitDiffRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
@@ -91,7 +92,7 @@ export function ChangesBadge() {
 				aria-haspopup="menu"
 				aria-expanded={menuOpen}
 				aria-label={`${state.count} uncommitted file${state.count === 1 ? "" : "s"}`}
-				title={`${state.count} file${state.count === 1 ? "" : "s"} differ from HEAD — as of ${state.asOf}`}
+				title={`${state.count} file${state.count === 1 ? "" : "s"} differ from HEAD — as of ${formatWhenFull(state.asOf)}`}
 			>
 				<BranchIcon size={12} />
 				{state.count}

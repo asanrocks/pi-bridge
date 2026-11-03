@@ -20,7 +20,8 @@ import {
 	newestLeafInSubtree,
 	type PlacedNode,
 } from "../../../../src/viewmodel/index.ts";
-import { formatTimestamp } from "../../infra/lib/time.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { useZoomScale } from "../../infra/lib/zoom.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
@@ -42,15 +43,21 @@ const DOT_RADIUS = 5;
 const GRAPH_PAD_LEFT = 12;
 const GRAPH_PAD_RIGHT = 12;
 const GUTTER_GAP = 12;
-const TIME_COL_W = 44;
+/** Time column width. Sized by the label ladder's longest form ("yesterday,
+ *  14:05" at the scaled --fs-xs), not by the clock it used to hold: the column
+ *  is fixed so rows keep a shared alignment, so the label budget is what sets
+ *  it. Scaled with the display zoom like the row pitch. */
+const TIME_COL_W = 84;
 const COL_GAP = 8;
 const SUPERSEDED_BADGE_W = 28;
 const ROW_RIGHT_PAD = 12;
 
 /** Minimum width the message text column keeps even when the lane graph is
  *  wide. Combined with --canvas-w, wide graphs overflow the .scroll container
- *  (which then scrolls horizontally) instead of squeezing the text to nothing. */
-const MIN_TEXT_W = 220;
+ *  (which then scrolls horizontally) instead of squeezing the text to nothing.
+ *  Trades 20px against the wider time column so a typical two-lane graph still
+ *  fits the default docked width without a horizontal scroll. */
+const MIN_TEXT_W = 200;
 
 /** Default desktop docked-pane width (also the resize double-click reset).
  *  Bounds keep the graph's fixed columns (gutter + time + MIN_TEXT_W)
@@ -165,6 +172,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	// scale. Rescale the pitch with it so larger text never overflows its row.
 	const zoomScale = useZoomScale();
 	const rowHeight = Math.round(ROW_HEIGHT * zoomScale);
+	const timeColW = Math.round(TIME_COL_W * zoomScale);
 
 	// The rendered (peeked) user-path set, for the second row highlight. Only
 	// user-message rows exist in the graph, so membership of the rendered
@@ -299,7 +307,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	// Canvas width = graph + fixed columns + MIN_TEXT_W of text. When this
 	// exceeds the pane, .content grows to it and .scroll scrolls horizontally
 	// (the "slider") — text stays readable instead of clipping off-canvas.
-	const canvasWidth = gutterWidth + TIME_COL_W + COL_GAP + MIN_TEXT_W + ROW_RIGHT_PAD;
+	const canvasWidth = gutterWidth + timeColW + COL_GAP + MIN_TEXT_W + ROW_RIGHT_PAD;
 	const totalHeight = layout.rowCount * rowHeight;
 
 	return (
@@ -311,7 +319,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						height: totalHeight,
 						["--canvas-w" as string]: `${canvasWidth}px`,
 						["--gutter-width" as string]: `${gutterWidth}px`,
-						["--time-col-w" as string]: `${TIME_COL_W}px`,
+						["--time-col-w" as string]: `${timeColW}px`,
 						["--col-gap" as string]: `${COL_GAP}px`,
 						["--superseded-badge-w" as string]: `${SUPERSEDED_BADGE_W}px`,
 						["--row-right-pad" as string]: `${ROW_RIGHT_PAD}px`,
@@ -346,6 +354,7 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 						key={n.node.id}
 						node={n}
 						gutterWidth={gutterWidth}
+						timeColW={timeColW}
 						rowHeight={rowHeight}
 						isCurrentLeaf={n.node.id === currentNodeId}
 						isOnRenderedPath={renderedPathIds?.has(n.node.id) ?? false}
@@ -409,6 +418,7 @@ const HistoryHeader = memo(function HistoryHeader({
 const NodeRow = memo(function NodeRow({
 	node,
 	gutterWidth,
+	timeColW,
 	rowHeight,
 	isCurrentLeaf,
 	isOnRenderedPath,
@@ -419,6 +429,8 @@ const NodeRow = memo(function NodeRow({
 }: {
 	node: PlacedNode;
 	gutterWidth: number;
+	/** Scaled time column width — the superseded popover anchors past it. */
+	timeColW: number;
 	/** Row pitch in px — the display scale applied to ROW_HEIGHT. */
 	rowHeight: number;
 	isCurrentLeaf: boolean;
@@ -431,7 +443,8 @@ const NodeRow = memo(function NodeRow({
 	const top = node.row * rowHeight;
 	const dotLeft = laneX(node.lane) - DOT_RADIUS;
 	const text = node.node.text || "(empty)";
-	const time = formatTimestamp(node.node.timestamp);
+	const now = useNow();
+	const when = formatWhen(node.node.timestamp, now);
 	const superseded = node.node.supersededTurns;
 	const hasSuperseded = superseded.length > 0;
 	const isExpanded = expandedSuperseded.has(node.node.id);
@@ -473,7 +486,13 @@ const NodeRow = memo(function NodeRow({
 				</span>
 				<span className={styles.graphGutter} aria-hidden="true" />
 				<span className={styles.timeCol}>
-					<span className={styles.timeText}>{time}</span>
+					<time
+						className={styles.timeText}
+						dateTime={node.node.timestamp}
+						title={formatWhenFull(node.node.timestamp)}
+					>
+						{when}
+					</time>
 				</span>
 				{hasSuperseded && (
 					<button
@@ -505,7 +524,7 @@ const NodeRow = memo(function NodeRow({
 				// visual mass is, capped so it can't run off the right edge.
 				<div
 					className={styles.supersededPopover}
-					style={{ top: top + rowHeight, left: gutterWidth + TIME_COL_W + COL_GAP }}
+					style={{ top: top + rowHeight, left: gutterWidth + timeColW + COL_GAP }}
 				>
 					{superseded.map((d: HistoryNode) => (
 						<button
@@ -517,7 +536,9 @@ const NodeRow = memo(function NodeRow({
 						>
 							<span className={styles.supersededDot} />
 							<span className={styles.supersededText}>{d.text || "(empty)"}</span>
-							<span className={styles.supersededTime}>{formatTimestamp(d.timestamp)}</span>
+							<time className={styles.supersededTime} dateTime={d.timestamp} title={formatWhenFull(d.timestamp)}>
+								{formatWhen(d.timestamp, now)}
+							</time>
 						</button>
 					))}
 				</div>

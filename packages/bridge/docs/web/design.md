@@ -205,8 +205,8 @@ use that form, which resolves inside the Project and falls back to its home.
 It is deliberately not an
 active-row duplicate: no liveness dot, preview, or time. It exists only
 while something is active. Active rows
-show a liveness dot, name or first-message fallback, Project, relative time
-tracked to the Session's last activity, and a latest-message preview;
+show a liveness dot, name or first-message fallback, Project, the shared time
+label tracked to the Session's last activity, and a latest-message preview;
 streaming rows use the streaming color and pulse. Selecting a Project opens
 its Project home at `/<projectId>`.
 
@@ -275,7 +275,10 @@ Folder children:
   accent tint plus weight `500` on its name, per Row states below. A folder row
   never carries identity — it is a fold control, not a target.
 - Dormant Session history is fetched when a folder unfolds, ordered into
-  `Today`, `This week`, and `Earlier`, and shown with relative timestamps.
+  `Today`, `This week`, and `Earlier`, and each row carries the shared time
+  label (relative while fresh, then a clock, a weekday, or a date). The bucket
+  boundaries are read from the same classifier as those labels, so a heading is
+  never contradicted by the rows under it.
   A chevron at the list's end requests the next page: the continuation is the
   one sidebar control drawn as a glyph rather than words, because "more below"
   is the meaning a chevron already carries, and this one sits below the content
@@ -548,7 +551,8 @@ transcript's git affordances and the TopBar badge (see Git affordances).
 
 The graph renders a git-log-style graph of user-message branches. SVG
 vertical lineage and cubic fork curves sit beneath fixed-height DOM rows
-containing a dot, time, and message preview. The active path uses the accent
+containing a dot, the shared time label (so a row from another day names that
+day), and message preview. The active path uses the accent
 treatment; the current deepest user message is filled. A `+N` badge groups
 consecutive off-path superseded turns — dead ends, whether aborted drafts
 or completed turns later edited away or abandoned for a sibling from the
@@ -729,7 +733,7 @@ keyboard focus and scroll anchors remain stable.
 
 ### Turn types
 
-- **User turns** show local time, `You`, an
+- **User turns** show the shared time label, `You`, an
   optional git-state chip, and the message's Markdown and images. A user-
   defined label (a bookmark set from pi's tree selector or in-app) renders
   as a `#`-prefixed tag chip in the header, left-aligned after the git-state
@@ -741,7 +745,7 @@ keyboard focus and scroll anchors remain stable.
   The header
   toolbar contains copy, the sibling pager, and Edit. The toolbar is revealed
   on hover/focus-capable inputs and always visible on touch.
-- **Assistant turns** show local time, the display model, and context
+- **Assistant turns** show the shared time label, the display model, and context
   occupancy when known. Each text block has its own copy
   action because one assistant turn may contain several messages; that chip is
   shown as a control only when it can be used (see the reveal rule below).
@@ -981,6 +985,23 @@ for new buttons, chips, action rows, and Markdown hosts.
   (section headers, mode badges), always with small positive tracking. Data
   (timestamps, paths, model names, status values) takes natural formatting with
   no case transformation. Ellipses use the `…` character, not `...`.
+- **Time has one ladder, one detail string, one duration spec.**
+  `formatWhen(iso, now)` is the visible label: relative while the row is fresh
+  (`just now`, `N min ago`), then the clock (`14:05`), then `yesterday, 14:05`,
+  then the weekday (`Tue, 14:05`) for the rolling week, then the date (`Nov 3`,
+  or `Nov 3, 2025` outside the current year). Escalating to the calendar is what
+  makes a list answerable without a hover; a clock-only label cannot say which
+  day a row belongs to. Every label is a `<time dateTime={iso}>` whose `title`
+  is `formatWhenFull(iso)` — date, 24h clock, and zone — so the exact instant
+  stays available on hover and on touch. Labels depend on the clock: hosts read
+  `useNow()` (one shared 60s ticker per page) and never `Date.now()` during
+  render, which would freeze a memoized row. Durations are a separate
+  classifier, `formatDuration(ms)` (`1.2s`, `30s`, `2m 03s`, `10m`); never route
+  an instant through it. Locale is pinned `en-US` and instants are device-local;
+  relative wording is app microcopy, so it is not delegated to
+  `Intl.RelativeTimeFormat`, while calendar parts come from `Intl` so DST and
+  month lengths are never computed by hand. Session buckets read the same
+  classifier, so `Today`/`This week`/`Earlier` cannot contradict a row's label.
 - **Every feature owns a CSS module.** Feature components and their CSS stay
   co-located. Shared rendering primitives own their own modules. A spec shared
   across features (the ghost control) lives in one shared module and is adopted

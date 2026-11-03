@@ -1,5 +1,3 @@
-// formatTimestamp moved to infra/lib/time.ts (shared with HistoryPane).
-
 // formatGitIdentity — ADR 10 stamp chip text for a user-turn header.
 // "main @ a1b2c3d" normally; "a1b2c3d" for detached HEAD; "main" for an unborn
 // branch. Returns "" when nothing is known (both null). The git mark itself is a

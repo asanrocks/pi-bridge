@@ -25,8 +25,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DirectoryEntry, GitDiffFileStat, GitDiffFileStatus, SnapshotFile } from "../../../../src/core/index.ts";
 import { isUnder, parentDirectory } from "../../infra/lib/paths.ts";
-import { formatTimestamp } from "../../infra/lib/time.ts";
+import { formatWhen } from "../../infra/lib/time.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { gitDiffRpc, listDirectoryRpc, readFileRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { useViewModel } from "../../infra/state/useViewModel.ts";
@@ -118,6 +119,7 @@ export const FileBrowser = memo(function FileBrowser() {
 	const leafId = useStore((s) => s.document.status.leafId);
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const vm = useViewModel();
+	const now = useNow();
 	const states = useMemo(() => collectDiffStates(vm.turns), [vm.turns]);
 	// The app's pane-topology breakpoint (the Sidebar and History panes, the
 	// index.css mobile block), so the tree drawer lands exactly where the other
@@ -646,7 +648,7 @@ export const FileBrowser = memo(function FileBrowser() {
 	// the detail line, and arbitrary selection lives in `Compare…`.
 	const heading = browserHeading({ state, baseline, label: browser.label, origin: browser.origin }, states);
 	const filesText = `${changedCount} file${changedCount === 1 ? "" : "s"} changed`;
-	const asOfText = involvesWorktree && directive.status === "open" ? `as of ${formatTimestamp(directive.asOf)}` : null;
+	const asOfText = involvesWorktree && directive.status === "open" ? `as of ${formatWhen(directive.asOf, now)}` : null;
 	const headingDetail =
 		heading.surface === "files" ? root : [filesText, heading.comparison, asOfText].filter(Boolean).join(" · ");
 

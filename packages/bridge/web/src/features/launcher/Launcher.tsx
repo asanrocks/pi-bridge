@@ -15,12 +15,13 @@
 
 import { memo, useMemo } from "react";
 import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
+import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
+import { useNow } from "../../infra/lib/useNow.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
-import { relativeTime } from "../sidebar/timeUtils.ts";
 import styles from "./Launcher.module.css";
 
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
@@ -36,6 +37,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	/** The daemon's resolved normal-tier keys (ADR 15) — the home's folded boundary. */
 	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
+	const now = useNow();
 	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
 	/** ADR 13: the launcher's discovery entry for the `@latest` alias — the
 	 * most recently active live session. */
@@ -178,7 +180,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 											<bdi>{session.projectId}</bdi>
 										</span>
 										{session.isStreaming && <span className={styles.streaming}>streaming</span>}
-										<span className={styles.rowTime}>{relativeTime(when)}</span>
+										<time className={styles.rowTime} dateTime={when} title={formatWhenFull(when)}>
+											{formatWhen(when, now)}
+										</time>
 									</div>
 									{preview && <div className={styles.rowPreview}>{preview}</div>}
 								</button>
