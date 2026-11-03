@@ -710,7 +710,9 @@ keyboard focus and scroll anchors remain stable.
   on hover/focus-capable inputs and always visible on touch.
 - **Assistant turns** show local time, the display model, and context
   occupancy when known. Each text block has its own copy
-  action because one assistant turn may contain several messages. Streaming
+  action because one assistant turn may contain several messages; that chip is
+  shown as a control only when it can be used (see the reveal rule below).
+  Streaming
   text uses the streaming Markdown mode and a cursor; provider errors, aborts,
   and output-length stops render beneath the content.
 - **System turns** render compaction and branch summaries as a divider plus
@@ -1323,6 +1325,25 @@ top of the viewport, which reads as clipping. And the box takes the slot its
 glyph fills: the copy mark is wide and squat, so 24 rather than 28 is what makes
 a 14-slot glyph read at size. Elevation is never nested — a control inside a
 dialog, menu, or toast carries none, because its host already floats.
+
+**A hidden control takes no hit area.** Opacity is a paint channel, not an
+interaction channel: a control revealed by fading in must also disable
+`pointer-events` while hidden and restore both from the same ancestor rule
+(`:hover`, `:focus-within`, focus-visible). Otherwise the invisible box keeps
+answering clicks, and on a fading chip that sits over prose the reader who taps
+the line's right end to place a caret copies the message instead, and a drag
+selection begun there never starts. When the input cannot hover at all, the
+control is visible and interactive unconditionally, so the faded state is never
+reached.
+
+**A chip that cannot be revealed stays out of the text box.** On coarse pointers
+the copy chip is visible and interactive at all times, so it cannot be an
+overlay on the first line: an overlay would answer the tap that meant to place a
+caret, and the in-flow `float` that replaced it only reflows inline text — over a
+code block, table, or image the chip is painted on the content instead of beside
+it. The chip therefore leaves the text box and takes its own row at the
+segment's right edge, below the Markdown. `pointer-events` alone does not fix
+this case; the overlap is the problem, not the visibility.
 
 **Text instead of a glyph, and the other way round.** Icon-only is the default
 for verbs. Text stays where the control carries a value rather than an action —

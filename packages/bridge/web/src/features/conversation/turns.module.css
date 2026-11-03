@@ -312,13 +312,17 @@
 /* Turn toolbar — the hover-revealed right half of the header line. Holds
    Copy / variant pager / Edit. Opacity (not display) toggles so layout is
    stable across hover and content-height changes. On inputs that cannot
-   hover (touch), the toolbar stays visible — hover is not usable there. */
+   hover (touch), the toolbar stays visible — hover is not usable there.
+   Hit-testing tracks visibility, not opacity: an invisible button that still
+   accepts clicks would fire Copy from a row the reader only meant to select
+   text in (the sidebar row menu fixes the same leak the same way). */
 .turnToolbar {
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
 	flex-shrink: 0;
 	opacity: 0;
+	pointer-events: none;
 	transition: opacity var(--dur-fast) ease;
 }
 
@@ -329,11 +333,13 @@
 .userMsg.focused .turnToolbar,
 .asstMsg.focused .turnToolbar {
 	opacity: 1;
+	pointer-events: auto;
 }
 
 @media (hover: none) {
 	.turnToolbar {
 		opacity: 1;
+		pointer-events: auto;
 	}
 }
 
@@ -494,10 +500,9 @@
 	margin-bottom: 6px;
 }
 
-/* Floating placement for the per-message copy chip on assistant text
-   segments: the .toolbarBtn spec (identical to the user-message Copy chip),
-   anchored inside the segment's top-right corner. Three placement decisions are
-   deliberate:
+/* Placement for the per-message copy chip on assistant text segments: the
+   .toolbarBtn spec (identical to the user-message Copy chip), anchored inside
+   the segment's top-right corner. Three placement decisions are deliberate:
 
    - It stays *inside* the segment. The earlier -8px offset pushed it above the
      segment, which put it behind the fixed TopBar whenever the line sat at the
@@ -512,7 +517,14 @@
      the page tone, so the half-pixel ring is what makes the chip a shape rather
      than a hole in the paragraph.
 
-   Only placement, box, and reveal live here — states belong to .toolbarBtn. */
+   Hit-testing tracks visibility as well: a `pointer-events: none` chip is not
+   a click target while it is invisible, and the reveal (a rule on the hovered
+   or focused ancestor) turns both on together. Without it the invisible chip
+   still answered clicks on the first line's right end — a tap that meant to
+   place a caret or start a selection copied the message instead.
+
+   Only placement, box, hit-testing, and reveal live here — states belong to
+   .toolbarBtn. */
 .msgCopyBtn {
 	position: absolute;
 	top: 2px;
@@ -523,6 +535,7 @@
 	   Markdown (code-block chrome, table wrappers) inside the same segment. */
 	z-index: 1;
 	opacity: 0;
+	pointer-events: none;
 	box-shadow: var(--shadow-chip);
 	transition: opacity var(--dur-fast) ease;
 }
@@ -538,24 +551,30 @@
 .textSegment:focus-within .msgCopyBtn,
 .msgCopyBtn:focus-visible {
 	opacity: 1;
+	pointer-events: auto;
 }
 
-@media (hover: none) {
-	/* Touch has no hover, so the overlay would sit permanently over the
-	   first line's text. Drop into the flow and float right instead: text
-	   wraps around the chip rather than under it. The float only lands at
-	   the segment's top-right because the button precedes the markdown in
-	   DOM order (floats can't rise above their flow position). */
+@media (pointer: coarse) {
+	/* Coarse pointers have no hover, so the always-visible chip cannot float
+	   over the text: an overlay there would answer the tap that meant to place
+	   a caret, and a float only reflows inline text — over a code block, table,
+	   or image it would sit on the content instead of beside it. Take the chip
+	   out of the text box entirely: it follows the Markdown in DOM order and
+	   occupies its own row at the segment's right edge, below the text. */
 	.msgCopyBtn {
+		display: flex;
 		position: static;
-		float: right;
-		/* Touch keeps the 40px tap target `.toolbarBtn` grows to, which would
-		   otherwise be overridden by the 24px box above. */
 		width: 40px;
 		height: 40px;
-		margin-left: 8px;
-		margin-bottom: 4px;
+		margin: 2px 0 0 auto;
 		opacity: 1;
+		pointer-events: auto;
+	}
+
+	/* The 40px box already is the touch target, so the generic coarse-pointer
+	   overlay would only add 6px of unlabeled hit area over the last line. */
+	.msgCopyBtn::after {
+		content: none;
 	}
 }
 
