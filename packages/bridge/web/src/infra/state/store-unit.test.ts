@@ -201,6 +201,78 @@ describe("setActiveSessionId × peek pin", () => {
 	});
 });
 
+describe("docAuthority — the loading tri-state's source", () => {
+	const REF = { projectId: "proj", stem: "2024-01-01_x", sessionId: "sess-a" } as const;
+
+	it("starts staged and is confirmed by an address-bearing initial sync", () => {
+		const store = createClientStore();
+		expect(store.getState().docAuthority).toBe("staged");
+
+		seedEntry(store, "u1", null, 0);
+		store.getState().commitObservation(REF, store.getState().document, 3);
+
+		expect(store.getState().docAuthority).toBe("authoritative");
+		expect(store.getState().activeSessionId).toBe("sess-a");
+	});
+
+	it("a local cache paint seeds; a wire flush extends the committed document", () => {
+		const store = createClientStore();
+		store.getState().commitObservation(REF, store.getState().document, 3);
+		expect(store.getState().docAuthority).toBe("authoritative");
+
+		// Cache seed (ADR 09): this address's own last-known state, not yet
+		// confirmed — the syncing tail renders on it.
+		store.getState().paintLocalDocument(store.getState().document);
+		expect(store.getState().docAuthority).toBe("seeded");
+
+		// A mirror flush (pipeline coalescing, lazy pulls) is not a claim about
+		// the address — it keeps the state it found.
+		store.getState().commitObservation(REF, store.getState().document, 4);
+		store.getState().applyReplace(store.getState().document, 5);
+		expect(store.getState().docAuthority).toBe("authoritative");
+	});
+
+	it("an optimistic address change stages the previous view's document; a rollback commit restores", () => {
+		const store = createClientStore();
+		store.getState().commitObservation(REF, store.getState().document, 3);
+
+		// A staged navigate keeps the previous session's document published
+		// under the new address — staged content: rendered untouched, no
+		// syncing tail (the tail would mis-attribute the new session's sync
+		// to the conversation on screen).
+		store.getState().setCurrentSession("proj", "2024-01-02_y");
+		expect(store.getState().docAuthority).toBe("staged");
+		expect(store.getState().activeSessionId).toBeNull();
+
+		// The failed open's rollback re-publishes the previously committed
+		// view: its document is still the published one, so authority returns
+		// with the address pair.
+		store.getState().commitAddress("proj", "2024-01-01_x", "sess-a");
+		expect(store.getState().docAuthority).toBe("authoritative");
+		expect(store.getState().activeSessionId).toBe("sess-a");
+	});
+
+	it("a rollback commit repaints the view's document in the same write", () => {
+		const store = createClientStore();
+		seedEntry(store, "u1", null, 0);
+		const docA = store.getState().document;
+		store.getState().commitObservation(REF, docA, 3);
+
+		// The instant-switch paint published another document under the
+		// staged address.
+		const seedB = { ...docA, status: { ...docA.status, name: "b" } };
+		store.getState().paintLocalDocument(seedB);
+		expect(store.getState().docAuthority).toBe("seeded");
+
+		// The rollback commits the restored pair together with its document.
+		store.getState().commitAddress("proj", "2024-01-01_x", "sess-a", docA);
+		const s = store.getState();
+		expect(s.document).toBe(docA);
+		expect(s.docAuthority).toBe("authoritative");
+		expect(s.docRevision).toBeGreaterThan(3);
+	});
+});
+
 describe("resolveRenderLeafTarget", () => {
 	function entriesOf(...specs: [id: string, parentId: string | null, ord?: number][]) {
 		return Object.fromEntries(

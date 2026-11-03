@@ -24,11 +24,17 @@
 // An opening transition is two-phase because seeding must precede the RPC:
 // the server pushes the initial-sync frame before the RPC reply, and the
 // candidate document (navigate) or the live mirror (boot) must already hold
-// the cached prefix when that frame applies. The intent message stages the
-// address optimistically and admits a value-only prepare effect; `prepared`
-// seeds in the step and admits the open RPC effect; the address-bearing
-// initial-sync frame returns as a `sync` message and commits the view; the
-// RPC reply returns as `openSettled` and confirms or rolls back.
+// the cached prefix when that frame applies. `prepared` also paints that
+// cached prefix into the store for a navigate (the instant switch): the
+// switch shows the target's last-known state immediately, unconfirmed (the
+// loading continuation renders in place of any wire claim), and a failed
+// navigate repaints the previous view's document — the mirror still holds
+// the last committed view's root, since candidates promote only at commit.
+// The intent message stages the address optimistically and admits a
+// value-only prepare effect; `prepared` seeds in the step and admits the
+// open RPC effect; the address-bearing initial-sync frame returns as a
+// `sync` message and commits the view; the RPC reply returns as
+// `openSettled` and confirms or rolls back.
 //
 // Admission is gated by intent ownership, not just completion filtering: a
 // superseded prepare sends no RPC at all. The server serializes attachment
@@ -528,15 +534,21 @@ function commitObservation(ref: SessionRef, deps: NavigationDeps): void {
 	} else {
 		// No client (tests without a mirror): the address pair alone — the
 		// document will be published with the next frame.
-		deps.port.commitAddress(ref);
+		deps.port.commitAddress(ref.projectId, ref.stem, ref.sessionId);
 	}
 }
 
 /** Restore a committed view after a failed navigate-mode open: the address,
  * the session id, and the route all describe the view the client actually
- * holds server-side. */
-function restoreView(previous: { view: NavigationView; sessionId: string | null }, port: NavigationViewPort): void {
-	port.restoreView(previous.view, previous.sessionId);
+ * holds server-side. `doc` republishes the view's document — the mirror
+ * holds the last committed view's root, so the instant-switch paint's
+ * snapshot must not survive the rollback. */
+function restoreView(
+	previous: { view: NavigationView; sessionId: string | null },
+	port: NavigationViewPort,
+	doc?: Document,
+): void {
+	port.restoreView(previous.view, previous.sessionId, doc);
 }
 
 /** Land a boot-mode failure on the Project home (ADR 11): the stem no longer
@@ -637,8 +649,11 @@ function settleOpen(
 		} else {
 			// A navigate failure restores the last committed view: the server
 			// left the previous attachment untouched, so the client must not
-			// claim the new address either.
-			restoreView(pending.previous, deps.port);
+			// claim the new address either. The previous view's document is
+			// repainted from the mirror — it holds the last committed view's
+			// root (candidates promote only at commit), so the instant-switch
+			// paint's snapshot goes with the address change.
+			restoreView(pending.previous, deps.port, deps.getClient()?.mirror.document);
 			current = pending.previous;
 		}
 	}
@@ -707,16 +722,23 @@ function navigationStep(
 				const seed = message.seed;
 				cursor = computeCursor(seed.records) ?? undefined;
 				if (pending.mode === "navigate") {
+					const doc = seedDocument(seed.records, seed.hint ?? undefined);
 					// Candidate seeding (ADR 09): the delta initial sync
 					// applies to the candidate, not the live mirror.
 					if (cursor !== undefined) {
 						state = {
 							...state,
-							candidate: {
-								sessionId: seed.sessionId,
-								doc: seedDocument(seed.records, seed.hint ?? undefined),
-							},
+							candidate: { sessionId: seed.sessionId, doc },
 						};
+					}
+					// Instant switch: paint the target's cached prefix over the
+					// previous view's document, so the switch reads as immediate —
+					// the loading continuation marks it unconfirmed. Skipped when
+					// the committed view is already this address (a re-navigate
+					// must not downgrade the live authoritative document to a
+					// cache snapshot) or the cache holds nothing.
+					if (sessionKey(state.current.view) !== sessionKey(pending.view) && seed.records.length > 0) {
+						deps.port.paintLocalDocument(doc);
 					}
 				} else {
 					// Boot seeding: the live mirror (and, when the cache has

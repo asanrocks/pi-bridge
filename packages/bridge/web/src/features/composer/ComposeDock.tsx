@@ -312,7 +312,12 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 
 	// ── Status dot ──────────────────────────────────────────────────────
 
-	const dot: ComposeDot = !connected ? "red" : isStreaming ? "orange" : "green";
+	// Red names the transport (disconnected outranks everything); orange is
+	// the shared in-flight vocabulary — a streaming turn or a document the
+	// wire has not confirmed yet (the loading tri-state: cache-painted or
+	// staged, initial sync in flight); green is the confirmed idle state.
+	const docAuthority = useStore((s) => s.docAuthority);
+	const dot: ComposeDot = !connected ? "red" : isStreaming || docAuthority !== "authoritative" ? "orange" : "green";
 
 	// Context usage is synced from the server via status.contextUsage.
 	// pi's AgentSession.getContextUsage() handles compaction gaps and

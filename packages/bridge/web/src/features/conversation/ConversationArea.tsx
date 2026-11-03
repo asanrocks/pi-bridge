@@ -46,6 +46,16 @@ export const ConversationArea = memo(function ConversationArea({
 	// the viewport tracking pauses follow and the jump button becomes the
 	// return-to-live gesture.
 	const isDiverged = useStore(selectRenderDiverged);
+	// Wire confirmation (loading tri-state): a document that is not the
+	// address's own wire-confirmed transcript asserts nothing. Pending (no
+	// confirmed content) renders the skeleton, never the empty-state copy. A
+	// seeded document (this address's cached last-known state — the instant
+	// switch) gets the same skeleton continuing after its last message, in
+	// place of any derived failure line, until the initial sync commits. A
+	// staged document — the previous session's transcript under a navigate
+	// in flight with no cache for the target — renders untouched: nothing
+	// may be appended to a conversation the wait does not belong to.
+	const docAuthority = useStore((s) => s.docAuthority);
 	// Broken-tail recovery (ADR 16): the buttons arm only when idle,
 	// connected, following the live leaf (the same divergence mutation lock
 	// as send), and not mid-edit — the edit composer already owns the
@@ -81,7 +91,11 @@ export const ConversationArea = memo(function ConversationArea({
 	if (vm.turns.length === 0) {
 		return (
 			<div className={styles.scrollContainer} ref={scrollContainerRef}>
-				<div className={styles.empty}>No messages yet. Send a prompt to begin.</div>
+				{docAuthority === "authoritative" ? (
+					<div className={styles.empty}>No messages yet. Send a prompt to begin.</div>
+				) : (
+					<ConversationSkeleton />
+				)}
 			</div>
 		);
 	}
@@ -155,6 +169,7 @@ export const ConversationArea = memo(function ConversationArea({
 					}
 				}
 			})}
+			{docAuthority === "seeded" && <ContinuationSkeleton />}
 			{/* Always mounted — visibility animates (opacity/translate) rather than
 			    a hard mount/unmount. data-visible drives the transition; the hidden
 			    state is inert (visibility + pointer-events) and untabbable. */}
@@ -195,3 +210,36 @@ export const ConversationArea = memo(function ConversationArea({
 		</div>
 	);
 });
+
+/** Pending placeholder (loading tri-state): no confirmed content yet — a
+ * cold open with no cache, before the initial sync lands. Turn-shaped bars,
+ * not a spinner: the arriving transcript materializes into the layout it
+ * previews instead of popping, and nothing asserts emptiness the wire has
+ * not confirmed. */
+function ConversationSkeleton() {
+	return (
+		// `<output>` is the implicit role="status" element (the DictationToolbar
+		// convention): the label names the wait for assistive tech without a
+		// live region that re-announces.
+		<output className={styles.skeleton} aria-label="Loading conversation">
+			<div className={styles.skeletonUser} />
+			<div className={styles.skeletonLine} />
+			<div className={styles.skeletonLine} data-short="true" />
+		</output>
+	);
+}
+
+/** Provisional continuation (loading tri-state): the rendered document is
+ * this address's cached last-known state, not yet wire-confirmed. The same
+ * pulsing bars as the pending skeleton, continuing the transcript's rhythm
+ * after the last message — visibly not finished, asserting no failure —
+ * until the initial sync commits and the authoritative transcript replaces
+ * the whole picture. */
+function ContinuationSkeleton() {
+	return (
+		<div className={styles.skeletonTail} aria-hidden="true">
+			<div className={styles.skeletonLine} />
+			<div className={styles.skeletonLine} data-short="true" />
+		</div>
+	);
+}

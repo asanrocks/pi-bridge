@@ -356,7 +356,8 @@
 	flex-shrink: 0;
 }
 
-/* Empty-state placeholder. */
+/* Empty-state placeholder — the wire-confirmed empty graph only; while the
+   document is unconfirmed the skeleton below renders instead. */
 .empty {
 	flex: 1;
 	display: flex;
@@ -365,4 +366,32 @@
 	color: var(--color-muted-foreground);
 	font-size: var(--fs-lg);
 	padding: 48px 0;
+}
+
+/* Pending placeholder (loading tri-state): graph-row-shaped bars at the
+   pane's fixed row height, previewing the layout the graph will fill. */
+.skeleton {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 12px;
+}
+
+.skeletonRow {
+	height: 16px;
+	width: min(75%, 260px);
+	border-radius: var(--radius-sm);
+	background: var(--color-muted);
+	animation: streaming-pulse 1.5s infinite;
+}
+
+.skeletonRow[data-short="true"] {
+	width: min(45%, 160px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.skeletonRow {
+		animation: none;
+	}
 }

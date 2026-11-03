@@ -153,6 +153,10 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	const leafId = document.status.leafId;
 	const entries = document.entries;
 	const isBusy = useStore((s) => s.document.status.isStreaming || s.document.status.isCompacting);
+	// Wire confirmation (loading tri-state): an unconfirmed empty graph is
+	// pending, not empty — the skeleton renders instead of the empty-state
+	// copy, which is a claim about the server's transcript.
+	const docAuthority = useStore((s) => s.docAuthority);
 	const renderLeafId = useStore((s) => s.renderLeafId);
 	const rpc = useRpc();
 
@@ -277,7 +281,17 @@ const HistoryPaneBody = memo(function HistoryPaneBody({
 	);
 
 	if (layout.nodes.length === 0) {
-		return <div className={styles.empty}>No messages yet.</div>;
+		return docAuthority === "authoritative" ? (
+			<div className={styles.empty}>No messages yet.</div>
+		) : (
+			// `<output>` is the implicit role="status" element (the DictationToolbar
+			// convention): the label names the wait for assistive tech.
+			<output className={styles.skeleton} aria-label="Loading history">
+				<div className={styles.skeletonRow} />
+				<div className={styles.skeletonRow} />
+				<div className={styles.skeletonRow} data-short="true" />
+			</output>
+		);
 	}
 
 	const graphWidth = GRAPH_PAD_LEFT + layout.laneCount * LANE_WIDTH + GRAPH_PAD_RIGHT;

@@ -2861,6 +2861,34 @@ describe("recovery projection (ADR 16)", () => {
 		expect(a.recovery).toBeUndefined();
 	});
 
+	it("projects nothing for a provisional document — an unconfirmed tail is not a claim about the server", () => {
+		// A cache seed (ADR 09) paints the quiesced last-known state: a run
+		// that was mid-flight reads as all-answered-tools-with-no-final-
+		// assistant — exactly the unfinishedTurn shape. Without the authority
+		// gate that tail renders the synthetic interruption line while the
+		// initial sync is still in flight.
+		const doc = emptyDoc();
+		doc.entries["u1"] = userMsg("u1", null, "build");
+		doc.entries["a1"] = assistantMsg("a1", "u1", {
+			content: [{ type: "toolCall", id: "tc-build", name: "bash", arguments: '{"command":"make"}' }],
+			stopReason: "toolUse",
+		});
+		doc.entries["r1"] = toolResult("r1", "a1", "tc-build");
+		doc.status.leafId = "r1";
+
+		const vm = computeViewModel({ document: doc, models: [], authoritative: false });
+		for (const t of vm.turns) {
+			if (t.kind === "assistant") expect(t.recovery).toBeUndefined();
+		}
+
+		// The same document, wire-confirmed: the interrupted run is real, the
+		// recovery row returns.
+		const confirmed = computeViewModel({ document: doc, models: [], authoritative: true });
+		const a = confirmed.turns[1]!;
+		if (a.kind !== "assistant") throw new Error("expected assistant turn");
+		expect(a.recovery?.kind).toBe("unfinishedTurn");
+	});
+
 	it("attaches interruptedTools to the merged turn containing the dangling assistant", () => {
 		// Mid-batch abort: the dangling tool-bearing assistant (a1), its one
 		// answered result, and the abort marker (a2) merge into one turn —

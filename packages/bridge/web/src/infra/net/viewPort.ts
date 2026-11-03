@@ -69,8 +69,10 @@ export interface NavigationViewPort {
 	 * reverse), and write the route unless the alias view holds it. */
 	commitObservation(ref: SessionRef, doc: Document, revision: number): void;
 	/** Commit an observation's identity without a document (no mirror — the
-	 * document publishes with the next frame). */
-	commitAddress(ref: SessionRef): void;
+	 * document publishes with the next frame). Also the navigate rollback's
+	 * restore: the previously committed view's document is still published,
+	 * so the pair restores document authority. */
+	commitAddress(projectId: string | null, stem: string | null, sessionId: string | null): void;
 	/** Publish the durable session id alone (the local-seed pair: the address
 	 * is staged first, then the id — `setCurrentSession` unbinds a stale id
 	 * on an address change, so the order is load-bearing). */
@@ -80,8 +82,10 @@ export interface NavigationViewPort {
 	paintLocalDocument(doc: Document): void;
 	/** Restore a previously committed view (a failed navigate's rollback):
 	 * the address, the session id, and the route all describe the view the
-	 * client actually holds. */
-	restoreView(view: ViewTarget, sessionId: string | null): void;
+	 * client actually holds. `doc` (the view's document, typically the
+	 * mirror's committed root) is republished with the pair in the same
+	 * write, replacing the instant-switch paint's snapshot. */
+	restoreView(view: ViewTarget, sessionId: string | null, doc?: Document): void;
 	/** Clear the rendered Session — the address, the session id, the
 	 * session-scoped UI state — optionally retaining a Project to land on
 	 * its home. */
@@ -119,12 +123,11 @@ export function createNavigationViewPort(): NavigationViewPort {
 				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
 			}
 		},
-		commitAddress(ref) {
-			rememberAddress(ref.projectId, ref.stem, ref.sessionId);
-			getStore().getState().setCurrentSession(ref.projectId, ref.stem);
-			getStore().getState().setActiveSessionId(ref.sessionId);
-			if (!getStore().getState().addressViaAlias) {
-				writeRoute({ kind: "session", projectId: ref.projectId, stem: ref.stem });
+		commitAddress(projectId, stem, sessionId) {
+			rememberAddress(projectId ?? "", stem ?? "", sessionId ?? "");
+			getStore().getState().commitAddress(projectId, stem, sessionId);
+			if (projectId !== null && stem !== null && !getStore().getState().addressViaAlias) {
+				writeRoute({ kind: "session", projectId, stem });
 			}
 		},
 		publishSessionId(sessionId) {
@@ -132,18 +135,21 @@ export function createNavigationViewPort(): NavigationViewPort {
 		},
 		paintLocalDocument(doc) {
 			// A local paint is a publication outside the mirror: the store's
-			// own revision counter advances, exactly like a cache restore.
-			getStore().getState().applyReplace(doc);
+			// own revision counter advances, exactly like a cache restore, and
+			// the document is unconfirmed until the initial sync commits.
+			getStore().getState().paintLocalDocument(doc);
 		},
-		restoreView(view, sessionId) {
+		restoreView(view, sessionId, doc) {
+			// The rollback re-publishes a committed view: the document still
+			// published belongs to the restored address, so the commit path
+			// (not staging) applies — and a replaced document returns with it.
 			if (view.kind === "session") {
-				getStore().getState().setCurrentSession(view.projectId, view.stem);
+				getStore().getState().commitAddress(view.projectId, view.stem, sessionId, doc);
 			} else if (view.kind === "project") {
-				getStore().getState().setCurrentSession(view.projectId, null);
+				getStore().getState().commitAddress(view.projectId, null, sessionId, doc);
 			} else {
-				getStore().getState().setCurrentSession(null, null);
+				getStore().getState().commitAddress(null, null, sessionId, doc);
 			}
-			getStore().getState().setActiveSessionId(sessionId);
 			writeRoute(view);
 		},
 		clearSession(retainProjectId) {

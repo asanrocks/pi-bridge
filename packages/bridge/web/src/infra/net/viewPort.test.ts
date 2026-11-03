@@ -104,7 +104,7 @@ describe("viewPort", () => {
 
 	it("a clear retains the Project it lands on, and drops the session state", () => {
 		const port: NavigationViewPort = createNavigationViewPort();
-		port.commitAddress(REF);
+		port.commitAddress(REF.projectId, REF.stem, REF.sessionId);
 
 		port.clearSession("proj");
 
@@ -121,7 +121,7 @@ describe("viewPort", () => {
 	it("the alias flag keeps the URL in alias form across an observation commit", () => {
 		const port = createNavigationViewPort();
 		port.setAddressViaAlias(true);
-		port.commitAddress(REF);
+		port.commitAddress(REF.projectId, REF.stem, REF.sessionId);
 		expect(publication()).toEqual({ projectId: "proj", stem: "a", sessionId: "s1", entryCount: 0 });
 		// The URL keeps the alias form (ADR 13): no route write happened.
 		expect(replaceState).not.toHaveBeenCalled();

@@ -31,6 +31,10 @@ export function useViewModel(): ViewModel {
 	// Document revision: same-id content replacements are invisible to the
 	// structural part of the key, so the revision is a declared input.
 	const docRevision = useStore((s) => s.docRevision);
+	// Wire confirmation (loading tri-state): gates the ADR 16 recovery
+	// derivation — an unconfirmed document (cache paint, staged navigate) is
+	// not a claim about the server's tail.
+	const authoritative = useStore((s) => s.docAuthority === "authoritative");
 	// Rendered-leaf override (peek). `null` follows the live leaf; the key
 	// includes it, so peek/un-peek over an unchanged document re-projects.
 	const renderLeafId = useStore((s) => s.renderLeafId);
@@ -43,7 +47,7 @@ export function useViewModel(): ViewModel {
 
 	const cacheRef = useRef<{ key: string; vm: ViewModel } | null>(null);
 	return useMemo(() => {
-		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId, modelsKey, docRevision);
+		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId, modelsKey, docRevision, authoritative);
 		if (cacheRef.current?.key === key) {
 			return cacheRef.current.vm;
 		}
@@ -53,8 +57,8 @@ export function useViewModel(): ViewModel {
 		// may be the live projection while peeking (or vice versa) — shared
 		// prefix turns are reused across the switch, which is the point.
 		const prevVm = cacheRef.current?.vm;
-		const vm = computeViewModel({ document: doc, models, viewLeafId: renderLeafId }, prevVm);
+		const vm = computeViewModel({ document: doc, models, viewLeafId: renderLeafId, authoritative }, prevVm);
 		cacheRef.current = { key, vm };
 		return vm;
-	}, [doc, models, scope, pullTick, docRevision, renderLeafId, modelsKey]);
+	}, [doc, models, scope, pullTick, docRevision, renderLeafId, modelsKey, authoritative]);
 }

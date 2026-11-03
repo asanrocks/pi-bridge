@@ -76,6 +76,17 @@ describe("viewModelCacheKey", () => {
 		);
 	});
 
+	it("changes with the document-confirmation flag; undefined defaults to confirmed", () => {
+		// The flag gates the ADR 16 recovery derivation: a provisional→confirmed
+		// flip must re-project even when every structural input is unchanged — or
+		// a cache-seeded broken tail stays recovery-less after the wire confirms
+		// the interruption, and the flip back never loses it.
+		const base = viewModelCacheKey(doc(), "stem", 0);
+		expect(viewModelCacheKey(doc(), "stem", 0, undefined, undefined, 0, false)).not.toBe(base);
+		// undefined (a pure-caller default) and true are the same projection.
+		expect(viewModelCacheKey(doc(), "stem", 0, undefined, undefined, 0, true)).toBe(base);
+	});
+
 	it("changes with the rendered-leaf override (peek); null and undefined share the live key", () => {
 		const entries: Document["entries"] = {
 			u1: {

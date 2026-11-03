@@ -340,7 +340,7 @@ describe("Navigation", () => {
 		fake.openReplies.push(replyGate.promise);
 		const opened = navigationOpen({ projectId: "proj", stem: "b" }, { sessionId: "id-b" });
 		await vi.waitFor(() => expect(fake.openCalls.length).toBe(1));
-		expect(fake.openCalls[0].cursor).toEqual(cursor);
+		expect(fake.openCalls[0]!.cursor).toEqual(cursor);
 		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: [DELTA_OP], generation: 1 });
 		replyGate.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
 		expect((await opened).ok).toBe(true);
@@ -348,6 +348,97 @@ describe("Navigation", () => {
 		// base is the pre-promotion seed.
 		expect(fake.applyReplaces.length).toBe(1);
 		expect(currentCacheBase()?.sessionId).toBe("id-b");
+	});
+
+	it("paints the target's cached prefix on a navigate (the instant switch)", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: (_projectId, stem) => `id-${stem}`,
+			// Only the target has a cached prefix — the committed view being
+			// switched from stays the wire's.
+			loadSession: async (sessionId) =>
+				sessionId === "id-b" ? { records: recordsFor("id-b"), hint: null } : { records: [], hint: null },
+		});
+		// A committed view to switch from.
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await openedA;
+
+		// Gate the reply so the seeded paint is observable before the commit.
+		const replyGate = gate<RpcReply>();
+		fake.openReplies.push(replyGate.promise);
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" }, { sessionId: "id-b" });
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(2));
+		// The cache paint replaced the previous session's document before the
+		// wire answered: the switch reads as immediate, marked seeded.
+		const mid = getStore().getState();
+		expect(Object.keys(mid.document.entries)).toEqual(["e0"]);
+		expect(mid.docAuthority).toBe("seeded");
+
+		navigationObservation({ kind: "initial_sync", ref: REF_B, ops: [DELTA_OP], generation: 1 });
+		replyGate.open({ id: "x", ok: true, session: REF_B } as unknown as RpcReply);
+		expect((await openedB).ok).toBe(true);
+		const s = getStore().getState();
+		expect(Object.keys(s.document.entries)).toEqual(["e0"]);
+		expect(s.docAuthority).toBe("authoritative");
+	});
+
+	it("a failed navigate repaints the previous view's document", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: (_projectId, stem) => `id-${stem}`,
+			loadSession: async (sessionId) => ({ records: recordsFor(sessionId), hint: null }),
+		});
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await openedA;
+		const docA = getStore().getState().document;
+
+		const fail = gate<RpcReply>();
+		fake.openReplies.push(fail.promise);
+		const openedB = navigationOpen({ projectId: "proj", stem: "b" }, { sessionId: "id-b" });
+		// The instant-switch paint landed (the store shows the target's seed).
+		await vi.waitFor(() => {
+			expect(Object.keys(getStore().getState().document.entries)).toEqual(["e0"]);
+			expect(getStore().getState().docAuthority).toBe("seeded");
+		});
+		fail.open({ id: "x", ok: false, error: "no such session" } as unknown as RpcReply);
+
+		expect((await openedB).ok).toBe(false);
+		const s = getStore().getState();
+		expect(s.currentStem).toBe("a");
+		expect(s.activeSessionId).toBe("id-a");
+		// The mirror still held the last committed view's root — the paint's
+		// snapshot does not survive the failed switch.
+		expect(s.document).toBe(docA);
+		expect(s.docAuthority).toBe("authoritative");
+	});
+
+	it("a re-navigate onto the committed view does not downgrade the live document", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({
+			getClient: () => fake.client,
+			lookupSessionId: () => "id-a",
+			loadSession: async () => ({ records: recordsFor("id-a"), hint: null }),
+		});
+		const openedA = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await openedA;
+		const docA = getStore().getState().document;
+
+		const openedAgain = navigationOpen({ projectId: "proj", stem: "a" }, { sessionId: "id-a" });
+		await vi.waitFor(() => expect(fake.openCalls.length).toBe(2));
+		// No paint: the committed view's authoritative document stays — a
+		// cache snapshot must not replace it.
+		const mid = getStore().getState();
+		expect(mid.document).toBe(docA);
+		expect(mid.docAuthority).toBe("authoritative");
+
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		expect((await openedAgain).ok).toBe(true);
+		expect(getStore().getState().document).toBe(docA);
 	});
 
 	it("commits a creation's initial sync when its operation owns the view", async () => {

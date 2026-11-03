@@ -358,6 +358,29 @@ summaries. Markdown is used for user and assistant prose, with syntax
 highlighting, tables, and copy controls supplied by the shared Markdown
 renderer.
 
+Until the wire confirms the rendered address (an address-bearing initial
+sync), the published document is a local guess, and the conversation never
+asserts what it cannot back — the loading tri-state. An unconfirmed document
+with no content is *pending*: turn-shaped placeholder bars (a user-tinted row
+and assistant text lines, pulsing on the shared liveness keyframes) render in
+place of the empty-state copy, which is a claim about the server's transcript.
+A session switch is instant by the same mechanism: a navigate paints the
+target's cached prefix immediately (the previous conversation is replaced at
+once, not kept under the new address), so the switch reads as immediate
+wherever the browser has seen the session before. A *seeded* document — this
+address's own last-known state painted from the cache, on boot or on the
+instant switch — renders the content with the same skeleton continuing
+after the last message: visibly not finished, asserting no failure, in place
+of any derived failure presentation. A *staged* document — a navigate in
+flight with no cache for the target, keeping the previous session's turns
+published — renders untouched: the old conversation is still valid reading,
+and appending the new session's wait to it would mis-attribute it. When the
+initial sync commits, the skeleton or continuation is replaced by the
+authoritative transcript, which materializes into the layout the placeholder
+previewed. A wire-confirmed empty session renders the guidance copy ("No
+messages yet. Send a prompt to begin."). The history pane's graph follows
+the same rule on its own empty state.
+
 The viewport follows structural and streaming text growth while the reader is
 at the bottom. Scrolling upward pauses follow.
 
@@ -443,6 +466,10 @@ above the mobile soft keyboard and safe-area inset. It publishes its measured
 height so the conversation cannot be covered by the card.
 
 The collapsed `ComposeBar` is a 44px card with a status dot and placeholder.
+The dot speaks the app's shared dot vocabulary: red while disconnected
+(the transport outranks everything), orange and pulsing while something is
+in flight — a streaming turn or a document the wire has not confirmed yet
+(the loading tri-state) — and green at the confirmed idle state.
 Clicking it, or pressing `/`, expands and focuses the shared `ComposeCard`.
 The expanded card contains the controlled textarea, attachment chips, and
 control row. Physical-keyboard Enter sends; Shift+Enter inserts a newline.
@@ -479,7 +506,10 @@ failure presentation and the one recovery carrier: its line is the turn's
 real error or abort text, or — when pi persisted no error at all, the silent
 data-loss shapes — a synthetic line in the same error hue ("Interrupted
 while running tools", "Interrupted before the reply finished"), so a
-half-dead run is never visually quieter than a provider error. The
+half-dead run is never visually quieter than a provider error. Both derive
+only from a wire-confirmed document: an unconfirmed tail (a cache seed's
+quiesced state, a staged navigate) renders the loading continuation
+instead — a mid-sync document is not a claim about the server's run. The
 ViewModel projects the recovery onto the turn containing the dead entry
 (`AssistantTurn.recovery`, derived by the same pure
 `computeRecoverableTurn` the host verb gates on, idle-only and from the live

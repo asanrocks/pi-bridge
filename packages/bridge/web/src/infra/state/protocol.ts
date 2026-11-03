@@ -52,6 +52,15 @@ export type SessionFolderPage =
 // Slice shape
 // ---------------------------------------------------------------------------
 
+/** How the published document relates to the rendered address — the loading
+ * tri-state's source. `authoritative`: confirmed by an address-bearing
+ * initial sync (live patches after it extend the committed document).
+ * `seeded`: the address's own last-known state painted from the local cache,
+ * awaiting the initial sync. `staged`: not this address's document — the
+ * previous view's document under an optimistically staged address, or the
+ * empty placeholder — nothing may be asserted on its behalf. */
+export type DocAuthority = "authoritative" | "seeded" | "staged";
+
 export interface ProtocolSlice {
 	// Document — replaced on every change. ADR 08 root-flip makes Object.is
 	// the change signal for all selectors.
@@ -69,6 +78,9 @@ export interface ProtocolSlice {
 	 * projection cache compares against the previous key only, so the two
 	 * counters can never produce a false hit. */
 	docRevision: number;
+	/** How the published document relates to the rendered address
+	 * (`DocAuthority`) — the loading tri-state's source. */
+	docAuthority: DocAuthority;
 	connection: ConnectionState;
 
 	// Attachment state — the address this tab is watching (ADR 11)
@@ -121,7 +133,9 @@ export interface ProtocolSlice {
 	 * also closes the file-viewer and diff-view portals — they showed content
 	 * from the session being left — and unbinds `activeSessionId`: the id is
 	 * only meaningful paired with its own address, and the initial-sync frame
-	 * that opens the session re-pairs both. */
+	 * that opens the session re-pairs both. An address change also marks the
+	 * published document `staged` (it belongs to the session being left); a
+	 * rollback commits the restored pair through `commitAddress`. */
 	setCurrentSession: (projectId: string | null, stem: string | null) => void;
 	/** Unbind from the current Project/session (Launcher, open failure). Pass a
 	 * `projectId` to land on that Project's home instead of the launcher. */
@@ -154,16 +168,26 @@ export interface ProtocolSlice {
 		visibleModels: string[],
 	) => void;
 	setDevMode: (mode: boolean) => void;
-	/** Publish the document as one store write. `revision` is the
-	 * publisher's document revision (the mirror's, for the wire pipeline);
-	 * omitted, the store advances its own counter — a document must never be
-	 * published without its revision moving too, or a same-shape replacement
-	 * could hit a stale ViewModel cache entry. */
+	/** Replace the document from the mirror's root (wire pipeline flushes,
+	 * lazy-pull ingests). Keeps `docAuthority`: a flush extends the committed
+	 * document; local (non-mirror) publications go through
+	 * `paintLocalDocument`. */
 	applyReplace: (doc: Document, revision?: number) => void;
-	/** Commit an address-bearing observation as one store write: the
+	/** Paint the address's own last-known state from the local cache (ADR 09):
+	 * never confirmed — sets `docAuthority` to `seeded`. */
+	paintLocalDocument: (doc: Document, revision?: number) => void;
+	/** Commit an address pair (a navigate rollback restoring the previously
+	 * committed view, or an address re-assert with no mirror): the published
+	 * document belongs to the address again, so `docAuthority` is
+	 * `authoritative`. `doc` — the view's document (a rollback's repaint) —
+	 * is published in the same write. */
+	commitAddress: (projectId: string | null, stem: string | null, sessionId: string | null, doc?: Document) => void;
+	/** Commit an address-bearing initial sync as one store write: the
 	 * address, the durable session id, the document, and its revision all
 	 * become visible together, so no subscriber can observe a new document
-	 * under an old address or the reverse. Carries the side effects of
+	 * under an old address or the reverse (ADR 19's single-owner rule). The
+	 * document is wire-confirmed for the address — `docAuthority` becomes
+	 * `authoritative`. Carries the side effects of the former
 	 * `setCurrentSession` and `setActiveSessionId` for an address/id change
 	 * (the file-viewer portals close on an address change; the peek pin
 	 * clears on a session-id change). */
@@ -205,6 +229,7 @@ function clearedSessionState() {
 		currentStem: null as string | null,
 		activeSessionId: null as string | null,
 		document: emptyDocument(),
+		docAuthority: "staged" as const,
 		addressViaAlias: false,
 		expandedActionGroups: new Set<string>(),
 		expandedActions: new Set<string>(),
@@ -230,6 +255,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	document: emptyDocument(),
 	activeSessionId: null,
 	docRevision: 0,
+	docAuthority: "staged",
 	connection: { kind: "connecting" },
 	currentProjectId: null,
 	currentStem: null,
@@ -270,12 +296,14 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	// them open. The session id is unbound too: an id paired with a foreign
 	// address would make the draft slot (draftKey) read and write the previous
 	// session's slot. Until the initial-sync frame re-pairs, the slot is null
-	// and draft writes gate — never another slot.
+	// and draft writes gate — never another slot. An address change also marks
+	// the published document `staged` (it belongs to the session being left);
+	// the re-pairing frame restores authority via commitObservation.
 	setCurrentSession: (currentProjectId, currentStem) =>
 		set((s) =>
 			s.currentProjectId === currentProjectId && s.currentStem === currentStem
 				? s
-				: { currentProjectId, currentStem, browser: null, activeSessionId: null },
+				: { currentProjectId, currentStem, browser: null, activeSessionId: null, docAuthority: "staged" as const },
 		),
 
 	clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
@@ -330,17 +358,41 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			docRevision: revision !== undefined ? revision : s.docRevision + 1,
 		})),
 
+	paintLocalDocument: (document, revision) =>
+		set((s) => ({
+			document,
+			docRevision: revision !== undefined ? revision : s.docRevision + 1,
+			docAuthority: "seeded",
+		})),
+
+	commitAddress: (projectId, stem, sessionId, doc) =>
+		set((s) => {
+			const addressChanged = s.currentProjectId !== projectId || s.currentStem !== stem;
+			const idChanged = s.activeSessionId !== sessionId;
+			if (!addressChanged && !idChanged && (doc === undefined || s.document === doc)) return s;
+			return {
+				currentProjectId: projectId,
+				currentStem: stem,
+				activeSessionId: sessionId,
+				...(doc !== undefined ? { document: doc, docRevision: s.docRevision + 1 } : {}),
+				docAuthority: "authoritative",
+				browser: addressChanged ? null : s.browser,
+				renderLeafId: idChanged ? null : s.renderLeafId,
+			};
+		}),
+
 	commitObservation: (ref, document, revision) =>
 		set((s) => {
 			const addressChanged = s.currentProjectId !== ref.projectId || s.currentStem !== ref.stem;
 			const idChanged = s.activeSessionId !== ref.sessionId;
-			if (!addressChanged && !idChanged && s.document === document) return s;
+			if (!addressChanged && !idChanged && s.document === document && s.docAuthority === "authoritative") return s;
 			return {
 				currentProjectId: ref.projectId,
 				currentStem: ref.stem,
 				activeSessionId: ref.sessionId,
 				document,
 				docRevision: revision !== undefined ? revision : s.docRevision + 1,
+				docAuthority: "authoritative",
 				browser: addressChanged ? null : s.browser,
 				renderLeafId: idChanged ? null : s.renderLeafId,
 			};

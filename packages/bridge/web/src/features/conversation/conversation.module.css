@@ -1,6 +1,7 @@
 /* ConversationArea shell — scroll container, the jump-to-bottom affordance,
-   and the empty placeholder. Turn chrome lives in turns.module.css; the
-   action hue in actions.module.css. */
+   and the loading/empty placeholders (the document-confirmation tri-state).
+   Turn chrome lives in turns.module.css; the action hue in
+   actions.module.css. */
 
 /* Scroll container (ConversationArea wraps content for auto-scroll) */
 .scrollContainer {
@@ -128,7 +129,9 @@
 	}
 }
 
-/* Empty conversation placeholder */
+/* Empty conversation placeholder — the wire-confirmed empty state only.
+   While the document is unconfirmed (loading tri-state) the skeleton below
+   renders instead: the copy is a claim about the server's transcript. */
 .empty {
 	flex: 1;
 	display: flex;
@@ -136,4 +139,57 @@
 	justify-content: center;
 	color: var(--color-muted-foreground);
 	font-size: var(--fs-lg);
+}
+
+/* Pending placeholder (loading tri-state): no confirmed content yet — a
+   cold open with no cache, before the initial sync lands. Turn-shaped bars
+   preview the transcript layout (a user tinted row + assistant text lines)
+   so the arriving content materializes into place instead of popping. Pulses
+   on the app's shared liveness keyframes; no text asserts emptiness. */
+.skeleton {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 12px;
+	padding: 16px;
+}
+
+.skeletonUser,
+.skeletonLine {
+	border-radius: var(--radius-sm);
+	animation: streaming-pulse 1.5s infinite;
+}
+
+.skeletonUser {
+	height: 44px;
+	width: min(60%, 340px);
+	background: var(--color-user-bg);
+}
+
+.skeletonLine {
+	height: 12px;
+	background: var(--color-muted);
+}
+
+.skeletonLine[data-short="true"] {
+	width: 55%;
+}
+
+/* Provisional continuation (loading tri-state): the seeded document's
+   skeleton — the same pulsing bars as the pending skeleton, laid out inline
+   at the transcript's rhythm (left-aligned, after the last turn) rather
+   than centered, so the cached transcript reads as continuing. */
+.skeletonTail {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 8px 16px 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.skeletonUser,
+	.skeletonLine {
+		animation: none;
+	}
 }

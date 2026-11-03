@@ -90,6 +90,21 @@ The protocol slice contains:
   publishers outside the mirror — cache restore, cache seeding — advance the
   store's own counter, so every publication moves the revision. It covers
   content changes the structural projection key cannot see;
+- `docAuthority`, the loading tri-state's source: how the published
+  document relates to the rendered address. `authoritative` — confirmed by
+  an address-bearing initial sync (`commitObservation`; live patches after
+  it keep it — a mirror flush extends the committed document). `seeded` —
+  the address's own last-known state painted from the local cache
+  (`paintLocalDocument`), awaiting the initial sync. `staged` — not this
+  address's document: an optimistic address change (`setCurrentSession` — a
+  staged navigate keeps the previous session's document published under the
+  new address) or the teardown/empty placeholder. A navigate rollback
+  re-commits the previously committed view's address pair through
+  `commitAddress` (with the mirror's committed root as the repainted
+  document), restoring `authoritative`. The renderer derives the pending
+  skeleton and the seeded continuation skeleton from it (a staged document
+  renders untouched), and the projection gates the ADR 16 recovery
+  derivation on `authoritative`;
 - `currentProjectId` and `currentStem`, the address currently represented by
   the tab. A null stem is the Project home and a null Project is the launcher;
 - `connection`, a discriminated `ConnectionState`. Its wording and severity
@@ -168,18 +183,23 @@ connection and event paths.
 
 `src/viewmodel/` is the pure projection boundary from a Document to renderable
 data. `useViewModel` selects the Document, model catalog, current stem,
-`pullTick`, the document revision, and the UI slice's rendered-leaf override,
+`pullTick`, the document revision, the document-confirmation flag
+(`docAuthority` — see the protocol slice), and the UI slice's rendered-leaf override,
 then memoizes `computeViewModel` using `viewModelCacheKey`. Its cache key
 combines the leaf path identity, streaming text/thinking lengths, relevant
 status fields, the current stem, the pull tick, the revision, the override,
-and the model catalog identity. The stem matters even when two Documents are
-structurally equal; the pull tick matters when lazy values arrive without a
-new path shape; the revision matters because a same-id entry-root replacement
-can change content the structural keys never read; the override matters
-so peek and un-peek re-project over an unchanged Document (null and absent
-override share one key — they resolve identically); the catalog matters
-because the context percentage is computed against each model's context
-window.
+the model catalog identity, and the confirmation flag. The stem matters even
+when two Documents are structurally equal; the pull tick matters when lazy
+values arrive without a new path shape; the revision matters because a
+same-id entry-root replacement can change content the structural keys never
+read; the override matters so peek and un-peek re-project over an unchanged
+Document (null and absent override share one key — they resolve identically);
+the catalog matters because the context percentage is computed against each
+model's context window; the confirmation flag matters because it gates the
+ADR 16 recovery derivation, so a provisional→confirmed flip re-projects even
+when every structural input is unchanged — a cache-seeded broken tail stays
+recovery-less while unconfirmed and gains its recovery row once the wire
+confirms the interruption.
 
 The projection first walks the effective leaf — the rendered-leaf override
 when it resolves to a known entry, `status.leafId` otherwise — through
@@ -414,8 +434,13 @@ applies):
   user navigation the route) and admits a value-only prepare effect that
   reads the target's cache records. The `prepared` completion seeds in the
   step: user navigation seeds a candidate document when the records yield a
-  cursor; a boot (route-driven, reconnect, or alias resolution) seeds the
-  live mirror and store from the cache. A superseded transition's prepare
+  cursor and paints the cached prefix into the store (the instant switch:
+  the previous conversation is replaced at once, marked `seeded`, with the
+  continuation skeleton in place of any wire claim — skipped when the
+  committed view is already the target, so a re-navigate cannot downgrade
+  the live authoritative document to a cache snapshot); a boot (route-driven,
+  reconnect, or alias resolution) seeds the live mirror and store from the
+  cache. A superseded transition's prepare
   sends no RPC at all: the server serializes attachment transitions in
   arrival order, so a late RPC from an abandoned intent could attach the
   abandoned session after the successor's command ran, leaving the
@@ -436,7 +461,10 @@ applies):
   committing the ref the server already pushed), rolls back to the last
   committed view, or lands on the Project home — but only while the
   transition is still the newest intent; a superseded transition settles its
-  caller and commits nothing.
+  caller and commits nothing. A navigate's rollback also repaints the
+  previous view's document (the mirror's committed root — candidates promote
+  only at commit), so the instant-switch paint's snapshot does not survive
+  the failed switch.
 - The Project-home and Launcher transitions release the server-side
   attachment from the staged intent, not the committed view alone: a pending
   open may already have its RPC on the wire (admitted while it owned the

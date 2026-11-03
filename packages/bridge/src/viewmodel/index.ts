@@ -339,6 +339,14 @@ export interface ViewModelInput {
 	 * this (store `setRenderLeaf`); an unknown id falls back to the live leaf
 	 * so a stale override can never blank the view. */
 	viewLeafId?: string | null;
+	/** Whether the document was confirmed by the wire for the rendered
+	 * address (an address-bearing initial sync committed, or a live patch
+	 * after one). The web caller owns the flag — a cache paint and a staged
+	 * navigate publish an unconfirmed document — and the pure projection
+	 * trusts its input, defaulting to true. Unconfirmed documents derive no
+	 * recovery: a quiesced cache tail (tool calls answered, no final
+	 * assistant) would otherwise read as an interrupted run. */
+	authoritative?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,12 +443,17 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 	const userLabels = resolveLabels(doc.entries);
 	// ADR 16: the live tail's recovery, projected below onto the turn
 	// containing the dead entry. Derived from the live leaf — never the
-	// peeked rendering — and only while the document is idle: during a run
-	// the tail is provisional and streaming tool calls would misread as
-	// interruption. The recoverTurn verb re-derives host-side and refuses on
-	// mismatch, so the projected affordance and the server gate agree by
-	// construction.
-	const recovery = doc.status.isStreaming || doc.status.isCompacting ? null : computeRecoverableTurn(doc);
+	// peeked rendering — and only while the document is idle and
+	// wire-confirmed: during a run the tail is provisional and streaming
+	// tool calls would misread as interruption; an unconfirmed document (a
+	// cache seed, a staged navigate over the previous session's document)
+	// is a local guess about the server's tail, not a claim about it. The
+	// recoverTurn verb re-derives host-side and refuses on mismatch, so
+	// the projected affordance and the server gate agree by construction.
+	const recovery =
+		input.authoritative !== false && !doc.status.isStreaming && !doc.status.isCompacting
+			? computeRecoverableTurn(doc)
+			: null;
 
 	const prevTurns = new Map<string, TurnVM>();
 	const prevBlocks = new Map<string, AssistantBlockVM>();
@@ -898,7 +911,10 @@ export function leafTextKey(doc: Document, viewLeafId?: string | null): string {
  * `modelsKey` — the model catalogue identity, since the context percentage
  * is computed against each model's context window; and `docRevision` — the
  * mirror revision, which advances on wholesale replaces and same-id
- * entry-root replacements whose content the structural keys cannot see).
+ * entry-root replacements whose content the structural keys cannot see; and
+ * `authoritative` — the document-confirmation flag, which gates the ADR 16
+ * recovery derivation, so a provisional→confirmed flip re-projects even
+ * when every structural input is unchanged).
  * `viewLeafId` is the rendered-leaf override (web peek): it must be in the key
  * or a peek/un-peek over an unchanged document would hit a stale cache entry.
  * Keeping this beside leafPathKey/leafStreamingKey means a new input that
@@ -912,6 +928,7 @@ export function viewModelCacheKey(
 	viewLeafId?: string | null,
 	modelsKey?: string,
 	docRevision?: number,
+	authoritative?: boolean,
 ): string {
 	const status = doc.status;
 	return [
@@ -931,6 +948,7 @@ export function viewModelCacheKey(
 		viewLeafId ?? "",
 		modelsKey ?? "",
 		String(docRevision ?? 0),
+		String(authoritative ?? true),
 	].join("::");
 }
 

@@ -51,7 +51,9 @@ export interface LocalSessionSeed {
  * The seeded status is quiesced: the cached hint may describe a mid-flight
  * turn (streaming, compaction, pending steer) that can never progress without
  * the daemon, which would render as an eternal spinner. The initial sync
- * restores the authoritative status.
+ * restores the authoritative status — and until it lands, the unconfirmed
+ * document renders the syncing tail rather than any derived failure state
+ * (see the loading tri-state in docs/web/design.md).
  */
 export async function restoreLocalSession(
 	projectId: string,
