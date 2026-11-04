@@ -1,21 +1,23 @@
 /* Turn-level chrome — everything at user/assistant/system turn granularity:
-   the header line (timestamp, role, timing, ADR 10 git chip), the user
-   tinted row vs the flat assistant turn, keyboard-focus and editing marks,
-   the hover-revealed toolbar (Copy / variant pager / Edit), shared markdown
-   and text-segment styles, error rendering, and the standalone turn
-   wrappers (git change cards, user bash runs). The action hue
-   (tinted rows, collapsed rows, details cards) lives in actions.module.css. */
+   the compact header line (ADR 21: date disclosure, label, reading, controls,
+   menu) and the two panels it opens, the user tinted row vs the flat assistant
+   turn, keyboard-focus and editing marks, the toolbar controls, shared
+   markdown and text-segment styles, error rendering, and the standalone turn
+   wrappers (git change cards, user bash runs). The action hue (tinted rows,
+   collapsed rows, details cards) lives in actions.module.css. */
 
-/* Turn header — top line per turn. Left: timestamp then role (You /
-   provider/model for the assistant), always visible. Right: toolbar (Copy /
-   pager / Edit), hover-revealed so it stays put when branch content height
-   changes (cycling branches no longer chases a bottom bar). No turn numbers
-   — they were clutter. */
-.msgHeader {
+/* Turn header — one line shared by user and assistant turns (ADR 21):
+   [date] [label] ······ [reading] [controls] [menu].
+   One line by default; the wrap is the record's second-line fallback, so a long
+   calendar label or enlarged text moves the right group down instead of
+   clipping a value. Nothing here shrinks text or a touch target: the label is
+   the only item that yields width, and every other item keeps its own. */
+.turnHeader {
 	display: flex;
-	justify-content: space-between;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	gap: 2px 8px;
+	min-height: 28px;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
 	margin-bottom: 6px;
@@ -28,6 +30,94 @@
 [data-turn-key] {
 	scroll-margin-top: calc(var(--topbar-h) + 12px);
 	scroll-margin-bottom: calc(var(--composer-h, 64px) + 16px);
+}
+
+/* The date disclosure — a value readout that opens the turn's details, the same
+   classification as the composer's cost readout: the words are the value (the
+   instant), so it keeps the chromeless ink and gains a caret instead of a
+   boundary. Never shrinks: the date is the reader's anchor for "when was this",
+   and an ellipsized date reads as a different date. The 28px box is the toolbar
+   ladder, so the date and the controls sit on one optical line. */
+.turnHeaderDate {
+	composes: dim from "../../render/buttons.module.css";
+	position: relative;
+	gap: 2px;
+	min-height: 28px;
+	padding: 0 2px;
+	font: inherit;
+	font-size: var(--fs-xs);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.turnHeaderDate time {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Right group: the commands. `margin-left: auto` pins them to the end of the
+   line without a spacer element and keeps the right edge a control area, so
+   adding a command later shifts nothing on the left. When the header wraps, the
+   group keeps that right edge on its own line.
+
+   Revealed on hover, focus, or the keyboard cursor — the header is per turn and a
+   transcript is many turns, so three glyphs standing on every row is chrome the
+   reader did not ask for. Opacity (not display) keeps the reserved slot's layout
+   stable, and `pointer-events` tracks visibility: an invisible box that still
+   accepted clicks would fire Copy from a row the reader only meant to select
+   text in. State is not a command and stays visible — the `Editing` badge is
+   rendered beside the label, outside this group — and a turn being edited or
+   focused reveals its commands. Touch has no hover, so the group is simply
+   visible there. */
+.turnHeaderRight {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: auto;
+	flex-shrink: 0;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity var(--dur-fast) ease;
+}
+
+.userMsg:hover .turnHeaderRight,
+.userMsg:focus-within .turnHeaderRight,
+.userMsg.focused .turnHeaderRight,
+.asstMsg:hover .turnHeaderRight,
+.asstMsg:focus-within .turnHeaderRight,
+.asstMsg.focused .turnHeaderRight {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+@media (hover: none) {
+	.turnHeaderRight {
+		opacity: 1;
+		pointer-events: auto;
+	}
+}
+
+/* The trailing value reading ("17%", or the live span while a turn
+   streams). It sits in the flow beside the date rather than docked to the
+   controls: a value's x-position must not move when the tier moves commands
+   between the header and the menu. A reading opens nothing, so it is not a
+   control: no fill, no hit target, no caret. */
+.turnHeaderReading {
+	white-space: nowrap;
+	flex-shrink: 0;
+	color: var(--color-muted-foreground);
+	padding: 0 2px;
+}
+
+/* The narrow tier buys width where it can: the row gap and the reading's own
+   padding are the only slack left once the label has been squeezed, and at this
+   width every 4px is a label character. `data-density` is written by
+   TurnHeader.tsx from the measured column. */
+.turnHeader[data-density="narrow"] {
+	gap: 2px 4px;
+}
+
+.turnHeader[data-density="narrow"] .turnHeaderReading {
+	padding: 0;
 }
 
 /* Keyboard focus chrome (j/k/g/G). A 2px accent frame inside the turn's
@@ -63,70 +153,15 @@
 	text-transform: uppercase;
 }
 
-.msgHeaderLeft {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	min-width: 0;
-	overflow: hidden;
-}
-
-.msgRole {
-	color: var(--color-secondary);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.msgTime {
-	color: var(--color-muted-foreground);
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-/* Turn timing — the header's turn span ("thought for 5s", "worked for 12s ·
-   tools 4s", live "working for 12s · 2 running") and the context occupancy
-   chip ("26% (+1%)"). Sits after the role label, dimmed to muted so the
-   timestamp+role remain the primary signal. A leading "·" separates it from
-   the role; a composite span joins its parts with "·" itself. nowrap so the
-   header stays one line. */
-.msgTiming {
-	color: var(--color-muted-foreground);
-	white-space: nowrap;
-	min-width: 0;
-}
-
-.msgTiming::before {
-	content: "· ";
-	margin: 0 2px;
-}
-
-/* ADR 10 git identity chip ("main @ a1b2c3d") — the effective repository
-   identity at this send, carried forward from the last stamp on the path. Same
-   tertiary treatment as .msgTiming. An inline flex so the git mark and the text
-   share one baseline, with the separator dot as the first item (it used to ride
-   on the text as a `::before` with margins; in a flex row a margin plus the row
-   gap would double the spacing). */
-.gitStamp {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	color: var(--color-muted-foreground);
-	white-space: nowrap;
-	flex-shrink: 0;
-}
-
-.gitStamp::before {
-	content: "·";
-}
-
 /* User-defined label (pi tree-selector bookmark) resolved onto the turn —
-   a `#`-prefixed tag chip in the turn header, left-aligned after the
-   git-state chip (LabelSlot: the chip is the edit trigger; the ghost is the
-   add affordance; the input is the inline editor). */
-.msgLabel,
-.msgLabelGhost {
+   a `#`-prefixed tag chip: the value the reader recognizes a turn by, and the
+   direct edit trigger (LabelSlot). It is the header's one flexible field: it
+   yields width (ellipsis) before the date, the reading, or a control does,
+   because a truncated date or reading is wrong while a truncated label is still
+   recognizable. Right after the date, in the ADR 21 order. */
+.msgLabel {
 	display: inline-block;
+	min-width: 0;
 	max-width: 280px;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -140,7 +175,7 @@
 	background: none;
 	font-family: inherit;
 	cursor: pointer;
-	flex-shrink: 0;
+	flex: 0 1 auto;
 }
 
 .msgLabel:hover {
@@ -148,60 +183,133 @@
 	border-color: var(--color-muted-foreground);
 }
 
-/* Ghost — the add affordance for an unlabeled message. Opacity (not
-   display) so the slot's layout stays stable; revealed on message hover
-   and focus-within like the turn toolbar, always visible on touch. */
-.msgLabelGhost {
-	opacity: 0;
-	border-style: dashed;
-	transition: opacity var(--dur-fast) ease;
+/* Label editor (the chip's panel): a bounded field plus Save/Cancel. A panel
+   rather than an inline swap-in, because an inline field changed the header's
+   width while it was open and could not show a long value on a narrow column
+   (ADR 21). The chrome is render/Popover.module.css; this is the body. */
+.labelPanel {
+	width: min(280px, calc(100vw - 16px));
 }
 
-.userMsg:hover .msgLabelGhost,
-.userMsg:focus-within .msgLabelGhost {
-	opacity: 1;
+.labelBody {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 6px 8px;
 }
 
-@media (hover: none) {
-	.msgLabelGhost {
-		opacity: 1;
-	}
-}
-
-/* Inline swap-in editor (the TopBar-rename pattern): chip geometry, but
-   editable — foreground text, solid border, accent while focused. */
-.labelInput {
-	display: inline-block;
-	width: 160px;
-	font-size: var(--fs-xs);
+.labelField {
+	min-width: 0;
+	font: inherit;
+	font-size: var(--fs-sm);
 	color: var(--color-foreground);
 	background: var(--color-background);
-	border: 1px solid var(--color-border);
+	border: 1px solid var(--color-border-control);
 	border-radius: var(--radius-xs);
-	padding: 0 6px;
-	line-height: 16px;
-	font-family: inherit;
-	flex-shrink: 0;
+	padding: 4px 6px;
 }
 
-.labelInput:focus {
+.labelField:focus {
 	outline: none;
 	border-color: var(--color-accent);
 }
 
-/* The clickable promotion of the chip (turn has a review window): a reset
-   button that renders identically to the static chip, plus a hover accent
-   so the affordance is discoverable without shouting. */
-.gitStampBtn {
-	background: none;
-	border: none;
-	padding: 0;
-	cursor: pointer;
-	font: inherit;
+.labelActions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
 }
 
-.gitStampBtn:hover {
-	color: var(--color-foreground);
+/* The panel's primary command and its dismiss. Save takes `filled` (the one
+   primary verb on its surface) and Cancel `outlined` (it carries words, and a
+   word has nothing else marking it as actionable). */
+.labelSave {
+	composes: filled from "../../render/buttons.module.css";
+	position: relative;
+	font: inherit;
+	font-size: var(--fs-xs);
+	padding: 3px 10px;
+	min-height: 24px;
+}
+
+.labelCancel {
+	composes: outlined from "../../render/buttons.module.css";
+	position: relative;
+	font: inherit;
+	font-size: var(--fs-xs);
+	padding: 3px 10px;
+	min-height: 24px;
+}
+
+/* Turn details — the read-only ledger behind the date disclosure. Box, tone,
+   elevation, and dismissal are render/Popover.module.css; the width cap, the
+   section dividers, and the row anatomy are the ledger's. Every value keeps a
+   label, because the readings are heterogeneous (a model name, a percentage, two
+   spans): unlike the cost popover, whose values are all money, a bare "15%"
+   here is a number with no subject. Rows are label/value pairs at meta scale and
+   the value wraps instead of truncating — a branch name, commit subject, or
+   provider cut in half answers nothing, and the body scrolls. */
+.detailsPanel {
+	width: min(320px, calc(100vw - 16px));
+}
+
+/* The ledger is ONE grid. Each section used to size its own label column, so the
+   values of `Time` and of `Branch` started at different offsets and the panel
+   read as two unrelated tables. A single `max-content` label column here plus
+   `subgrid` in the sections keeps every value on one vertical edge. */
+.detailsBody {
+	padding: 4px 8px;
+	font-size: var(--fs-xs);
+	line-height: 1.5;
+	color: var(--color-secondary);
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	column-gap: 12px;
+}
+
+/* A section joins the body's columns instead of defining its own, so its rows
+   align with the rows of every other section. */
+.detailsSection {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: subgrid;
+	row-gap: 2px;
+	margin: 0;
+}
+
+/* The divider is the section's own edge, so the groups need no headings: model
+   and provider, the window reading, then the timing. Same in-panel separator as
+   every other edge (`--color-border`), and it spans both columns because the
+   section does. */
+.detailsSection + .detailsSection {
+	margin-top: 6px;
+	padding-top: 6px;
+	border-top: 1px solid var(--color-border);
+}
+
+/* A row is one line of the grid. `baseline` (not the default `stretch`) keeps a
+   label on its value's *first* line when the value wraps, which is the alignment
+   a two-line commit subject needs; stretching would drop the label to the row's
+   top edge and make every wrapped row look broken. */
+.detailsRow {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: subgrid;
+	align-items: baseline;
+}
+
+.detailsKey {
+	color: var(--color-muted-foreground);
+}
+
+/* Values are left-aligned in their column rather than right-aligned against the
+   label. Right-aligning is right for a column of numbers, but this ledger holds
+   prose — a commit subject — and a wrapped sentence that is ragged on both ends
+   reads as a mistake. */
+.detailsValue {
+	margin: 0;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 /* ADR 10 v2 — standalone (boundary) git change card wrapper: the tinted row
@@ -311,40 +419,6 @@
 	word-break: break-word;
 }
 
-/* Turn toolbar — the hover-revealed right half of the header line. Holds
-   Copy / variant pager / Edit. Opacity (not display) toggles so layout is
-   stable across hover and content-height changes. On inputs that cannot
-   hover (touch), the toolbar stays visible — hover is not usable there.
-   Hit-testing tracks visibility, not opacity: an invisible button that still
-   accepts clicks would fire Copy from a row the reader only meant to select
-   text in (the sidebar row menu fixes the same leak the same way). */
-.turnToolbar {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	flex-shrink: 0;
-	opacity: 0;
-	pointer-events: none;
-	transition: opacity var(--dur-fast) ease;
-}
-
-.userMsg:hover .turnToolbar,
-.userMsg:focus-within .turnToolbar,
-.asstMsg:hover .turnToolbar,
-.asstMsg:focus-within .turnToolbar,
-.userMsg.focused .turnToolbar,
-.asstMsg.focused .turnToolbar {
-	opacity: 1;
-	pointer-events: auto;
-}
-
-@media (hover: none) {
-	.turnToolbar {
-		opacity: 1;
-		pointer-events: auto;
-	}
-}
-
 /* The sibling pager reads as one control: two square arrows from the same box
    ladder as the toolbar's other controls, around a count that holds its width
    (tabular figures plus a floor sized for "99 / 99" — 6ch covers four digit
@@ -402,6 +476,24 @@
 @media (pointer: coarse) {
 	.toolbarBtn::after,
 	.pagerBtn::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
+	}
+
+	/* The date is a word-shaped target, so only its height is short: the 28px
+	   box plus the row's own gap reaches 40 without touching the label chip
+	   that follows it. */
+	.turnHeaderDate::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
+	}
+
+	/* The editor's two verbs sit in a 6px-gapped row: the overlay meets the
+	   neighbouring target exactly, as with the toolbar. */
+	.labelSave::after,
+	.labelCancel::after {
 		content: "";
 		position: absolute;
 		inset: -6px;

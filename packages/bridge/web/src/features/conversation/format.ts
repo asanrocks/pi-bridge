@@ -1,59 +1,50 @@
 // format — the conversation's header strings that are more than one call to a
-// shared formatter: the git identity chip and the turn span fragment.
+// shared formatter: the spans a turn's details ledger reports, and the live
+// status line of a streaming turn.
 
 import { formatSpan } from "../../infra/lib/time.ts";
 
-// formatGitIdentity — ADR 10 stamp chip text for a user-turn header.
-// "main @ a1b2c3d" normally; "a1b2c3d" for detached HEAD; "main" for an unborn
-// branch. Returns "" when nothing is known (both null). The git mark itself is a
-// glyph (`BranchIcon`), not a character: `⎇` is a font glyph that renders at the
-// text baseline and varies by font, which is exactly what the icon contract
-// bans, and it cannot take the control's ink.
-export function formatGitIdentity(identity: { commit: string | null; branch: string | null }): string {
-	const branch = identity.branch;
-	const commit = identity.commit ? identity.commit.slice(0, 8) : null;
-	if (branch && commit) return `${branch} @ ${commit}`;
-	if (branch) return branch;
-	if (commit) return commit;
-	return "";
+/** A wall-clock estimate's value text: `~1m 19s`. The tilde carries
+ *  "approximate" in the value, so the details ledger needs no footnote sentence
+ *  explaining that a duration is derived from turn seals rather than recorded.
+ *  A bound is already approximate (`<1s`), so it takes no tilde. */
+export function formatEstimate(span: string): string {
+	if (!span || span.startsWith("<")) return span;
+	return `~${span}`;
 }
 
-/** The assistant turn's header span: an estimate, never a pi-recorded value
- *  (see AssistantTurn.totalMs). Sealed turns name the span and, once the tool
- *  split passes a second, the tool share; a streaming turn shows a live span
- *  plus the running-tool count, which is the only progress signal that does not
- *  wait for content to arrive. "" when nothing is known — no anchor yet, or a
- *  turn that has not sealed. */
-export function formatTurnSpan({
-	isStreaming,
+/** An estimated span worth a ledger row, or "" when it is not. Below a second it
+ *  is noise rather than information: a sub-second tool share sits inside the
+ *  turn total, and a sub-second reply gap is the reader's own fast turnaround.
+ *  The same rule covers the two zeros those readings can produce — a tool-free
+ *  turn resolves its share to 0, and `formatSpan` would render both as a
+ *  confident `<1s`, a measurement the turn did not make. Absent is the honest
+ *  form of "none", so the caller omits the row. */
+export function formatReportedSpan(ms: number | undefined): string {
+	if (ms === undefined || ms < 1000) return "";
+	return formatEstimate(formatSpan(ms));
+}
+
+/** A streaming turn's status line: the live span plus the running-tool count —
+ *  the only progress signal that does not wait for a content delta (ADR 21 moved
+ *  it out of the header and below it, so moving statistics behind the date
+ *  cannot hide the fact that work is in flight). Completed spans are statistics
+ *  and live in the turn's details instead. "" when nothing is known. */
+export function formatLiveStatus({
 	turnStartedAt,
-	totalMs,
-	toolMs,
 	runningTools,
 	now,
 }: {
-	isStreaming: boolean;
+	/** The turn's estimated start anchor (see AssistantTurn.turnStartedAt). */
 	turnStartedAt: string | undefined;
-	/** Sealed span; undefined while the turn streams. */
-	totalMs: number | undefined;
-	/** Sealed tool share; undefined when the split could not resolve. */
-	toolMs: number | undefined;
-	/** Tool blocks in the pending/running state (streaming turn only). */
+	/** Tool blocks in the pending/running state. */
 	runningTools: number;
 	/** Wall clock for the live span (the caller ticks it every second). */
 	now: number;
 }): string {
-	if (isStreaming) {
-		if (!turnStartedAt) return "";
-		const startedMs = new Date(turnStartedAt).getTime();
-		const span = formatSpan(Number.isNaN(startedMs) ? undefined : now - startedMs);
-		if (!span) return "";
-		return runningTools > 0 ? `working for ${span} · ${runningTools} running` : `working for ${span}`;
-	}
-	if (totalMs === undefined) return "";
-	const total = formatSpan(totalMs);
-	if (!total) return "";
-	// A sub-second tool share is noise next to the total.
-	const tools = toolMs !== undefined && toolMs >= 1000 ? formatSpan(toolMs) : "";
-	return tools ? `worked for ${total} · tools ${tools}` : `worked for ${total}`;
+	if (!turnStartedAt) return "";
+	const startedMs = new Date(turnStartedAt).getTime();
+	const span = formatSpan(Number.isNaN(startedMs) ? undefined : now - startedMs);
+	if (!span) return "";
+	return runningTools > 0 ? `working for ${span} · ${runningTools} running` : `working for ${span}`;
 }

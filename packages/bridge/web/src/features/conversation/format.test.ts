@@ -1,59 +1,66 @@
-// format — the turn header's span fragment. The estimate itself comes from the
-// viewmodel; this pins how it is worded, including the two thresholds (the tool
-// share only once it passes a second, the live branch only while streaming).
+// format — the live status line of a streaming turn and the ledger's
+// approximation mark. Sealed durations are statistics now (ADR 21), so the
+// wording this pins is the in-flight one (the live span plus the running-tool
+// count) and the `~` that replaces a footnote about estimated durations.
 
 import { describe, expect, test } from "vitest";
-import { formatTurnSpan } from "./format.ts";
+import { formatEstimate, formatLiveStatus, formatReportedSpan } from "./format.ts";
 
 const NOW = new Date(2026, 10, 3, 14, 5).getTime();
 
-function span(input: Partial<Parameters<typeof formatTurnSpan>[0]>): string {
-	return formatTurnSpan({
-		isStreaming: false,
+function status(input: Partial<Parameters<typeof formatLiveStatus>[0]>): string {
+	return formatLiveStatus({
 		turnStartedAt: new Date(NOW - 12000).toISOString(),
-		totalMs: 12000,
-		toolMs: 0,
 		runningTools: 0,
 		now: NOW,
 		...input,
 	});
 }
 
-describe("formatTurnSpan — sealed turn", () => {
-	test("names the span alone when nothing ran in tools", () => {
-		expect(span({})).toBe("worked for 12s");
+describe("formatEstimate — the ledger's approximation mark", () => {
+	test("prefixes a span with a tilde instead of a footnote", () => {
+		expect(formatEstimate("1m 19s")).toBe("~1m 19s");
+		expect(formatEstimate("55s")).toBe("~55s");
 	});
 
-	test("adds the tool share once it passes a second", () => {
-		expect(span({ toolMs: 4000 })).toBe("worked for 12s · tools 4s");
-		expect(span({ toolMs: 999 })).toBe("worked for 12s");
+	test("a bound is already approximate and takes no tilde", () => {
+		expect(formatEstimate("<1s")).toBe("<1s");
 	});
 
-	test("writes nothing when the turn has not sealed", () => {
-		expect(span({ totalMs: undefined })).toBe("");
-		expect(span({ totalMs: undefined, toolMs: undefined })).toBe("");
+	test("nothing stays nothing", () => {
+		expect(formatEstimate("")).toBe("");
 	});
 });
 
-describe("formatTurnSpan — streaming turn", () => {
+describe("formatReportedSpan — only a span worth a row", () => {
+	test("a zero reading is absent, not <1s", () => {
+		// A tool-free turn resolves its share to 0 and an instant reply resolves the
+		// gap to 0; formatSpan would render both as a confident "<1s".
+		expect(formatReportedSpan(0)).toBe("");
+		expect(formatReportedSpan(undefined)).toBe("");
+	});
+
+	test("a sub-second span is noise", () => {
+		expect(formatReportedSpan(999)).toBe("");
+	});
+
+	test("a real span is estimated", () => {
+		expect(formatReportedSpan(1000)).toBe("~1s");
+		expect(formatReportedSpan(55000)).toBe("~55s");
+	});
+});
+
+describe("formatLiveStatus", () => {
 	test("ticks a live span from the turn anchor", () => {
-		expect(span({ isStreaming: true, totalMs: undefined, toolMs: undefined })).toBe("working for 12s");
+		expect(status({})).toBe("working for 12s");
 	});
 
 	test("counts the running tools beside it", () => {
-		expect(span({ isStreaming: true, totalMs: undefined, toolMs: undefined, runningTools: 2 })).toBe(
-			"working for 12s · 2 running",
-		);
+		expect(status({ runningTools: 2 })).toBe("working for 12s · 2 running");
 	});
 
 	test("writes nothing without a usable anchor", () => {
-		expect(span({ isStreaming: true, totalMs: undefined, turnStartedAt: undefined })).toBe("");
-		expect(span({ isStreaming: true, totalMs: undefined, turnStartedAt: "not-a-date" })).toBe("");
-	});
-
-	test("ignores the sealed fields while streaming", () => {
-		// A sealed total can precede the seal of the turn (tool durations land
-		// early); the live span still wins so the header does not jump.
-		expect(span({ isStreaming: true, totalMs: 12000, runningTools: 1 })).toBe("working for 12s · 1 running");
+		expect(status({ turnStartedAt: undefined })).toBe("");
+		expect(status({ turnStartedAt: "not-a-date" })).toBe("");
 	});
 });

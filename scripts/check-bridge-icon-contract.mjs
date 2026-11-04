@@ -273,13 +273,10 @@ const CONTROL_ROLES = new Map(
 		editDiffSectionTitle: "diff section fold header",
 		// Chips: a label or a value with its own geometry.
 		msgLabel: "label chip (a value)",
-		msgLabelGhost: "label chip (the add affordance for absent data)",
 		supersededBadge: "status chip",
 		noticePath: "path chip (opens the file)",
 		// Value controls: the words or the number are the content.
 		topBarTitle: "the Session name (rename target)",
-		gitStamp: "git identity chip",
-		gitStampBtn: "git identity chip (menu trigger)",
 		// Floating controls keep a container (see design.md), so they are not
 		// ghost boxes.
 		attachRemove: "floating control over an image (ring recipe)",

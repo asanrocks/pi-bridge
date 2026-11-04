@@ -136,6 +136,9 @@ counts) ·
 empty tree.
 
 **S5 · A git chip opens its transition; untracked files count without ±.**
+*(The trigger moved: [ADR 21](0021-compact-turn-headers.md) put the turn's
+transition windows in its action menu and its identity in the details ledger.
+The endpoints below are unchanged.)*
 *Given* a user turn carrying identity `a1b2c3d` and a later transition to
 `d4e5f6a` ·
 *When* the developer picks the turn's git chip ·

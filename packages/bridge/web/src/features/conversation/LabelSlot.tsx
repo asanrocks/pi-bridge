@@ -1,38 +1,76 @@
-// LabelSlot — the user message's label affordance, one interaction for add,
-// edit, and remove (TopBar-rename pattern, no popover): the rendered
-// `#label` chip is the edit trigger; an unlabeled message shows a
-// hover-revealed ghost chip as the add trigger; either swaps in place for
-// an inline input — Enter commits, Escape/blur cancels, empty + Enter
-// clears. Commit failures (verb rejected) keep the input open with its
-// text; the store never changed, so nothing is lost.
+// LabelSlot — the user turn's label chip and its editor (ADR 21).
+//
+// The chip stays the direct edit trigger, because a label is a value the reader
+// recognizes turns by; the *add* affordance is gone from the header (a dashed
+// ghost chip with no label was permanent header width spent on nothing), so
+// creating one is a menu command instead.
+//
+// The editor is a bounded panel with Save and Cancel rather than an inline field
+// swapped into the header. An inline input changed the header's width while it
+// was open — the row the reader was aiming at moved under the pointer — and on a
+// narrow column an unbounded field could not show the value it was editing.
+// Enter commits, Escape and Cancel dismiss, and the peek/busy gates are the same
+// ones every other mutation path applies, checked here so the failure stays
+// local instead of arriving as a toast after the fact.
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, type Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { getStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
+import { Popover } from "../../render/Popover.tsx";
 import styles from "./turns.module.css";
 
-export const LabelSlot = memo(function LabelSlot({ entryId, label }: { entryId: string; label?: string }) {
+/** The rendered label. A value chip, not a verb: `msgLabel` is a declared
+ *  control role (a label with its own geometry), which is why it takes no
+ *  boundary. */
+export const LabelChip = memo(function LabelChip({
+	label,
+	buttonRef,
+	onOpen,
+}: {
+	label: string;
+	buttonRef?: Ref<HTMLButtonElement>;
+	onOpen: () => void;
+}) {
+	return (
+		<button
+			ref={buttonRef}
+			type="button"
+			className={styles.msgLabel}
+			title={`${label} — click to edit`}
+			onClick={onOpen}
+		>
+			#{label}
+		</button>
+	);
+});
+
+export const LabelEditor = memo(function LabelEditor({
+	entryId,
+	label,
+	anchor,
+	onClose,
+}: {
+	entryId: string;
+	/** The current label, or undefined when creating one. */
+	label: string | undefined;
+	anchor: HTMLElement | null;
+	onClose: () => void;
+}) {
 	const setLabelRpc = useRpc().setLabel;
-	const [editing, setEditing] = useState(false);
-	const [value, setValue] = useState("");
+	const [value, setValue] = useState(label ?? "");
 	const inputRef = useRef<HTMLInputElement | null>(null);
 
-	// Focus on mount of the editing state (autoFocus is banned by lint; the
-	// TopBar rename input uses the same ref pattern).
+	// Focus on mount (autoFocus is banned by lint; the TopBar rename input uses
+	// the same ref pattern).
 	useEffect(() => {
-		if (editing) inputRef.current?.focus();
-	}, [editing]);
-
-	const start = useCallback(() => {
-		setValue(label ?? "");
-		setEditing(true);
-	}, [label]);
+		inputRef.current?.focus();
+	}, []);
 
 	const commit = useCallback(async () => {
 		const trimmed = value.trim();
 		if (trimmed === (label ?? "")) {
-			setEditing(false); // unchanged — nothing to send
+			onClose(); // unchanged — nothing to send
 			return;
 		}
 		// The same guards as the other mutation paths: the peek lock (never
@@ -50,40 +88,36 @@ export const LabelSlot = memo(function LabelSlot({ entryId, label }: { entryId: 
 			return;
 		}
 		const reply = await setLabelRpc(entryId, trimmed);
-		if (reply?.ok) setEditing(false);
-	}, [entryId, label, value, setLabelRpc]);
+		if (reply?.ok) onClose();
+	}, [entryId, label, value, setLabelRpc, onClose]);
 
-	if (editing) {
-		return (
-			<input
-				ref={inputRef}
-				className={styles.labelInput}
-				value={value}
-				spellCheck={false}
-				placeholder="label"
-				aria-label="Message label"
-				onChange={(e) => setValue(e.target.value)}
-				onBlur={() => setEditing(false)}
-				onKeyDown={(e) => {
-					if (e.key === "Enter") {
-						e.preventDefault();
-						void commit();
-					}
-					if (e.key === "Escape") setEditing(false);
-				}}
-			/>
-		);
-	}
-	if (label !== undefined) {
-		return (
-			<button type="button" className={styles.msgLabel} title={`${label} — click to edit`} onClick={start}>
-				#{label}
-			</button>
-		);
-	}
 	return (
-		<button type="button" className={styles.msgLabelGhost} title="Add label" onClick={start}>
-			# label
-		</button>
+		<Popover anchor={anchor} onClose={onClose} role="dialog" label="Message label" className={styles.labelPanel}>
+			<div className={styles.labelBody}>
+				<input
+					ref={inputRef}
+					className={styles.labelField}
+					value={value}
+					spellCheck={false}
+					placeholder="label"
+					aria-label="Message label"
+					onChange={(e) => setValue(e.target.value)}
+					onKeyDown={(e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							void commit();
+						}
+					}}
+				/>
+				<div className={styles.labelActions}>
+					<button type="button" className={styles.labelSave} onClick={() => void commit()}>
+						Save
+					</button>
+					<button type="button" className={styles.labelCancel} onClick={onClose}>
+						Cancel
+					</button>
+				</div>
+			</div>
+		</Popover>
 	);
 });

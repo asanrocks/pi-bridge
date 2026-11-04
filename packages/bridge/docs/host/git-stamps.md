@@ -133,8 +133,8 @@ Stamps on another branch do not participate.
 The stamp's position and anchor determine its display form:
 
 - A `prompt` stamp produces no standalone item. Its effective identity is
-  shown on the following user turn as the git identity chip; the v2 subject is
-  the chip tooltip.
+  carried to the following user turn, where it appears as the repository row of
+  that turn's details ledger (the v2 subject included).
 - A `user_bash_end` stamp, or a `turn_end` stamp reached with no assistant turn
   open, becomes one standalone `GitChangeTurn` at its path position. It is
   ordered like a transcript item but is not a user or assistant turn and does
@@ -164,10 +164,11 @@ An inline stamp appears inside its owning action group after the action it
 follows. The group summary includes a git segment and its kind-dot list
 includes the git kind when inline changes are present.
 
-A user-turn chip displays a compact form of the effective branch and an
-abbreviated commit. A change card displays the commit subject when available,
-with branch and short commit metadata alongside it. Its expanded header
-restores the full commit id, anchor, and timestamp, and uses neutral wording
+A user turn's details ledger displays the effective branch and an abbreviated
+commit at send, with the commit subject when there is one. A change card
+displays the commit subject when available, with branch and short commit
+metadata alongside it. Its expanded header restores the full commit id, anchor,
+and timestamp, and uses neutral wording
 such as `Git state observed`; position does not prove that a particular
 parallel tool caused the change.
 

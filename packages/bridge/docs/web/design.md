@@ -623,23 +623,25 @@ Repository evolution has three discovery surfaces, one per question the user
 asks, and no separate timeline pane. Each names its endpoint pair explicitly;
 none infers a turn-scoped window git cannot know.
 
-- **The turn chip** (the git identity on a user message) is a static label
-  until the turn has something to review, then a disclosure menu. Its items are
-  the commits observed during the turn (`UserTurn.gitTransitions`): a stamp whose
-  commit differs from the previously observed one, attributed to the turn open
-  at its path position — a prompt stamp is persisted before the message it
-  labels, so it closes the previous turn while its identity becomes the next
-  turn's baseline. A turn with several commits also offers one union window
-  from the first transition's old commit to the last one's new commit. The
-  live path's last user turn additionally offers **Compare with the current
+- **The turn menu** carries the review windows for a user turn: the commits
+  observed during the turn (`UserTurn.gitTransitions`): a stamp whose commit
+  differs from the previously observed one, attributed to the turn open at its
+  path position — a prompt stamp is persisted before the message it labels, so
+  it closes the previous turn while its identity becomes the next turn's
+  baseline. A turn with several commits also offers one union window from the
+  first transition's old commit to the last one's new commit. The live path's
+  last user turn additionally offers **Compare with the current
   worktree** (its send state → `worktree`), the honest form of "what happened
   since this prompt" — it is a sampling point, so the browser marks it `as of`
   and refetches on settle. Earlier turns and peeked paths offer no worktree
   item, because comparing them to the current worktree would silently span
-  other turns.
+  other turns. The turn's own identity at send (branch and short commit, with
+  the commit subject) is a row in its
+  [details ledger](#turn-headers) rather than a header chip, so the header has
+  one disclosure instead of two.
 - **The git card** (`Review`) opens that one commit against its first parent,
   resolved host-side. It is the card's only review meaning; the turn's
-  transition windows belong to the chip menu, so there is no second `diff`
+  transition windows belong to the turn menu, so there is no second `diff`
   affordance to disambiguate.
 - **The TopBar changes badge** is the one turn-agnostic surface: the count of
   files differing from `HEAD` in the attached session's Project worktree,
@@ -659,7 +661,7 @@ The browser is the one fullscreen repository surface (ADR 14): a file tree on
 the left, file content on the right, in the portal role (Escape, the close
 control, and the backdrop close it; read-only). Every entry point opens this same surface with a
 different target — a Markdown link or a tool card opens one file with the full
-tree, a turn chip menu or a git card's `Review` control opens a changed-files
+tree, a turn menu or a git card's `Review` control opens a changed-files
 review, the TopBar badge's menu opens the live uncommitted review, and the
 Project home browses the worktree from the Project cwd with
 nothing selected. The browser is not a Session-scoped route: it is ephemeral
@@ -771,34 +773,41 @@ keyboard focus and scroll anchors remain stable.
 
 ### Turn types
 
-- **User turns** show the shared time label, `You`, the deliberation interval
-  (`thought for 5s` — the wall-clock gap from the previous assistant
-  completion, across branches, to this send), an
-  optional git-state chip, and the message's Markdown and images. A user-
-  defined label (a bookmark set from pi's tree selector or in-app) renders
-  as a `#`-prefixed tag chip in the header, left-aligned after the git-state
-  chip — and is editable in place: clicking the chip swaps it for an inline
-  input (Enter commits, Escape/blur cancels, empty + Enter clears); an
-  unlabeled message reveals a dashed ghost chip on hover as the add
-  affordance (always visible on touch). Labeling is blocked while peeking
-  another branch or a turn is in flight.
-  The header
-  toolbar contains copy, the sibling pager, and Edit. The toolbar is revealed
-  on hover/focus-capable inputs and always visible on touch.
-- **Assistant turns** show the shared time label, the display model, the turn
-  span, and context
-  occupancy when known. The span is an estimate derived from seals: `worked for
-  12s` (`· tools 4s` once it exceeds a second) when sealed, and a live `working
-  for 12s · 2 running` while the turn streams — the one progress signal that
-  does not wait for a content delta. Because it is wall clock rather than a
-  pi-recorded value, it includes queueing and inter-request latency; the
-  per-message and per-tool durations pi records stay on the cards. Each text
-  block has its own copy
-  action because one assistant turn may contain several messages; that chip is
-  shown as a control only when it can be used (see the reveal rule below).
-  Streaming
-  text uses the streaming Markdown mode and a cursor; provider errors, aborts,
-  and output-length stops render beneath the content.
+Both message turn types share one compact header (ADR 21) whose order never
+changes: date disclosure, existing label, a trailing reading, the controls the
+measured column affords, and the action menu. Missing fields take no space, so
+a turn with no label and no reading is a date and a menu. The header never
+expands into a metadata strip, and it falls back to a second line rather than
+clipping a value when the essential fields cannot fit one line.
+
+- **User turns** show the header (date, the `#`-prefixed label when the message
+  has one, then the controls) and the message's Markdown and images. The tinted
+  row carries the role, so no `You` verb is rendered; the row is a named
+  `article` (`User message`) so assistive tech keeps the distinction. A
+  user-defined label is a bookmark set from pi's tree selector or in-app: the
+  chip is the direct edit trigger and opens a bounded editor panel (Save and
+  Cancel; Enter commits, Escape dismisses) rather than swapping an inline field
+  into the header, because an inline field changed the header's width while it
+  was open. Creation is a menu command, so an unlabeled turn spends no header
+  width on a ghost affordance. Labeling is blocked while peeking another branch
+  or a turn is in flight. The header's inline controls are the sibling pager
+  when the turn has siblings, then Copy, then Edit; see
+  [Turn headers](#turn-headers) for the ordering rule and how width moves them.
+- **Assistant turns** show the header plus the turn's Markdown and actions. The
+  header's trailing reading has two mutually exclusive tenants: while the turn
+  streams it carries the live status (`working for 12s · 2 running`), and once
+  the turn seals it carries the rounded context reading (`17%`). They cannot
+  collide — the percentage only exists with the turn's last usage — so progress
+  costs no second line and the slot swaps in place at the seal. The percentage
+  stands alone, matching the composer's own reading; its meaning and its change
+  are the details ledger's `Context` row and the reading's tooltip, which is a
+  hint rather than the only route to the numbers. The live span is the one
+  progress signal that does not wait for a content delta. Each text block has
+  its own copy action because one assistant turn may contain several messages,
+  and that chip is shown as a control only when it can be used (see the reveal
+  rule in [Styling invariants](#styling-invariants)). Streaming text uses the
+  streaming Markdown mode and a cursor; provider errors, aborts, and
+  output-length stops render beneath the content.
 - **System turns** render compaction and branch summaries as a divider plus
   Markdown summary. Model changes render as one divider line naming the new
   model and thinking level. A system-prompt diff renders as a read-style card:
@@ -824,6 +833,94 @@ Editing dims the target's later turns, marks the target with an accent bar and
 `Editing` label, and keeps the branch point explicit. A keyboard-focused turn
 uses an inset accent frame rather than a background fill, preserving the
 user-versus-assistant surface distinction.
+
+### Turn headers
+
+The header is a single row with a fixed order: date, label, reading, controls,
+menu. Fields read left, actions own the right edge: the reading stays in the
+flow beside the date instead of docking to the controls, so a value's position
+does not move when the column's tier moves commands between the header and the
+menu — and adding a command later shifts nothing that is already placed. A
+reading and a label never share a header (a reading is an assistant field, a
+label a user one), so neither competes for the other's width. Two rules make it
+hold at every width.
+
+- **The date is the statistics disclosure.** It renders the shared relative /
+  calendar time ladder as a value readout — chromeless ink plus a caret, the
+  same classification as the composer's cost readout — and opens a read-only
+  ledger (`role="dialog"`, anchored, width-capped, body scrolls) of
+  hairline-separated sections, each a list of labelled rows. Assistant turns
+  show three sections: the producer (`Model`, `Provider` — as separate rows,
+  because composing them into one string duplicates the provider that many
+  catalog names already carry), the window reading (`Context` with its change),
+  and the timing (`Time`, `Duration`, `Tools`). User turns show two: the timing
+  (`Time`, `Since last reply` — a measurement, not a claim about the user's
+  attention) and the repository state, split the same way (`Branch`, `Commit`,
+  `Subject`: a branch and a commit are different facts, and the subject belongs
+  to the commit). Unavailable fields are omitted rather than rendered as zeroes,
+  and each row hides on its own — detached HEAD has no `Branch`, an unborn branch
+  has no `Commit`, a v1 stamp has no `Subject`. A `Tools` row appears only once
+  the share passes a second, because a sub-second share is noise next to the
+  total and a turn with no tool calls resolves its share to zero — which would
+  otherwise render as a confident `<1s`, a measurement the turn never made.
+  `Since last reply` follows the same rule for its own reason.
+
+  Every value keeps a label. That is the difference from the cost popover, whose
+  values are all money and describe themselves; here a model name, a percentage,
+  and two spans sit in one panel, so a bare `15%` would be a number with no
+  subject. Sections need no headings — the divider is the group — and estimated
+  spans carry a `~` in the value (`~1m 19s`) instead of a footnote sentence
+  explaining that turn durations are derived from seals. The rows are one grid
+  for the whole panel — a single `max-content` label column and a
+  `minmax(0, 1fr)` value column, which the sections join through `subgrid` so
+  every value sits on the same vertical edge instead of each section sizing its
+  own labels. Values are **left** aligned (right-aligning a column of numbers is
+  what the cost ledger wants, but this one holds prose, and a wrapped sentence
+  ragged on both ends reads as a mistake) and labels are **baseline** aligned to
+  their value's first line, so a wrapped subject keeps its label on the line the
+  eye starts at.
+
+  A missing or invalid instant keeps the trigger's shape as a clock mark rather
+  than the word `Details`: the slot names a time everywhere else, so a word
+  there reads as a verb among values. A streaming assistant turn has no sealed
+  instant of its own yet, so it names its start anchor — the seal of the entry
+  that opened it, usually the prompt, the same reading its live span measures
+  from — and the turn's own instant takes over when it seals. The date never
+  shrinks: an ellipsized date reads as a different date.
+- **The menu owns every command that is not inline.** Ownership is exclusive: a
+  command is either a header control or a menu entry, never both, and resizing
+  the column moves it between the two. The menu is a `role="menu"` whose
+  trigger is a `More` glyph; it focuses its first item on open, roams with
+  arrows/Home/End, and returns focus to the trigger when it closes. A turn with
+  no command renders no trigger instead of an empty menu. Two consequences are
+  worth naming: the label chip edits an existing label, so the menu offers only
+  `Create label`; and the date owns the details, so the menu does not repeat
+  them.
+
+Controls are ordered by where the row is anchored and by how often they are
+used: an item's distance from a right-anchored row's edge depends only on the
+items to its right, so the optional pager takes the leading slot and Copy, Edit,
+and the menu keep their positions when a turn gains a branch. The fixed run is
+descending frequency (Copy, then Edit) with the overflow last, which is also
+where a command arrives when the tier collapses. The menu orders by likely use
+instead of mirroring the row — a list reads top-down, so a spatial mirror would
+bury Copy under `Previous branch`.
+
+The tier comes from the measured conversation column, not the viewport or the
+pointer type: at 560 CSS px and above the header keeps the pager, Copy, and
+Edit; from 340 to 559 it keeps Edit; below that the menu is the header's only
+control. Edit is the compact tier's keeper not because it outranks Copy in use
+but because it is the correction path: a wrong or superseded message must be
+one tap from its fix, while Copy is a tap away in the menu. The label is the one flexible field — it ellipsizes before the date,
+the reading, or a control yields — and the row wraps to a second line rather
+than shrinking text, a control, or a touch target. The commands are revealed on
+hover, focus, or the keyboard cursor and are simply visible on touch, like every
+other hover-revealed control: the header repeats once per turn, so glyphs
+standing on every row are chrome the reader did not ask for, and opacity keeps
+the reserved slot's layout stable. The tier decides *what* is present, so the
+reveal never changes the set, only the ink. State is not a command: the
+`Editing` badge sits beside the label, outside the revealed group, because a
+state indicator that appeared only on hover would be a hidden state.
 
 ### Action groups and cards
 
@@ -1179,7 +1276,7 @@ header is the registry (role, glyph, one sentence each), exports are named
   weights.
 - **Four slots, no free numbers.** The slot follows the row, not the meaning:
   12 for meta marks (chip marks, section carets, a chevron beside a short
-  label), 14 in compact control rows (card and turn toolbars, row menus), 16 for
+  label), 14 in compact control rows (card toolbars and turn headers, row menus), 16 for
   full-size icon controls (composer row, dialog and portal actions, the
   fullscreen viewer's close), 20 for chrome (TopBar and pane-header toggles). A
   feature picks a slot, never a number; 11, 13, and 18 are drift, and so is a
@@ -1392,7 +1489,7 @@ thing — a command issued at the edge of a surface whose state changes somethin
 **A boundary belongs to the container, or to the words.** This is the rule the
 rest of this section follows from. A glyph-only control earns a line or an edge
 by being a container or by floating over content — never because of what the
-glyph is; the proof is in the app twice: the turn toolbar's Copy and the
+glyph is; the proof is in the app twice: the turn header's Copy and the
 per-message Copy chip are the same glyph at the same slot, and only the floating
 one has an edge. Words are the other case: nobody can tell that a bare `Review`
 is clickable, so a text control owns its boundary at rest and does not depend on
@@ -1405,7 +1502,7 @@ states:
 
 | Tier | Shape | When |
 | --- | --- | --- |
-| ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn toolbar |
+| ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn header's Copy |
 | `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's chevrons, the topbar's changes badge |
 | `quiet` | `dim` without the hover fill | the one text control that is a label rather than a verb — the `Projects` fold-all toggle |
 | outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
@@ -1508,7 +1605,7 @@ grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
 | File browser header | `Review`, `File`/`Diff`, `Changed (3)`/`All files`, `Compare…`, `Refresh` | The words name which rendering, which state pair, or which read is being re-run. No glyph distinguishes two renderings of the same object without inventing a vocabulary for it, and a lone circular arrow among four text chips in one header would be the only glyph in the row. |
 | File browser review bar | `Collapse files`/`Expand files` | A second chevron pair in the same bar collides with the lines toggle below it; the words are the only thing carrying the scope. |
 | Tool card | the `Full output` chip, the uncommitted count | Values, not actions. |
-| Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn toolbar draws `Edit` as a pencil. |
+| Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn header draws `Edit` as a pencil. |
 | Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
 | Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
 | Sidebar row menu | `Close`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
@@ -1702,9 +1799,13 @@ The principal breakpoint is 768px for docked panes. Below it:
   replaces the live model label with `Models`. Primary Send and Stop targets
   retain their touch size. The model picker flips below its anchor when there
   is insufficient space above.
-- Hover-only toolbar and card controls become visible on touch-capable
-  inputs, and coarse-pointer targets grow. Safe-area insets protect overlays,
-  the drawer, and the fixed composer from notches and the home indicator.
+- Hover-only card controls become visible on touch-capable inputs, and
+  coarse-pointer targets grow. Safe-area insets protect overlays, the drawer,
+  and the fixed composer from notches and the home indicator.
+- The turn header is not governed by this breakpoint: its control tier follows
+  the measured conversation column (see [Turn headers](#turn-headers)), because
+  a narrow desktop pane has the same width problem as a phone. The menu carries
+  the commands the column cannot hold.
 
 The 640px composer breakpoint only changes compact control presentation; the
 768px breakpoint changes pane topology. The document remains the scroll

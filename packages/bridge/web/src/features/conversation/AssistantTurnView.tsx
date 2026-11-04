@@ -1,9 +1,13 @@
-// AssistantTurnView — flat (unbubbled) turn whose first line is the turn
-// header (provider/model · timestamp, left). Copy lives per message
-// (TextBlockView), not here: a merged turn holds several messages, so
-// there is no single "turn text" to copy. Consecutive actions are segmented
-// into action groups (renderer-owned grouping) sharing a vertical line.
-// Padding matches the user tinted row so headers/text align.
+// AssistantTurnView — flat (unbubbled) turn whose first line is the shared
+// compact header (ADR 21): date disclosure, context reading, and the action
+// menu. The model in force and the completed durations are statistics now and
+// live behind the date; while the turn streams, its live status takes the same
+// trailing slot, so progress never hides behind a disclosure and never costs a
+// second line. Copy lives per message (TextBlockView), not here: a merged turn
+// holds several messages, so there is no single "turn text" to copy.
+// Consecutive actions are segmented into action groups (renderer-owned
+// grouping) sharing a vertical line. Padding matches the user tinted row so
+// headers/text align.
 
 import { memo, useCallback, useMemo, useRef } from "react";
 import {
@@ -15,15 +19,16 @@ import {
 	type TurnRecovery,
 	type TurnSegment,
 } from "../../../../src/viewmodel/index.ts";
-import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
-import { useNow } from "../../infra/lib/useNow.ts";
 import { useStore } from "../../infra/state/store.tsx";
-import { displayModelLabel } from "../../render/modelNames.ts";
+import { displayModelName, displayProviderName } from "../../render/modelNames.ts";
 import { ActionGroupView } from "./ActionGroupView.tsx";
-import { formatTurnSpan } from "./format.ts";
+import { formatLiveStatus } from "./format.ts";
 import { GitChangeView } from "./GitChangeView.tsx";
+import type { HeaderDensity } from "./headerDensity.ts";
 import { RecoveryActions, recoveryNotice } from "./RecoveryBar.tsx";
 import { TextBlockView } from "./TextBlockView.tsx";
+import { TurnHeader } from "./TurnHeader.tsx";
+import { assistantTurnDetails } from "./turnDetails.ts";
 import styles from "./turns.module.css";
 import { useTurnClock } from "./useTurnClock.ts";
 
@@ -33,11 +38,14 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	onToggleGroup,
 	onToggleAction,
 	recovery,
+	density,
 }: {
 	turn: AssistantTurn;
 	isStreaming: boolean;
 	onToggleGroup: (key: string, cardKeys: string[]) => void;
 	onToggleAction: (key: string) => void;
+	/** The measured conversation column's header tier (ADR 21). */
+	density: HeaderDensity;
 	/** Broken-tail recovery (ADR 16), present only on the dead turn. The
 	 * error row below is the recovery carrier: the turn's real error/abort
 	 * line, or a synthetic one (`recoveryNotice`) when pi persisted no
@@ -84,41 +92,82 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 	);
 	groupGitRef.current = groupGit;
 	const lastIdx = segments.length - 1;
-	const now = useNow();
-	const ts = formatWhen(turn.timestamp, now);
 	const models = useStore(useCallback((s) => s.models, []));
-	const modelLabel = turn.model ? displayModelLabel(turn.provider ?? "", turn.model, models) : "";
+	const modelName = turn.model ? displayModelName(turn.provider ?? "", turn.model, models) : "";
+	const providerName = turn.provider ? displayProviderName(turn.provider, models) : "";
 
-	// Turn span — an estimate derived from seals (see AssistantTurn.totalMs), so
-	// it includes queueing and inter-request latency, not just model time. The
-	// live branch ticks once a second: a streaming turn's header must move even
-	// when no content delta arrives.
+	// The instant the header names. A streaming turn's own entry has no seal, so
+	// `timestamp` is empty until its first message lands — the header would name
+	// no moment at all for the first seconds of every reply. The turn's start
+	// anchor (the seal of the entry that opened it, usually the prompt) is that
+	// moment, and it is the same reading the live span measures from; once the
+	// entry seals, the turn's own instant takes over. Both read as "just now".
+	const displayInstant = turn.timestamp || turn.turnStartedAt || "";
+
+	// Live status while the turn streams — the only progress signal that does
+	// not wait for a content delta. The clock ticks once a second only for the
+	// streaming turn (useTurnClock is inert when `active` is false).
 	const liveNow = useTurnClock(isStreaming);
-	const timing = formatTurnSpan({
-		isStreaming,
-		turnStartedAt: turn.turnStartedAt,
-		totalMs: turn.totalMs,
-		toolMs: turn.toolMs,
-		runningTools: turn.blocks.filter(
-			(b) => b.blockType === "tool" && (b.status === "pending" || b.status === "running"),
-		).length,
-		now: liveNow,
-	});
+	const runningTools = turn.blocks.filter(
+		(b) => b.blockType === "tool" && (b.status === "pending" || b.status === "running"),
+	).length;
+	const liveStatus = isStreaming
+		? formatLiveStatus({ turnStartedAt: turn.turnStartedAt, runningTools, now: liveNow })
+		: "";
 
-	// Context occupancy for this turn: "26%" absolute, "(+1%)" the change
-	// vs. the previous valid reading (omitted below the 1pp threshold;
-	// negative — the compaction drop — always renders). Rounded to whole
-	// points: this is a compact/expand decision aid, not a billing figure.
-	let contextFrag = "";
-	if (turn.contextPercent !== undefined) {
+	// The ledger's three sections: the turn's producer, the window reading, and the
+	// timing. The row rules live in turnDetails (a label on every value, `~` for
+	// estimates, absent data absent) so they can be tested as data.
+	const details = useMemo(
+		() =>
+			assistantTurnDetails({
+				timestamp: turn.timestamp,
+				turnStartedAt: turn.turnStartedAt,
+				modelName,
+				providerName,
+				totalMs: turn.totalMs,
+				toolMs: turn.toolMs,
+				contextPercent: turn.contextPercent,
+				contextDeltaPercent: turn.contextDeltaPercent,
+			}),
+		[
+			turn.timestamp,
+			turn.turnStartedAt,
+			modelName,
+			providerName,
+			turn.totalMs,
+			turn.toolMs,
+			turn.contextPercent,
+			turn.contextDeltaPercent,
+		],
+	);
+
+	// The header's trailing reading, one slot with two tenants. While the turn
+	// streams it carries the live status (the span plus the running-tool count),
+	// which is the only progress signal that does not wait for a content delta;
+	// once the turn seals it carries the context reading, because that percentage
+	// only exists with the last entry's usage. The two never compete, so the
+	// status costs no second line — and the slot swaps in place at the seal
+	// instead of the header losing a row.
+	//
+	// The percentage stands alone: the composer already renders the context as a
+	// bare `21%` with a bar, so a `context` descriptor here was the odd one out and
+	// cost the header the width a label needs. Its meaning and its change are one
+	// gesture away on the date's disclosure; the tooltip is a hint for the pointer,
+	// never the only route to the numbers.
+	let reading: { text: string; title: string } | undefined;
+	if (liveStatus) {
+		reading = { text: liveStatus, title: "This turn is still running" };
+	} else if (turn.contextPercent !== undefined) {
 		const pct = Math.round(turn.contextPercent);
-		const delta = turn.contextDeltaPercent === undefined ? null : Math.round(turn.contextDeltaPercent);
-		const deltaFrag = delta === null ? "" : ` (${delta >= 0 ? "+" : ""}${delta}%)`;
-		contextFrag = `${pct}%${deltaFrag}`;
+		reading = {
+			text: `${pct}%`,
+			title: `Context window: ${pct}% used when this turn was generated`,
+		};
 	}
 
 	return (
-		<div
+		<article
 			className={`${styles.asstMsg} ${isDimmed ? styles.msgDimmed : ""} ${isFocused ? styles.focused : ""}`}
 			// Unique per-turn anchor: a split entry yields two turns sharing the
 			// first entry's id, so focus/keyboard scroll targets key on turnKey.
@@ -128,19 +177,22 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 			// (scrollToEntryId → querySelector, first match) must resolve to
 			// the entry's first turn — the message.
 			data-entry-id={turn.turnKey === turn.entryId ? turn.entryId : undefined}
+			// A message is a self-contained composition, and the visible model label
+			// is gone: the name is what keeps the role distinction available to
+			// assistive tech.
+			aria-label="Assistant message"
 		>
-			<div className={styles.msgHeader}>
-				<span className={styles.msgHeaderLeft}>
-					{ts && (
-						<time className={styles.msgTime} dateTime={turn.timestamp} title={formatWhenFull(turn.timestamp)}>
-							{ts}
-						</time>
-					)}
-					{modelLabel && <span className={styles.msgRole}>{modelLabel}</span>}
-					{timing && <span className={styles.msgTiming}>{timing}</span>}
-					{contextFrag && <span className={styles.msgTiming}>{contextFrag}</span>}
-				</span>
-			</div>
+			<TurnHeader
+				timestamp={displayInstant}
+				density={density}
+				details={details}
+				reading={reading}
+				// An assistant turn has no header command of its own: Copy is per
+				// message and the statistics are the date's, so the menu has nothing
+				// to own and does not render a trigger.
+				menuItems={[]}
+				menuLabel="Turn actions"
+			/>
 			{segments.map((seg, idx) =>
 				seg.kind === "text" ? (
 					<TextBlockView
@@ -205,7 +257,7 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 					{recoveryActions}
 				</div>
 			)}
-		</div>
+		</article>
 	);
 });
 

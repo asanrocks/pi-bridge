@@ -9,12 +9,14 @@
 
 import { memo, useEffect, useRef } from "react";
 import type { ViewModel } from "../../../../src/viewmodel/index.ts";
+import { useElementWidth } from "../../infra/lib/useElementWidth.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
 import { ChevronDownIcon } from "../../render/icons.tsx";
 import { AssistantTurnView } from "./AssistantTurnView.tsx";
 import styles from "./conversation.module.css";
 import { GitChangeView } from "./GitChangeView.tsx";
+import { headerDensity } from "./headerDensity.ts";
 import { SystemTurnView } from "./SystemTurnView.tsx";
 import { UserBashView } from "./UserBashView.tsx";
 import { UserTurnView } from "./UserTurnView.tsx";
@@ -68,6 +70,12 @@ export const ConversationArea = memo(function ConversationArea({
 	// Column element observed by the geometry anchor (§1 in the hook): its
 	// width is the rewrap driver — a width change is what needs a restore.
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
+	// The turn header's control budget follows the measured column (ADR 21), not
+	// the viewport: a narrow desktop pane and a phone have the same problem. The
+	// width arrives from the same element the viewport hook observes, so a pane
+	// drag re-tiers the headers without a second observer.
+	const columnWidth = useElementWidth(scrollContainerRef);
+	const density = headerDensity(columnWidth);
 	const { awayFromBottom, newContentBelow, isFrozen, jumpToBottom, anchorLatestReply, goLive } = useViewportTracking(
 		vm,
 		isStreaming,
@@ -122,6 +130,7 @@ export const ConversationArea = memo(function ConversationArea({
 								onNavigate={onSelectBranch}
 								onEdit={onEdit}
 								isLiveTail={isLive && turn.entryId === lastUserTurnId}
+								density={density}
 							/>
 						);
 					case "assistant": {
@@ -139,6 +148,7 @@ export const ConversationArea = memo(function ConversationArea({
 								isStreaming={isStreaming && turn === lastTurn}
 								onToggleGroup={onToggleGroup}
 								onToggleAction={onToggleAction}
+								density={density}
 								recovery={
 									r
 										? {
