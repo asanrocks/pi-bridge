@@ -38,6 +38,29 @@ export function useViewModel(): ViewModel {
 	// Rendered-leaf override (peek). `null` follows the live leaf; the key
 	// includes it, so peek/un-peek over an unchanged document re-projects.
 	const renderLeafId = useStore((s) => s.renderLeafId);
+	// Expanded thinking keys on the rendered leaf entry only: a collapsed
+	// thinking block's streaming key caps at k0/k1 so thinking_delta churn
+	// neither re-projects the ViewModel nor trips auto-scroll while collapsed.
+	// Scoped to the leaf entry's thinking blocks as a primitive string so
+	// expanding a tool card or an earlier turn's block never invalidates the
+	// VM cache.
+	const leafThinkingExpandedKey = useStore((s) => {
+		const leafId = s.renderLeafId ?? s.document.status.leafId;
+		const entry = leafId ? s.document.entries[leafId] : undefined;
+		if (!entry || entry.kind !== "message") return "";
+		let out = "";
+		for (let i = 0; i < entry.content.length; i++) {
+			if (entry.content[i]?.type === "thinking") {
+				const key = `${leafId}:b${i}`;
+				if (s.expandedActions.has(key)) out += `${out ? "|" : ""}${key}`;
+			}
+		}
+		return out;
+	});
+	const expandedLeafThinking = useMemo(
+		() => new Set(leafThinkingExpandedKey ? leafThinkingExpandedKey.split("|") : []),
+		[leafThinkingExpandedKey],
+	);
 	// The catalogue is a projection input (context percentage is computed
 	// against each model's context window), so its identity is in the key.
 	const modelsKey = useMemo(
@@ -47,7 +70,16 @@ export function useViewModel(): ViewModel {
 
 	const cacheRef = useRef<{ key: string; vm: ViewModel } | null>(null);
 	return useMemo(() => {
-		const key = viewModelCacheKey(doc, scope, pullTick, renderLeafId, modelsKey, docRevision, authoritative);
+		const key = viewModelCacheKey(
+			doc,
+			scope,
+			pullTick,
+			renderLeafId,
+			modelsKey,
+			docRevision,
+			authoritative,
+			expandedLeafThinking,
+		);
 		if (cacheRef.current?.key === key) {
 			return cacheRef.current.vm;
 		}
@@ -57,8 +89,17 @@ export function useViewModel(): ViewModel {
 		// may be the live projection while peeking (or vice versa) — shared
 		// prefix turns are reused across the switch, which is the point.
 		const prevVm = cacheRef.current?.vm;
-		const vm = computeViewModel({ document: doc, models, viewLeafId: renderLeafId, authoritative }, prevVm);
+		const vm = computeViewModel(
+			{
+				document: doc,
+				models,
+				viewLeafId: renderLeafId,
+				authoritative,
+				expandedActions: expandedLeafThinking,
+			},
+			prevVm,
+		);
 		cacheRef.current = { key, vm };
 		return vm;
-	}, [doc, models, scope, pullTick, docRevision, renderLeafId, modelsKey, authoritative]);
+	}, [doc, models, scope, pullTick, docRevision, renderLeafId, modelsKey, authoritative, expandedLeafThinking]);
 }

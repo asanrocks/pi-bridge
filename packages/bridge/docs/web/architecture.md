@@ -185,9 +185,12 @@ connection and event paths.
 `src/viewmodel/` is the pure projection boundary from a Document to renderable
 data. `useViewModel` selects the Document, model catalog, current stem,
 `pullTick`, the document revision, the document-confirmation flag
-(`docAuthority` — see the protocol slice), and the UI slice's rendered-leaf override,
+(`docAuthority` — see the protocol slice), the UI slice's rendered-leaf override,
+and the expanded thinking-block keys on the rendered leaf entry,
 then memoizes `computeViewModel` using `viewModelCacheKey`. Its cache key
-combines the leaf path identity, streaming text/thinking lengths, relevant
+combines the leaf path identity, streaming text and expanded-thinking lengths
+(collapsed thinking blocks cap at empty vs. non-empty so `thinking_delta`
+frames do not invalidate the projection while collapsed), relevant
 status fields, the current stem, the pull tick, the revision, the override,
 the model catalog identity, and the confirmation flag. The stem matters even
 when two Documents are structurally equal; the pull tick matters when lazy

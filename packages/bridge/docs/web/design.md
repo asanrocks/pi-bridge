@@ -422,16 +422,21 @@ previewed. A wire-confirmed empty session renders the guidance copy ("No
 messages yet. Send a prompt to begin."). The history pane's graph follows
 the same rule on its own empty state.
 
-The viewport follows structural and streaming text growth while the reader is
-at the bottom. Scrolling upward pauses follow.
+The viewport follows structural and streaming growth (including expanded
+thinking blocks, synchronized with deferred Markdown DOM layout via the column
+`ResizeObserver`; collapsed thinking blocks stay fixed at one line and do not
+drive follow after their initial line) while the reader is at the bottom,
+advancing only when the content end extends below the current viewport bottom.
+Scrolling upward pauses follow, including within the tail-slack range.
 
 A sent message is different: the sent user turn top-anchors — the whole turn
 container, header metadata included, not the text — and auto-scroll freezes
 for the turn, so the reader's own message stays the reading position while
 the reply streams in below. The freeze is unconditional for the turn and
-lifts only when the reader reaches the live end after content has grown below
-the parked viewport, presses the jump button, or switches sessions: reaching
-the live end before anything streamed below is circumstance, not intent, and
+lifts only when the reader scrolls down to the live end while content extends
+below the parked viewport, presses the jump button, or switches sessions: reaching
+the live end before anything streamed below (or after collapsing a block back
+into the parked viewport) is circumstance, not intent, and
 must not lift it. The anchor scroll itself is animated (instant under
 prefers-reduced-motion), and the frozen viewport's park position — not the
 transient mid-animation position — is what the content-below check measures
@@ -441,7 +446,9 @@ the minimum manufactured scroll range that keeps the live path's last user
 turn pinnable at the viewport top — exactly the just-sent reading position,
 available at any time (an idle session landing, or a plain scroll down), not
 only while a turn is frozen. It is trimmed down as content streams in below
-the pin and grown back when content above the pin shrinks (a collapsed card),
+the pin and grown back when content shrinks (refreshed ahead of fold-landing
+measurement on collapse so a pre-slack browser clamp cannot pull the parked
+turn down from the top),
 so while any slack remains the document's maximum scroll IS the pin position
 — scrolling past it into blank is structurally impossible — and once the tail
 fills the viewport the slack is zero and the range below the live end is

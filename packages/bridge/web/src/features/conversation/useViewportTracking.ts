@@ -79,19 +79,30 @@ export function useViewportTracking(
 	const [awayFromBottom, setAwayFromBottom] = useState(false);
 	const [newContentBelow, setNewContentBelow] = useState(false);
 	// Frozen (§3b): a sent turn is anchored and auto-scroll is paused for it.
-	// `frozenSawBelowRef` distinguishes bottom-ness by circumstance from
-	// bottom-ness by intent: the send-anchor itself can land at the live end
-	// (nothing below the sent message yet) — that must NOT unfreeze, or the
-	// first streaming delta yanks the anchored message off-screen. Only once
-	// content has actually grown below the parked viewport does reaching the
-	// live end count as the reader's own gesture and re-arm follow.
+	// Only once content extends below the parked viewport does reaching the
+	// live end by scrolling down count as the reader's own gesture and re-arm
+	// follow; the send-anchor's own scroll can land at the live end while
+	// nothing is below yet — circumstance, not intent.
 	const [isFrozen, setFrozen] = useState(false);
 	const frozenRef = useRef(false);
-	const frozenSawBelowRef = useRef(false);
 	// Where the frozen viewport parks (scroll position), for §4's content-below
 	// check — see §3b for why the check is anchored to the park, not to the
 	// transient scroll position (mid-animation positions would trip it early).
 	const frozenParkYRef = useRef(0);
+	// True after §4 observes streaming/structural growth while following, so
+	// the §1 ResizeObserver also follows the deferred DOM growth committed a
+	// tick later by useDeferredValue in TextBlockView / ThinkActionView.
+	// Cleared on manual expand/collapse toggles and lazy-pull ingests (reading
+	// actions must never auto-scroll).
+	const pendingStreamFollowRef = useRef(false);
+	// True across an expand/collapse toggle's commit and withFoldLanding's rAF
+	// correction so neither layout clamp nor fold-landing scroll is misread as
+	// user scroll intent.
+	const foldInFlightRef = useRef(false);
+	const isStreamingRef = useRef(isStreaming);
+	isStreamingRef.current = isStreaming;
+	const isDivergedRef = useRef(isDiverged);
+	isDivergedRef.current = isDiverged;
 
 	const releaseFreeze = useCallback(() => {
 		if (!frozenRef.current) return;
@@ -143,6 +154,12 @@ export function useViewportTracking(
 		return Number.parseFloat(el.style.getPropertyValue("--tail-slack")) || 0;
 	}, [scrollContainerRef]);
 
+	/** Scroll position (window.scrollY) that aligns the viewport bottom with
+	 * the content end (scrollHeight minus tail slack), never the padded end. */
+	const liveEndTop = useCallback((): number => {
+		return Math.max(0, document.documentElement.scrollHeight - tailSlack() - window.innerHeight);
+	}, [tailSlack]);
+
 	const updateTailSlack = useCallback(() => {
 		const el = scrollContainerRef.current;
 		if (!el) return;
@@ -159,6 +176,9 @@ export function useViewportTracking(
 			if (!(turnEl instanceof HTMLElement)) return;
 			const margin = Number.parseFloat(getComputedStyle(turnEl).scrollMarginTop) || 0;
 			parkY = Math.max(0, turnEl.getBoundingClientRect().top + window.scrollY - margin);
+		}
+		if (frozenRef.current) {
+			frozenParkYRef.current = parkY;
 		}
 		// The deficit against the content end (scrollHeight minus the slack
 		// currently applied — the padding's composer-footprint base is inside
@@ -214,6 +234,75 @@ export function useViewportTracking(
 		turnRelTop: number | null;
 	} | null>(null);
 	const columnWidthRef = useRef(0);
+	const columnHeightRef = useRef(0);
+
+	/** Advance the viewport toward the live content end when content extends
+	 * past the bottom edge of the current viewport. Never scrolls into blank
+	 * tail slack or upward when contentEnd is already visible on screen. */
+	const followLiveEnd = useCallback(() => {
+		if (userScrolledUpRef.current || frozenRef.current) return;
+		updateTailSlack();
+		const target = liveEndTop();
+		if (smoothJumpRef.current) {
+			if (target > window.scrollY) {
+				window.scrollTo({ top: target, behavior: "smooth" });
+			}
+			return;
+		}
+		if (target > window.scrollY) {
+			window.scrollTo(0, target);
+		}
+		lastScrollTopRef.current = window.scrollY;
+		lastScrollHeightRef.current = document.documentElement.scrollHeight;
+	}, [updateTailSlack, liveEndTop]);
+
+	useEffect(() => {
+		let prevState = getStore().getState();
+		let preFoldScrollY: number | null = null;
+		let raf1 = 0;
+		let raf2 = 0;
+		const unsub = getStore().subscribe((state) => {
+			const foldChanged =
+				state.expandedActions !== prevState.expandedActions ||
+				state.expandedActionGroups !== prevState.expandedActionGroups ||
+				state.uncappedDetails !== prevState.uncappedDetails;
+			const pullChanged = state.pullTick !== prevState.pullTick;
+			prevState = state;
+			if (foldChanged || pullChanged) {
+				pendingStreamFollowRef.current = false;
+			}
+			if (foldChanged) {
+				if (preFoldScrollY === null) preFoldScrollY = window.scrollY;
+				foldInFlightRef.current = true;
+				cancelAnimationFrame(raf1);
+				cancelAnimationFrame(raf2);
+				// Span both the synchronous layout clamp and withFoldLanding's rAF
+				// scrollBy correction. raf1 is registered inside the store setter
+				// (before withFoldLanding queues its own rAF), so refreshing
+				// --tail-slack and undoing any pre-slack browser clamp here gives
+				// withFoldLanding the true post-slack layout.
+				raf1 = requestAnimationFrame(() => {
+					const savedScrollY = preFoldScrollY;
+					preFoldScrollY = null;
+					updateTailSlack();
+					if (savedScrollY !== null && window.scrollY < savedScrollY) {
+						window.scrollTo(0, savedScrollY);
+						lastScrollTopRef.current = window.scrollY;
+						lastScrollHeightRef.current = document.documentElement.scrollHeight;
+					}
+					raf2 = requestAnimationFrame(() => {
+						foldInFlightRef.current = false;
+					});
+				});
+			}
+		});
+		return () => {
+			unsub();
+			preFoldScrollY = null;
+			cancelAnimationFrame(raf1);
+			cancelAnimationFrame(raf2);
+		};
+	}, [updateTailSlack]);
 
 	const captureAnchor = useCallback(() => {
 		// Probe just below the fixed TopBar: elementFromPoint is a cheap hit
@@ -294,8 +383,9 @@ export function useViewportTracking(
 	}, []);
 
 	// The observer lives on the column element (swapped by ConversationArea's
-	// empty-state branch — hasTurns re-attaches on that flip). Width-only
-	// filter: height callbacks are content growth, not rewrap.
+	// empty-state branch — hasTurns re-attaches on that flip). Width changes
+	// restore the reading anchor; height growth while streaming follows the
+	// live end once useDeferredValue commits the actual Markdown DOM update.
 	const hasTurns = vm.turns.length > 0;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: hasTurns is the re-attach signal — the observed element is swapped by ConversationArea's empty-state branch, so the observer must re-attach on that flip even though the dep is unread inside.
 	useEffect(() => {
@@ -303,22 +393,39 @@ export function useViewportTracking(
 		if (!el) return;
 		captureAnchor();
 		const ro = new ResizeObserver((entries) => {
-			const width = entries[entries.length - 1]?.contentRect.width ?? 0;
+			const rect = entries[entries.length - 1]?.contentRect;
+			const width = rect?.width ?? 0;
+			const height = rect?.height ?? 0;
 			if (width <= 0) return; // display:none or unmounted
+			const prevWidth = columnWidthRef.current;
+			const prevHeight = columnHeightRef.current;
+			columnWidthRef.current = width;
+			columnHeightRef.current = height;
 			// Every content height change — streaming growth, expand toggles,
 			// image loads, rewrap — re-derives the tail slack (§3c): streamed-in
 			// growth below the pin replaces slack; shrinkage above the pin grows
 			// it back. The write is a custom property (not the content box), so it
 			// never re-fires this observer.
 			updateTailSlack();
-			const prev = columnWidthRef.current;
-			columnWidthRef.current = width;
-			if (prev === 0 || Math.abs(width - prev) < 1) return;
-			restoreAnchor();
+			if (prevWidth > 0 && Math.abs(width - prevWidth) >= 1) {
+				restoreAnchor();
+				return;
+			}
+			if (isDivergedRef.current) return;
+			if (height > prevHeight + 0.5 && pendingStreamFollowRef.current) {
+				followLiveEnd();
+				if (!isStreamingRef.current) pendingStreamFollowRef.current = false;
+			}
+			// Keep the jump-button geometry mirror honest when content grows or
+			// shrinks (e.g. deferred Markdown commit or card collapse) without a
+			// scroll event.
+			const contentEnd = document.documentElement.scrollHeight - tailSlack();
+			const refTop = frozenRef.current && !userScrolledUpRef.current ? frozenParkYRef.current : window.scrollY;
+			setAwayFromBottom(contentEnd - (refTop + window.innerHeight) > 30);
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, [hasTurns, captureAnchor, restoreAnchor, scrollContainerRef, updateTailSlack]);
+	}, [hasTurns, captureAnchor, restoreAnchor, scrollContainerRef, updateTailSlack, followLiveEnd, tailSlack]);
 
 	// A viewport-height change moves the tail-slack reachability line with no
 	// content or width change for the §1 observer to catch — recompute on
@@ -348,15 +455,8 @@ export function useViewportTracking(
 			const sh = document.documentElement.scrollHeight;
 			const shrank = sh < lastScrollHeightRef.current - 2;
 			lastScrollHeightRef.current = sh;
-			// Clamp / layout shift, not user intent. Bookkeep the position so
-			// the next event's direction delta is correct, but leave the
-			// viewport state untouched — the user didn't move.
-			if (shrank) {
-				lastScrollTopRef.current = st;
-				return;
-			}
 
-			// Geometry mirror — computed before the no-net-change guard below:
+			// Geometry mirror — computed before the early-return guards below:
 			// programmatic scrolls (jump button, auto-scroll, anchors) pre-update
 			// lastScrollTopRef so their event reads as no movement, and would
 			// otherwise early-return with a stale awayFromBottom (the jump
@@ -368,24 +468,54 @@ export function useViewportTracking(
 			// the tail, and "reaching the live end" must not require scrolling
 			// through the blank slack.
 			const slack = tailSlack();
-			const isAtBottom = sh - slack - st - window.innerHeight <= threshold;
+			const contentEnd = sh - slack;
+			const isAtBottom = contentEnd - st - window.innerHeight <= threshold;
 			setAwayFromBottom(!isAtBottom);
 			if (isAtBottom) {
-				userScrolledUpRef.current = false;
 				smoothJumpRef.current = false;
-				// A frozen viewport unfreezes only when the reader reaches the live
-				// end after content has grown below it (frozenSawBelow). The
-				// send-anchor's own programmatic scroll can land at the live end
-				// while nothing is below yet — circumstance, not intent.
-				if (frozenRef.current && frozenSawBelowRef.current) releaseFreeze();
 				// Reaching the live end by any means consumes the new-content signal.
 				setNewContentBelow(false);
 			}
 
+			// Clamp / layout shift or fold-landing scroll — not user intent.
+			// Bookkeep the position so the next event's direction delta is
+			// correct; if a fold left content below the viewport, pause follow
+			// so the next delta does not yank the reader off the folded header.
+			// Never flip in-middle → at-bottom or unfreeze here.
+			if (shrank || foldInFlightRef.current) {
+				if (foldInFlightRef.current && !isAtBottom && !frozenRef.current) {
+					userScrolledUpRef.current = true;
+				}
+				lastScrollTopRef.current = st;
+				return;
+			}
+
 			if (Math.abs(st - lastScrollTopRef.current) <= 2) return;
-			if (!isAtBottom && st < lastScrollTopRef.current - 1) {
+			if (st < lastScrollTopRef.current - 1) {
+				// Any real upward user scroll pauses follow — including inside
+				// the tail-slack region where contentEnd is still visible in the
+				// lower part of the viewport.
 				userScrolledUpRef.current = true;
 				smoothJumpRef.current = false;
+			} else if (st > lastScrollTopRef.current + 1 && isAtBottom) {
+				// Downward scroll reaching the live end (or the document's max
+				// scroll when tail slack is present) re-arms follow. While tail
+				// slack > 0, contentEnd sits above the max scroll position:
+				// require either reaching the live content bottom from above or
+				// reaching max scroll, so scrolling down slightly while reading an
+				// earlier turn above parkY does not re-arm follow.
+				const atMaxScroll = sh - st - window.innerHeight <= threshold;
+				const atContentEdge = contentEnd - st - window.innerHeight >= -threshold;
+				if (slack === 0 || atMaxScroll || atContentEdge) {
+					userScrolledUpRef.current = false;
+					smoothJumpRef.current = false;
+					// A frozen viewport unfreezes only when the reader scrolls down
+					// to the live end while content actually extends below the
+					// parked viewport.
+					if (frozenRef.current && contentEnd - (frozenParkYRef.current + window.innerHeight) > threshold) {
+						releaseFreeze();
+					}
+				}
 			}
 
 			lastScrollTopRef.current = st;
@@ -425,19 +555,26 @@ export function useViewportTracking(
 		userScrolledUpRef.current = false;
 		smoothJumpRef.current = false;
 		releaseFreeze();
-		frozenSawBelowRef.current = false;
+		pendingStreamFollowRef.current = isStreaming;
 		setNewContentBelow(false);
-		if (isStreaming) return;
+		if (isStreaming) {
+			updateTailSlack();
+			window.scrollTo(0, liveEndTop());
+			lastScrollTopRef.current = window.scrollY;
+			lastScrollHeightRef.current = document.documentElement.scrollHeight;
+			return;
+		}
 		let lastUserId: string | null = null;
 		for (const t of vm.turns) if (t.kind === "user") lastUserId = t.entryId;
 		if (lastUserId) {
 			getStore().getState().setScrollToEntryId(lastUserId);
 			return;
 		}
-		window.scrollTo(0, document.documentElement.scrollHeight - tailSlack());
+		updateTailSlack();
+		window.scrollTo(0, liveEndTop());
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [activeSessionId, vm, isStreaming, releaseFreeze, tailSlack]);
+	}, [activeSessionId, vm, isStreaming, releaseFreeze, updateTailSlack, liveEndTop]);
 
 	// ---------------------------------------------------------------------------
 	// 3b. Send anchor — top-anchor the sent user turn, freeze auto-scroll
@@ -508,7 +645,6 @@ export function useViewportTracking(
 		} else {
 			el.scrollIntoView({ block: "start", behavior: "smooth" });
 		}
-		frozenSawBelowRef.current = false;
 		userScrolledUpRef.current = false;
 		smoothJumpRef.current = false;
 		setNewContentBelow(false);
@@ -538,15 +674,28 @@ export function useViewportTracking(
 	// reading up. Auto-scroll (when at the bottom) still follows every change.
 	const textKey = vm.textKey;
 	const prevTextKeyRef = useRef<string>("");
+	const expandedActions = useStore((s) => s.expandedActions);
+	const prevExpandedActionsRef = useRef(expandedActions);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: vm is the content-change signal; expanded* state is a deliberate omission
+	// biome-ignore lint/correctness/useExhaustiveDependencies: vm is the content-change signal; expandedActions is read only to absorb leaf-thinking toggle re-projections without scrolling
 	useEffect(() => {
+		const expandToggled = expandedActions !== prevExpandedActionsRef.current;
+		prevExpandedActionsRef.current = expandedActions;
 		// While peeking (rendering leaf pinned off the live path) the auto-scroll
 		// machinery pauses entirely: the VM describes the peeked path, whose keys
 		// don't track live growth, and the viewport belongs to the reader. Refs
 		// are deliberately left stale — returning to live sees changed keys and
 		// §4 re-runs once (the go-live pending flag handles the scroll).
 		if (isDiverged) return;
+		const structChanged = structKey !== prevStructKeyRef.current;
+		if (expandToggled && !structChanged) {
+			// Toggling a leaf thinking block re-projects vm.streamingKey (k1 ↔ k<len>);
+			// absorb the new key so the user's toggle never triggers auto-scroll.
+			prevStreamingKeyRef.current = streamingKey;
+			prevTextKeyRef.current = textKey;
+			pendingStreamFollowRef.current = false;
+			return;
+		}
 		// Fire on either (a) a structural change (new entries/blocks — covers
 		// block-appending events) or (b) streaming intra-block content growth
 		// (text/thinking deltas) while the turn is in-flight. The latter is the
@@ -554,63 +703,30 @@ export function useViewportTracking(
 		// its field without appending a block, so structKey never changed and
 		// the viewport didn't follow. isStreaming excludes completed-turn lazy
 		// pulls (also text/thinking-length changes) and expand toggles.
-		const structChanged = structKey !== prevStructKeyRef.current;
 		const streamingGrew = isStreaming && streamingKey !== prevStreamingKeyRef.current;
 		if (!structChanged && !streamingGrew) return;
 		const textChanged = textKey !== prevTextKeyRef.current;
 		prevStructKeyRef.current = structKey;
 		prevStreamingKeyRef.current = streamingKey;
 		prevTextKeyRef.current = textKey;
+		pendingStreamFollowRef.current = isStreaming;
 		// The user is reading up or the sent turn is anchored (frozen): don't
 		// yank the viewport. Reading up raises the new-content signal on the
 		// jump button — but only for readable text, and never while frozen (the
 		// frozen button already means "follow live"; a dot would be redundant —
 		// new text below is guaranteed while the anchored reply streams).
-		// While frozen, also keep the geometry mirror honest without scroll
-		// events (the parked viewport doesn't scroll as content grows below) and
-		// record that content has grown below — the §2 unfreeze condition.
+		// Keep the geometry mirror honest without scroll events (a parked or
+		// scrolled-up viewport doesn't scroll as content grows below).
 		if (userScrolledUpRef.current || frozenRef.current) {
-			if (frozenRef.current) {
-				// Re-derive the slack first: the streamed-in growth below the park
-				// replaces slack, so the check below measures against a
-				// minimal-blank geometry.
-				updateTailSlack();
-				// Content-below is measured from the PARKED position, not from the
-				// transient scroll position, and against the live end (content end,
-				// slack subtracted) — a smooth anchor still animating must not trip
-				// this, and neither may the slack itself.
-				const contentEnd = document.documentElement.scrollHeight - tailSlack();
-				if (contentEnd - (frozenParkYRef.current + window.innerHeight) > 30) {
-					frozenSawBelowRef.current = true;
-					setAwayFromBottom(true);
-				}
-			}
+			updateTailSlack();
+			const contentEnd = document.documentElement.scrollHeight - tailSlack();
+			const refTop = frozenRef.current && !userScrolledUpRef.current ? frozenParkYRef.current : window.scrollY;
+			setAwayFromBottom(contentEnd - (refTop + window.innerHeight) > 30);
 			if (textChanged && !frozenRef.current) setNewContentBelow(true);
 			return;
 		}
-		// A smooth jump is animating: an instant scrollTo here would cancel it.
-		// Re-aim the animation at the (moved) live end instead — each re-issue
-		// retargets from the current position, so streaming growth chases
-		// smoothly. Arrival at the live end clears smoothJumpRef (scroll
-		// handler), after which normal instant-follow resumes.
-		if (smoothJumpRef.current) {
-			window.scrollTo({ top: document.documentElement.scrollHeight - tailSlack(), behavior: "smooth" });
-			return;
-		}
-		// The target is the content end, never the padded end: the tail slack
-		// (§3c) extends the scroll range below the live end, and following must
-		// not scroll into the blank. scrollHeight − slack is the content end by
-		// construction, stale or fresh.
-		const target = document.documentElement.scrollHeight - tailSlack();
-		window.scrollTo(0, target);
-		// scrollTo is synchronous; read back the clamped position so the
-		// async scroll event sees no net change and doesn't re-trip the
-		// handler. Refresh the height bookkeeping too, in case scrollTo
-		// lands on the same position (no scroll event) and would otherwise
-		// leave lastScrollHeightRef stale for the next handler invocation.
-		lastScrollTopRef.current = window.scrollY;
-		lastScrollHeightRef.current = document.documentElement.scrollHeight;
-	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged, updateTailSlack, tailSlack]);
+		followLiveEnd();
+	}, [vm, structKey, streamingKey, textKey, isStreaming, isDiverged, updateTailSlack, tailSlack, followLiveEnd]);
 
 	// ---------------------------------------------------------------------------
 	// 5. Anchor scroll — history-pane selection after a navigation
@@ -702,9 +818,10 @@ export function useViewportTracking(
 	// synchronous bookkeeping.
 	const jumpToBottom = useCallback(() => {
 		releaseFreeze();
+		updateTailSlack();
 		// Target the content end — the tail slack (§3c) extends the range below
 		// the live end, and the jump must not land in the blank.
-		const target = document.documentElement.scrollHeight - tailSlack();
+		const target = liveEndTop();
 		const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 		smoothJumpRef.current = !reduced;
 		if (reduced) {
@@ -716,7 +833,7 @@ export function useViewportTracking(
 		}
 		userScrolledUpRef.current = false; // explicit gesture: re-arm follow for the rest of the turn
 		setNewContentBelow(false);
-	}, [releaseFreeze, tailSlack]);
+	}, [releaseFreeze, updateTailSlack, liveEndTop]);
 
 	// ---------------------------------------------------------------------------
 	// 7b. Anchor latest reply (the jump button's dot meaning)
@@ -772,13 +889,13 @@ export function useViewportTracking(
 		// The slack went stale through the peek (updates are skipped while
 		// diverged) — refresh before reading the content end.
 		updateTailSlack();
-		window.scrollTo(0, document.documentElement.scrollHeight - tailSlack());
+		window.scrollTo(0, liveEndTop());
 		lastScrollTopRef.current = window.scrollY;
 		lastScrollHeightRef.current = document.documentElement.scrollHeight;
 		// The isDiverged flip IS the projection-change signal: setRenderLeaf(null)
 		// flips it, the store subscribers re-render, and this effect runs after
 		// that same commit — the live content's height is final here.
-	}, [isDiverged, updateTailSlack, tailSlack]);
+	}, [isDiverged, updateTailSlack, liveEndTop]);
 
 	return { awayFromBottom, newContentBelow, isFrozen, jumpToBottom, anchorLatestReply, goLive };
 }
