@@ -6,12 +6,10 @@
    exists), so a consumer picks a placement, never an offset. Sides are
    physical because `<anchor-side>` has no `inline-start`.
 
-   Two axes a consumer still owns, routed through custom properties so neither
-   competes with a shared declaration (a property two files declare is decided
-   by bundle order, which no component can see): `--popover-pad` for a panel
-   whose content is not an item list, and `--popover-bg` / `--popover-border`
-   for a surface that belongs to the card it hangs on rather than to the shell
-   portal ladder (the viewer's menus).
+   The surface is one spec (`--color-popover-bg` above the portal tier,
+   `--color-portal-border`, `--radius-md`, `--shadow-2`) and the outer pad is one
+   value; a consumer that needs inner padding pads its own content, because the
+   panel's box is chrome and its body is content.
    ========================================================================== */
 
 /* The dismiss target. It stays under the panel (`--z-portal` vs +1) and is
@@ -32,7 +30,18 @@
 	z-index: 1;
 }
 
+/* The overlay surface itself: tone, hairline, radius, elevation. Shared with the
+   History pane's in-flow disclosure, which positions itself from row pitch and
+   so cannot compose the panel's geometry. */
+.surface {
+	background: var(--color-popover-bg);
+	border: 1px solid var(--color-portal-border);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-2);
+}
+
 .panel {
+	composes: surface;
 	position: fixed;
 	position-anchor: --pi-popover;
 	top: calc(anchor(bottom) + 4px);
@@ -41,11 +50,7 @@
 	z-index: calc(var(--z-portal) + 1);
 	max-height: min(320px, calc(100vh - 32px));
 	overflow-y: auto;
-	padding: var(--popover-pad, 4px);
-	background: var(--popover-bg, var(--color-portal-bg));
-	border: 1px solid var(--popover-border, var(--color-portal-border));
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-2);
+	padding: 4px;
 }
 
 .panel[data-layer="local"] {

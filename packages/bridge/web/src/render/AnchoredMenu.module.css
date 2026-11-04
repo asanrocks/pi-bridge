@@ -1,9 +1,6 @@
-/* Chrome, placement, and layering are render/Popover.module.css; a menu hangs
-   on the card it belongs to (a turn card, the TopBar band) rather than on the
-   page tone, so it takes that surface and keeps only its own width. */
+/* Chrome, placement, layering, and surface are render/Popover.module.css; a menu
+   only adds its own width. */
 .menu {
-	--popover-bg: var(--color-card);
-	--popover-border: var(--color-border);
 	width: min(320px, calc(100vw - 16px));
 }
 

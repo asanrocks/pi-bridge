@@ -297,14 +297,15 @@
 /* Superseded popover — overlay below the keeper row, above subsequent rows.
    Anchors at the gutter end + time column (under the +N chip) and extends
    rightward into the text area where the visual mass is, capped so it can't
-   run off the pane's right edge on early rows. */
+   run off the pane's right edge on early rows.
+
+   The surface is the shared overlay spec (render/Popover.module.css); only the
+   position is local, because the disclosure is in flow and must scroll with the
+   rows it belongs to rather than hang in the viewport. */
 .supersededPopover {
+	composes: surface from "../../render/Popover.module.css";
 	position: absolute;
 	z-index: 10;
-	background: var(--color-background);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-xs);
-	box-shadow: var(--shadow-2);
 	padding: 4px;
 	min-width: 200px;
 	max-width: min(320px, calc(100% - 16px));

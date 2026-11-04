@@ -1080,7 +1080,12 @@ for new buttons, chips, action rows, and Markdown hosts.
   Sidebar/TopBar are a warmer chrome surface, user turns have a light blue
   tint, and the composer is the raised white surface. Cards are reserved for
   individual actions, dialogs, file viewing, and repeated rows; page sections
-  are not nested cards. Radius stays in the token scale, with the composer as
+  are not nested cards. Elevation is an ordering, not a hue: the raised tier
+  (`--color-surface-raised`) is the only surface documented as sitting above the
+  page, so it is what an anchored panel takes (`--color-popover-bg`), while the
+  chrome tier is a *recess* in light and a *rise* in dark and can never carry a
+  floating surface. An overlay is separated from its host by tone, hairline, and
+  shadow together, never by tone alone. Radius stays in the token scale, with the composer as
   the deliberate larger-radius exception. A hairline border is a boundary
   between two surfaces — a field, a portal, a card, a thumbnail; the one other
   boundary is the control that carries words (see
@@ -1251,21 +1256,31 @@ header is the registry (role, glyph, one sentence each), exports are named
   stays anchored, so the panel opens in the right column at the wrong place.
   `check-bridge-styling-tokens.mjs` validates every `anchor()` argument and fails
   a fixed `--shadow-2` panel declared outside the named exceptions, for the same
-  reason. Two properties cannot be productively shared — padding, and the pigment
-  of a panel that belongs to the card it hangs on rather than to the page tone —
-  so they are routed through `--popover-pad` / `--popover-bg` / `--popover-border`
-  instead: when two rules declare one property on one element, bundle order
-  decides, and no component can see bundle order. Escape belongs to the innermost
-  panel (`escape={false}` stands an outer one down), because two capture-phase
-  document listeners cannot be ordered by nesting. Two surfaces still take rects:
-  `PathCompletion` anchors to a textarea caret (not an element, so it needs a
-  zero-width anchor element rather than a token) and the model picker receives
-  one from its host. One anchored surface is deliberately outside this primitive:
-  the History pane's superseded list is an in-flow disclosure inside the
-  scrolling content, so its position comes from row pitch and it must scroll with
-  the rows rather than hang in the viewport. This assumes the client's browser
-  floor (`anchor()`, `subgrid`, `color-mix()`, cascade layers) — a 2026 baseline,
-  not a 2021 one.
+  reason. Escape belongs to the innermost panel (`dismissOnEscape={false}` stands
+  an outer one down), because two capture-phase document listeners cannot be
+  ordered by nesting. Two surfaces still take rects: `PathCompletion` anchors to
+  a textarea caret (not an element, so it needs a zero-width anchor element
+  rather than a token) and the model picker receives one from its host.
+- **An anchored panel is one surface with two content anatomies.** The panel's
+  box is chrome and is identical everywhere: `--color-popover-bg` (the raised
+  tier, one step above the portal surfaces), `--color-portal-border`,
+  `--radius-md`, `--shadow-2`, and a 4px outer pad. The tone is not the host's,
+  because the chrome tier's direction flips between themes — light puts
+  `--color-card` below the page, dark puts it above — so a floating surface that
+  inherited it would be recessed in one theme by construction; the gate asserts
+  both that `--color-popover-bg` aliases `--color-surface-raised` and that the
+  raised tier stays lighter than the page in each theme. What a consumer adds is
+  content, not chrome: **action rows** (a label, an optional detail line, a hover
+  fill, `role="menu"` with `menuitem` children) or a **read-only ledger**
+  (labelled sections and key/value rows at `--fs-xs`, `role="dialog"` with a
+  name, no focus management). The ledger owns its inner padding in a body
+  wrapper rather than widening the panel, and in-panel separators are
+  `--color-border` like every other in-panel edge. The History pane's superseded
+  list composes the shared surface (`composes: surface`) while keeping its own
+  position: it is an in-flow disclosure inside the scrolling content, so it comes
+  from row pitch and scrolls with the rows instead of hanging in the viewport.
+  This assumes the client's browser floor (`anchor()`, `subgrid`, `color-mix()`,
+  cascade layers) — a 2026 baseline, not a 2021 one.
 - **Nothing in the document is a font glyph.** No emoji, and no geometric
   character (`▾ ▶ ■ ✕ …`) standing in for an icon. Three concrete reasons: an
   emoji is a colour bitmap that ignores `currentColor`, so it cannot follow the

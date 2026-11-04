@@ -72,6 +72,14 @@
 //     static inline position while its block offset stays anchored — a menu that
 //     opens in the right column, at the wrong place.
 //
+//   - An anchored panel sits above its host in both themes. Its tone is
+//     `--color-popover-bg`, which must alias `--color-surface-raised`.
+//     `--color-card` is the chrome role and its direction flips between themes
+//     (light: recessed below the page, dark: raised above it), so a floating
+//     surface that inherited it is recessed in one theme by construction — and
+//     the raised tier itself must stay lighter than the page, or "elevated"
+//     stops meaning anything.
+//
 //   - The elevated portal panel is one spec. A `position: fixed` panel carrying
 //     `--shadow-2` is declared in render/Popover.module.css and nowhere else;
 //     the two full-surface variants (render/Dialog, viewer/Viewer) and the
@@ -486,7 +494,11 @@ for (const [f, source] of css) {
 	if (PANEL_SITE_EXCEPTIONS.has(f.slice(ROOT.length + 1))) continue;
 	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
 		const body = block[2];
-		if (!/(?:^|;|\s)position\s*:\s*fixed/.test(body) || !body.includes("var(--shadow-2)")) continue;
+		if (!/(?:^|;|\s)position\s*:\s*fixed/.test(body)) continue;
+		// The surface can also arrive by composition, so the elevation and the
+		// fixed box are separate declarations on purpose.
+		const elevated = body.includes("var(--shadow-2)") || /composes:\s*surface\s+from/.test(body);
+		if (!elevated) continue;
 		const selector = block[1].split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
 		errors.push(
 			`${f}: ${selector} is a fixed elevated panel — anchored panels compose render/Popover (and ${PANEL_SITE} owns the chrome) unless it is one of the named exceptions in PANEL_SITE_EXCEPTIONS`,
@@ -588,6 +600,50 @@ if (themeBody && darkBody) {
 		if (!theme.has(name)) {
 			errors.push(`${INDEX_CSS}: ${name} is declared in ${DARK_MEDIA} but not in @theme`);
 		}
+	}
+}
+
+// ── Pass 3b: the overlay surface sits above its host in both themes ─────────
+//
+// "Elevated" is an ordering, not a colour: an anchored panel has to read as
+// floating in both themes, so its tone is the raised tier. See the header for
+// why inheriting the chrome tier cannot satisfy that.
+
+const RAISED_TIER = "--color-surface-raised";
+const PAGE_TONE = "--color-background";
+const POPOVER_TONE = "--color-popover-bg";
+
+/** Relative luminance of a `#rrggbb` literal, or null when it is not one. */
+function hexLuminance(value) {
+	const m = /^#([0-9a-f]{6})$/i.exec(value ?? "");
+	if (!m) return null;
+	const channel = (offset) => {
+		const c = Number.parseInt(m[1].slice(offset, offset + 2), 16) / 255;
+		return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+	};
+	return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+}
+
+if (themeBody && darkBody) {
+	const theme = declarations(themeBody);
+	const dark = declarations(darkBody);
+	for (const [label, tokens] of [
+		["@theme", theme],
+		[DARK_MEDIA, dark],
+	]) {
+		const raised = hexLuminance(tokens.get(RAISED_TIER));
+		const page = hexLuminance(tokens.get(PAGE_TONE));
+		if (raised === null || page === null) continue;
+		if (raised <= page) {
+			errors.push(
+				`${INDEX_CSS}: ${RAISED_TIER} (${tokens.get(RAISED_TIER)}) is not lighter than ${PAGE_TONE} (${tokens.get(PAGE_TONE)}) in ${label} — an elevated surface that is not above the page reads as recessed`,
+			);
+		}
+	}
+	if (!(theme.get(POPOVER_TONE) ?? "").includes(`var(${RAISED_TIER})`)) {
+		errors.push(
+			`${INDEX_CSS}: ${POPOVER_TONE} must alias var(${RAISED_TIER}) — the chrome tier's direction flips between themes, so an anchored panel that inherits it is recessed in one theme by construction`,
+		);
 	}
 }
 

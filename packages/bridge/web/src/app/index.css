@@ -130,6 +130,12 @@
   --color-overlay: rgba(0, 0, 0, 0.3);
   --color-portal-bg: var(--color-background);
   --color-portal-border: #c8c3b8;
+  /* An anchored panel floats above whatever it covers, so it takes the raised
+     tier rather than its host's tone: the chrome tier's direction flips between
+     themes (light: recessed below the page, dark: raised above it), and a
+     floating surface that inherits it is recessed in one theme by construction.
+     An alias, so it follows --color-surface-raised through both themes. */
+  --color-popover-bg: var(--color-surface-raised);
 
   /* ── Radius scale ───────────────────────────────────────────────────── */
   --radius-xs: 2px;   /* tiny — pager buttons, edit chips, inline diff marks */

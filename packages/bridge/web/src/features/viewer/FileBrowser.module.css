@@ -262,12 +262,10 @@
 
 /* ── Compare menu ─────────────────────────────────────────────────────── */
 
-/* Chrome, placement, and the local layering are render/Popover.module.css; the
-   menu takes the card surface it hangs on and only sizes itself. */
+/* Chrome, placement, layering, and surface are render/Popover.module.css; the
+   menu only sizes itself. */
 .compareMenu {
-	--popover-bg: var(--color-card);
-	--popover-border: var(--color-border);
-	width: min(316px, calc(100vw - 16px));
+	width: min(320px, calc(100vw - 16px));
 }
 
 .compareLabel {
@@ -387,12 +385,10 @@
 	color: var(--color-foreground);
 }
 
-/* Endpoint list: chrome, placement, and the local layering are
+/* Endpoint list: chrome, placement, layering, and surface are
    render/Popover.module.css (the list lives inside the viewer panel's stacking
-   context). Only the width and padding here. */
+   context). Only the width here. */
 .pickerMenu {
-	--popover-bg: var(--color-card);
-	--popover-border: var(--color-border);
 	width: min(320px, calc(100vw - 16px));
 	min-width: 240px;
 	max-width: min(340px, calc(100vw - 16px));
