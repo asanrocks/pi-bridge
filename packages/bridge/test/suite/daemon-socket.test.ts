@@ -10,13 +10,19 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { Daemon } from "../../src/host/daemon.ts";
-import { probeDaemonSocket, removeStaleSocket, webBaseUrlFromEndpoint } from "../../src/host/daemon-socket.ts";
+import {
+	defaultDaemonSocketPath,
+	probeDaemonSocket,
+	removeStaleSocket,
+	startDaemonSocket,
+	webBaseUrlFromEndpoint,
+} from "../../src/host/daemon-socket.ts";
 import { buildProjects } from "../../src/host/projects.ts";
 import { runWorkerClient, type WorkerClientProcess } from "../../src/host/worker-process.ts";
 
@@ -127,6 +133,36 @@ async function abandonSocket(path: string): Promise<void> {
 	});
 }
 
+const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\";
+
+/** Tests that bind or leave behind a UNIX socket file: Windows binds a named
+ * pipe and the namespace entry vanishes with the process, so neither a plain
+ * path is bindable nor is a stale file left to find. */
+const itOnUnix = process.platform === "win32" ? it.skip : it;
+const itOnWindows = process.platform === "win32" ? it : it.skip;
+
+let pipeSeq = 0;
+
+/** An address one test can actually bind: a file in its private temp directory
+ * on a platform that binds paths, a process-unique pipe name on Windows, where
+ * the pipe namespace is machine-global. */
+function testSocketPath(root: string, name: string): string {
+	if (process.platform !== "win32") return join(root, `${name}.sock`);
+	pipeSeq += 1;
+	return `${WINDOWS_PIPE_PREFIX}pi-bridge-${name}-${process.pid}-${pipeSeq}`;
+}
+
+/** Replace `process.platform` for one synchronous block, then put it back. */
+function withPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	Object.defineProperty(process, "platform", { value: platform, configurable: true });
+	try {
+		return run();
+	} finally {
+		if (descriptor !== undefined) Object.defineProperty(process, "platform", descriptor);
+	}
+}
+
 describe("daemon socket probe", () => {
 	it("reports an absent path", async () => {
 		const root = workdir();
@@ -135,7 +171,7 @@ describe("daemon socket probe", () => {
 
 	it("reports a live daemon and does not register anything", async () => {
 		const root = workdir();
-		const socketPath = join(root, "bridge.sock");
+		const socketPath = testSocketPath(root, "live");
 		const daemon = await startDaemon(socketPath, root);
 
 		// The probe is the only reply a daemon sends a launcher, so it is where a
@@ -151,7 +187,7 @@ describe("daemon socket probe", () => {
 		expect(webBaseUrlFromEndpoint("http://box")).toBeNull();
 	});
 
-	it("reports a crashed daemon's socket as stale and removes only a socket", async () => {
+	itOnUnix("reports a crashed daemon's socket as stale and removes only a socket", async () => {
 		const root = workdir();
 		const socketPath = join(root, "stale.sock");
 		await abandonSocket(socketPath);
@@ -174,10 +210,58 @@ describe("daemon socket probe", () => {
 	});
 });
 
+describe("daemon socket default address", () => {
+	it("names a file under $HOME where the platform has UNIX sockets", () => {
+		withPlatform("linux", () => {
+			expect(defaultDaemonSocketPath()).toBe(join(homedir(), ".pi", "bridge.sock"));
+		});
+	});
+
+	it("names a per-user pipe on Windows, where a plain path is not bindable", () => {
+		const windows = withPlatform("win32", () => defaultDaemonSocketPath());
+		expect(windows.startsWith(WINDOWS_PIPE_PREFIX)).toBe(true);
+		// The pipe namespace is machine-global: the address must separate users,
+		// which is what $HOME does for the file default.
+		expect(windows.length).toBeGreaterThan(`${WINDOWS_PIPE_PREFIX}pi-bridge-`.length);
+		withPlatform("linux", () => expect(defaultDaemonSocketPath()).not.toBe(windows));
+
+		// `ws` parses `ws+unix:` through `new URL()`, which percent-encodes
+		// non-ASCII characters without decoding them and splits on `:`. Plain ASCII
+		// names stay readable; non-ASCII or URL-special names are byte-escaped
+		// without colliding.
+		expect(withPlatform("win32", () => defaultDaemonSocketPath("alice"))).toBe(
+			`${WINDOWS_PIPE_PREFIX}pi-bridge-alice`,
+		);
+		const cjk = withPlatform("win32", () => defaultDaemonSocketPath("张三"));
+		const special = withPlatform("win32", () => defaultDaemonSocketPath("DOM\\a:b?c#d e_f"));
+		const underscore = withPlatform("win32", () => defaultDaemonSocketPath("DOM_5ca_3ab_3fc_23d_20e_5ff"));
+		for (const address of [cjk, special, underscore]) {
+			const tail = address.slice(WINDOWS_PIPE_PREFIX.length);
+			expect(tail).toMatch(/^pi-bridge-[0-9A-Za-z._-]+$/);
+			expect(new URL(`ws+unix:${address}:/`).pathname).toBe(`${address}:/`);
+		}
+		expect(special).not.toBe(underscore);
+	});
+
+	// Runs only where a pipe can actually be bound: it pins the address shape the
+	// Windows default uses, end to end rather than by string.
+	itOnWindows("binds a pipe name and refuses a plain path by name", async () => {
+		const socketPath = defaultDaemonSocketPath(`张三-${process.pid}-${++pipeSeq}`);
+		const socket = await startDaemonSocket({ socketPath, onWorker: () => {} });
+		cleanups.push(() => socket.close());
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null });
+
+		// libuv answers a non-pipe bind with a bare EACCES; the message must say
+		// what the caller can change instead.
+		const plain = join(workdir(), "plain-path");
+		await expect(startDaemonSocket({ socketPath: plain, onWorker: () => {} })).rejects.toThrow(/named pipe/);
+	});
+});
+
 describe("dial-in Worker registration", () => {
 	it("routes a Worker that joined a daemon-only process", async () => {
 		const root = workdir();
-		const socketPath = join(root, "bridge.sock");
+		const socketPath = testSocketPath(root, "dials-in");
 		const fixture = projectFixture(root, "dials-in");
 		const daemon = await startDaemon(socketPath, root);
 
@@ -208,7 +292,7 @@ describe("dial-in Worker registration", () => {
 
 	it("keeps the Worker's runtimes across a daemon restart and re-registers", async () => {
 		const root = workdir();
-		const socketPath = join(root, "bridge.sock");
+		const socketPath = testSocketPath(root, "survivor");
 		const fixture = projectFixture(root, "survivor");
 		const first = await startDaemon(socketPath, root);
 
@@ -245,7 +329,7 @@ describe("dial-in Worker registration", () => {
 
 	it("stops a Worker whose registration the daemon refuses", async () => {
 		const root = workdir();
-		const socketPath = join(root, "bridge.sock");
+		const socketPath = testSocketPath(root, "reserved");
 		// `assets` is a reserved surface name, so the daemon rejects the claim.
 		const fixture = projectFixture(root, "assets");
 		const daemon = await startDaemon(socketPath, root);
@@ -272,7 +356,7 @@ describe("dial-in Worker registration", () => {
 
 	it("stops a Worker whose Project id another registration already serves", async () => {
 		const root = workdir();
-		const socketPath = join(root, "bridge.sock");
+		const socketPath = testSocketPath(root, "clash");
 		// The same Project id from two different directories: the Daemon's
 		// routing conflict is under test, not the storage lock (which correctly
 		// refuses the same directory to a second process).

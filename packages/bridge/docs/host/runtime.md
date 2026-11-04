@@ -80,10 +80,14 @@ never falls back to another role. **worker** (`--mode=worker`) registers this
 invocation's Projects with an existing daemon and fails when none answers;
 `--daemon <ws-url>` selects a remote daemon and implies the worker role.
 
-Local discovery uses one UNIX socket, `$HOME/.pi/bridge.sock`, independent of
-pi's agent directory; `--socket` overrides it. The socket carries the discovery
-probe and Worker registration only — never the browser surface — so a local
-Worker needs no port guess and the web listener stays free to move.
+Local discovery uses one address per user, independent of pi's agent directory:
+`$HOME/.pi/bridge.sock`, or the named pipe `\\.\pipe\pi-bridge-<user>` on
+Windows, where `node:net` will not bind a plain filesystem path (it reports the
+rejection as `EACCES`). The user segment keeps the isolation `$HOME` provides
+there, because the pipe namespace is machine-global. `--socket` overrides the
+default. The socket carries the discovery probe and Worker registration only —
+never the browser surface — so a local Worker needs no port guess and the web
+listener stays free to move.
 
 ```text
 pi-bridge                     join a live daemon as a Worker, else start both
@@ -103,7 +107,9 @@ because it is the only daemon→launcher reply and a UNIX socket path has no
 port to read; a Worker registers with an address it could not otherwise name.
 A launch that loses the bind race joins the winner, which is the only case
 where arrival order decides the role. Disposal removes the socket file, so the
-next launch sees a missing path rather than a stale one.
+next launch sees a missing path rather than a stale one. On Windows a pipe name
+needs no cleanup step: the namespace entry disappears with the process that
+bound it, so an interrupted run leaves nothing behind.
 
 A forced `--mode=daemon` fails when the socket is already owned instead of
 changing roles. A Worker's first registration must succeed; once registered, a
@@ -190,10 +196,10 @@ catalogue, and pinned/visible scopes, deduped by identity.
 Four modes share one host implementation:
 
 - **dial-in** — the default for a second invocation: the Daemon binds the
-  discovery socket (`--socket`, default `$HOME/.pi/bridge.sock`) and a Worker
-  connects to it, sending `hello` as its first frame. The Daemon never dials
-  out for a local registration, which is what makes role discovery possible
-  (see [Startup Roles](#startup-roles)).
+  discovery socket (`--socket`; see [Startup Roles](#startup-roles) for the
+  per-platform default) and a Worker connects to it, sending `hello` as its
+  first frame. The Daemon never dials out for a local registration, which is
+  what makes role discovery possible.
 - **in-process** — the default of a combined launch, and what the test suites
   use: `startLocalWorker` builds the environment and the registry inside the
   Daemon process.

@@ -2,9 +2,10 @@
 // Startup discovery — which role this invocation takes.
 //
 // A local Worker needs a way to find a running Daemon without a port guess, so
-// the default is one UNIX socket path (`$HOME/.pi/bridge.sock`, independent of
-// pi's agent directory). The socket file is not proof of anything: a crashed
-// daemon leaves the file behind, and an unrelated process can own the path.
+// the default is one address per user (`$HOME/.pi/bridge.sock`, or a named pipe
+// on Windows, independent of pi's agent directory). The socket file is not proof
+// of anything: a crashed daemon leaves the file behind, and an unrelated process
+// can own the path.
 // Every decision therefore comes from a probe that actually answers:
 //
 //   live    — a compatible daemon answered the handshake: join as a Worker.

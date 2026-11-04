@@ -22,6 +22,7 @@
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import type { ImageContent, JsonValue, PullRequestItem, SessionInfo } from "../core/index.ts";
+import { endpointUrl } from "./daemon-socket.ts";
 import type {
 	ObservedSession,
 	ObserveSessionOptions,
@@ -104,15 +105,8 @@ interface Pending {
 	reject: (error: Error) => void;
 }
 
-function connectUrl(endpoint: string): string {
-	if (!endpoint.startsWith("unix:")) return endpoint;
-	// `ws` speaks Unix sockets through its own URL form; the trailing path is the
-	// HTTP request target, which the serving side ignores.
-	return `ws+unix://${endpoint.slice("unix:".length)}:/`;
-}
-
 export function connectWorker(options: ConnectWorkerOptions): Promise<RemoteWorker> {
-	return adoptWorkerConnection(new WebSocket(connectUrl(options.endpoint)), options);
+	return adoptWorkerConnection(new WebSocket(endpointUrl(options.endpoint)), options);
 }
 
 /**
