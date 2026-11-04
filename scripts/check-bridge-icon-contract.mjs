@@ -244,7 +244,7 @@ const CONTROL_ROLES = new Map(
 		// Backdrops: a full-viewport hit area, not a control.
 		overlay: "backdrop (click dismisses)",
 		portalOverlay: "backdrop (click dismisses)",
-		pickerOverlay: "backdrop (click dismisses)",
+		backdrop: "backdrop (click dismisses)",
 		viewerOverlay: "backdrop (click dismisses)",
 		treeScrim: "backdrop (click dismisses)",
 		// Containers that happen to be buttons: the whole surface is the target.

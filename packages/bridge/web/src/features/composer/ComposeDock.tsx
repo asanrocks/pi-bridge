@@ -116,9 +116,9 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const visibleModels = useStore((s) => s.visibleModels);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
 
-	// Cost-breakdown popover state
+	// Cost-breakdown popover state. The trigger element is the anchor (CSS
+	// resolves the insets), so only the open flag is state.
 	const [costOpen, setCostOpen] = useState(false);
-	const [costAnchor, setCostAnchor] = useState<DOMRect | null>(null);
 	const costBtnRef = useRef<HTMLButtonElement>(null);
 
 	// Picker writes are local (the stateless client API has no model verb):
@@ -378,10 +378,9 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 				ref={costBtnRef}
 				type="button"
 				className={cardStyles.composerCostBtn}
-				onClick={() => {
-					setCostAnchor(costBtnRef.current?.getBoundingClientRect() ?? null);
-					setCostOpen((v) => !v);
-				}}
+				onClick={() => setCostOpen((v) => !v)}
+				aria-haspopup="dialog"
+				aria-expanded={costOpen}
 				aria-label="Token usage breakdown"
 			>
 				{costLabel}
@@ -454,7 +453,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 			)}
 
 			{/* Cost breakdown popover */}
-			{costOpen && <CostPopover anchorRect={costAnchor} onClose={() => setCostOpen(false)} />}
+			{costOpen && <CostPopover anchor={costBtnRef.current} onClose={() => setCostOpen(false)} />}
 		</div>
 	);
 });

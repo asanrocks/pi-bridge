@@ -72,6 +72,14 @@
 //     static inline position while its block offset stays anchored — a menu that
 //     opens in the right column, at the wrong place.
 //
+//   - The elevated portal panel is one spec. A `position: fixed` panel carrying
+//     `--shadow-2` is declared in render/Popover.module.css and nowhere else;
+//     the two full-surface variants (render/Dialog, viewer/Viewer) and the
+//     model picker (the last rect-anchored panel) are named exceptions. Without
+//     this, each new popover re-derived the backdrop, the chrome, and its own
+//     flip/clamp arithmetic — four copies of a rule whose only difference was
+//     the pigment.
+//
 //   - The shell coordinates are consumed by name, not restated as numbers. The
 //     frame has one action column, one TopBar-band control box, and one header
 //     box per pane; the table below names the rules that must take those values
@@ -455,6 +463,34 @@ for (const [f, source] of css) {
 	if (!source.includes("anchor(")) continue;
 	if (!/(?:^|;|\s)position-anchor\s*:/.test(source) && !/anchor\(\s*--/.test(source)) {
 		errors.push(`${f}: uses anchor() but never names an anchor — add position-anchor (or pass the anchor name to anchor()) so the offsets have something to resolve against`);
+	}
+}
+
+// ── Pass 1f: the elevated portal panel has one declaration site ─────────────
+//
+// Backdrop + fixed panel + `--shadow-2` is the popover spec, and it lived in
+// four modules with a hand-written clamp or flip in each. render/Popover owns
+// it now; a new anchored surface composes that component instead of restating
+// the chrome. The exceptions are the two full-surface portals and the model
+// picker, which still takes a trigger rect (see docs/web/design.md).
+
+const PANEL_SITE = "render/Popover.module.css";
+const PANEL_SITE_EXCEPTIONS = new Set([
+	PANEL_SITE,
+	"render/Dialog.module.css",
+	"features/viewer/Viewer.module.css",
+	"features/composer/ComposeCard.module.css",
+]);
+
+for (const [f, source] of css) {
+	if (PANEL_SITE_EXCEPTIONS.has(f.slice(ROOT.length + 1))) continue;
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const body = block[2];
+		if (!/(?:^|;|\s)position\s*:\s*fixed/.test(body) || !body.includes("var(--shadow-2)")) continue;
+		const selector = block[1].split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
+		errors.push(
+			`${f}: ${selector} is a fixed elevated panel — anchored panels compose render/Popover (and ${PANEL_SITE} owns the chrome) unless it is one of the named exceptions in PANEL_SITE_EXCEPTIONS`,
+		);
 	}
 }
 

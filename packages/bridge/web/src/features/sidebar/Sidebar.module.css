@@ -435,49 +435,10 @@ difference between them. */
 	}
 }
 
-/* ── cwd picker popover (Instances [+] when allowlist > 1) ──
-   portalOverlay is duplicated here and in the composer's model-picker
-   module; it's a 5-line backdrop rule, cheaper to duplicate than to
-   invent a shared render/portal module for one consumer each. */
-.portalOverlay {
-	position: fixed;
-	inset: 0;
-	z-index: var(--z-portal);
-	background: transparent;
-	border: none;
-	padding: 0;
-	margin: 0;
-}
-
-.cwdPopover {
-	position: fixed;
-	z-index: calc(var(--z-portal) + 1);
-	min-width: 200px;
-	max-width: 320px;
-	background: var(--color-portal-bg);
-	border: 1px solid var(--color-portal-border);
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-2);
+/* Row menu: chrome and placement are render/Popover.module.css; the panel only
+   sizes itself to its two verbs (Close, Archive). */
+.rowMenu {
 	display: flex;
 	flex-direction: column;
-	padding: 4px;
-}
-
-.cwdPopoverItem {
-	padding: 6px 10px;
-	font-size: var(--fs-sm);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	background: none;
-	color: var(--color-foreground);
-	border: none;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-	text-align: left;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.cwdPopoverItem:hover {
-	background: var(--color-muted);
+	min-width: 130px;
 }

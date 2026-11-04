@@ -1235,22 +1235,37 @@ header is the registry (role, glyph, one sentence each), exports are named
   one token and the gate holds every consumer to it. Revisit only if a third
   pane needs the same column, where a shared grid would be cheaper than three
   consumers of one token.
-- **Anchored surfaces are positioned by CSS, not by a rect.** The trigger carries
-  an `anchor-name` while its panel exists (`render/useAnchorName.ts`, a layout
-  effect so the panel never paints at its static position); the panel declares
-  `position-anchor`, `anchor(bottom)` / `anchor(inline-start)` insets, and
-  `position-try-fallbacks` for the flip. A `DOMRect` snapshot goes stale on the
-  first scroll, and the clamp arithmetic was hand-written per popover. The sides
-  are physical (`left: anchor(left)`): `<anchor-side>` is a closed set with no
-  `inline-start`, and an invalid side is silently dropped — the inset then falls
-  back to `auto` while the block offset stays anchored, so the panel opens in the
-  right column at the wrong place. `check-bridge-styling-tokens.mjs` validates
-  every `anchor()` argument for that reason. Two
-  surfaces still take rects and are the remaining conversions: `PathCompletion`
-  anchors to a textarea caret (not an element, so it needs a zero-width anchor
-  element rather than a token), and the model picker and cost popover receive
-  rects from their hosts. This assumes the client's browser floor (`anchor()`,
-  `subgrid`, `color-mix()`, cascade layers) — a 2026 baseline, not a 2021 one.
+- **One anchored panel, positioned by CSS.** `render/Popover.tsx` is the only
+  anchored surface: it owns the dismiss backdrop, Escape, and the chrome in
+  `render/Popover.module.css`, and a consumer supplies the trigger element, a
+  placement (`below` / `above`), an alignment, and its own item geometry. The
+  trigger carries an `anchor-name` while the panel exists
+  (`render/useAnchorName.ts`, a layout effect so the panel never paints at its
+  static position); the panel declares `position-anchor`, `anchor(bottom)` /
+  `anchor(left)` insets, and `position-try-fallbacks` for the flip. A `DOMRect`
+  snapshot went stale on the first scroll, and the clamp arithmetic it needed was
+  restated per popover — four backdrops and four chromes whose only difference
+  was the pigment. The sides are physical (`left: anchor(left)`):
+  `<anchor-side>` is a closed set with no `inline-start`, and an invalid side is
+  silently dropped — the inset then falls back to `auto` while the block offset
+  stays anchored, so the panel opens in the right column at the wrong place.
+  `check-bridge-styling-tokens.mjs` validates every `anchor()` argument and fails
+  a fixed `--shadow-2` panel declared outside the named exceptions, for the same
+  reason. Two properties cannot be productively shared — padding, and the pigment
+  of a panel that belongs to the card it hangs on rather than to the page tone —
+  so they are routed through `--popover-pad` / `--popover-bg` / `--popover-border`
+  instead: when two rules declare one property on one element, bundle order
+  decides, and no component can see bundle order. Escape belongs to the innermost
+  panel (`escape={false}` stands an outer one down), because two capture-phase
+  document listeners cannot be ordered by nesting. Two surfaces still take rects:
+  `PathCompletion` anchors to a textarea caret (not an element, so it needs a
+  zero-width anchor element rather than a token) and the model picker receives
+  one from its host. One anchored surface is deliberately outside this primitive:
+  the History pane's superseded list is an in-flow disclosure inside the
+  scrolling content, so its position comes from row pitch and it must scroll with
+  the rows rather than hang in the viewport. This assumes the client's browser
+  floor (`anchor()`, `subgrid`, `color-mix()`, cascade layers) — a 2026 baseline,
+  not a 2021 one.
 - **Nothing in the document is a font glyph.** No emoji, and no geometric
   character (`▾ ▶ ■ ✕ …`) standing in for an icon. Three concrete reasons: an
   emoji is a colour bitmap that ignores `currentColor`, so it cannot follow the

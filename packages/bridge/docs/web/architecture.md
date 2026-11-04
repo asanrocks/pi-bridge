@@ -30,8 +30,9 @@ The web source is divided by responsibility:
   unread counting, media queries, notification permission, clipboard writes,
   secure-context guidance, and image preparation.
 - `render/` contains shared rendering primitives, Markdown, code highlighting,
-  icons, the centered `Dialog` portal surface, shared resize/result helpers,
-  and the side-pane shell (`PaneShell` +
+  icons, the centered `Dialog` portal surface, the anchored `Popover` panel that
+  every popover, picker, and menu composes, shared resize/result helpers, and the
+  side-pane shell (`PaneShell` +
   `usePaneMode`/`usePeekDrawer`/`useEdgeReveal`) that both docked panes
   (Sidebar, HistoryPane) render into.
 - `features/<area>/` owns an area and its wiring: launcher, topbar, sidebar,

@@ -6,11 +6,12 @@
 // disclosure, and this row's menu is not that menu.
 // ============================================================================
 
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 import type { SessionInfo } from "../../../../src/core/index.ts";
 import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
 import { useNow } from "../../infra/lib/useNow.ts";
 import { MoreIcon } from "../../render/icons.tsx";
+import { Popover } from "../../render/Popover.tsx";
 import styles from "./Sidebar.module.css";
 
 export const SessionRow = memo(function SessionRow({
@@ -40,7 +41,8 @@ export const SessionRow = memo(function SessionRow({
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
 	const now = useNow();
-	const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
+	const menuBtnRef = useRef<HTMLButtonElement>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const dotCls = [
 		styles.sidebarLiveDot,
 		dot === "streaming" ? styles.sidebarLiveDotStreaming : dot === "idle" ? styles.sidebarDotIdle : "",
@@ -70,62 +72,53 @@ export const SessionRow = memo(function SessionRow({
 			</button>
 			{(onClose || onArchive) && (
 				<button
+					ref={menuBtnRef}
 					type="button"
 					className={styles.sidebarMenuBtn}
 					aria-label="Session menu"
 					aria-haspopup="menu"
-					aria-expanded={menuAnchor !== null}
+					aria-expanded={menuOpen}
 					onClick={(e) => {
 						e.stopPropagation();
-						setMenuAnchor(e.currentTarget.getBoundingClientRect());
+						setMenuOpen((v) => !v);
 					}}
 				>
 					<MoreIcon size={14} />
 				</button>
 			)}
-			{menuAnchor && (
-				<>
-					<button
-						type="button"
-						aria-label="Close menu"
-						className={styles.portalOverlay}
-						onClick={() => setMenuAnchor(null)}
-					/>
-					<div
-						className={styles.cwdPopover}
-						style={{
-							position: "fixed",
-							top: menuAnchor.bottom + 4,
-							left: Math.max(8, Math.min(menuAnchor.right - 130, window.innerWidth - 130 - 8)),
-							width: 130,
-						}}
-					>
-						{onClose && (
-							<button
-								type="button"
-								className={[styles.sidebarMenuItem, styles.sidebarMenuClose].join(" ")}
-								onClick={() => {
-									setMenuAnchor(null);
-									onClose(session);
-								}}
-							>
-								Close
-							</button>
-						)}
-						{onArchive && (
-							<button
-								type="button"
-								className={[styles.sidebarMenuItem, styles.sidebarMenuArchive].join(" ")}
-								onClick={() => {
-									setMenuAnchor(null);
-									onArchive(session);
-								}}
-							>
-								Archive
-							</button>
-						)}
-					</div>
-				</>
+			{menuOpen && (
+				<Popover
+					anchor={menuBtnRef.current}
+					onClose={() => setMenuOpen(false)}
+					role="menu"
+					label="Session menu"
+					className={styles.rowMenu}
+				>
+					{onClose && (
+						<button
+							type="button"
+							className={[styles.sidebarMenuItem, styles.sidebarMenuClose].join(" ")}
+							onClick={() => {
+								setMenuOpen(false);
+								onClose(session);
+							}}
+						>
+							Close
+						</button>
+					)}
+					{onArchive && (
+						<button
+							type="button"
+							className={[styles.sidebarMenuItem, styles.sidebarMenuArchive].join(" ")}
+							onClick={() => {
+								setMenuOpen(false);
+								onArchive(session);
+							}}
+						>
+							Archive
+						</button>
+					)}
+				</Popover>
 			)}
 		</div>
 	);
