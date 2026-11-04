@@ -338,8 +338,11 @@ describe("daemon routing through a remote worker", () => {
 		expect((replace.session as { stem: string }).stem).toBe("s1");
 
 		send(ws, { verb: "prompt", text: "hi" });
-		// The command travelled browser → Daemon → Worker and reached the runtime.
-		await waitUntil(() => fixture.managers[0]?.calls.includes("prompt:hi") === true);
+		// The command travelled browser → Daemon → Worker and reached the runtime
+		// at admission (ADR 12 Reply semantics): the wire verb must not use the
+		// completion path, whose reply waits for the whole turn.
+		await waitUntil(() => fixture.managers[0]?.calls.includes("admitted:hi") === true);
+		expect(fixture.managers[0]?.calls).not.toContain("prompt:hi");
 	});
 
 	it("refuses a Project outside the accepted registration", async () => {

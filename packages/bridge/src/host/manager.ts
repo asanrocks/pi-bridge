@@ -163,9 +163,10 @@ export interface Manager {
 	/** Admit a prompt without awaiting the turn: resolves once pi's preflight
 	 * accepts it (model/auth validated, message enqueued — the turn runs on in
 	 * the background), rejects if admission fails. A rejection *after*
-	 * admission never surfaces here; it becomes document state. Used by the
-	 * daemon's text-bearing `newSession` (ADR 12 slice). */
-	promptAdmitted(text: string, images?: ImageContent[]): Promise<void>;
+	 * admission never surfaces here; it becomes document state. This is the
+	 * wire `prompt` verb's path (ADR 12 Reply semantics) and the first prompt of
+	 * the text-bearing `newSession` (ADR 12 slice). */
+	promptAdmitted(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	/** Run a user `!` command in the instance cwd. Recorded as a
 	 * `bashExecution` entry — also an ADR 10 user_bash_end observation
 	 * boundary. */
@@ -559,6 +560,29 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		refresh({ settle: true });
 	}
 
+	/** The stateless client API's worker-side adapter: a send carries its
+	 * selection, and this is where the carry meets pi's stateful session.
+	 * Applied before the turn so the whole run (retries, continuations after
+	 * tool results) uses it, and recorded on the path so a cold resume — the
+	 * terminal client included — restores the same model. Only while idle: a
+	 * queued steer keeps the running model, because a mid-turn swap would change
+	 * the model under the in-flight run. An omitted carry leaves the session's
+	 * current selection in force (the last applied one — the fallback
+	 * unattended runs use too).
+	 */
+	async function applySelection(model?: ModelRef, thinkingLevel?: string): Promise<void> {
+		if (model === undefined && thinkingLevel === undefined) return;
+		const busy = state.document.status.isStreaming || state.document.status.isCompacting;
+		if (busy) return;
+		const same =
+			model !== undefined &&
+			session.model !== undefined &&
+			session.model.provider === model.provider &&
+			session.model.id === model.modelId;
+		if (model !== undefined && !same) await mgr.setModel(model.provider, model.modelId);
+		if (thinkingLevel !== undefined) await mgr.setThinkingLevel(thinkingLevel);
+	}
+
 	// ── Manager object ────────────────────────────────────────────────────
 
 	const mgr: Manager = {
@@ -632,27 +656,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		},
 
 		async prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
-			// The stateless client API's worker-side adapter: a send carries its
-			// selection, and this is where the carry meets pi's stateful session.
-			// Applied before the turn so the whole run (retries, continuations
-			// after tool results) uses it, and recorded on the path so a cold
-			// resume — the terminal client included — restores the same model.
-			// Only while idle: a queued steer keeps the running model, because a
-			// mid-turn swap would change the model under the in-flight run. An
-			// omitted carry leaves the session's current selection in force (the
-			// last applied one — the fallback unattended runs use too).
-			if (model !== undefined || thinkingLevel !== undefined) {
-				const busy = state.document.status.isStreaming || state.document.status.isCompacting;
-				if (!busy) {
-					const same =
-						model !== undefined &&
-						session.model !== undefined &&
-						session.model.provider === model.provider &&
-						session.model.id === model.modelId;
-					if (model !== undefined && !same) await mgr.setModel(model.provider, model.modelId);
-					if (thinkingLevel !== undefined) await mgr.setThinkingLevel(thinkingLevel);
-				}
-			}
+			await applySelection(model, thinkingLevel);
 			await session.prompt(text, {
 				source: "rpc",
 				streamingBehavior: "steer",
@@ -661,7 +665,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			});
 		},
 
-		promptAdmitted(text: string, images?: ImageContent[]) {
+		async promptAdmitted(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
+			// Carries are applied before admission too: a reply that lands at
+			// preflight must already describe the selection the run will use.
+			await applySelection(model, thinkingLevel);
 			// pi's preflightResult fires exactly once before the turn starts (or
 			// rethrows after preflightResult(false) on refusal), so it is the
 			// admission signal. After admission the turn's own rejection is

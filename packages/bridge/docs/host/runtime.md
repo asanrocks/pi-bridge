@@ -465,29 +465,34 @@ produce a child whose parent the Document has not installed.
 
 The Manager API has these Session operations:
 
-- `prompt(text, images?)` awaits the completed pi prompt operation.
-- `promptAdmitted(text, images?)` resolves at pi preflight admission and lets
-the turn continue in the background. The daemon uses this for the first prompt
-of `newSession`.
+- `prompt(text, images?, model?, thinkingLevel?)` sends a user message and
+  awaits the whole turn. This completion-style form is the internal call
+  (tests, disposal-adjacent drains); the wire `prompt` verb uses the
+  admission-style form below (ADR 12 Reply semantics). The optional carries
+  are the stateless client API's selection and the worker-side adapter: while
+  idle, a differing `model` is applied through pi's `setModel` (recorded as a
+  `model_change`; pi re-derives the level for the switch) and a carried
+  `thinkingLevel` is applied after it (clamped, recorded only on change);
+  while streaming or compacting the carry is dropped so a queued steer keeps
+  the running model. Carrying the in-force model is a no-op, so a client that
+  always carries its inherited model adds no entries. The carry runs inside
+  the turn's immediate admission, not on the serialized mutation line: a
+  `navigate` committed by another Connection in between can therefore move the
+  leaf the `model_change` lands on. `setModel`/`setThinkingLevel` remain on the
+  Manager as the internal application path (the prompt carries and
+  `newSession`'s pre-session choices are the callers); they are not wire verbs.
+- `promptAdmitted(text, images?, model?, thinkingLevel?)` resolves at pi
+  preflight admission and lets the turn continue in the background, so the
+  reply's lifetime is bounded by admission rather than by the turn. It applies
+  the same selection carries first (the reply then describes the selection the
+  run uses). The daemon uses it for the wire `prompt` verb and for the first
+  prompt of `newSession`; the tracked work it registers ends at admission, and
+  the run stays live through the Document's streaming status.
 - `executeBash(command, options?)` runs a user `!`/`!!` command in the Session
   cwd and records a `bashExecution` message. The host uses the persisted entry
   as the `user_bash_end` git-stamp boundary.
 - `abort` clears queued steering text before waiting for pi to stop.
 - `discardSteer` clears queued steering text without aborting the run.
-- `prompt(text, images?, model?, thinkingLevel?)` sends a user message and
-  awaits the whole turn. The optional carries are the stateless client API's
-  selection and the worker-side adapter: while idle, a differing `model` is
-  applied through pi's `setModel` (recorded as a `model_change`; pi
-  re-derives the level for the switch) and a carried `thinkingLevel` is
-  applied after it (clamped, recorded only on change); while streaming or
-  compacting the carry is dropped so a queued steer keeps the running model.
-  Carrying the in-force model is a no-op, so a client that always carries its
-  inherited model adds no entries. The carry runs inside the turn's immediate
-  admission, not on the serialized mutation line: a `navigate` committed by
-  another Connection in between can therefore move the leaf the
-  `model_change` lands on. `setModel`/`setThinkingLevel` remain on the Manager
-  as the internal application path (the prompt carries and `newSession`'s
-  pre-session choices are the callers); they are not wire verbs.
 - `renameSession` and `navigate` update the
   Session and refresh or patch the Document as needed. `navigate` is the
   server-side mutation lock enforcement point: it throws while the Document

@@ -334,8 +334,12 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			ref,
 			authorization,
 			cwd: manager.cwd,
+			// Admission-style (ADR 12 Reply semantics): the caller's reply must not
+			// wait for the turn, so the tracked accounting ends at preflight. The
+			// run stays live through the Document's streaming status, and the
+			// actor's close disposes an in-flight turn.
 			prompt: (text, images, model, thinkingLevel) =>
-				commandOp((session) => session.prompt(text, images, model, thinkingLevel)),
+				commandOp((session) => session.promptAdmitted(text, images, model, thinkingLevel)),
 			abort: () => commandOp((session) => session.abort()),
 			discardSteer: () => commandOp((session) => session.discardSteer()),
 			renameSession: (name) => mutateOp((session) => session.renameSession(name)),

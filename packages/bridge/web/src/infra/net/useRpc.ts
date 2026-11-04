@@ -78,9 +78,33 @@ function rememberRows(rows: SessionInfo[] | undefined): void {
 // ---------------------------------------------------------------------------
 
 export function useRpc() {
+	/** Send a message. The reply is an admission acknowledgement (ADR 12 Reply
+	 * semantics), so it arrives as soon as preflight accepted the prompt — never
+	 * at turn settle. A reply-less rejection means the outcome is *unknown*, not
+	 * failed: the turn may already be running, so the sender must not restore its
+	 * draft (see useComposerCommit) and the toast must not read as a rejection. */
 	const prompt = useCallback(
-		(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) =>
-			rpc(() => getGlobalClient()?.prompt(text, images, model, thinkingLevel), "prompt failed"),
+		async (text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) => {
+			const client = getGlobalClient();
+			if (!client) {
+				rpcErrorToast(new Error("Not connected"), "prompt failed");
+				return undefined;
+			}
+			let reply: RpcReply;
+			try {
+				reply = await client.prompt(text, images, model, thinkingLevel);
+			} catch (err) {
+				getStore()
+					.getState()
+					.pushToast(
+						"rpc:prompt-unknown",
+						`Lost the reply to your message (${err instanceof Error ? err.message : String(err)}) — check the session`,
+					);
+				return undefined;
+			}
+			if (!reply.ok) rpcErrorToast(reply.error, "prompt failed");
+			return reply;
+		},
 		[],
 	);
 
@@ -109,9 +133,9 @@ export function useRpc() {
 		[],
 	);
 
-	/** Recover the broken tail turn (ADR 16). The run's first event flips
-	 * streaming state, so — like a prompt — the reply arrives after the turn;
-	 * the client's in-flight treatment is the composer's own isBusy gate. */
+	/** Recover the broken tail turn (ADR 16). The reply arrives after the
+	 * recovered run settles (this verb is completion-style, unlike `prompt`); the
+	 * client's in-flight treatment is the composer's own isBusy gate. */
 	const recoverTurn = useCallback(() => rpc(() => getGlobalClient()?.recoverTurn(), "recover turn failed"), []);
 
 	/** Resolve-or-activate a session by address and make it the current one.

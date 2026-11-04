@@ -1,8 +1,8 @@
 // ============================================================================
 // useComposerCommit — the draft→wire commit flow for the session dock.
 //
-// Two paths, both atomic on the draft (clear only after the RPC resolves ok;
-// restore on failure so nothing is lost):
+// Two paths, both atomic on the draft (cleared optimistically before the RPC
+// leaves, and restored only on a *definitive* refusal so nothing is lost):
 //  - compose: prompt() — available while streaming (queues a steer); only
 //    compaction blocks it.
 //  - edit: fork the edited message — navigate() to its parent, then prompt()
@@ -17,11 +17,13 @@
 // the turn just recorded instead of a stale pick. A send admitted while the
 // turn is in flight is a steer: it carries nothing and keeps the pick.
 //
-// The optimistic clear empties the textarea immediately — the prompt RPC
-// awaits the *whole turn* (Manager.prompt awaits session.prompt), so clearing
-// only on resolve would leave the text through the entire stream. The restore
-// preserves the no-data-loss guarantee: a failed or offline send keeps the
-// text for retry.
+// The optimistic clear is what makes a send feel instant. Its counterpart is
+// the failure taxonomy: the prompt reply is an *admission* acknowledgement
+// (ADR 12 Reply semantics), so `ok: false` means nothing was admitted and the
+// text goes back to the composer, while a reply-less rejection (the transport
+// died) means the outcome is unknown — the turn may be running, so restoring
+// the draft there would invite a duplicate send. The send anchor plus the
+// reattached document decide that case.
 // ============================================================================
 
 import { useCallback } from "react";
@@ -30,6 +32,7 @@ import { requestNotificationPermission } from "../../infra/lib/notificationPermi
 import { getStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
 import { nextSelectionOf } from "./nextSelection.ts";
+import { sendOutcomeOf } from "./sendOutcome.ts";
 
 export interface RpcForCommit {
 	navigate: (entryId: string | null) => Promise<unknown>;
@@ -97,13 +100,17 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			// path change.
 			getStore().getState().armSendAnchor();
 			const promptReply = await rpc.prompt(text, entryImages, selection.carryModel, selection.carryLevel);
-			if (!isOk(promptReply)) {
+			const outcome = sendOutcomeOf(promptReply);
+			if (outcome === "refused") {
 				getStore().getState().clearSendAnchor();
 				// Leaf moved to the parent (the intended fork point); restore as
 				// a compose draft so retrying forks at the same place.
 				getStore().getState().setDraft({ kind: "compose", text });
 				return;
 			}
+			// Unknown outcome (no reply): the fork may have landed. Keep the
+			// anchor and the cleared draft; the reattached document decides.
+			if (outcome === "unknown") return;
 		} else {
 			// Compose: streaming is OK (queues a steer); only compaction blocks.
 			if (s.document.status.isCompacting) return;
@@ -114,11 +121,16 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			// appended user entry can never render before the viewport sees it.
 			getStore().getState().armSendAnchor();
 			const reply = await rpc.prompt(text, draftImages, selection.carryModel, selection.carryLevel);
-			if (!isOk(reply)) {
+			const outcome = sendOutcomeOf(reply);
+			if (outcome === "refused") {
 				getStore().getState().clearSendAnchor();
 				getStore().getState().setDraft(savedDraft);
 				return;
 			}
+			// Unknown outcome (no reply): the turn may be running. Keep the
+			// anchor and the cleared draft — restoring the text here would
+			// duplicate a send the daemon already admitted.
+			if (outcome === "unknown") return;
 		}
 		// The turn that carried the selection recorded it on its path — the
 		// next send inherits from the path, so the pick is consumed. A send

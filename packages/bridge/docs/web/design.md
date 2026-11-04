@@ -20,8 +20,11 @@ thinking and tool actions, copy text or tool artifacts, open file links, and
 browse branches in History. A steerer can do the following:
 
 - Send a prompt from an attached Session. A prompt clears its draft
-  optimistically and restores it if the RPC fails, so an offline or failed
-  send does not lose text. An image-only prompt is valid.
+  optimistically and restores it only when the daemon refuses the admission
+  (`ok: false`, so nothing ran), so a refused or offline send does not lose
+  text. A reply that never arrives is treated as an unknown outcome instead:
+  the turn may be running, so the draft stays cleared and the reattached
+  Session shows what happened. An image-only prompt is valid.
 - Send while the agent is streaming. The prompt becomes a steer queued by the
   Session rather than a second concurrent turn. Queued steers appear as
   read-only chips above the textarea and can be discarded together.

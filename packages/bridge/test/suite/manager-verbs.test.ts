@@ -144,6 +144,54 @@ describe("Manager verbs", () => {
 		expect(modelChanges(h.manager)).toHaveLength(before);
 	});
 
+	it("promptAdmitted replies at admission, while the turn still runs", async () => {
+		const h = await createVerbHarness(false);
+		harnesses.push(h);
+
+		let releaseTurn: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		h.faux.setResponses([() => gate.then(() => fauxAssistantMessage("done"))]);
+
+		// The wire `prompt` verb's lifetime (ADR 12 Reply semantics): the reply
+		// lands at preflight, never at turn settle. A client that disconnects
+		// mid-turn therefore never sees a failed send for a turn that is running.
+		let replied = false;
+		const reply = h.manager.promptAdmitted("hello").then(() => {
+			replied = true;
+		});
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (h.manager.document.status.isStreaming) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+		expect(replied).toBe(true);
+		expect(h.manager.document.status.isStreaming).toBe(true);
+
+		releaseTurn!();
+		await reply;
+	});
+
+	it("promptAdmitted applies a carried model and level before admission", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const before = modelChanges(h.manager).length;
+		await h.manager.promptAdmitted("hello", undefined, { provider: "faux", modelId: "faux-2" }, "high");
+
+		// The reply describes the selection the run will use, so the carry must
+		// already be applied when admission resolves.
+		const changes = modelChanges(h.manager);
+		expect(changes).toHaveLength(before + 1);
+		expect(changes.at(-1)).toMatchObject({ provider: "faux", modelId: "faux-2" });
+		expect(h.manager.document.status.model).toEqual({ provider: "faux", modelId: "faux-2" });
+		expect(h.manager.document.status.thinkingLevel).toBe("high");
+	});
+
 	it("prompt rejects an unknown carried model", async () => {
 		const h = await createVerbHarness();
 		harnesses.push(h);

@@ -259,8 +259,10 @@ export interface WorkerService extends WorkerEnvironment {
 	archiveSession(address: SessionAddress): Promise<void>;
 
 	// ── Session commands (target-addressed) ─────────────────────────────
-	/** A turn: immediate admitted work, so a Stop never queues behind it.
-	 * Carries the send's model selection (the stateless client API). */
+	/** A turn: immediate admitted work, so a Stop never queues behind it, and
+	 * admission-style — it resolves at preflight admission, not at turn settle
+	 * (ADR 12 Reply semantics). Carries the send's model selection (the
+	 * stateless client API). */
 	prompt(
 		target: SessionTarget,
 		text: string,

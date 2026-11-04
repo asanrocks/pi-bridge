@@ -106,6 +106,24 @@ describe("SessionActor admission", () => {
 		await expect(capability.mutate(async () => "mutated")).resolves.toBe("mutated");
 	});
 
+	it("admits a prompt at preflight instead of holding the reply for the turn", async () => {
+		const calls: string[] = [];
+		const manager = stubManager();
+		// The completion form is the turn itself: a reply that waited on it would
+		// pin every send to the run's lifetime (ADR 12 Reply semantics).
+		manager.prompt = () => {
+			calls.push("turn");
+			return new Promise<void>(() => {});
+		};
+		manager.promptAdmitted = async (text: string) => {
+			calls.push(`admit:${text}`);
+		};
+		const actor = actorFor(manager);
+
+		await expect(actor.admission().prompt("hello")).resolves.toBeUndefined();
+		expect(calls).toEqual(["admit:hello"]);
+	});
+
 	it("serializes mutations: one at a time, in admission order", async () => {
 		const actor = actorFor(stubManager());
 		const capability = actor.capability();

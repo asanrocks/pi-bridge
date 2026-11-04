@@ -30,14 +30,19 @@ interface TraceManager {
 	calls: string[];
 	/** Release a gated operation (rename). */
 	release: () => void;
+	/** Hold the next prompt's preflight, so a kill can land in the
+	 * admitted-work window. One-shot: the following admissions resolve. */
+	holdNextAdmission: () => void;
 	disposeCalls: () => number;
 }
 
-/** A Manager stand-in: records calls; `prompt` settles when disposal
- * releases it (as a real abort would); `renameSession` is gated. */
+/** A Manager stand-in: records calls; the admitted prompt's preflight is
+ * gated so a kill can land inside the admitted-work window (as a slow input
+ * extension's would); `renameSession` is gated too. */
 function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`): TraceManager {
 	const calls: string[] = [];
 	let disposed = 0;
+	let holdAdmission = false;
 	const gates: Array<() => void> = [];
 	const gate = (): Promise<void> =>
 		new Promise<void>((resolve) => {
@@ -78,10 +83,15 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {
-			calls.push("prompt");
+			calls.push("prompt:turn");
 			await gate(); // released by disposal (the abort path) or by hand
 		},
-		promptAdmitted: async () => {},
+		promptAdmitted: async () => {
+			calls.push("prompt");
+			if (!holdAdmission) return;
+			holdAdmission = false;
+			await gate(); // the admitted-work window: a kill inside preflight
+		},
 		executeBash: async () => {},
 		abort: async () => {},
 		discardSteer: async () => {},
@@ -104,6 +114,9 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		manager: base as unknown as Manager,
 		calls,
 		release,
+		holdNextAdmission: () => {
+			holdAdmission = true;
+		},
 		disposeCalls: () => disposed,
 	};
 }
@@ -282,13 +295,14 @@ describe("Connection protocol traces", () => {
 		const bundle = makeBundle();
 		const { conn, clientWs, frames } = await connect(bundle, "s1");
 		const tm = bundle.managers.get("s1")!;
+		tm.holdNextAdmission();
 
 		clientWs.send(JSON.stringify({ id: "p1", verb: "prompt", text: "hi" }));
 		await waitForCall(tm, "prompt");
 
-		// The kill lands while the command runs: disposal aborts the turn, the
-		// admitted command settles against the runtime it captured, and the
-		// terminal ownership boundary follows.
+		// The kill lands while the prompt's preflight is still running: disposal
+		// releases the admitted command, which settles against the runtime it
+		// captured, and the terminal ownership boundary follows.
 		await bundle.worker.closeSession({ projectId: "proj", stem: "s1" });
 
 		const promptReply = await replyFor(frames, "p1");
@@ -351,6 +365,7 @@ describe("Connection protocol traces", () => {
 		const c2 = await connect(bundle, "life");
 		const tm = bundle.managers.get("life")!;
 		expect(bundle.worker.liveRecords()).toHaveLength(1);
+		tm.holdNextAdmission();
 
 		// A turn runs on conn 1; conn 2 reads a lazy value while it streams.
 		c1.clientWs.send(JSON.stringify({ id: "p1", verb: "prompt", text: "hi" }));

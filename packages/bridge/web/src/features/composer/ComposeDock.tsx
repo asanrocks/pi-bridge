@@ -12,7 +12,8 @@
 // compose / edit), not local React state — that split is what makes durable
 // drafts work (blur salvage, offline sends, per-scope persistence). The dock
 // is a view: onChange → setDraftText, blur → blurDraft, Enter → onCommit
-// (useComposerCommit does the atomic RPC; clears the draft only on success).
+// (useComposerCommit does the atomic RPC; restores the draft only on a
+// definitive refusal).
 //
 // Self-sufficient: models, status, and connection state come from the store;
 // verb callbacks come from useRpc / useModelCycling. The one prop is the
@@ -275,9 +276,9 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// ── Commit ──────────────────────────────────────────────────────────
 	// The dock only triggers the commit; useComposerCommit (App) owns the
 	// RPC + draft-clear. It clears the draft optimistically (before the RPC
-	// awaits the turn) and restores it on failure, so the textarea empties
-	// immediately on send and a second Enter is a no-op (empty draft) — no
-	// in-flight dedup needed, which would have blocked steering during the
+	// leaves) and restores it only on a definitive refusal, so the textarea
+	// empties immediately on send and a second Enter is a no-op (empty draft) —
+	// no in-flight dedup needed, which would have blocked steering during the
 	// turn.
 	const closeCompletion = capabilities.closeCompletion;
 	const handleCommit = useCallback(() => {
