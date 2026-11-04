@@ -47,6 +47,10 @@ pinned only by the control below.
 
 ### The pin control
 
+> Superseded by ADR 0019: the control now sends the whole ordered list, so
+> pinning, unpinning, and reordering are one verb. The paragraph below records
+> the original mechanism.
+
 `setModelPinned { provider, modelId, pinned }` is a daemon verb. The host
 reads the raw global `enabledModels`, resolves it to concrete ids (pi's TUI
 normalizes globs the same way on save), adds or removes the one model,

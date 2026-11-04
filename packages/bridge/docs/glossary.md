@@ -257,7 +257,10 @@ and [web design](web/design.md).
     survives a rewind, and a send admitted mid-turn (a steer) carries nothing
     and keeps it. Its catalogue is
     three **tiers** *(bound)*: **Pinned** (the daemon-global list from pi's
-    global `enabledModels`, cycle-able), **normal** (shown in provider
+    global `enabledModels`, cycle-able and ordered — the head is the **pinned
+    default** *(bound)* a fresh Session starts on, marked in the list, and a
+    pin appends to the tail while a drag inside the group reorders), **normal**
+    (shown in provider
     groups), and **folded** (revealed on demand). A model is normal when it
     matches a `visibleModels` pattern from the bridge settings file; with no
     such preference every non-pinned model is normal, so nothing folds.

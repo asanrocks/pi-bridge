@@ -988,6 +988,56 @@
 	opacity: 1;
 }
 
+/* Reorder handle for a curated-group row (ADR 20). Ghost tier like the pin, but
+   unlike an unpinned row's pin it stays visible: a handle nobody can see is not
+   an affordance, and ordering is a control here, not a detail. Hover and the
+   keyboard cursor bring it to full ink. `touch-action: none` keeps the browser
+   from scrolling the list under a drag that started on the grip; dragging
+   anywhere else still scrolls. */
+.portalGrip {
+	composes: ghost from "../../render/buttons.module.css";
+	flex-shrink: 0;
+	width: 20px;
+	height: 24px;
+	margin: 0 0 0 4px;
+	opacity: 0.55;
+	cursor: grab;
+	touch-action: none;
+}
+
+.portalItem:hover .portalGrip,
+.portalItem[data-cursor] .portalGrip {
+	opacity: 1;
+}
+
+.portalItem[data-dragging] {
+	opacity: 0.55;
+}
+
+.portalItem[data-dragging] .portalGrip {
+	cursor: grabbing;
+}
+
+/* The insertion point a drop would land on: one hairline in the identity hue,
+   drawn on the boundary between rows. */
+.portalDropLine {
+	height: 2px;
+	margin: -1px 6px -1px 16px;
+	background: var(--color-accent);
+	border-radius: 1px;
+}
+
+/* "default" marks the head of the curated group — the model a fresh Session
+   starts on. A micro label, not a control: it states a fact the order carries. */
+.portalItemDefault {
+	flex-shrink: 0;
+	margin-left: 2px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-caps);
+}
+
 /* One highlight surface for row hover and the keyboard cursor — `--color-muted`
    is the token's documented hover role and matches the sidebar's rows, so a
    row reads the same whether the pointer or the cursor is on it. Identity is

@@ -84,7 +84,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 					defaultModel={project?.defaultModel ?? null}
 					defaultThinkingLevel={project?.defaultThinkingLevel ?? null}
 					connected={connection.kind === "connected"}
-					onTogglePin={rpc.setModelPinned}
+					onSetPinnedModels={rpc.setPinnedModels}
 					onNewSession={(projectId, text, images, model, thinkingLevel) =>
 						// ADR 12 slice: the daemon admits the first prompt (with any
 						// attachments and the pre-session model choice) before attach.

@@ -447,7 +447,7 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					onSetModel={handleSetModel}
 					onSetThinkingLevel={handleSetThinkingLevel}
 					onCycleModel={onCycleModel}
-					onTogglePin={rpc.setModelPinned}
+					onSetPinnedModels={rpc.setPinnedModels}
 					leftControls={leftControls}
 				/>
 			)}

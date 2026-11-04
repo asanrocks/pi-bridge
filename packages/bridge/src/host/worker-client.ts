@@ -421,8 +421,7 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 			listActiveSessions: () => request<SessionInfo[]>({ kind: "listActiveSessions" }),
 
 			info: () => request<WorkerInfo>({ kind: "info" }),
-			setModelPinned: (provider, modelId, pinned) =>
-				request<void>({ kind: "setModelPinned", provider, modelId, pinned }),
+			setPinnedModels: (models) => request<void>({ kind: "setPinnedModels", models }),
 			listFiles: (prefix, projectId) => request({ kind: "listFiles", prefix, projectId }),
 			readFile: (path, state) => request({ kind: "readFile", path, state }),
 			listDirectory: (path, state) => request({ kind: "listDirectory", path, state }),

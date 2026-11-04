@@ -655,13 +655,11 @@ export class Daemon {
 
 		getDaemonInfo: async () => ({ ...(await this.aggregateInfo()), devMode: this.devMode }),
 
-		setModelPinned: (provider, modelId, pinned) => {
+		setPinnedModels: (models) => {
 			// The pinned scope is Worker-global; with several registrations the
 			// last writer would otherwise silently drop the others' view, so the
-			// mutation is broadcast to every registered Worker.
-			return Promise.all(this.services.map((host) => host.service.setModelPinned(provider, modelId, pinned))).then(
-				() => undefined,
-			);
+			// replacement is broadcast to every registered Worker.
+			return Promise.all(this.services.map((host) => host.service.setPinnedModels(models))).then(() => undefined);
 		},
 	};
 

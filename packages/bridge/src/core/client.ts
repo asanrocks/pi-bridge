@@ -15,6 +15,7 @@ import type {
 	JsonValue,
 	ModelRef,
 	PatchOp,
+	PinnedModelSelection,
 	PrefixCursor,
 	PromptRequest,
 	RpcReply,
@@ -272,8 +273,11 @@ export class BridgeClient {
 		return this.call({ verb: "discardSteer" });
 	}
 
-	setModelPinned(provider: string, modelId: string, pinned: boolean): Promise<RpcReply> {
-		return this.call({ verb: "setModelPinned", provider, modelId, pinned });
+	/** Replace the daemon-global pinned list, in order (ADR 20). The result —
+	 * filtered to what the catalogue resolves — arrives as a
+	 * `pinned_models_changed` push. */
+	setPinnedModels(models: PinnedModelSelection[]): Promise<RpcReply> {
+		return this.call({ verb: "setPinnedModels", models });
 	}
 
 	renameSession(name: string): Promise<RpcReply> {

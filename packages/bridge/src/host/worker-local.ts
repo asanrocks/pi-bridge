@@ -38,6 +38,7 @@ import {
 	type ModelInfo,
 	type ModelRef,
 	type PinnedModelInfo,
+	type PinnedModelSelection,
 	type PrefixCursor,
 	type ProjectInfo,
 	type PullRequestItem,
@@ -194,9 +195,8 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			globalSettings = null;
 		}
 	}
-	/** One mutation at a time, in arrival order: `setModelPinned` is a
-	 * read-modify-write over the global scope, so concurrent writes would drop
-	 * one another. */
+	/** One mutation at a time, in arrival order: `setPinnedModels` rewrites the
+	 * global scope, so concurrent writes would drop one another. */
 	const settingsMutations = createLifecycleScope();
 
 	const requestedThinkingLevelOf = (projectId: string, provider: string, modelId: string): string => {
@@ -590,22 +590,31 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			};
 		},
 
-		setModelPinned: (provider: string, modelId: string, pinned: boolean) =>
+		setPinnedModels: (models: PinnedModelSelection[]) =>
 			settingsMutations.run(async (): Promise<void> => {
 				const settings = globalSettings;
 				if (!settings) throw new Error("No global settings available");
-				// Resolve the raw scope to concrete ids (pi's TUI normalizes globs the
-				// same way on save), then add or remove this one model.
-				const patterns = settings.getGlobalSettings().enabledModels ?? [];
-				const { scopedModels: resolved } = await resolveModelScopeWithDiagnostics(patterns, options.modelRuntime);
-				const key = `${provider}/${modelId}`;
-				const ids = resolved.map((sm) => `${sm.model.provider}/${sm.model.id}`);
-				const next = pinned
-					? ids.some((id) => id.toLowerCase() === key.toLowerCase())
-						? ids
-						: [...ids, key]
-					: ids.filter((id) => id.toLowerCase() !== key.toLowerCase());
-				settings.setEnabledModels(next.length > 0 ? next : undefined);
+				// A replacement is a proposal: the client cannot know the catalogue,
+				// so an entry the runtime cannot resolve is dropped rather than
+				// written, and the push reports the result. Position is meaning, so
+				// the first occurrence of an identity wins and nothing is re-sorted.
+				// The level suffix rides through verbatim, which is what keeps a
+				// reorder from silently changing what a pin means.
+				const seen = new Set<string>();
+				const patterns: string[] = [];
+				for (const entry of models) {
+					const key = `${entry.provider}/${entry.id}`;
+					const lower = key.toLowerCase();
+					if (seen.has(lower)) continue;
+					if (!options.modelRuntime.getModel(entry.provider, entry.id)) continue;
+					seen.add(lower);
+					const level =
+						entry.thinkingLevel !== undefined && THINKING_LEVEL_NAMES.includes(entry.thinkingLevel)
+							? entry.thinkingLevel
+							: undefined;
+					patterns.push(level === undefined ? key : `${key}:${level}`);
+				}
+				settings.setEnabledModels(patterns.length > 0 ? patterns : undefined);
 				await settings.flush();
 				if (disposed) return;
 				emit({ kind: "pinned_models_changed", pinnedModels: await resolvePinnedModels() });

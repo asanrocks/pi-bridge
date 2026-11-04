@@ -23,7 +23,7 @@ behind a socket without the Daemon branching on locality.
 
 `WorkerEnvironment` is the part of the contract that owns state rather than
 Sessions: `info()` (Projects, model catalogue, pinned and visible scopes,
-thinking levels), `setModelPinned`, and the repository surface (`listFiles`,
+thinking levels), `setPinnedModels`, and the repository surface (`listFiles`,
 `readFile`, `listDirectory`, `gitShow`, `gitBase`, `gitDiff`). The Daemon keeps
 no second model runtime and reads no Project file, because a remote Worker's
 filesystem is not the Daemon's; it forwards these calls and serves the replies
@@ -319,9 +319,9 @@ on a connection that no longer exists.
 Model runtime, extensions, per-Project settings, the global `enabledModels`
 scope, and the repository surface all belong to the Worker. The Daemon's
 `getDaemonInfo` verb forwards `info()` and adds only its own `devMode`;
-`setModelPinned` is serialized inside the Worker that owns the scope, so
-concurrent pins cannot drop one another. With several registrations the Daemon
-broadcasts the mutation to every Worker and reports the deduped union of
+`setPinnedModels` is serialized inside the Worker that owns the scope, so
+concurrent replacements cannot interleave. With several registrations the Daemon
+forwards the replacement to every Worker and reports the deduped union of
 their lists; that aggregate is only coherent while the registrations share
 one settings file, so several Workers over distinct agent directories is not a
 supported configuration — a partial write failure or divergent scopes would
@@ -902,12 +902,19 @@ a model the Project home *picked* — rather than the default — is host-side
 state the reply does not carry, so the display ignores it while the session
 runs at the override. Pinned models is one daemon-global concept (ADR 15): a project-level
 `.pi/settings.json` `enabledModels` override is not reflected, and the
-`setModelPinned` verb writes the same global list (broadcasting
-`pinned_models_changed`). The verb is a read-modify-write over that list, so
-its mutations are serialized daemon-wide — one at a time, in arrival order,
-across every Connection — or two concurrent pins would each read the
-pre-mutation list and the later flush would silently drop the earlier
-update.
+`setPinnedModels` verb writes the same global list (broadcasting
+`pinned_models_changed`). The verb carries the whole ordered list, so its
+mutations are serialized inside the Worker that owns the scope — one at a time,
+in arrival order — and the worker rewrites the scope in that order, dropping
+entries the runtime cannot resolve, deduping by identity (first position wins),
+and carrying each entry's `:level` suffix verbatim so a reorder never changes
+what a pin means. An empty list clears the scope, which is the "no pins" state
+a fresh Session resolves through pi instead. Accepted window: because the
+request is the list the client last saw, two clients replacing concurrently are
+last-writer-wins — a backgrounded tab can revert a pin it never received. The
+window is one push wide for a connected client (pushes and requests ride the
+same socket) and is documented rather than closed; a revision echo on the
+request would close it if it ever matters.
 
 ### Files and repository detail
 

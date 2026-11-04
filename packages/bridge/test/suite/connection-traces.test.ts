@@ -169,7 +169,7 @@ function makeBundle(): Bundle {
 			thinkingLevels: [],
 			devMode: false,
 		}),
-		setModelPinned: async () => {},
+		setPinnedModels: async () => {},
 		asrCredentials: async () => ({ kind: "device", deviceId: "d" }),
 		textPolish: async (text: string) => text,
 		openSession: async (_projectId, stem, conn, cursor) => {

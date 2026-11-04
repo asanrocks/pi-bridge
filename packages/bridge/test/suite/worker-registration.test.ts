@@ -60,7 +60,7 @@ function fakeWorker(
 		recoverTurn: notImplemented,
 		listSessions: notImplemented,
 		listActiveSessions: notImplemented,
-		setModelPinned: notImplemented,
+		setPinnedModels: notImplemented,
 		listFiles: notImplemented,
 		readFile: notImplemented,
 		listDirectory: notImplemented,

@@ -19,6 +19,7 @@ import type {
 	ListFilesReply,
 	ListSessionsReply,
 	ModelRef,
+	PinnedModelSelection,
 	ReadFileReply,
 	RpcReply,
 	SessionInfo,
@@ -87,9 +88,8 @@ export function useRpc() {
 
 	const discardSteer = useCallback(() => rpc(() => getGlobalClient()?.discardSteer(), "discard steer failed"), []);
 
-	const setModelPinned = useCallback(
-		(provider: string, modelId: string, pinned: boolean) =>
-			rpc(() => getGlobalClient()?.setModelPinned(provider, modelId, pinned), "pin model failed"),
+	const setPinnedModels = useCallback(
+		(models: PinnedModelSelection[]) => rpc(() => getGlobalClient()?.setPinnedModels(models), "pin model failed"),
 		[],
 	);
 
@@ -274,7 +274,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
-			setModelPinned,
+			setPinnedModels,
 			renameSession,
 			setLabel,
 			navigate,
@@ -294,7 +294,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
-			setModelPinned,
+			setPinnedModels,
 			renameSession,
 			setLabel,
 			navigate,

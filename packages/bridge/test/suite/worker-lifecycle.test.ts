@@ -130,7 +130,7 @@ function fakeWorker(): FakeWorker {
 			return { sessions: [], hasMore: false };
 		},
 		listActiveSessions: async () => [],
-		setModelPinned: notImplemented,
+		setPinnedModels: notImplemented,
 		listFiles: notImplemented,
 		readFile: notImplemented,
 		listDirectory: notImplemented,

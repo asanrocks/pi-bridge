@@ -445,6 +445,22 @@ export const PinIcon = memo(function PinIcon({ filled = false, ...rest }: IconPr
 // counter and reads as a smudge, so the family is solid by construction rather
 // than by taste.
 
+/** Grip — the picker's reorder handle. Six dots: the same construction as the
+ * overflow mark, because a mark made of dots has no outline form, and its
+ * meaning is "hold and move" rather than "there is more". */
+export const GripIcon = memo(function GripIcon(props: IconProps) {
+	return (
+		<SolidIcon {...props}>
+			<circle cx="5.6" cy="4.6" r="1.05" />
+			<circle cx="10.4" cy="4.6" r="1.05" />
+			<circle cx="5.6" cy="8" r="1.05" />
+			<circle cx="10.4" cy="8" r="1.05" />
+			<circle cx="5.6" cy="11.4" r="1.05" />
+			<circle cx="10.4" cy="11.4" r="1.05" />
+		</SolidIcon>
+	);
+});
+
 /** More — the overflow of a row that holds more than one command. Deliberately
  * not the hamburger: that one is the Sidebar's disclosure, and one glyph cannot
  * mean both "open the app menu" and "this row has two commands". */

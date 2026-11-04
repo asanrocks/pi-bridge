@@ -13,6 +13,7 @@ import { AuthStorage, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { Document, Patch, RpcReply, SessionRef } from "../../src/core/index.ts";
+import { MAX_PINNED_MODELS } from "../../src/core/index.ts";
 import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from "../../src/host/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -579,7 +580,7 @@ describe("daemon: projects", () => {
 		ws.close();
 	});
 
-	it("setModelPinned writes the global enabledModels scope and broadcasts", async () => {
+	it("setPinnedModels writes the ordered global scope and broadcasts the result", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		mkdirSync(agentDir, { recursive: true });
 		const modelRuntime = await makeFauxRuntime();
@@ -589,57 +590,138 @@ describe("daemon: projects", () => {
 
 		await waitForReply(
 			frames,
-			send(ws, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: true }),
+			send(ws, {
+				verb: "setPinnedModels",
+				models: [
+					{ provider: "faux", id: "faux-2", thinkingLevel: "high" },
+					{ provider: "faux", id: "faux-1" },
+				],
+			}),
 		);
 		const push = await waitForPush(frames, "pinned_models_changed");
-		expect(push.pinnedModels).toEqual([{ provider: "faux", id: "faux-1", name: expect.any(String) }]);
-		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual(["faux/faux-1"]);
+		// Position is meaning (the head is a fresh Session's default) and the
+		// level round-trips verbatim, so a reorder cannot change what a pin
+		// means.
+		expect(push.pinnedModels).toEqual([
+			{ provider: "faux", id: "faux-2", name: expect.any(String), thinkingLevel: "high" },
+			{ provider: "faux", id: "faux-1", name: expect.any(String) },
+		]);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual([
+			"faux/faux-2:high",
+			"faux/faux-1",
+		]);
 
 		ws.close();
 	});
 
-	it("concurrent pins from two connections do not lose updates", async () => {
-		// setModelPinned is a read-modify-write over the daemon-global scope:
-		// two connections pinning different models concurrently must both land,
-		// in arrival order — the later write must read the earlier one's list,
-		// not the pre-mutation snapshot.
+	it("setPinnedModels is a proposal: unresolvable entries are filtered, duplicates deduped", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		mkdirSync(agentDir, { recursive: true });
 		const modelRuntime = await makeFauxRuntime();
 		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
-		const ws1 = await openClient(port);
-		const frames1 = collectFrames(ws1);
-		const ws2 = await openClient(port);
-		const frames2 = collectFrames(ws2);
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
 
-		const id1 = send(ws1, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: true });
-		const id2 = send(ws2, { verb: "setModelPinned", provider: "faux", modelId: "faux-2", pinned: true });
-		expect((await waitForReply(frames1, id1)).ok).toBe(true);
-		expect((await waitForReply(frames2, id2)).ok).toBe(true);
-
-		const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")) as {
-			enabledModels?: string[];
-		};
-		expect((saved.enabledModels ?? []).slice().sort()).toEqual(["faux/faux-1", "faux/faux-2"]);
-
-		// The converged broadcast carries both pins (each mutation broadcasts
-		// to every connection; the last one is the converged list).
-		const converged = await waitFor(
-			frames2,
-			(f) =>
-				f.kind === "pinned_models_changed" &&
-				(f.pinnedModels as Array<{ id: string }>)
-					.map((m) => m.id)
-					.sort()
-					.join(",") === "faux-1,faux-2",
+		await waitForReply(
+			frames,
+			send(ws, {
+				verb: "setPinnedModels",
+				models: [
+					{ provider: "faux", id: "ghost" },
+					{ provider: "faux", id: "faux-1", thinkingLevel: "high" },
+					{ provider: "faux", id: "faux-1", thinkingLevel: "low" },
+				],
+			}),
 		);
-		expect(converged).toBeDefined();
+		// The push is the verdict: the ghost is dropped, and the first
+		// occurrence of an identity wins (position is meaning, so a later
+		// duplicate cannot move it or restate its level).
+		const push = await waitForPush(frames, "pinned_models_changed");
+		expect(push.pinnedModels).toEqual([
+			{ provider: "faux", id: "faux-1", name: expect.any(String), thinkingLevel: "high" },
+		]);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual([
+			"faux/faux-1:high",
+		]);
 
-		ws1.close();
-		ws2.close();
+		ws.close();
 	});
 
-	it("unpinning the last model clears the global scope", async () => {
+	it("two sequential replacements converge on the last one", async () => {
+		// A replacement is state, not a delta: the last write wins, and a retried
+		// one is idempotent. (Two clients replacing concurrently is the accepted
+		// stale-replace window — see docs/host/runtime.md.)
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const first = send(ws, {
+			verb: "setPinnedModels",
+			models: [
+				{ provider: "faux", id: "faux-1" },
+				{ provider: "faux", id: "faux-2" },
+			],
+		});
+		expect((await waitForReply(frames, first)).ok).toBe(true);
+		const second = send(ws, {
+			verb: "setPinnedModels",
+			models: [{ provider: "faux", id: "faux-2" }],
+		});
+		expect((await waitForReply(frames, second)).ok).toBe(true);
+		await waitForReply(frames, send(ws, { verb: "setPinnedModels", models: [{ provider: "faux", id: "faux-2" }] }));
+
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "pinned_models_changed" &&
+				(f.pinnedModels as Array<{ id: string }>).map((m) => m.id).join(",") === "faux-2",
+		);
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual(["faux/faux-2"]);
+
+		ws.close();
+	});
+
+	it("rejects a malformed pinned replacement", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		mkdirSync(agentDir, { recursive: true });
+		const modelRuntime = await makeFauxRuntime();
+		const { port } = await startDaemon({ agentDir, allow: [a], modelRuntime });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+
+		const oversize = Array.from({ length: MAX_PINNED_MODELS + 1 }, (_, index) => ({
+			provider: "faux",
+			id: `m${index}`,
+		}));
+		const badFrames: Array<[Record<string, unknown>, RegExp]> = [
+			[{ verb: "setPinnedModels" }, /Invalid `models`/],
+			[{ verb: "setPinnedModels", models: "faux/faux-1" }, /Invalid `models`/],
+			[{ verb: "setPinnedModels", models: [{ provider: "faux" }] }, /Invalid `models`/],
+			[{ verb: "setPinnedModels", models: [{ provider: "", id: "faux-1" }] }, /Invalid `models`/],
+			[
+				{ verb: "setPinnedModels", models: [{ provider: "faux", id: "faux-1", thinkingLevel: "ultra" }] },
+				/Invalid `models`/,
+			],
+			[{ verb: "setPinnedModels", models: oversize }, /Too many pinned models/],
+		];
+		for (const [frame, errorRe] of badFrames) {
+			const reply = (await waitForReply(frames, send(ws, frame))) as unknown as { ok: boolean; error?: string };
+			expect(reply.ok).toBe(false);
+			expect(reply.error).toMatch(errorRe);
+		}
+		// Nothing was written: shape is validated before the scope is touched.
+		const savedPath = join(agentDir, "settings.json");
+		expect(
+			existsSync(savedPath) ? JSON.parse(readFileSync(savedPath, "utf-8")).enabledModels : undefined,
+		).toBeUndefined();
+
+		ws.close();
+	});
+
+	it("an empty replacement clears the pinned scope", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["faux-1"] }));
@@ -648,11 +730,9 @@ describe("daemon: projects", () => {
 		const ws = await openClient(port);
 		const frames = collectFrames(ws);
 
-		await waitForReply(
-			frames,
-			send(ws, { verb: "setModelPinned", provider: "faux", modelId: "faux-1", pinned: false }),
-		);
-		await waitForPush(frames, "pinned_models_changed");
+		await waitForReply(frames, send(ws, { verb: "setPinnedModels", models: [] }));
+		const push = await waitForPush(frames, "pinned_models_changed");
+		expect(push.pinnedModels).toEqual([]);
 		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toBeUndefined();
 
 		ws.close();

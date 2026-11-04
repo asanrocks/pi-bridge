@@ -39,6 +39,7 @@ import type {
 	ModelRef,
 	PatchOp,
 	PinnedModelInfo,
+	PinnedModelSelection,
 	PrefixCursor,
 	ProjectInfo,
 	PullRequestItem,
@@ -193,8 +194,11 @@ export interface WorkerInfo {
  * Project or by absolute path, never by a runtime handle. */
 export interface WorkerEnvironment {
 	info(): Promise<WorkerInfo>;
-	/** Pin or unpin one model in the global `enabledModels` scope. */
-	setModelPinned(provider: string, modelId: string, pinned: boolean): Promise<void>;
+	/** Replace the global `enabledModels` scope with this ordered list. The
+	 * scope IS the pinned list (ADR 15), so position is meaning; entries the
+	 * catalogue cannot resolve are filtered, and the result is announced by a
+	 * `pinned_models_changed` event. */
+	setPinnedModels(models: PinnedModelSelection[]): Promise<void>;
 	/** Project-cwd path completion. */
 	listFiles(prefix: string, projectId: string): Promise<Array<{ path: string; isDirectory: boolean }>>;
 	readFile(path: string, state?: string): Promise<SnapshotFile>;
@@ -213,7 +217,7 @@ export interface WorkerEnvironment {
 export type WorkerEvent =
 	| { readonly kind: "sessions_changed"; readonly projectId: string; readonly page: SessionPage }
 	| { readonly kind: "active_sessions_changed"; readonly sessions: SessionInfo[] }
-	/** The global pinned list changed (a `setModelPinned` mutation). */
+	/** The global pinned list changed (a `setPinnedModels` mutation). */
 	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
 	/** The Worker can serve nothing more (its execution scope is terminal).
 	 * Emitted once; the Daemon withdraws the registration instead of leaving

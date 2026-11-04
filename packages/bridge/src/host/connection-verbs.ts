@@ -36,6 +36,7 @@ import type {
 	ModelRef,
 	NavigateRequest,
 	PinnedModelInfo,
+	PinnedModelSelection,
 	PrefixCursor,
 	ProjectInfo,
 	PromptRequest,
@@ -46,12 +47,17 @@ import type {
 	SessionListCursor,
 	SessionRef,
 	SetLabelRequest,
-	SetModelPinnedRequest,
+	SetPinnedModelsRequest,
 	SnapshotFile,
 	TextPolishReply,
 	TextPolishRequest,
 } from "../core/index.ts";
-import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE, THINKING_LEVEL_NAMES } from "../core/index.ts";
+import {
+	MAX_IMAGE_BASE64_LENGTH,
+	MAX_IMAGES_PER_MESSAGE,
+	MAX_PINNED_MODELS,
+	THINKING_LEVEL_NAMES,
+} from "../core/index.ts";
 import type { Connection } from "./connection.ts";
 import type { SessionCommands } from "./session-commands.ts";
 import type { SessionTarget } from "./worker-contract.ts";
@@ -79,9 +85,9 @@ export interface DaemonVerbs {
 		thinkingLevels: string[];
 		devMode: boolean;
 	}>;
-	/** Pin or unpin one model in the daemon-global list (ADR 15). The new list
-	 * arrives as a `pinned_models_changed` push. */
-	setModelPinned: (provider: string, modelId: string, pinned: boolean) => Promise<void>;
+	/** Replace the daemon-global pinned model list with this ordered list
+	 * (ADR 20). The new list arrives as a `pinned_models_changed` push. */
+	setPinnedModels: (models: PinnedModelSelection[]) => Promise<void>;
 	/** Dictation credentials, minted or registered by the daemon because a page
 	 * can do neither (see `asr-credentials.ts`). Daemon-global: the ASR session
 	 * runs from the browser to the endpoint, not through this socket. */
@@ -350,12 +356,28 @@ const daemonVerbs: Record<string, VerbHandler> = {
 		const reply: GetDaemonInfoReply = { id: msg.id, ok: true, ...info };
 		ctx.send(reply as unknown as Record<string, unknown>);
 	},
-	setModelPinned: async (ctx, msg) => {
-		const m = msg as unknown as SetModelPinnedRequest;
-		if (typeof m.provider !== "string" || m.provider === "") throw new Error("Missing `provider`");
-		if (typeof m.modelId !== "string" || m.modelId === "") throw new Error("Missing `modelId`");
-		if (typeof m.pinned !== "boolean") throw new Error("Missing `pinned`");
-		await ctx.daemonVerbs.setModelPinned(m.provider, m.modelId, m.pinned);
+	setPinnedModels: async (ctx, msg) => {
+		const m = msg as unknown as SetPinnedModelsRequest;
+		if (!Array.isArray(m.models)) throw new Error("Invalid `models`");
+		if (m.models.length > MAX_PINNED_MODELS) throw new Error("Too many pinned models");
+		// Shape only: an entry the catalogue cannot resolve is the host's to
+		// filter, so a replace is a proposal and the pushed list is the verdict.
+		for (const entry of m.models) {
+			if (
+				typeof entry !== "object" ||
+				entry === null ||
+				typeof entry.provider !== "string" ||
+				entry.provider === "" ||
+				typeof entry.id !== "string" ||
+				entry.id === ""
+			) {
+				throw new Error("Invalid `models`");
+			}
+			if (entry.thinkingLevel !== undefined && !THINKING_LEVEL_NAMES.includes(entry.thinkingLevel)) {
+				throw new Error("Invalid `models`");
+			}
+		}
+		await ctx.daemonVerbs.setPinnedModels(m.models);
 		ctx.send({ id: msg.id, ok: true });
 	},
 	// Daemon-global and attachment-free, like getDaemonInfo: the ASR stream

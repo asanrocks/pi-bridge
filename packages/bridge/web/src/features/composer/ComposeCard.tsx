@@ -14,7 +14,14 @@
 // ============================================================================
 
 import { memo, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
+import type {
+	ImageContent,
+	ModelInfo,
+	ModelRef,
+	PinnedModelInfo,
+	PinnedModelSelection,
+	RpcReply,
+} from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { ArrowUpIcon, ChevronDownIcon, CloseIcon, PaperclipIcon, StopIcon } from "../../render/icons.tsx";
@@ -86,8 +93,10 @@ export interface ComposeCardProps {
 	onSetModel: (provider: string, modelId: string) => void;
 	onSetThinkingLevel?: (level: string) => void;
 	onCycleModel: (direction: "forward" | "backward") => void;
-	/** Pin or unpin one model in the daemon-global list (ADR 15). */
-	onTogglePin: (provider: string, modelId: string, pinned: boolean) => void;
+	/** Replace the daemon-global pinned list (ADR 20): pin, unpin, and reorder
+	 * all arrive here as the whole ordered list. Resolves with the RPC reply
+	 * so the portal can roll its copy back on a refused replacement. */
+	onSetPinnedModels: (models: PinnedModelSelection[]) => Promise<RpcReply | undefined>;
 
 	// ── Slots ──
 	/** Left control group (session: context % + bar + cost). */
@@ -139,7 +148,7 @@ export const ComposeCard = memo(function ComposeCard({
 	onSetModel,
 	onSetThinkingLevel,
 	onCycleModel,
-	onTogglePin,
+	onSetPinnedModels,
 	leftControls,
 	mic,
 	completion,
@@ -421,7 +430,7 @@ export const ComposeCard = memo(function ComposeCard({
 					onSelectThinkingLevel={(level) => {
 						onSetThinkingLevel?.(level);
 					}}
-					onTogglePin={onTogglePin}
+					onSetPinnedModels={onSetPinnedModels}
 					onClose={() => setPortalOpen(false)}
 				/>
 			)}

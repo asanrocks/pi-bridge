@@ -151,7 +151,7 @@ const stubVerbs: DaemonVerbs = {
 		thinkingLevels: [],
 		devMode: false,
 	}),
-	setModelPinned: async () => {},
+	setPinnedModels: async () => {},
 	asrCredentials: async () => ({ kind: "device", deviceId: "d" }),
 	textPolish: async (text: string) => text,
 	openSession: async () => ({ ok: false, error: "unused" }),

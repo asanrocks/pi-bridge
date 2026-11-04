@@ -73,9 +73,23 @@ browse branches in History. A steerer can do the following:
   scannable. The glyph is state only — hovering the control changes its fill,
   never the symbol, and the tooltip names the action. Hover and the keyboard
   cursor reveal the same pin (`data-cursor`), because Shift+Enter's target has
-  to be visible to the user who presses it. Shift+Enter toggles the focused row. Ctrl/Cmd+P
-  cycles the pinned list; Shift reverses the cycle. The controls remain
-  available whenever connected.
+  to be visible to the user who presses it. Shift+Enter toggles the focused row;
+  pinning appends to the tail, so a new pin never becomes the default. Ctrl/Cmd+P
+  cycles the pinned list in its order; Shift reverses the cycle. The controls
+  remain available whenever connected.
+- Reorder the pinned list by dragging a pinned row's grip handle. The
+  insertion line shows the landing slot, the move applies to the pinned group
+  only (the handle exists nowhere else, and a drag that leaves the group lands
+  at its nearest edge), and it commits once on release; membership is frozen
+  while the picker is open, order is not. Reordering is pointer-only: the grip
+  drag is the one gesture that moves a row, because the app's global
+  Alt+Up/Down chord already cycles active Sessions. A refused replacement
+  (connection lost, verb rejected) rolls the rows back to the last accepted
+  order. The head of the list
+  carries a `default` label: it is the model a fresh Session starts on, which is
+  why the ordering is a control rather than a detail. The picker's edits are
+  one replacement of the daemon-global list (ADR 20), so the pin toggle and
+  the drag send the same shape and the pushed list is the verdict.
 - Attach PNG, JPEG, WebP, or GIF images by file picker, paste, or drag and
   drop. Attachments are resized when necessary, show thumbnail chips, and can
   be removed individually. The per-message attachment cap and per-file

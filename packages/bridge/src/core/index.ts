@@ -110,6 +110,7 @@ export type {
 	PatchMessage,
 	PatchOp,
 	PinnedModelInfo,
+	PinnedModelSelection,
 	PrefixCursor,
 	ProjectInfo,
 	PromptRequest,
@@ -134,7 +135,7 @@ export type {
 	SessionListCursor,
 	SessionRef,
 	SetLabelRequest,
-	SetModelPinnedRequest,
+	SetPinnedModelsRequest,
 	SnapshotFile,
 	SnapshotState,
 	Stats,
@@ -155,5 +156,6 @@ export {
 	LAZY_FIELD_PATTERNS,
 	MAX_IMAGE_BASE64_LENGTH,
 	MAX_IMAGES_PER_MESSAGE,
+	MAX_PINNED_MODELS,
 	THINKING_LEVEL_NAMES,
 } from "./types.ts";

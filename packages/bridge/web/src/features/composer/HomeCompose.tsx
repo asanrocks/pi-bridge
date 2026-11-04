@@ -18,7 +18,14 @@
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ImageContent, ModelInfo, ModelRef, PinnedModelInfo } from "../../../../src/core/index.ts";
+import type {
+	ImageContent,
+	ModelInfo,
+	ModelRef,
+	PinnedModelInfo,
+	PinnedModelSelection,
+	RpcReply,
+} from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { ComposeCard } from "./ComposeCard.tsx";
@@ -69,7 +76,7 @@ export const HomeCompose = memo(function HomeCompose({
 	defaultThinkingLevel,
 	connected,
 	onNewSession,
-	onTogglePin,
+	onSetPinnedModels,
 }: {
 	projectId: string;
 	models: ModelInfo[];
@@ -95,8 +102,9 @@ export const HomeCompose = memo(function HomeCompose({
 		model?: ModelRef,
 		thinkingLevel?: string,
 	) => Promise<boolean>;
-	/** Pin or unpin one model in the daemon-global list (ADR 15). */
-	onTogglePin: (provider: string, modelId: string, pinned: boolean) => void;
+	/** Replace the daemon-global pinned list (ADR 20). Resolves with the RPC
+	 * reply so the picker can roll its copy back on a refused replacement. */
+	onSetPinnedModels: (models: PinnedModelSelection[]) => Promise<RpcReply | undefined>;
 }) {
 	const draft = useStore((s) => s.draft);
 	const setDraftText = useStore((s) => s.setDraftText);
@@ -306,7 +314,7 @@ export const HomeCompose = memo(function HomeCompose({
 				onSetModel={handleSetModel}
 				onSetThinkingLevel={handleSetThinkingLevel}
 				onCycleModel={handleCycleModel}
-				onTogglePin={onTogglePin}
+				onSetPinnedModels={onSetPinnedModels}
 			/>
 			<div className={styles.hint}>
 				Enter starts a new session · Shift+Enter for a new line

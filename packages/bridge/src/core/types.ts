@@ -484,6 +484,10 @@ export const MAX_IMAGES_PER_MESSAGE = 5;
 /** Max base64 string length per image attachment (wire limit, enforced host-side). */
 export const MAX_IMAGE_BASE64_LENGTH = 4.5 * 1024 * 1024;
 
+/** Max pinned models per replacement (wire limit, enforced host-side). A
+ * pinned list is a curated shortlist; the cap only bounds a malformed one. */
+export const MAX_PINNED_MODELS = 64;
+
 export interface PromptRequest {
 	verb: "prompt";
 	text: string;
@@ -510,14 +514,24 @@ export interface DiscardSteerRequest {
 	verb: "discardSteer";
 }
 
-/** Pin or unpin one model in the daemon-global list (ADR 15). The host mutates
- * the global `enabledModels` scope; the new list arrives as a
- * `pinned_models_changed` push, so the reply is acknowledgement only. */
-export interface SetModelPinnedRequest {
-	verb: "setModelPinned";
+/** One entry of a pinned-model replacement: the model's identity plus the
+ * thinking level its scope entry carries. The client round-trips what the
+ * daemon reported, so a reorder preserves levels instead of re-deriving them. */
+export interface PinnedModelSelection {
 	provider: string;
-	modelId: string;
-	pinned: boolean;
+	id: string;
+	thinkingLevel?: string;
+}
+
+/** Replace the daemon-global pinned model list with this ordered list (ADR 20).
+ * Position is meaning: the head is a fresh Session's default model, and the
+ * cycle order follows. The host filters entries the catalogue cannot resolve
+ * and answers with the resulting list as a `pinned_models_changed` push — a
+ * replace is a proposal, the push is the verdict — so the reply is
+ * acknowledgement only. */
+export interface SetPinnedModelsRequest {
+	verb: "setPinnedModels";
+	models: PinnedModelSelection[];
 }
 
 export interface RenameSessionRequest {
@@ -880,7 +894,7 @@ export type RpcRequestBody =
 	| PromptRequest
 	| AbortRequest
 	| DiscardSteerRequest
-	| SetModelPinnedRequest
+	| SetPinnedModelsRequest
 	| RenameSessionRequest
 	| SetLabelRequest
 	| NavigateRequest

@@ -14,7 +14,14 @@
 // name claiming atomic without a second protocol round trip.
 // ============================================================================
 
-import type { JsonValue, ModelRef, PrefixCursor, PullRequestItem, SessionListCursor } from "../core/index.ts";
+import type {
+	JsonValue,
+	ModelRef,
+	PinnedModelSelection,
+	PrefixCursor,
+	PullRequestItem,
+	SessionListCursor,
+} from "../core/index.ts";
 import type {
 	ObservationId,
 	SessionAddress,
@@ -142,10 +149,8 @@ export type WorkerRequest =
 	| { readonly id: string; readonly kind: "info" }
 	| {
 			readonly id: string;
-			readonly kind: "setModelPinned";
-			readonly provider: string;
-			readonly modelId: string;
-			readonly pinned: boolean;
+			readonly kind: "setPinnedModels";
+			readonly models: PinnedModelSelection[];
 	  }
 	| { readonly id: string; readonly kind: "listFiles"; readonly prefix: string; readonly projectId: string }
 	| { readonly id: string; readonly kind: "readFile"; readonly path: string; readonly state?: string }

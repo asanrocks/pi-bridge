@@ -73,6 +73,9 @@ const SOLID_SLOTS = {
 	// Menu marks: made of dots, so they have no outline form to fall back to, and
 	// they only ever mark a row's overflow (< 16 by the same badge argument).
 	MoreIcon: [12, 14],
+	// The picker's reorder handle: dots for the same reason, and it lives inside
+	// the same 14px compact row.
+	GripIcon: [12, 14],
 	// Transport solids: filled because solidity is the meaning, and 16 because
 	// the filled box around them carries the size.
 	RecordIcon: [16],

@@ -261,8 +261,8 @@ export async function serveWorkerConnection(
 			case "info":
 				replyOk(request.id, (await service.info()) as unknown as JsonValue);
 				return;
-			case "setModelPinned":
-				await service.setModelPinned(request.provider, request.modelId, request.pinned);
+			case "setPinnedModels":
+				await service.setPinnedModels(request.models);
 				replyOk(request.id, null);
 				return;
 			case "listFiles":
