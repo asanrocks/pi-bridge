@@ -649,26 +649,31 @@
 }
 
 @media (pointer: coarse) {
-	/* Coarse pointers have no hover, so the always-visible chip cannot float
-	   over the text: an overlay there would answer the tap that meant to place
-	   a caret, and a float only reflows inline text — over a code block, table,
-	   or image it would sit on the content instead of beside it. Take the chip
-	   out of the text box entirely: it follows the Markdown in DOM order and
-	   occupies its own row at the segment's right edge, below the text. */
+	/* Coarse pointers have no hover, so the chip is visible at all times. It
+	   still cannot be an overlay on the first line: that corner must place a
+	   caret, and a tap there would copy instead. Take it out of the overlay and
+	   into the flow — a float that precedes the Markdown sits at the segment's
+	   top-right and the paragraph wraps around it. Scroll containers (the
+	   code-block body, the table wrapper) establish their own formatting
+	   context, so they shift beside the float instead of sitting under it.
+
+	   The float's outer box is exactly one line of its own type — narrower than
+	   the prose line box, because the chip is --fs-xs inside body text. That is
+	   the whole point of the number: a float shortens every line box it
+	   intersects, so a 24px chip plus its margins also trimmed the second line
+	   and left two ragged line ends (the chip is taller than one 22px prose
+	   line). One line box of the chip is what keeps the squeeze to the opening
+	   line. The left margin is optical clearance from the wrapped text, not
+	   padding; the target still comes from the shared ::after overlay. */
 	.msgCopyBtn {
-		display: flex;
-		position: static;
-		width: 40px;
-		height: 40px;
-		margin: 2px 0 0 auto;
+		position: relative;
+		top: auto;
+		right: auto;
+		float: right;
+		height: 1lh;
+		margin: 0 0 0 4px;
 		opacity: 1;
 		pointer-events: auto;
-	}
-
-	/* The 40px box already is the touch target, so the generic coarse-pointer
-	   overlay would only add 6px of unlabeled hit area over the last line. */
-	.msgCopyBtn::after {
-		content: none;
 	}
 }
 

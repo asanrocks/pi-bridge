@@ -1571,14 +1571,25 @@ selection begun there never starts. When the input cannot hover at all, the
 control is visible and interactive unconditionally, so the faded state is never
 reached.
 
-**A chip that cannot be revealed stays out of the text box.** On coarse pointers
-the copy chip is visible and interactive at all times, so it cannot be an
-overlay on the first line: an overlay would answer the tap that meant to place a
-caret, and the in-flow `float` that replaced it only reflows inline text — over a
-code block, table, or image the chip is painted on the content instead of beside
-it. The chip therefore leaves the text box and takes its own row at the
-segment's right edge, below the Markdown. `pointer-events` alone does not fix
-this case; the overlap is the problem, not the visibility.
+**A chip that cannot be hidden keeps one box and changes only its placement.**
+On coarse pointers the copy chip is visible and interactive at all times, so it
+cannot be an overlay on the first line — that corner must place a caret, and a
+tap there would copy instead. It leaves the overlay and enters the flow as a
+float at the segment's top-right, so the paragraph wraps beside it and no text
+is painted over; scroll containers (the code-block body, the table wrapper)
+establish their own formatting context and shift beside the float rather than
+sitting under it. The width stays the hover-revealed chip's 24px, and the touch
+target comes from the `::after` overlay every `.toolbarBtn` grows on a coarse
+pointer — a 40px box here would read as a different control from the turn
+header's Copy even though both carry the same glyph.
+
+The float's *height* is the one value that must differ, and it is a line-height
+rather than a slot: a float shortens every line box it intersects, so a box
+taller than one prose line trims the opening line and nicks the second, leaving
+two ragged line ends and a visibly empty wedge beside the chip. One line of the
+chip's own type (`1lh`, and the chip is `--fs-xs` inside body prose) stays inside
+the first line box, so exactly one line wraps and the waste is one ragged line
+end, which is what wrapping prose around a control costs.
 
 **Text instead of a glyph, and the other way round.** Icon-only is the default
 for verbs. Text stays where the control carries a value rather than an action —

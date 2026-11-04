@@ -10,9 +10,10 @@
 // also gates hit-testing (pointer-events), so the invisible chip never answers
 // a click that meant to place a caret.
 //
-// The chip follows the Markdown in DOM order so a coarse pointer can place it
-// in the flow, below the text, instead of over it (see turns.module.css); the
-// absolute placement on hover-capable inputs makes that order invisible.
+// The chip precedes the Markdown in DOM order: on a coarse pointer it leaves
+// the overlay and floats at the segment's top-right, and a float can only sit
+// beside text that follows it in the flow (see turns.module.css). The absolute
+// placement on hover-capable inputs makes that order invisible.
 // Copies this block's markdown source.
 
 import { memo, useCallback, useDeferredValue, useState } from "react";
@@ -57,8 +58,6 @@ export const TextBlockView = memo(function TextBlockView({
 
 	return (
 		<div className={`${styles.textSegment} ${styles.markdownContent}`}>
-			<MarkdownBlock text={deferredText} isProvisional={isProvisional} />
-			{showCursor && isProvisional && <span className={styles.streamingCursor}>|</span>}
 			{text.length > 0 && (
 				<button
 					type="button"
@@ -70,6 +69,8 @@ export const TextBlockView = memo(function TextBlockView({
 					{copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
 				</button>
 			)}
+			<MarkdownBlock text={deferredText} isProvisional={isProvisional} />
+			{showCursor && isProvisional && <span className={styles.streamingCursor}>|</span>}
 		</div>
 	);
 });
