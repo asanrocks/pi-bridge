@@ -37,7 +37,24 @@ browse branches in History. A steerer can do the following:
   streaming or compacting; compaction itself blocks Send.
 - Rename the current Session by clicking the topbar title, pressing Enter to
   save, or Escape to cancel.
-- Choose a model and thinking level from the model picker. The picker is
+- Choose a model and thinking level from the model picker. Model selection is
+  client-local (the stateless client API): there is no model verb — the
+  picker's pick rides with the next send, which also consumes it, so a later
+  send inherits from the path the turn recorded instead of a stale pick. What
+  the picker shows before any pick is that same inheritance: the path the
+  send continues (an edit forks at the edited message's parent, a compose
+  continues from the live leaf) names the model of its last recorded change,
+  else the producer of its last assistant message, else the session's live
+  model — the model an uncarried send runs on. The thinking level inherits
+  the path's last recorded change the same way, clamped to the model's
+  supported levels — the clamp is the single authority, so the level shown and
+  the level carried cannot disagree. A pick is an override, not a default: it
+  survives a rewind, and it survives a steer — a send admitted while a turn is
+  in flight carries nothing (the running turn keeps its model) and keeps the
+  pick for the next idle send. Known gap: inheritance prefers a recorded
+  change over an earlier answer's producer, while a cold resume prefers the
+  producer, so an automatic fallback answer reads as the recorded model here
+  and as the fallback's model after a reopen. The picker is
   searchable, grouped by provider, marks the selected model, and filters the
   thinking slider to levels supported by that model. Its catalogue is three
   tiers (ADR 15). A "Pinned" group sits at the top when models are pinned —
@@ -212,10 +229,14 @@ its Project home at `/<projectId>`.
 
 Project home is an unattached, compose-first surface. It shows the expanded
 `HomeCompose` card, focuses the textarea, and starts a new Session when the
-first prompt is sent. The first prompt, images, and explicitly chosen
-pre-session model and thinking level are admitted together. The draft is
-scoped to the Project, and the model choice is persisted in one local Project
-slot. An unset choice leaves model resolution to the daemon. The displayed
+first prompt is sent. The first prompt, images, and the pre-session model and
+thinking level are admitted together. The draft is
+scoped to the Project, and an explicitly chosen model is persisted in one
+local Project slot. The default pick is the first pinned model — the curated
+group's head — so a fresh Session starts on it; with no pins the send carries
+nothing and the daemon resolves (the settings default, else a provider
+default, else the first available model), which is also what the display
+falls back to (`ProjectInfo.defaultModel`). The displayed
 thinking level is the daemon's pre-clamp default resolution clamped to the
 effective model's supported levels (`clampToSupportedLevels`), which is the
 level a send runs at. Known gap: a per-model thinking-level override (pi

@@ -119,8 +119,6 @@ function fakeWorker(): FakeWorker {
 		prompt: notImplemented,
 		abort: notImplemented,
 		discardSteer: notImplemented,
-		setModel: notImplemented,
-		setThinkingLevel: notImplemented,
 		renameSession: notImplemented,
 		setLabel: notImplemented,
 		navigate: notImplemented,

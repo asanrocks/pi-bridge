@@ -11,6 +11,12 @@
 //    turn. Blocked while streaming/compacting (a fork mid-turn would race
 //    the run).
 //
+// Both paths carry the send's model selection (the stateless client API,
+// computed by nextSelectionOf — the local pick else path inheritance); the
+// successful send consumes the pick, so the next send inherits from the path
+// the turn just recorded instead of a stale pick. A send admitted while the
+// turn is in flight is a steer: it carries nothing and keeps the pick.
+//
 // The optimistic clear empties the textarea immediately — the prompt RPC
 // awaits the *whole turn* (Manager.prompt awaits session.prompt), so clearing
 // only on resolve would leave the text through the entire stream. The restore
@@ -19,14 +25,15 @@
 // ============================================================================
 
 import { useCallback } from "react";
-import type { ImageContent } from "../../../../src/core/index.ts";
+import type { ImageContent, ModelRef } from "../../../../src/core/index.ts";
 import { requestNotificationPermission } from "../../infra/lib/notificationPermission.ts";
 import { getStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
+import { nextSelectionOf } from "./nextSelection.ts";
 
 export interface RpcForCommit {
 	navigate: (entryId: string | null) => Promise<unknown>;
-	prompt: (text: string, images?: ImageContent[]) => Promise<unknown>;
+	prompt: (text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) => Promise<unknown>;
 }
 
 /** A reply is ok when it exists and its `ok` field is true (RpcReply-shaped). */
@@ -58,6 +65,16 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			s.pushToast("draft:peek", "Viewing another branch — back to live to send");
 			return;
 		}
+		// The send's model selection, computed before any RPC leaves: the
+		// draft's fork point (edit) or the live leaf (compose) is what the
+		// send continues, and the navigate below moves the leaf before the
+		// prompt fires.
+		const selection = nextSelectionOf({
+			document: s.document,
+			draft,
+			pick: s.selectionPick,
+			models: s.models,
+		});
 		if (draft.kind === "edit") {
 			if (s.document.status.isStreaming || s.document.status.isCompacting) return;
 			const entry = s.document.entries[draft.entryId];
@@ -79,7 +96,7 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			// flag consumes on the forked message, not on the navigate's own
 			// path change.
 			getStore().getState().armSendAnchor();
-			const promptReply = await rpc.prompt(text, entryImages);
+			const promptReply = await rpc.prompt(text, entryImages, selection.carryModel, selection.carryLevel);
 			if (!isOk(promptReply)) {
 				getStore().getState().clearSendAnchor();
 				// Leaf moved to the parent (the intended fork point); restore as
@@ -96,11 +113,21 @@ export function useComposerCommit(rpc: RpcForCommit) {
 			// Arm before the RPC leaves: the flag is set synchronously, so the
 			// appended user entry can never render before the viewport sees it.
 			getStore().getState().armSendAnchor();
-			const reply = await rpc.prompt(text, draftImages);
+			const reply = await rpc.prompt(text, draftImages, selection.carryModel, selection.carryLevel);
 			if (!isOk(reply)) {
 				getStore().getState().clearSendAnchor();
 				getStore().getState().setDraft(savedDraft);
+				return;
 			}
+		}
+		// The turn that carried the selection recorded it on its path — the
+		// next send inherits from the path, so the pick is consumed. A send
+		// admitted mid-turn carried nothing (nextSelectionOf gates on the same
+		// busy state, as the worker does), so its pick stays and lands on the
+		// next idle send instead of being spent on a steer that could not use
+		// it.
+		if (!s.document.status.isStreaming && !s.document.status.isCompacting) {
+			getStore().getState().clearSelectionPick();
 		}
 	}, [rpc]);
 

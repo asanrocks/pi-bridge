@@ -19,8 +19,15 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
+import type { Entry } from "../../src/core/index.ts";
 import { applyPatch, type Document, initFromEntries, type JsonValue, type ModelRef } from "../../src/core/index.ts";
-import { findNextModel, isModelSelected, type ModelRefLike } from "../../src/viewmodel/index.ts";
+import {
+	findNextModel,
+	inheritModelForPath,
+	inheritThinkingLevelForPath,
+	isModelSelected,
+	type ModelRefLike,
+} from "../../src/viewmodel/index.ts";
 
 // Minimal catalog entry shape (ModelInfo / PinnedModelInfo both satisfy this).
 interface Cat {
@@ -116,5 +123,116 @@ describe("model ref disambiguation — picker highlight", () => {
 		const ref: ModelRef = { provider: "faux-b", modelId: "shared" };
 		expect(isModelSelected(B_SHARED as ModelRefLike, ref)).toBe(true);
 		expect(isModelSelected(A_SHARED as ModelRefLike, ref)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Path inheritance — the stateless client API's send-time heuristic.
+// ---------------------------------------------------------------------------
+
+describe("model ref disambiguation — path inheritance", () => {
+	/** A path root → mc(faux-a/shared) → assistant → user, plus an abandoned
+	 * sibling branch carrying a LATER model_change to faux-b/shared. Inheritance
+	 * walks the parent chain, so the off-branch entry must never win (unlike
+	 * deriveStatus, which is a whole-map paint hint). */
+	function branchedEntries(): Record<string, Entry> {
+		return {
+			mc: {
+				kind: "model_change",
+				id: "mc",
+				parentId: null,
+				timestamp: "t1",
+				provider: "faux-a",
+				modelId: "shared",
+				ord: 0,
+			},
+			assistant: {
+				kind: "message",
+				id: "assistant",
+				parentId: "mc",
+				timestamp: "t2",
+				role: "assistant",
+				content: [],
+				provider: "faux-a",
+				model: "shared",
+				ord: 1,
+			},
+			user: {
+				kind: "message",
+				id: "user",
+				parentId: "assistant",
+				timestamp: "t3",
+				role: "user",
+				content: [],
+				ord: 2,
+			},
+			// Abandoned branch: higher ord, different path.
+			branchy: {
+				kind: "model_change",
+				id: "branchy",
+				parentId: "assistant",
+				timestamp: "t4",
+				provider: "faux-b",
+				modelId: "shared",
+				ord: 3,
+			},
+		};
+	}
+
+	it("inherits the path's last model_change, ignoring later entries on other branches", () => {
+		const entries = branchedEntries();
+		expect(inheritModelForPath(entries, "user")).toEqual({ provider: "faux-a", modelId: "shared" });
+		expect(inheritModelForPath(entries, "branchy")).toEqual({ provider: "faux-b", modelId: "shared" });
+	});
+
+	it("falls back to the producer of the path's last assistant message", () => {
+		const entries: Record<string, Entry> = {
+			assistant: {
+				kind: "message",
+				id: "assistant",
+				parentId: null,
+				timestamp: "t1",
+				role: "assistant",
+				content: [],
+				provider: "faux-b",
+				model: "shared",
+				ord: 0,
+			},
+			user: {
+				kind: "message",
+				id: "user",
+				parentId: "assistant",
+				timestamp: "t2",
+				role: "user",
+				content: [],
+				ord: 1,
+			},
+		};
+		expect(inheritModelForPath(entries, "user")).toEqual({ provider: "faux-b", modelId: "shared" });
+	});
+
+	it("returns null when the path records nothing", () => {
+		expect(inheritModelForPath({}, null)).toBeNull();
+		const entries: Record<string, Entry> = {
+			user: { kind: "message", id: "user", parentId: null, timestamp: "t1", role: "user", content: [], ord: 0 },
+		};
+		expect(inheritModelForPath(entries, "user")).toBeNull();
+	});
+
+	it("inherits the path's last thinking_level_change, null when the path records none", () => {
+		const entries = branchedEntries();
+		expect(inheritThinkingLevelForPath(entries, "user")).toBeNull();
+		entries.tlc = {
+			kind: "thinking_level_change",
+			id: "tlc",
+			parentId: "assistant",
+			timestamp: "t5",
+			thinkingLevel: "high",
+			ord: 4,
+		};
+		// tlc hangs off the assistant like the abandoned branch: the user path
+		// still records none, the tlc path records "high".
+		expect(inheritThinkingLevelForPath(entries, "user")).toBeNull();
+		expect(inheritThinkingLevelForPath(entries, "tlc")).toBe("high");
 	});
 });

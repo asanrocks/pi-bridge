@@ -10,8 +10,11 @@
 // Draft: the store draft scoped to the project (draftPersistence keys
 // `p:<projectId>`), so an unsent prompt survives navigation and reloads.
 // Model + thinking level: per-project pre-session picks persisted to one
-// localStorage slot; unset means "the daemon-resolved default" and sends
-// nothing with newSession, so the daemon keeps resolving.
+// localStorage slot. The stateless client API: the send always carries its
+// selection — the persisted pick, else the first pinned model (the curated
+// group's head). With neither, nothing is carried and the daemon resolves
+// (settings default, else provider default, else first available), which is
+// also what the display falls back to (`ProjectInfo.defaultModel`).
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -146,7 +149,12 @@ export const HomeCompose = memo(function HomeCompose({
 	// a per-model thinking-level override (pi settings `modelThinkingLevels`) for
 	// the picked model is host-side only and is not reflected here; the session
 	// runs at the override, not at this fallback.
-	const model = choice?.provider && choice?.modelId ? { provider: choice.provider, modelId: choice.modelId } : null;
+	const model =
+		choice?.provider && choice?.modelId
+			? { provider: choice.provider, modelId: choice.modelId }
+			: pinnedModels.length > 0
+				? { provider: pinnedModels[0].provider, modelId: pinnedModels[0].id }
+				: null;
 	const effectiveModel = model ?? defaultModel;
 	const effectiveModelInfo = effectiveModel
 		? models.find((m) => m.provider === effectiveModel.provider && m.id === effectiveModel.modelId)

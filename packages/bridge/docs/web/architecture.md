@@ -531,8 +531,9 @@ the original methods when the connection closes or the app unmounts.
 
 ### RPC and candidates
 
-`useRpc` exposes typed wrappers for Session verbs (`prompt`, `abort`,
-`discardSteer`, model and thinking changes, rename, and branch navigation),
+`useRpc` exposes typed wrappers for Session verbs (`prompt` — which carries
+the send's model selection; there is no separate model verb — `abort`,
+`discardSteer`, rename, and branch navigation),
 address operations (`openSession`, `openProject`, `newSession`, `detach`, and
 `closeSession`), Project/session listing, and Project file completion. It
 centralizes failure toasts. `useBranchSelect` is the branch-target selection

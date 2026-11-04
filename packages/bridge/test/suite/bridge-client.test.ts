@@ -303,21 +303,22 @@ describe("BridgeClient", () => {
 		expect(frame.id).toBe("1");
 	});
 
-	it("setModel sends provider and model", () => {
+	it("prompt carries the send's model selection", () => {
 		const { client, transport } = makeClient();
-		client.setModel("openai", "gpt-5");
+		client.prompt("fix the bug", undefined, { provider: "openai", modelId: "gpt-5" }, "high");
 		const frame = JSON.parse(transport.sent[0]);
-		expect(frame.verb).toBe("setModel");
-		expect(frame.provider).toBe("openai");
-		expect(frame.model).toBe("gpt-5");
+		expect(frame.verb).toBe("prompt");
+		expect(frame.model).toEqual({ provider: "openai", modelId: "gpt-5" });
+		expect(frame.thinkingLevel).toBe("high");
 	});
 
-	it("setThinkingLevel sends level", () => {
+	it("prompt omits absent carries", () => {
 		const { client, transport } = makeClient();
-		client.setThinkingLevel("high");
+		client.prompt("fix the bug");
 		const frame = JSON.parse(transport.sent[0]);
-		expect(frame.verb).toBe("setThinkingLevel");
-		expect(frame.level).toBe("high");
+		expect(frame.verb).toBe("prompt");
+		expect("model" in frame).toBe(false);
+		expect("thinkingLevel" in frame).toBe(false);
 	});
 
 	it("renameSession sends name", () => {

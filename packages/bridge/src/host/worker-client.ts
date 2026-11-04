@@ -400,12 +400,17 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 			closeSession: (address) => request<void>({ kind: "closeSession", address }),
 			archiveSession: (address) => request<void>({ kind: "archiveSession", address }),
 
-			prompt: (target, text, images) =>
-				request<void>({ kind: "prompt", target, text, images: images as unknown as JsonValue }),
+			prompt: (target, text, images, model, thinkingLevel) =>
+				request<void>({
+					kind: "prompt",
+					target,
+					text,
+					images: images as unknown as JsonValue,
+					model,
+					thinkingLevel,
+				}),
 			abort: (target) => request<void>({ kind: "abort", target }),
 			discardSteer: (target) => request<void>({ kind: "discardSteer", target }),
-			setModel: (target, provider, modelId) => request<void>({ kind: "setModel", target, provider, modelId }),
-			setThinkingLevel: (target, level) => request<void>({ kind: "setThinkingLevel", target, level }),
 			renameSession: (target, name) => request<void>({ kind: "renameSession", target, name }),
 			setLabel: (target, entryId, label) => request<void>({ kind: "setLabel", target, entryId, label }),
 			navigate: (target, entryId) => request<void>({ kind: "navigate", target, entryId }),

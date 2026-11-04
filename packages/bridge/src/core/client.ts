@@ -16,6 +16,7 @@ import type {
 	ModelRef,
 	PatchOp,
 	PrefixCursor,
+	PromptRequest,
 	RpcReply,
 	RpcRequestBody,
 	ServerPushMessage,
@@ -253,10 +254,14 @@ export class BridgeClient {
 
 	// ── Verb methods ─────────────────────────────────────────────────────
 
-	prompt(text: string, images?: ImageContent[]): Promise<RpcReply> {
-		return images && images.length > 0
-			? this.call({ verb: "prompt", text, images })
-			: this.call({ verb: "prompt", text });
+	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<RpcReply> {
+		// Carries ride only when present: an omitted model/level leaves pi's
+		// session selection (the last applied one) in force.
+		const body: PromptRequest = { verb: "prompt", text };
+		if (images && images.length > 0) body.images = images;
+		if (model) body.model = model;
+		if (thinkingLevel !== undefined) body.thinkingLevel = thinkingLevel;
+		return this.call(body);
 	}
 
 	abort(): Promise<RpcReply> {
@@ -265,14 +270,6 @@ export class BridgeClient {
 
 	discardSteer(): Promise<RpcReply> {
 		return this.call({ verb: "discardSteer" });
-	}
-
-	setModel(provider: string, model: string): Promise<RpcReply> {
-		return this.call({ verb: "setModel", provider, model });
-	}
-
-	setThinkingLevel(level: string): Promise<RpcReply> {
-		return this.call({ verb: "setThinkingLevel", level });
 	}
 
 	setModelPinned(provider: string, modelId: string, pinned: boolean): Promise<RpcReply> {

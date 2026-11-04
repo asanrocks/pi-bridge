@@ -238,6 +238,7 @@ function clearedSessionState() {
 		frozenActions: new Set<string>(),
 		loadingPaths: new Set<string>(),
 		draft: { kind: "idle" } as ComposerDraft,
+		selectionPick: null,
 		composerExpanded: false,
 		focusedTurnId: null as string | null,
 		renderLeafId: null as string | null,
@@ -303,7 +304,16 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 		set((s) =>
 			s.currentProjectId === currentProjectId && s.currentStem === currentStem
 				? s
-				: { currentProjectId, currentStem, browser: null, activeSessionId: null, docAuthority: "staged" as const },
+				: {
+						currentProjectId,
+						currentStem,
+						browser: null,
+						activeSessionId: null,
+						docAuthority: "staged" as const,
+						// The selection pick is session-scoped: it must not ride into
+						// another session's sends.
+						selectionPick: null,
+					},
 		),
 
 	clearCurrentSession: (projectId = null) => set({ ...clearedSessionState(), currentProjectId: projectId }),
@@ -378,6 +388,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 				docAuthority: "authoritative",
 				browser: addressChanged ? null : s.browser,
 				renderLeafId: idChanged ? null : s.renderLeafId,
+				selectionPick: addressChanged || idChanged ? null : s.selectionPick,
 			};
 		}),
 
@@ -395,6 +406,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 				docAuthority: "authoritative",
 				browser: addressChanged ? null : s.browser,
 				renderLeafId: idChanged ? null : s.renderLeafId,
+				selectionPick: addressChanged || idChanged ? null : s.selectionPick,
 			};
 		}),
 });

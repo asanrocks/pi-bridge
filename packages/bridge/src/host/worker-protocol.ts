@@ -14,7 +14,7 @@
 // name claiming atomic without a second protocol round trip.
 // ============================================================================
 
-import type { JsonValue, PrefixCursor, PullRequestItem, SessionListCursor } from "../core/index.ts";
+import type { JsonValue, ModelRef, PrefixCursor, PullRequestItem, SessionListCursor } from "../core/index.ts";
 import type {
 	ObservationId,
 	SessionAddress,
@@ -112,17 +112,11 @@ export type WorkerRequest =
 			readonly target: SessionTarget;
 			readonly text: string;
 			readonly images?: JsonValue;
+			readonly model?: ModelRef;
+			readonly thinkingLevel?: string;
 	  }
 	| { readonly id: string; readonly kind: "abort"; readonly target: SessionTarget }
 	| { readonly id: string; readonly kind: "discardSteer"; readonly target: SessionTarget }
-	| {
-			readonly id: string;
-			readonly kind: "setModel";
-			readonly target: SessionTarget;
-			readonly provider: string;
-			readonly modelId: string;
-	  }
-	| { readonly id: string; readonly kind: "setThinkingLevel"; readonly target: SessionTarget; readonly level: string }
 	| { readonly id: string; readonly kind: "renameSession"; readonly target: SessionTarget; readonly name: string }
 	| {
 			readonly id: string;

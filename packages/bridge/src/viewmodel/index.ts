@@ -2647,3 +2647,61 @@ export function findNextModel(
 export function isModelSelected(m: ModelRefLike, ref: ModelRef): boolean {
 	return m.provider === ref.provider && m.id === ref.modelId;
 }
+
+// ---------------------------------------------------------------------------
+// Path inheritance — the stateless client API's send-time heuristic. A
+// send carries its model selection; when the user has not picked one, it
+// inherits from the path being continued: the last `model_change` the path
+// records, else the producer of the last assistant message on it. Walks the
+// parent chain from `leafId` (entries from other branches are never visited —
+// unlike `deriveStatus`, which derives from the whole entry map as a paint
+// hint). Null when the path records nothing (a fresh session) — the send
+// then carries nothing and the worker's session selection stays in force.
+//
+// Deliberately not identical to pi's branch-selection restore, which is what
+// a cold resume uses: pi prefers an answer's physical producer over an earlier
+// recorded change unless that change names a virtual model, so an automatic
+// fallback answer wins there. Here a recorded change wins, because a send
+// carries the selection the user made — the model the session is running
+// (`status.model`), not the producer of a single fallback answer. The two
+// agree on every other shape of path.
+// ---------------------------------------------------------------------------
+
+/** The model selection `leafId`'s path records, or null. */
+export function inheritModelForPath(entries: Record<string, Entry>, leafId: string | null): ModelRef | null {
+	let id = leafId;
+	while (id !== null) {
+		const entry = entries[id];
+		if (!entry) break;
+		if (entry.kind === "model_change") return { provider: entry.provider, modelId: entry.modelId };
+		if (
+			entry.kind === "message" &&
+			entry.role === "assistant" &&
+			typeof entry.provider === "string" &&
+			typeof entry.model === "string" &&
+			entry.provider !== "" &&
+			entry.model !== ""
+		) {
+			// The physical producer of the answer — the fallback source when the
+			// path records no explicit change (see the header note on the one
+			// deliberate difference from pi's restore).
+			return { provider: entry.provider, modelId: entry.model };
+		}
+		id = entry.parentId;
+	}
+	return null;
+}
+
+/** The thinking level `leafId`'s path records (its last
+ * `thinking_level_change`), or null when the path records none — the send
+ * then carries nothing and the level stays whatever the session runs at. */
+export function inheritThinkingLevelForPath(entries: Record<string, Entry>, leafId: string | null): string | null {
+	let id = leafId;
+	while (id !== null) {
+		const entry = entries[id];
+		if (!entry) break;
+		if (entry.kind === "thinking_level_change") return entry.thinkingLevel;
+		id = entry.parentId;
+	}
+	return null;
+}

@@ -18,11 +18,11 @@
 // Admission keeps the two classes the bridge has always needed (architecture
 // invariant 5: pi's event loop is serial and the bridge observes it):
 //
-//   - Mutations (setModel, setThinkingLevel, renameSession, setLabel,
-//     navigate) are serialized among themselves — one at a time, in
-//     admission order — so concurrent commands from different Connections
-//     get a deterministic order. Mutations are quick and never await a
-//     turn, so the line cannot deadlock behind streaming.
+//   - Mutations (renameSession, setLabel, navigate) are serialized among
+//     themselves — one at a time, in admission order — so concurrent
+//     commands from different Connections get a deterministic order.
+//     Mutations are quick and never await a turn, so the line cannot
+//     deadlock behind streaming.
 //   - Immediate work (turns — prompt, recoverTurn — plus abort, and reads —
 //     pull, gitShow's cwd) runs without queueing: a Stop must reach a
 //     streaming turn rather than wait behind it, and a read that queued
@@ -59,6 +59,7 @@ import type {
 	Document,
 	ImageContent,
 	JsonValue,
+	ModelRef,
 	PrefixCursor,
 	PullRequestItem,
 	SessionRef,
@@ -132,13 +133,12 @@ export interface SessionAdmission {
 	 * reads (gitShow's query base), not a runtime handle. */
 	readonly cwd: string;
 	// ── Typed session verbs (admitted by the actor) ─────────────────────
-	/** A turn. Immediate admitted work — a Stop must not queue behind it. */
-	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	/** A turn. Immediate admitted work — a Stop must not queue behind it.
+	 * Carries the send's model selection (the stateless client API). */
+	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	abort(): Promise<void>;
 	discardSteer(): Promise<void>;
 	/** A serialized mutation: one at a time, in admission order. */
-	setModel(provider: string, modelId: string): Promise<void>;
-	setThinkingLevel(level: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
 	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
@@ -334,11 +334,10 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			ref,
 			authorization,
 			cwd: manager.cwd,
-			prompt: (text, images) => commandOp((session) => session.prompt(text, images)),
+			prompt: (text, images, model, thinkingLevel) =>
+				commandOp((session) => session.prompt(text, images, model, thinkingLevel)),
 			abort: () => commandOp((session) => session.abort()),
 			discardSteer: () => commandOp((session) => session.discardSteer()),
-			setModel: (provider, modelId) => mutateOp((session) => session.setModel(provider, modelId)),
-			setThinkingLevel: (level) => mutateOp((session) => session.setThinkingLevel(level)),
 			renameSession: (name) => mutateOp((session) => session.renameSession(name)),
 			setLabel: (entryId, label) => mutateOp((session) => session.setLabel(entryId, label)),
 			navigate: (entryId) => mutateOp((session) => session.navigate(entryId)),

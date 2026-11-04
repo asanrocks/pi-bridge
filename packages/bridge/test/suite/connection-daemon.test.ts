@@ -189,6 +189,75 @@ describe("Connection + Daemon", () => {
 		clientWs.close();
 	});
 
+	it("rejects prompt RPC with a malformed model carry", async () => {
+		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
+		harnesses.push(bh);
+
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
+		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
+
+		// A half-applied carry would misattribute the turn, so the shape is
+		// refused before anything is applied.
+		const cases: Array<[unknown, RegExp]> = [
+			[{ provider: 1, modelId: "m" }, /Invalid `model`/],
+			[{ provider: "p" }, /Invalid `model`/],
+			[{ provider: "", modelId: "m" }, /Invalid `model`/],
+			["p/m", /Invalid `model`/],
+		];
+		let id = 0;
+		for (const [model, errorRe] of cases) {
+			id += 1;
+			clientWs.send(JSON.stringify({ id: String(id), verb: "prompt", text: "go", model }));
+			const reply = await waitForFrame(clientFrames, (f) => {
+				const r = f as Record<string, unknown>;
+				return r.id === String(id) && r.ok !== undefined;
+			});
+			expect((reply as Record<string, unknown>).ok).toBe(false);
+			expect((reply as Record<string, unknown>).error).toMatch(errorRe);
+		}
+
+		serverWs.close();
+		clientWs.close();
+	});
+
+	it("rejects prompt RPC with a thinking level outside the protocol's set", async () => {
+		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
+		harnesses.push(bh);
+
+		const { serverWs, clientWs } = await createWsPair();
+		const clientFrames = collectFrames(clientWs);
+
+		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
+		await waitForFrame(clientFrames, (f) => (f as Record<string, unknown>).kind === "replace");
+
+		// Shape-checking alone would let pi cast an unknown name into its state;
+		// the wire accepts only the names `getDaemonInfo` reports.
+		const cases: Array<[unknown, RegExp]> = [
+			[42, /Invalid `thinkingLevel`/],
+			["", /Invalid `thinkingLevel`/],
+			["ultra", /Invalid `thinkingLevel`/],
+		];
+		let id = 0;
+		for (const [thinkingLevel, errorRe] of cases) {
+			id += 1;
+			clientWs.send(JSON.stringify({ id: String(id), verb: "prompt", text: "go", thinkingLevel }));
+			const reply = await waitForFrame(clientFrames, (f) => {
+				const r = f as Record<string, unknown>;
+				return r.id === String(id) && r.ok !== undefined;
+			});
+			expect((reply as Record<string, unknown>).ok).toBe(false);
+			expect((reply as Record<string, unknown>).error).toMatch(errorRe);
+		}
+
+		serverWs.close();
+		clientWs.close();
+	});
+
 	// ── daemon verbs via RPC ─────────────────────────────────────────────
 
 	it("listSessions returns session list", async () => {
@@ -392,9 +461,9 @@ describe("Connection + Daemon", () => {
 		clientWs.close();
 	});
 
-	// ── setModel via Connection ──────────────────────────────────────────
+	// ── prompt model carries via Connection ──────────────────────────────
 
-	it("setModel RPC routes through Connection to Manager", async () => {
+	it("prompt RPC with a model carry routes through Connection to Manager", async () => {
 		const bh = await createBridgeHarness({ fixturePath: FIXTURE_URL.pathname });
 		harnesses.push(bh);
 
@@ -408,8 +477,18 @@ describe("Connection + Daemon", () => {
 
 		const patchCountBefore = bh.patches.length;
 
-		// setModel RPC — uses the faux model from harness
-		clientWs.send(JSON.stringify({ id: "5", verb: "setModel", provider: "faux", model: "faux-1" }));
+		// Prompt with the stateless client API's carry — uses the faux model
+		// from the harness, so the worker-side adapter applies it before the
+		// turn (a model_change entry and the status.model patch).
+		clientWs.send(
+			JSON.stringify({
+				id: "5",
+				verb: "prompt",
+				text: "Say hello",
+				model: { provider: "faux", modelId: "faux-1" },
+				thinkingLevel: "high",
+			}),
+		);
 
 		const reply = await waitForFrame(clientFrames, (f) => {
 			const r = f as Record<string, unknown>;
@@ -418,7 +497,7 @@ describe("Connection + Daemon", () => {
 		const r = reply as Record<string, unknown>;
 		expect(r.ok).toBe(true);
 
-		// Patches should be emitted for model_change entry
+		// Patches should be emitted for the model_change entry and the turn
 		expect(bh.patches.length).toBeGreaterThan(patchCountBefore);
 
 		serverWs.close();

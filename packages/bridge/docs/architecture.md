@@ -270,10 +270,10 @@ idle --idle Session verb--> idle
 
 The event loop is serial. `applyEvent`, `refresh`, and `settle` are
 synchronous pure projections; the host applies each resulting Patch before
-dispatching the next one. `setModel`, `setThinkingLevel`, and `renameSession`
-refresh immediately when idle. `navigate` goes through the same refresh
-boundary, so the leaf, the branch statistics, and the recovery kind describe
-the selected branch.
+dispatching the next one. `renameSession` and the model/level carries a
+prompt brings refresh immediately when idle. `navigate` goes through the same
+refresh boundary, so the leaf, the branch statistics, and the recovery kind
+describe the selected branch.
 
 ### Connection and Activation lifecycle
 

@@ -9,13 +9,28 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
-import { type ImageContent, MAX_IMAGES_PER_MESSAGE } from "../../../../src/core/types.ts";
+import { type ImageContent, MAX_IMAGES_PER_MESSAGE, type ModelRef } from "../../../../src/core/types.ts";
 import type { ClientStore } from "./store.ts";
 
 export type ComposerDraft =
 	| { kind: "idle" }
 	| { kind: "compose"; text: string; images?: ImageContent[] }
 	| { kind: "edit"; entryId: string; index: number; text: string; initialText: string };
+
+/** A model selection picked in the composer's picker — the local state of the
+ * stateless client API. Not server state: it rides with the next send, whose
+ * turn records the selection on its path, and is consumed by that send's
+ * success so later sends inherit from the path instead of a stale pick. A
+ * send admitted mid-turn (a steer) carries nothing, so it keeps the pick. An
+ * explicit pick stays in force across a rewind: inheritance is the default,
+ * not an override. `thinkingLevel` is null when only the model was picked —
+ * the level then inherits, clamped to the picked model's supported levels. */
+export interface SelectionPick {
+	/** The picked model; null when only a level was picked — the model then
+	 * inherits from the path like an unpicked send. */
+	model: ModelRef | null;
+	thinkingLevel: string | null;
+}
 
 /** Stable empty attachment list — a selector returning a fresh `[]` on every
  * call makes `useStore` (useSyncExternalStore) see the snapshot as changed
@@ -41,6 +56,9 @@ export interface ComposerSlice {
 	    app-level keybinding layer can drive `/` to expand + focus the
 	    textarea without reaching into Composer. */
 	composerExpanded: boolean;
+	/** The picker's local selection pick (see SelectionPick). Session-scoped:
+	 *  cleared when the session changes and consumed by a successful send. */
+	selectionPick: SelectionPick | null;
 
 	/** Direct draft replacement (restore-from-localStorage, internal). */
 	setDraft: (draft: ComposerDraft) => void;
@@ -56,12 +74,18 @@ export interface ComposerSlice {
 	blurDraft: () => void;
 	/** Clear the draft to idle (commit success, instance exit, Escape-on-edit). */
 	clearDraft: () => void;
+	/** Set the picker's local selection pick. */
+	setSelectionPick: (pick: SelectionPick | null) => void;
+	/** Consume the pick after an idle send that carried it landed, or drop it
+	 *  without sending. A busy send keeps it. */
+	clearSelectionPick: () => void;
 	setComposerExpanded: (expanded: boolean) => void;
 }
 
 export const createComposerSlice: StateCreator<ClientStore, [], [], ComposerSlice> = (set) => ({
 	draft: { kind: "idle" },
 	composerExpanded: false,
+	selectionPick: null,
 
 	setDraft: (draft) => set({ draft }),
 
@@ -132,6 +156,10 @@ export const createComposerSlice: StateCreator<ClientStore, [], [], ComposerSlic
 		}),
 
 	clearDraft: () => set({ draft: { kind: "idle" } }),
+
+	setSelectionPick: (selectionPick) => set({ selectionPick }),
+
+	clearSelectionPick: () => set((s) => (s.selectionPick === null ? s : { selectionPick: null })),
 
 	setComposerExpanded: (composerExpanded) => set({ composerExpanded }),
 });

@@ -47,13 +47,11 @@ import type {
 	SessionRef,
 	SetLabelRequest,
 	SetModelPinnedRequest,
-	SetModelRequest,
-	SetThinkingLevelRequest,
 	SnapshotFile,
 	TextPolishReply,
 	TextPolishRequest,
 } from "../core/index.ts";
-import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../core/index.ts";
+import { MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE, THINKING_LEVEL_NAMES } from "../core/index.ts";
 import type { Connection } from "./connection.ts";
 import type { SessionCommands } from "./session-commands.ts";
 import type { SessionTarget } from "./worker-contract.ts";
@@ -218,7 +216,31 @@ const sessionVerbs: Record<string, VerbHandler> = {
 		) {
 			throw new Error("Invalid `images`");
 		}
-		await commands.prompt(m.text, images);
+		// The stateless client API's carries (see PromptRequest): a malformed
+		// selection is refused rather than silently dropped — the client meant
+		// it, and a half-applied one would misattribute the turn.
+		const model = m.model;
+		if (
+			model !== undefined &&
+			(typeof model !== "object" ||
+				model === null ||
+				typeof model.provider !== "string" ||
+				model.provider === "" ||
+				typeof model.modelId !== "string" ||
+				model.modelId === "")
+		) {
+			throw new Error("Invalid `model`");
+		}
+		if (m.thinkingLevel !== undefined && typeof m.thinkingLevel !== "string") {
+			throw new Error("Invalid `thinkingLevel`");
+		}
+		// A level outside the protocol's set is a client bug, not a value to
+		// clamp: pi clamps a *supported* level down to the model's subset, but it
+		// would cast an unknown name straight into its state.
+		if (m.thinkingLevel !== undefined && !THINKING_LEVEL_NAMES.includes(m.thinkingLevel)) {
+			throw new Error("Invalid `thinkingLevel`");
+		}
+		await commands.prompt(m.text, images, model, m.thinkingLevel);
 		ctx.reply(msg.id, true);
 	},
 	abort: async (ctx, msg) => {
@@ -229,18 +251,6 @@ const sessionVerbs: Record<string, VerbHandler> = {
 	discardSteer: async (ctx, msg) => {
 		const commands = ctx.requireCommands();
 		await commands.discardSteer();
-		ctx.reply(msg.id, true);
-	},
-	setModel: async (ctx, msg) => {
-		const commands = ctx.requireCommands();
-		const m = msg as unknown as SetModelRequest;
-		await commands.setModel(m.provider, m.model);
-		ctx.reply(msg.id, true);
-	},
-	setThinkingLevel: async (ctx, msg) => {
-		const commands = ctx.requireCommands();
-		const m = msg as unknown as SetThinkingLevelRequest;
-		await commands.setThinkingLevel(m.level);
 		ctx.reply(msg.id, true);
 	},
 	renameSession: async (ctx, msg) => {

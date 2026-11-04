@@ -78,23 +78,14 @@ function rememberRows(rows: SessionInfo[] | undefined): void {
 
 export function useRpc() {
 	const prompt = useCallback(
-		(text: string, images?: ImageContent[]) => rpc(() => getGlobalClient()?.prompt(text, images), "prompt failed"),
+		(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) =>
+			rpc(() => getGlobalClient()?.prompt(text, images, model, thinkingLevel), "prompt failed"),
 		[],
 	);
 
 	const abort = useCallback(() => rpc(() => getGlobalClient()?.abort(), "abort failed"), []);
 
 	const discardSteer = useCallback(() => rpc(() => getGlobalClient()?.discardSteer(), "discard steer failed"), []);
-
-	const setModel = useCallback(
-		(provider: string, model: string) => rpc(() => getGlobalClient()?.setModel(provider, model), "set model failed"),
-		[],
-	);
-
-	const setThinkingLevel = useCallback(
-		(level: string) => rpc(() => getGlobalClient()?.setThinkingLevel(level), "set thinking level failed"),
-		[],
-	);
 
 	const setModelPinned = useCallback(
 		(provider: string, modelId: string, pinned: boolean) =>
@@ -283,9 +274,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
-			setModel,
 			setModelPinned,
-			setThinkingLevel,
 			renameSession,
 			setLabel,
 			navigate,
@@ -305,9 +294,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
-			setModel,
 			setModelPinned,
-			setThinkingLevel,
 			renameSession,
 			setLabel,
 			navigate,

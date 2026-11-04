@@ -489,6 +489,16 @@ export interface PromptRequest {
 	text: string;
 	/** Optional image attachments (base64 + mimeType), sent as part of the user message. */
 	images?: ImageContent[];
+	/** Optional model selection carried with the send (the stateless client
+	 * API): the worker applies it to pi's session before the turn — recorded
+	 * as a `model_change` on the path — and pi re-derives the thinking level
+	 * for the switch unless `thinkingLevel` is also carried. Applied only
+	 * while the session is idle; a queued steer keeps the running model. */
+	model?: ModelRef;
+	/** Optional thinking level carried with the send. Applied after the
+	 * model (pi clamps it to the model's supported levels); appended to the
+	 * path only when it changes the effective level. */
+	thinkingLevel?: string;
 }
 
 export interface AbortRequest {
@@ -500,12 +510,6 @@ export interface DiscardSteerRequest {
 	verb: "discardSteer";
 }
 
-export interface SetModelRequest {
-	verb: "setModel";
-	provider: string;
-	model: string;
-}
-
 /** Pin or unpin one model in the daemon-global list (ADR 15). The host mutates
  * the global `enabledModels` scope; the new list arrives as a
  * `pinned_models_changed` push, so the reply is acknowledgement only. */
@@ -514,11 +518,6 @@ export interface SetModelPinnedRequest {
 	provider: string;
 	modelId: string;
 	pinned: boolean;
-}
-
-export interface SetThinkingLevelRequest {
-	verb: "setThinkingLevel";
-	level: string;
 }
 
 export interface RenameSessionRequest {
@@ -881,9 +880,7 @@ export type RpcRequestBody =
 	| PromptRequest
 	| AbortRequest
 	| DiscardSteerRequest
-	| SetModelRequest
 	| SetModelPinnedRequest
-	| SetThinkingLevelRequest
 	| RenameSessionRequest
 	| SetLabelRequest
 	| NavigateRequest
@@ -956,6 +953,12 @@ export interface PinnedModelInfo {
 	name: string;
 	thinkingLevel?: string;
 }
+
+/** The thinking levels the protocol accepts, in ascending effort order — the
+ * set `getDaemonInfo` reports and the set a send's `thinkingLevel` carry must
+ * name. pi clamps a level to the model's supported subset; a name outside
+ * this set is a client error and is refused at the wire. */
+export const THINKING_LEVEL_NAMES: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export interface ModelInfo {
 	provider: string;

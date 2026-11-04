@@ -205,7 +205,13 @@ export async function serveWorkerConnection(
 				return;
 			}
 			case "prompt":
-				await service.prompt(request.target, request.text, request.images as never);
+				await service.prompt(
+					request.target,
+					request.text,
+					request.images as never,
+					request.model,
+					request.thinkingLevel,
+				);
 				replyOk(request.id, null);
 				return;
 			case "abort":
@@ -214,14 +220,6 @@ export async function serveWorkerConnection(
 				return;
 			case "discardSteer":
 				await service.discardSteer(request.target);
-				replyOk(request.id, null);
-				return;
-			case "setModel":
-				await service.setModel(request.target, request.provider, request.modelId);
-				replyOk(request.id, null);
-				return;
-			case "setThinkingLevel":
-				await service.setThinkingLevel(request.target, request.level);
 				replyOk(request.id, null);
 				return;
 			case "renameSession":

@@ -255,13 +255,18 @@ export interface WorkerService extends WorkerEnvironment {
 	archiveSession(address: SessionAddress): Promise<void>;
 
 	// ── Session commands (target-addressed) ─────────────────────────────
-	/** A turn: immediate admitted work, so a Stop never queues behind it. */
-	prompt(target: SessionTarget, text: string, images?: ImageContent[]): Promise<void>;
+	/** A turn: immediate admitted work, so a Stop never queues behind it.
+	 * Carries the send's model selection (the stateless client API). */
+	prompt(
+		target: SessionTarget,
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+	): Promise<void>;
 	abort(target: SessionTarget): Promise<void>;
 	discardSteer(target: SessionTarget): Promise<void>;
 	/** Serialized mutations: one at a time, in admission order. */
-	setModel(target: SessionTarget, provider: string, modelId: string): Promise<void>;
-	setThinkingLevel(target: SessionTarget, level: string): Promise<void>;
 	renameSession(target: SessionTarget, name: string): Promise<void>;
 	setLabel(target: SessionTarget, entryId: string, label: string): Promise<void>;
 	navigate(target: SessionTarget, entryId: string | null): Promise<void>;

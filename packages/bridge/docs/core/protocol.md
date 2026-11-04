@@ -90,18 +90,16 @@ handler entry, before any await: a transition that completes while the
 command runs cannot retarget it, so the command executes against — and its
 reply reports on — the session that was attached when the request arrived,
 even if a switch has since moved the Connection elsewhere. Mutations
-(`setModel`, `setThinkingLevel`, `renameSession`, `setLabel`, `navigate`)
+(`renameSession`, `setLabel`, `navigate`)
 enter the session's serialized mutation line; turns, aborts, and reads run
 immediately but tracked (see [host runtime](../host/runtime.md)).
 
 | Verb | Address / binding | Successful reply and effects |
 | --- | --- | --- |
-| `prompt` | Attached Session | `{ ok: true }` after the prompt call is accepted/completed by the Manager; streaming and settle patches follow. Optional images are bounded by the host wire limits. |
+| `prompt` | Attached Session | `{ ok: true }` after the prompt call is accepted/completed by the Manager; streaming and settle patches follow. Optional images are bounded by the host wire limits. Optional `model` and `thinkingLevel` carries are the stateless client API's selection: applied to pi's session before the turn (a differing model is recorded as a `model_change`; pi re-derives the level for a model switch unless a level is carried, and clamps a carried level to the model's supported levels). Applied only while idle — a queued steer keeps the running model. An omitted carry leaves the session's current selection (the last applied one) in force; that selection is also what unattended runs (recovery, compaction) use. A malformed `model`, and a `thinkingLevel` naming a level outside the set `getDaemonInfo` reports, are refused before anything is applied; an unknown model fails the prompt. |
 | `abort` | Attached Session | `{ ok: true }` after abort and its finalization; final document patches precede the reply. |
 | `discardSteer` | Attached Session | `{ ok: true }`; the queue-clear `status.pendingSteer` patch is the effect. |
-| `setModel` | Attached Session | `{ ok: true }`; the Manager refreshes status and any silent entry while idle. Invalid models fail. |
 | `setModelPinned` | Daemon-global (ADR 15) | `{ ok: true }` after the global `enabledModels` scope is updated and flushed. The new resolved list follows as a `pinned_models_changed` push. |
-| `setThinkingLevel` | Attached Session | `{ ok: true }`; status and any silent entry are refreshed. Invalid levels fail. |
 | `renameSession` | Attached Session | `{ ok: true }`; the session name change and Project session-list refresh are pushed. |
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
 | `pull` | Attached Session and its observation's demand | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become the observation's live demand; committed paths are one-shot. |

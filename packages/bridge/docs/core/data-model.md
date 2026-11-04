@@ -26,7 +26,10 @@ client's point of view: the mirror renders only after all operations in the
 patch have been applied.
 
 `status` is the current session projection. It contains `leafId`, `name`,
-`model` (`ModelRef` with `provider` and `modelId`), `thinkingLevel`,
+`model` (`ModelRef` with `provider` and `modelId` — the last selection the
+host applied, from a prompt's carries or `newSession`'s pre-session choices;
+read-only on the wire, since sends carry their selection rather than writing
+it separately), `thinkingLevel` (same provenance, clamped to the model),
 `isStreaming`, `isCompacting`, `stats`, `contextUsage`, `pendingSteer`, and
 `inFlightTools`. `inFlightTools` is the one host-owned live field that is not
 part of pi's model and is never persisted: a `toolCallId → elapsedMs` map,
@@ -170,8 +173,8 @@ no append still changes the path the totals describe. The session name is
 re-derived when an installed suffix carries a `session_info` entry, so a
 reopened session's title and a silent rename publish without their own event
 (the rename event lands after the append and sets the same value). Idle
-`setModel`, `setThinkingLevel`, and `renameSession` paths refresh without
-waiting for another turn; `navigate` goes through the same refresh boundary
+`renameSession` paths and the model/level carries a prompt applies refresh
+without waiting for another turn; `navigate` goes through the same refresh boundary
 so the leaf, the branch statistics, and the recovery kind all describe the
 newly selected branch. A refresh that finds nothing new installs nothing
 and stays O(live forms): the host refreshes after every event, so copying or

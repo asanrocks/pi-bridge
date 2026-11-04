@@ -14,18 +14,17 @@
 // belongs here too because it is an attachment-bound read of the same stream.
 // ============================================================================
 
-import type { ImageContent, PullRequestItem } from "../core/index.ts";
+import type { ImageContent, ModelRef, PullRequestItem } from "../core/index.ts";
 import type { SessionTarget, WorkerObservation, WorkerPulledValue, WorkerService } from "./worker-contract.ts";
 
 /** The typed commands of one Session, unbound: what any owner of a runtime can
  * offer. A Worker implements it per target; an actor admission implements it
- * for the registration it belongs to. */
+ * for the registration it belongs to. The prompt carries the send's model
+ * selection (the stateless client API) — there is no separate model verb. */
 export interface SessionCommandSurface {
-	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	abort(): Promise<void>;
 	discardSteer(): Promise<void>;
-	setModel(provider: string, modelId: string): Promise<void>;
-	setThinkingLevel(level: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
 	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
@@ -45,11 +44,9 @@ export interface SessionCommands extends SessionCommandSurface {
 export function bindSessionCommands(target: SessionTarget, surface: SessionCommandSurface): SessionCommands {
 	return {
 		target,
-		prompt: (text, images) => surface.prompt(text, images),
+		prompt: (text, images, model, thinkingLevel) => surface.prompt(text, images, model, thinkingLevel),
 		abort: () => surface.abort(),
 		discardSteer: () => surface.discardSteer(),
-		setModel: (provider, modelId) => surface.setModel(provider, modelId),
-		setThinkingLevel: (level) => surface.setThinkingLevel(level),
 		renameSession: (name) => surface.renameSession(name),
 		setLabel: (entryId, label) => surface.setLabel(entryId, label),
 		navigate: (entryId) => surface.navigate(entryId),
@@ -67,11 +64,9 @@ export function bindWorkerCommands(
 	observation: WorkerObservation,
 ): SessionCommands {
 	const surface: SessionCommandSurface = {
-		prompt: (text, images) => worker.prompt(target, text, images),
+		prompt: (text, images, model, thinkingLevel) => worker.prompt(target, text, images, model, thinkingLevel),
 		abort: () => worker.abort(target),
 		discardSteer: () => worker.discardSteer(target),
-		setModel: (provider, modelId) => worker.setModel(target, provider, modelId),
-		setThinkingLevel: (level) => worker.setThinkingLevel(target, level),
 		renameSession: (name) => worker.renameSession(target, name),
 		setLabel: (entryId, label) => worker.setLabel(target, entryId, label),
 		navigate: (entryId) => worker.navigate(target, entryId),

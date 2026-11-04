@@ -108,6 +108,86 @@ describe("Manager verbs", () => {
 		while (harnesses.length) harnesses.pop()?.cleanup();
 	});
 
+	// ── prompt model carries (the stateless client API) ─────────────────
+
+	/** The path's model_change entries in file order. */
+	const modelChanges = (m: Manager) =>
+		Object.values(m.document.entries)
+			.filter((e) => e.kind === "model_change")
+			.sort((a, b) => (a.ord ?? 0) - (b.ord ?? 0));
+
+	it("prompt applies a carried model and level before the turn", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const before = modelChanges(h.manager).length;
+		await h.manager.prompt("hello", undefined, { provider: "faux", modelId: "faux-2" }, "high");
+
+		// The carry was applied (a model_change entry, the status pair, the level)
+		// and the turn ran on it.
+		const changes = modelChanges(h.manager);
+		expect(changes).toHaveLength(before + 1);
+		expect(changes.at(-1)).toMatchObject({ provider: "faux", modelId: "faux-2" });
+		expect(h.manager.document.status.model).toEqual({ provider: "faux", modelId: "faux-2" });
+		expect(h.manager.document.status.thinkingLevel).toBe("high");
+	});
+
+	it("prompt skips the carry when it names the current model", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		const before = modelChanges(h.manager).length;
+		await h.manager.prompt("hello", undefined, { provider: "faux", modelId: "faux-1" });
+
+		// No new model_change: carrying the in-force selection is a no-op, so a
+		// client that always carries its inherited model spams no entries.
+		expect(modelChanges(h.manager)).toHaveLength(before);
+	});
+
+	it("prompt rejects an unknown carried model", async () => {
+		const h = await createVerbHarness();
+		harnesses.push(h);
+
+		await expect(h.manager.prompt("hello", undefined, { provider: "nope", modelId: "nope-1" })).rejects.toThrow(
+			"Model not found",
+		);
+	});
+
+	it("prompt drops a differing carry while streaming (a queued steer keeps the running model)", async () => {
+		const h = await createVerbHarness(false);
+		harnesses.push(h);
+
+		let releaseTurn: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseTurn = resolve;
+		});
+		h.faux.setResponses([() => gate.then(() => fauxAssistantMessage("done"))]);
+
+		const promptPromise = h.manager.prompt("hello");
+		await new Promise<void>((resolve) => {
+			const timer = setInterval(() => {
+				if (h.manager.document.status.isStreaming) {
+					clearInterval(timer);
+					resolve();
+				}
+			}, 10);
+		});
+
+		// A steer mid-turn with a different model carry: queued, and the carry
+		// is NOT applied mid-run (the model under the in-flight turn would
+		// change otherwise). The count is relative: a fresh session records
+		// its initial model_change at creation (pi's sdk), which is not this
+		// path's business.
+		const before = modelChanges(h.manager).length;
+		const steerPromise = h.manager.prompt("steer", undefined, { provider: "faux", modelId: "faux-2" });
+		expect(h.manager.document.status.model).toEqual({ provider: "faux", modelId: "faux-1" });
+		expect(modelChanges(h.manager)).toHaveLength(before);
+
+		releaseTurn!();
+		await promptPromise;
+		await steerPromise;
+	});
+
 	// ── setModel ─────────────────────────────────────────────────────────
 
 	it("setModel rejects invalid model", async () => {

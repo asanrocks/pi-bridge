@@ -38,6 +38,7 @@ import { formatCost } from "./formatters.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 import { useDictation } from "./useDictation.ts";
 import { useModelCycling } from "./useModelCycling.ts";
+import { useNextSelection } from "./useNextSelection.ts";
 
 interface ComposeDockProps {
 	onCommit: () => void | Promise<void>;
@@ -98,8 +99,18 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const sendLocked = useStore(selectRenderDiverged);
 	const isBusy = isStreaming || isCompacting;
 	const connected = useStore((s) => s.connection.kind === "connected");
-	const model = useStore((s) => s.document.status.model);
-	const thinkingLevel = useStore((s) => s.document.status.thinkingLevel);
+	// The picker's model and level — the stateless client API's heuristic
+	// (nextSelectionOf): the local pick else inheritance from the path the
+	// send continues, carried by that send. There is no server model state
+	// to mirror; status.model survives only as the computation's display
+	// fallback (the model an uncarried send runs on). useNextSelection is the
+	// value-memoized binding: the Document changes on every streaming patch
+	// and subscribing it here would re-render this memo'd dock per token.
+	const selection = useNextSelection();
+	const selectionPick = useStore((s) => s.selectionPick);
+	const setSelectionPick = useStore((s) => s.setSelectionPick);
+	const model = selection.model;
+	const thinkingLevel = selection.level;
 	const pinnedModels = useStore((s) => s.pinnedModels);
 	const visibleModels = useStore((s) => s.visibleModels);
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
@@ -108,6 +119,31 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const [costOpen, setCostOpen] = useState(false);
 	const [costAnchor, setCostAnchor] = useState<DOMRect | null>(null);
 	const costBtnRef = useRef<HTMLButtonElement>(null);
+
+	// Picker writes are local (the stateless client API has no model verb):
+	// a model pick keeps whatever level was picked, and nextSelectionOf clamps
+	// it to the new model's supported levels — the clamp is the one authority
+	// on support, so the display and the carry cannot disagree. A level pick
+	// without a model pick carries the level alone.
+	const handleSetModel = useCallback(
+		(provider: string, modelId: string) => {
+			setSelectionPick({
+				model: { provider, modelId },
+				thinkingLevel: selectionPick?.thinkingLevel ?? null,
+			});
+		},
+		[selectionPick, setSelectionPick],
+	);
+	const handleSetThinkingLevel = useCallback(
+		(level: string) => {
+			// A level pick without a model pick pins the level only: the send
+			// carries the level while the model keeps inheriting.
+			setSelectionPick(
+				selectionPick ? { ...selectionPick, thinkingLevel: level } : { model: null, thinkingLevel: level },
+			);
+		},
+		[selectionPick, setSelectionPick],
+	);
 
 	// ── Shared compose capabilities (attachments + path completion) ──────
 	// Completion is Project-scoped (ADR 12) and the hook reads the current
@@ -408,8 +444,8 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					visibleModels={visibleModels}
 					thinkingLevel={thinkingLevel}
 					thinkingLevels={thinkingLevels}
-					onSetModel={rpc.setModel}
-					onSetThinkingLevel={rpc.setThinkingLevel}
+					onSetModel={handleSetModel}
+					onSetThinkingLevel={handleSetThinkingLevel}
 					onCycleModel={onCycleModel}
 					onTogglePin={rpc.setModelPinned}
 					leftControls={leftControls}

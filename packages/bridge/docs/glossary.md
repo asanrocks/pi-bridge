@@ -249,7 +249,13 @@ and [web design](web/design.md).
     changed paths and the content pane can diff; without one, the browser
     reads a single state. The baseline end cannot be `worktree`.
 
-16. The **model picker** *(bound)* chooses the active model. Its catalogue is
+16. The **model picker** *(bound)* chooses the model the next send carries
+    (the stateless client API: a pick is client-local, rides with the send,
+    and is consumed by it; with no pick the send inherits from the path it
+    continues — the last recorded change, else the producer of the last
+    assistant message). A pick is an override, not a fork-point default: it
+    survives a rewind, and a send admitted mid-turn (a steer) carries nothing
+    and keeps it. Its catalogue is
     three **tiers** *(bound)*: **Pinned** (the daemon-global list from pi's
     global `enabledModels`, cycle-able), **normal** (shown in provider
     groups), and **folded** (revealed on demand). A model is normal when it

@@ -384,7 +384,7 @@ describe("LocalWorker (contract)", () => {
 			worker: { id: "other", incarnation: "another-run", generation: 1 },
 			activation: record.authorization.generation,
 		};
-		await expect(bundle.worker.setModel(foreign, "faux", "faux-1")).rejects.toThrow(/replaced registration/);
+		await expect(bundle.worker.renameSession(foreign, "renamed")).rejects.toThrow(/replaced registration/);
 	});
 
 	it("refuses a target whose durable session changed under the same address", async () => {

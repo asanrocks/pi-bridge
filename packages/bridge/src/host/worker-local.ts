@@ -43,6 +43,7 @@ import {
 	type PullRequestItem,
 	type SessionInfo,
 	type SessionListCursor,
+	THINKING_LEVEL_NAMES,
 } from "../core/index.ts";
 import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
@@ -82,9 +83,6 @@ import type {
 
 /** First page size for `sessions_changed` refreshes. */
 const SESSION_PAGE_SIZE = 10;
-
-/** Thinking levels pi's models expose; reported to the picker. */
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export type LocalManagerFactory = (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
 
@@ -542,11 +540,10 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		},
 
 		// ── Session commands (target-addressed) ─────────────────────────
-		prompt: async (target, text, images) => admissionFor(target).prompt(text, images),
+		prompt: async (target, text, images, model, thinkingLevel) =>
+			admissionFor(target).prompt(text, images, model, thinkingLevel),
 		abort: async (target) => admissionFor(target).abort(),
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
-		setModel: async (target, provider, modelId) => admissionFor(target).setModel(provider, modelId),
-		setThinkingLevel: async (target, level) => admissionFor(target).setThinkingLevel(level),
 		renameSession: async (target, name) => {
 			await admissionFor(target).renameSession(name);
 			emitSessionsChanged(target.projectId);
@@ -589,7 +586,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 				models,
 				pinnedModels: await resolvePinnedModels(),
 				visibleModels,
-				thinkingLevels: THINKING_LEVELS,
+				thinkingLevels: [...THINKING_LEVEL_NAMES],
 			};
 		},
 

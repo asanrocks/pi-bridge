@@ -474,7 +474,21 @@ of `newSession`.
   as the `user_bash_end` git-stamp boundary.
 - `abort` clears queued steering text before waiting for pi to stop.
 - `discardSteer` clears queued steering text without aborting the run.
-- `setModel`, `setThinkingLevel`, `renameSession`, and `navigate` update the
+- `prompt(text, images?, model?, thinkingLevel?)` sends a user message and
+  awaits the whole turn. The optional carries are the stateless client API's
+  selection and the worker-side adapter: while idle, a differing `model` is
+  applied through pi's `setModel` (recorded as a `model_change`; pi
+  re-derives the level for the switch) and a carried `thinkingLevel` is
+  applied after it (clamped, recorded only on change); while streaming or
+  compacting the carry is dropped so a queued steer keeps the running model.
+  Carrying the in-force model is a no-op, so a client that always carries its
+  inherited model adds no entries. The carry runs inside the turn's immediate
+  admission, not on the serialized mutation line: a `navigate` committed by
+  another Connection in between can therefore move the leaf the
+  `model_change` lands on. `setModel`/`setThinkingLevel` remain on the Manager
+  as the internal application path (the prompt carries and `newSession`'s
+  pre-session choices are the callers); they are not wire verbs.
+- `renameSession` and `navigate` update the
   Session and refresh or patch the Document as needed. `navigate` is the
   server-side mutation lock enforcement point: it throws while the Document
   is streaming or compacting, because branching swaps the LLM context under
@@ -525,11 +539,10 @@ Work arrives in two admission classes, and the classes exist because the
 bridge must not add a competing turn lifecycle (architecture invariant 5:
 pi's event loop is serial and the bridge observes it):
 
-- **Mutations** (`setModel`, `setThinkingLevel`, `renameSession`, `setLabel`,
-  `navigate`) are serialized among themselves — one at a time, in admission
-  order — so concurrent commands from different Connections get a
-  deterministic order. Mutations are quick and never await a turn, so the
-  line cannot deadlock behind streaming.
+- **Mutations** (`renameSession`, `setLabel`, `navigate`) are serialized among
+  themselves — one at a time, in admission order — so concurrent commands
+  from different Connections get a deterministic order. Mutations are quick
+  and never await a turn, so the line cannot deadlock behind streaming.
 - **Immediate work** (turns — `prompt`, `recoverTurn` — plus `abort`, and
   reads — `pull`, `gitShow`'s cwd) runs without queueing: a Stop must reach a
   streaming turn rather than wait behind it, and a read that queued behind a
@@ -608,7 +621,8 @@ shape, captures its target at handler entry (before any await), and replies
 through a `VerbContext` exposing only the daemon seam, the attachment
 target-bound commands, and the reply path — no socket, no transition state,
 no runtime. Attached Session verbs are:
-`prompt`, `abort`, `discardSteer`, `setModel`, `setThinkingLevel`,
+`prompt` (which carries the send's model selection — there is no separate
+model verb), `abort`, `discardSteer`,
 `renameSession`, `setLabel`, `navigate`, and `recoverTurn`. They require an
 attachment and are issued through the target-bound commands — the two
 admission classes (immediate commands, serialized mutations) are the

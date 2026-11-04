@@ -331,8 +331,6 @@ describe("SessionCapability typed verbs", () => {
 		await expect(capability.prompt("hello")).resolves.toBeUndefined();
 		await expect(capability.abort()).resolves.toBeUndefined();
 		await expect(capability.discardSteer()).resolves.toBeUndefined();
-		await expect(capability.setModel("prov", "model")).resolves.toBeUndefined();
-		await expect(capability.setThinkingLevel("low")).resolves.toBeUndefined();
 		await expect(capability.renameSession("name")).resolves.toBeUndefined();
 		await expect(capability.setLabel("e1", "label")).resolves.toBeUndefined();
 		await expect(capability.navigate("e1")).resolves.toBeUndefined();
@@ -340,7 +338,7 @@ describe("SessionCapability typed verbs", () => {
 		expect(capability.cwd).toBe("/proj");
 		await actor.close();
 		await expect(capability.prompt("late")).rejects.toThrow("session is closed");
-		await expect(capability.setModel("p", "m")).rejects.toThrow("session is closed");
+		await expect(capability.renameSession("late")).rejects.toThrow("session is closed");
 	});
 
 	it("pull reads values through the actor and reports live fields", async () => {

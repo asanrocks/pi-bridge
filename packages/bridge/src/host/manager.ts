@@ -26,6 +26,7 @@ import {
 	type InitialSyncFrame,
 	initFromEntries,
 	type JsonValue,
+	type ModelRef,
 	type Patch,
 	type PatchOp,
 	type PrefixCursor,
@@ -154,7 +155,11 @@ export interface Manager {
 
 	// ── Session verbs ─────────────────────────────────────────────────────
 
-	prompt(text: string, images?: ImageContent[]): Promise<void>;
+	/** Send a user message and await the whole turn. The optional carries are
+	 * the stateless client API's selection: applied to pi's session before the
+	 * turn (see the implementation) and recorded on the path, so the next
+	 * send's inheritance and a cold resume agree with what ran. */
+	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	/** Admit a prompt without awaiting the turn: resolves once pi's preflight
 	 * accepts it (model/auth validated, message enqueued — the turn runs on in
 	 * the background), rejects if admission fails. A rejection *after*
@@ -168,7 +173,12 @@ export interface Manager {
 	abort(): Promise<void>;
 	/** Clear all pending steer/follow-up messages from the session queue. */
 	discardSteer(): Promise<void>;
+	/** Apply a model selection to pi's session (recorded as a `model_change`,
+	 * level re-derived by pi for the switch). Not a wire verb: the prompt
+	 * carries and `newSession`'s pre-session choices are the callers. */
 	setModel(provider: string, modelId: string): Promise<void>;
+	/** Apply a thinking level (clamped by pi; recorded only on change). Not a
+	 * wire verb: the prompt carries and `newSession` are the callers. */
 	setThinkingLevel(level: string): Promise<void>;
 	renameSession(name: string): Promise<void>;
 	/** Set or clear a user-defined label on one entry (pi `LabelEntry`, a
@@ -621,7 +631,28 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			return () => activityListeners.delete(listener);
 		},
 
-		async prompt(text: string, images?: ImageContent[]) {
+		async prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
+			// The stateless client API's worker-side adapter: a send carries its
+			// selection, and this is where the carry meets pi's stateful session.
+			// Applied before the turn so the whole run (retries, continuations
+			// after tool results) uses it, and recorded on the path so a cold
+			// resume — the terminal client included — restores the same model.
+			// Only while idle: a queued steer keeps the running model, because a
+			// mid-turn swap would change the model under the in-flight run. An
+			// omitted carry leaves the session's current selection in force (the
+			// last applied one — the fallback unattended runs use too).
+			if (model !== undefined || thinkingLevel !== undefined) {
+				const busy = state.document.status.isStreaming || state.document.status.isCompacting;
+				if (!busy) {
+					const same =
+						model !== undefined &&
+						session.model !== undefined &&
+						session.model.provider === model.provider &&
+						session.model.id === model.modelId;
+					if (model !== undefined && !same) await mgr.setModel(model.provider, model.modelId);
+					if (thinkingLevel !== undefined) await mgr.setThinkingLevel(thinkingLevel);
+				}
+			}
 			await session.prompt(text, {
 				source: "rpc",
 				streamingBehavior: "steer",
