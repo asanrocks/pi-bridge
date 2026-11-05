@@ -372,6 +372,12 @@ export interface ViewModelInput {
 	 * recovery: a quiesced cache tail (tool calls answered, no final
 	 * assistant) would otherwise read as an interrupted run. */
 	authoritative?: boolean;
+	/** Expanded action keys (`"${entryId}:b${blockIndex}"`). When supplied, a
+	 * collapsed thinking block on the leaf entry reports only empty vs
+	 * non-empty in `streamingKey` and reuses its `ThinkActionVM` across
+	 * `thinking_delta` appends, since its rendered height is fixed at one line
+	 * and `ThinkActionView` reads line 1 from the store directly. */
+	expandedActions?: ReadonlySet<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +618,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 			},
 			pendingGitStamps,
 			turnRecovery,
+			input.expandedActions,
 		);
 		turns.push(t);
 		pending = [];
@@ -809,7 +816,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 		leafEntryId: viewLeaf,
 		forkPointId: viewLeaf === null || viewLeaf === doc.status.leafId ? null : computeForkPoint(doc, viewLeaf),
 		pathKey: leafPathKey(doc, viewLeaf),
-		streamingKey: leafStreamingKey(doc, viewLeaf),
+		streamingKey: leafStreamingKey(doc, viewLeaf, input.expandedActions),
 		textKey: leafTextKey(doc, viewLeaf),
 	};
 }
@@ -906,15 +913,30 @@ export function leafPathKey(doc: Document, viewLeafId?: string | null): string {
  * The renderer gates this with `isStreaming` so completed-turn lazy pulls of
  * `thinking` (which also change this key) stay excluded.
  */
-export function leafStreamingKey(doc: Document, viewLeafId?: string | null): string {
+export function leafStreamingKey(
+	doc: Document,
+	viewLeafId?: string | null,
+	expandedActions?: ReadonlySet<string>,
+): string {
 	const leafId = resolveViewLeaf(doc, viewLeafId);
 	if (!leafId) return "";
 	const entry = doc.entries[leafId];
 	if (!entry || entry.kind !== "message") return "";
 	return entry.content
-		.map((b) => {
+		.map((b, i) => {
 			if (b.type === "text") return `t${b.text.length}`;
-			if (b.type === "thinking") return `k${(b.thinking ?? "").length}`;
+			if (b.type === "thinking") {
+				const text = b.thinking ?? "";
+				// Collapsed thinking renders as a single clamped line whose text
+				// ThinkActionView selects from the store directly. Cap its
+				// streaming key at empty (k0) vs non-empty (k1) so subsequent
+				// thinking_delta frames neither invalidate the ViewModel cache nor
+				// trigger auto-scroll while collapsed.
+				if (expandedActions && !expandedActions.has(`${leafId}:b${i}`)) {
+					return `k${text.length > 0 ? 1 : 0}`;
+				}
+				return `k${text.length}`;
+			}
 			return "x"; // tool call — args stream via deltas but are lazy; height stays put
 		})
 		.join("|");
@@ -979,11 +1001,12 @@ export function viewModelCacheKey(
 	modelsKey?: string,
 	docRevision?: number,
 	authoritative?: boolean,
+	expandedActions?: ReadonlySet<string>,
 ): string {
 	const status = doc.status;
 	return [
 		leafPathKey(doc),
-		leafStreamingKey(doc),
+		leafStreamingKey(doc, viewLeafId, expandedActions),
 		status.name,
 		`${status.model.provider}/${status.model.modelId}`,
 		status.thinkingLevel,
@@ -1191,13 +1214,14 @@ function buildAssistantTurn(
 	context: { contextPercent?: number; contextDeltaPercent?: number },
 	gitChanges: InlineGitStamp[] = [],
 	recovery: TurnRecovery | undefined = undefined,
+	expandedActions?: ReadonlySet<string>,
 ): AssistantTurn {
 	// Flatten pass: one descriptor per accumulated block ref, in order.
 	const blocks: AssistantBlockVM[] = [];
 	for (const { entry, blockIndex } of refs) {
 		const isProvisional = !isEntrySealed(entry);
 		const vm = buildBlockVM(entry.id, blockIndex, entry.content[blockIndex], isProvisional, toolResultMap);
-		if (vm) blocks.push(reuseBlock(prevBlocks, vm));
+		if (vm) blocks.push(reuseBlock(prevBlocks, vm, expandedActions));
 	}
 
 	const last = refs[refs.length - 1].entry;
@@ -1527,7 +1551,11 @@ function buildBlockVM(
 }
 
 /** Reuse the previous block VM object when all derived fields are unchanged. */
-function reuseBlock(prevBlocks: Map<string, AssistantBlockVM>, vm: AssistantBlockVM): AssistantBlockVM {
+function reuseBlock(
+	prevBlocks: Map<string, AssistantBlockVM>,
+	vm: AssistantBlockVM,
+	expandedActions?: ReadonlySet<string>,
+): AssistantBlockVM {
 	const prev = prevBlocks.get(`${vm.entryId}:${vm.blockIndex}`);
 	if (!prev || prev.blockType !== vm.blockType) return vm;
 	switch (vm.blockType) {
@@ -1537,9 +1565,12 @@ function reuseBlock(prevBlocks: Map<string, AssistantBlockVM>, vm: AssistantBloc
 		}
 		case "thinking": {
 			const p = prev as ThinkActionVM;
-			return p.thinking === vm.thinking && p.isProvisional === vm.isProvisional && p.redacted === vm.redacted
-				? p
-				: vm;
+			const isCollapsed = expandedActions !== undefined && !expandedActions.has(`${vm.entryId}:b${vm.blockIndex}`);
+			const sameThinking = isCollapsed
+				? (p.thinking === null ? 0 : p.thinking.length > 0 ? 2 : 1) ===
+					(vm.thinking === null ? 0 : vm.thinking.length > 0 ? 2 : 1)
+				: p.thinking === vm.thinking;
+			return sameThinking && p.isProvisional === vm.isProvisional && p.redacted === vm.redacted ? p : vm;
 		}
 		case "tool": {
 			const p = prev as ToolActionVM;

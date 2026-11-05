@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { Document } from "../../src/core/types.ts";
 import {
 	computeViewModel,
+	leafStreamingKey,
 	leafTextKey,
 	liveActivityPhase,
 	nextFocusedTurnKey,
@@ -112,6 +113,43 @@ describe("viewModelCacheKey", () => {
 		// pendingSteer is not projected (the renderer reads it from the store
 		// directly) — flipping it must not re-key the VM.
 		expect(viewModelCacheKey(doc({ pendingSteer: ["queued"] }), "stem", 0)).toBe(base);
+	});
+
+	it("caps collapsed thinking blocks at empty vs non-empty when expandedActions is provided", () => {
+		const makeDoc = (thinking: string): Document => ({
+			...doc({ leafId: "a1", isStreaming: true }),
+			entries: {
+				a1: {
+					id: "a1",
+					parentId: null,
+					timestamp: "1",
+					kind: "message",
+					role: "assistant",
+					content: [{ type: "thinking", thinking }],
+				} as unknown as Document["entries"][string],
+			},
+		});
+		const collapsed = new Set<string>();
+		const expanded = new Set<string>(["a1:b0"]);
+
+		// Empty → non-empty transitions once while collapsed; further deltas stay stable.
+		const dEmpty = makeDoc("");
+		const dShort = makeDoc("first line");
+		const dLong = makeDoc("first line\nsecond line\nthird line");
+
+		expect(leafStreamingKey(dEmpty, null, collapsed)).toBe("k0");
+		expect(leafStreamingKey(dShort, null, collapsed)).toBe("k1");
+		expect(leafStreamingKey(dLong, null, collapsed)).toBe("k1");
+		expect(viewModelCacheKey(dShort, "stem", 0, null, "", 0, true, collapsed)).toBe(
+			viewModelCacheKey(dLong, "stem", 0, null, "", 0, true, collapsed),
+		);
+
+		// When expanded, every delta advances the streaming key and cache key.
+		expect(leafStreamingKey(dShort, null, expanded)).toBe(`k${"first line".length}`);
+		expect(leafStreamingKey(dLong, null, expanded)).toBe(`k${"first line\nsecond line\nthird line".length}`);
+		expect(viewModelCacheKey(dShort, "stem", 0, null, "", 0, true, expanded)).not.toBe(
+			viewModelCacheKey(dLong, "stem", 0, null, "", 0, true, expanded),
+		);
 	});
 });
 

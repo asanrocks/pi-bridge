@@ -1869,6 +1869,40 @@ describe("identity preservation", () => {
 			expect(a2.blocks[0]).not.toBe(a1.blocks[0]);
 		}
 	});
+
+	it("reuses collapsed thinking block and turn references across non-empty thinking deltas", () => {
+		const doc1 = emptyDoc();
+		doc1.entries["a1"] = {
+			kind: "message",
+			id: "a1",
+			parentId: null,
+			timestamp: "",
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "line one" }],
+		} as unknown as Document["entries"][string];
+		doc1.status.leafId = "a1";
+
+		const doc2 = emptyDoc();
+		doc2.entries["a1"] = {
+			kind: "message",
+			id: "a1",
+			parentId: null,
+			timestamp: "",
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "line one\nline two" }],
+		} as unknown as Document["entries"][string];
+		doc2.status.leafId = "a1";
+
+		const collapsed = new Set<string>();
+		const vm1 = computeViewModel({ document: doc1, models: [], expandedActions: collapsed });
+		const vm2 = computeViewModel({ document: doc2, models: [], expandedActions: collapsed }, vm1);
+		expect(vm2.turns[0]).toBe(vm1.turns[0]);
+
+		// Expanding the block makes content changes produce a fresh block reference.
+		const expanded = new Set<string>(["a1:b0"]);
+		const vm3 = computeViewModel({ document: doc2, models: [], expandedActions: expanded }, vm1);
+		expect(vm3.turns[0]).not.toBe(vm1.turns[0]);
+	});
 });
 
 describe("beautifyShellCommand — elided shell summaries", () => {
