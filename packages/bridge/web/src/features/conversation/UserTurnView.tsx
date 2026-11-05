@@ -8,7 +8,7 @@
 import { type MutableRefObject, memo, useCallback, useMemo, useState } from "react";
 import type { Entry } from "../../../../src/core/index.ts";
 import { newestLeafInSubtree, type UserTurn } from "../../../../src/viewmodel/index.ts";
-import { copyToClipboard } from "../../infra/lib/clipboard.ts";
+import { COPIED_FEEDBACK_MS, copyToClipboard } from "../../infra/lib/clipboard.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import type { MenuItem } from "../../render/AnchoredMenu.tsx";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, PencilIcon } from "../../render/icons.tsx";
@@ -108,7 +108,7 @@ export const UserTurnView = memo(function UserTurnView({
 	const handleCopy = useCallback(async () => {
 		if (await copyToClipboard(turn.text)) {
 			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
+			setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
 		}
 	}, [turn.text]);
 
@@ -209,7 +209,7 @@ export const UserTurnView = memo(function UserTurnView({
 			{inline.copy && (
 				<button
 					type="button"
-					className={styles.toolbarBtn}
+					className={styles.copyBtn}
 					onClick={handleCopy}
 					aria-label={copied ? "Copied" : "Copy message"}
 					title="Copy message"

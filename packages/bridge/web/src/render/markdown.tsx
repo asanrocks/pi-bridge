@@ -10,8 +10,9 @@
 // ============================================================================
 
 import { useEffect, useMemo, useState } from "react";
-import type { CodeHighlighterPlugin, Components, ControlsConfig, ThemeInput } from "streamdown";
+import type { CodeHighlighterPlugin, Components, ControlsConfig, IconMap, ThemeInput } from "streamdown";
 import { parseMarkdownIntoBlocks, Streamdown } from "streamdown";
+import { CheckIcon, CopyIcon } from "./icons.tsx";
 import { createShikiPlugin } from "./shiki.ts";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,19 @@ const SHIKI_THEME: [ThemeInput, ThemeInput] = ["github-light", "github-dark"];
 // code: copy only — the PRD specifies copy buttons; download adds a second
 // icon to the actions region and isn't useful for in-conversation snippets.
 const CONTROLS: ControlsConfig = { code: { copy: true, download: false }, table: false, mermaid: false };
+
+// The code-block copy chip renders this set's object marks, not Streamdown's
+// bundled pair, so both Copy chips are one glyph at one fit — the same path
+// through the set's liveFit, rather than the same path at two scales (the
+// bundled pair scales its raw 16-grid, ~13px of a 14 slot; liveFit maps the
+// ink onto the 12-unit live area, ~11px). Streamdown types its icon map as
+// generic SVG components and passes only `size` (14, inside our slot union),
+// so the cast states that decided fit rather than widening the slot type for
+// one consumer.
+const ICONS: Partial<IconMap> = {
+	CheckIcon: CheckIcon as IconMap["CheckIcon"],
+	CopyIcon: CopyIcon as IconMap["CopyIcon"],
+};
 
 // Start loading the Shiki highlighter immediately on module import.
 let shikiPlugin: CodeHighlighterPlugin | null = null;
@@ -80,6 +94,7 @@ export function Markdown({ text, mode = "static", components, className }: Markd
 			mode={mode}
 			shikiTheme={SHIKI_THEME}
 			controls={CONTROLS}
+			icons={ICONS}
 			components={components}
 			className={className}
 			parseIncompleteMarkdown={true}

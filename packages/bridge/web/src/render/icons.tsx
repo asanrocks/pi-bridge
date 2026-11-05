@@ -145,6 +145,19 @@ export const ChevronRightIcon = memo(function ChevronRightIcon(props: IconProps)
 	);
 });
 
+/** Arrow down — "go to the newest content": a shaft with a head, not a chevron.
+ * The chevron is a disclosure mark (it opens a row in place); a bottom-of-
+ * conversation jump is transport through the document, so the glyph carries the
+ * distance it travels. Authored in the 12×12 live area like the chevrons. */
+export const ArrowDownIcon = memo(function ArrowDownIcon(props: IconProps) {
+	return (
+		<OutlineIcon {...props}>
+			<path d="M8 3.5V12.5" />
+			<path d="M4.25 8.75L8 12.5L11.75 8.75" />
+		</OutlineIcon>
+	);
+});
+
 /** Fold caret — "there is more inside". Solid by definition, and the only
  * directional mark drawn that way; `direction` is the state (folded / active /
  * open), so a consumer never rotates it in CSS. The path is authored symmetric
@@ -174,8 +187,11 @@ const MARKDOWN_INK: InkBox = [0, 3, 16, 13]; // 16×10 — the widest, so it kee
 // ── Objects ───────────────────────────────────────────────────────────────
 
 /** Copy — replicates streamdown's bundled CopyIcon exactly (evenodd fill,
- * currentColor) so the turn-text Copy button and the code-block Copy button
- * rendered by streamdown read as one icon. Solid because the renderer's is. */
+ * currentColor). Solid because the renderer's is; the provenance is kept so
+ * the glyph matches its source, and the code-block Copy button now renders
+ * this same export through Streamdown's `icons` prop (render/markdown.tsx),
+ * so both Copy chips are one glyph at one fit instead of the same path at
+ * two scales. */
 export const CopyIcon = memo(function CopyIcon(props: IconProps) {
 	return (
 		<SolidIcon {...props}>

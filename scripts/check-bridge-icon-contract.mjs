@@ -29,13 +29,35 @@
 //      table only has to hold the family rule.
 //
 //   4. Every control resolves to a tier, or to a declared role with its reason.
+//      The floating-chip category resolves through `floating`/`floatingOnImage`
+//      (render/buttons.module.css), which compose ghost, so a floating control
+//      is a tiered control and never needs a role entry.
 //
 //   5. A control's box follows its content: a button whose own children are
 //      literal words takes the outlined tier (or filled, when it is its
 //      surface's primary command), never the chromeless ghost/`dim` one. A
 //      glyph marks itself as actionable and a word cannot — the rule that was
 //      missing when `review` and `file` shipped as unbordered lowercase words
-//      in git and diff cards.
+//      in git and diff cards. Rule 5 is also what keeps the floating category
+//      glyph-only: `floating` composes ghost, so a worded floating chip fails
+//      here and the illegal combination never needs its own check.
+//
+//   6. `filled` is a closed family: a surface's primary command, nothing else.
+//      The files allowed to compose it are listed with the command each is the
+//      primary of, so adding a filled control is a review-time decision, and a
+//      stale entry fails so the list cannot rot.
+//
+//   7. The floating chip's edge has one home. `--shadow-chip` appears only in
+//      the recipe (render/buttons.module.css) and the Streamdown override seam
+//      (app/index.css, where a composed class cannot reach); a host restating
+//      the recipe instead of composing `floating` fails.
+//
+//   8. A hidden element takes no hit area: a rule that fades anything to
+//      `opacity: 0` — a button, a wrapper div holding buttons, a mark that
+//      yields its slot — must also set `pointer-events: none`, restored by the
+//      same rule that reveals it. Opacity is a paint channel, not an
+//      interaction channel — the invisible copy chip once answered the tap
+//      that meant to place a caret.
 //
 // Keeping the table in step with icons.tsx is checked, not trusted: every name
 // listed here must still be exported, and every exported `<Role>Icon` must be
@@ -91,6 +113,7 @@ const OUTLINE = [
 	"ChevronUpIcon",
 	"ChevronLeftIcon",
 	"ChevronRightIcon",
+	"ArrowDownIcon",
 	"CaretIcon",
 	"FolderIcon",
 	"FileIcon",
@@ -237,6 +260,30 @@ for (const name of exported) {
 
 const TIERS = new Set(["ghost", "outlined", "filled"]);
 
+// Rule 6's allowlist: module path relative to web/src -> the command the file's
+// filled control is the primary of. Global by path for the same reason as the
+// role table: the decision is made at the point of use, and a stale entry
+// fails the anti-rot check below.
+const FILLED_SURFACES = new Map(
+	Object.entries({
+		"render/Dialog.module.css": "a dialog's confirm — the surface's primary command",
+		"features/viewer/FileBrowser.module.css": "the compare menu's `Apply`",
+		"features/conversation/turns.module.css": "the label panel's `Save` — the panel's one primary verb",
+		"features/launcher/Launcher.module.css": "`Retry now` — the connection-down surface's only command",
+		"features/composer/ComposeCard.module.css": "`Send` and `Stop` — the commit and the interrupt",
+	}),
+);
+
+// Rule 7's two homes for the floating chip's edge token: the recipe itself, and
+// the unlayered Streamdown override seam where a composed class cannot reach.
+// Any other file restating `--shadow-chip` fails.
+const CHIP_EDGE_HOME = new Map(
+	Object.entries({
+		"app/index.css": "the token's declaration and the [data-streamdown] seam — Streamdown's own copy button takes the recipe here because its class cannot be composed",
+		"render/buttons.module.css": "the recipe's one home",
+	}),
+);
+
 // class name -> why this button is not a tiered control. Global by name: a role
 // is a role wherever it appears, and a name collision would be a spec bug first.
 const CONTROL_ROLES = new Map(
@@ -273,14 +320,9 @@ const CONTROL_ROLES = new Map(
 		editDiffSectionTitle: "diff section fold header",
 		// Chips: a label or a value with its own geometry.
 		msgLabel: "label chip (a value)",
-		supersededBadge: "status chip",
 		noticePath: "path chip (opens the file)",
 		// Value controls: the words or the number are the content.
 		topBarTitle: "the Session name (rename target)",
-		// Floating controls keep a container (see design.md), so they are not
-		// ghost boxes.
-		attachRemove: "floating control over an image (ring recipe)",
-		jumpToBottom: "floating control over the conversation",
 		// Links inside prose.
 		browse: "inline link in a sentence",
 	}),
@@ -303,11 +345,26 @@ function parseModules() {
 			const name = selector === undefined ? null : /^\.([A-Za-z0-9_-]+)$/.exec(selector)?.[1];
 			if (!name) continue;
 			const composes = /composes\s*:\s*([^;]+);/.exec(block[2]);
-			if (!composes) continue;
-			const value = composes[1].trim();
+			// A class is declared in several blocks (its base, media branches, state
+		// rules), and only the base carries `composes` — so a later block merges
+		// into the record instead of replacing it, keeping the tier link. Rules
+		// without any `composes` are recorded too: rule 8 asks about every class
+		// used on a <button>, not only the ones that compose a tier.
+			const record = rules.get(name);
+			if (record) {
+				record.body += `\n${block[2]}`;
+				if (composes && record.from === undefined) {
+					const value = composes[1].trim();
+					record.names = value.split(" from ")[0].trim().split(/\s+/);
+					record.from = /from\s+["']([^"']+)["']/.exec(value)?.[1];
+				}
+				continue;
+			}
+			const value = composes?.[1].trim();
 			rules.set(name, {
-				names: value.split(" from ")[0].trim().split(/\s+/),
-				from: /from\s+["']([^"']+)["']/.exec(value)?.[1],
+				names: value === undefined ? [] : value.split(" from ")[0].trim().split(/\s+/),
+				from: value === undefined ? undefined : /from\s+["']([^"']+)["']/.exec(value)?.[1],
+				body: block[2],
 			});
 		}
 		modules.set(file, rules);
@@ -493,6 +550,71 @@ for (const file of files.filter((f) => f.endsWith(".tsx"))) {
 	}
 }
 
+// ── Rule 6: `filled` is a closed family ──────────────────────────────
+//
+// The tier's meaning is "this surface's one primary command". That cannot be
+// checked from the CSS alone — the check is the list: a file composes `filled`
+// only with a recorded reason, and an entry whose file no longer composes it
+// fails below, so the family stays closed in both directions.
+const filledUsed = new Set();
+for (const [file, rules] of MODULES) {
+	const rel = relative(ROOT, file).replace(/\\/g, "/");
+	for (const [name, rule] of rules) {
+		if (!rule.names.includes("filled")) continue;
+		filledUsed.add(rel);
+		const why = FILLED_SURFACES.get(rel);
+		if (why === undefined) {
+			errors.push(
+				`${file}: .${name} composes "filled" outside the closed family — filled is a surface's primary command and nothing else; record this file in FILLED_SURFACES with the command it is the primary of, or take the outlined tier`,
+			);
+		}
+	}
+}
+
+// ── Rule 7: the floating chip's edge has one home ──────────────────────
+for (const f of walk(ROOT).filter((f) => f.endsWith(".css"))) {
+	const rel = relative(ROOT, f).replace(/\\/g, "/");
+	if (readFileSync(f, "utf-8").includes("--shadow-chip") && !CHIP_EDGE_HOME.has(rel)) {
+		errors.push(
+			`${f}: restates --shadow-chip — the floating chip's edge lives in render/buttons.module.css (plus the Streamdown seam in app/index.css); compose the floating tier instead of restating the recipe`,
+		);
+	}
+}
+
+// ── Rule 8: a hidden element takes no hit area ──────────────────────
+//
+// `opacity: 0` keeps hit-testing (opacity is a paint channel), so anything
+// faded out to await its reveal still answers clicks — the invisible copy
+// chip over prose once copied the message a tap meant to select text in. The
+// check is not scoped to buttons: a wrapper that fades a whole cluster of
+// controls is the same bug on a div, and a mark that yields its slot (the
+// sidebar timestamp) is the same rule on a span. Scope is every rule whose
+// selector names a class or an attribute, in every module plus the unlayered
+// Streamdown seam in app/index.css; keyframe steps and bare element selectors
+// name neither and are skipped, and so are pseudo-elements, whose hits bubble
+// to the element they hang from. Only the hidden half is checked — the reveal
+// must restore pointer-events on the same rule that restores opacity, which
+// no scan here can see. `0.4` and other dim values are excluded on purpose: a
+// visible-but-dim element is a state, not a hidden one.
+for (const file of [...MODULES.keys(), join(ROOT, "app", "index.css")]) {
+	const text = readFileSync(file, "utf-8");
+	for (const block of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		// The selector is the chunk's last non-empty line, so a block inside a
+		// media query reads as its own innermost selector.
+		const selector = block[1]
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.pop();
+		if (selector === undefined || !/[.[]/.test(selector) || selector.includes("::")) continue;
+		if (!/\bopacity:\s*0(?:\.0+)?\s*;/.test(block[2])) continue;
+		if (/pointer-events:\s*none/.test(block[2])) continue;
+		errors.push(
+			`${file}: ${selector} fades to opacity: 0 without pointer-events: none — an invisible element still answers clicks; take it out of hit-testing and let the same rule that reveals it restore pointer-events (docs/web/design.md, "A hidden control takes no hit area")`,
+		);
+	}
+}
+
 // The role table describes this app's surfaces, so its anti-rot check only
 // means something against the real tree: the unit tests build a fixture holding
 // just the glyph set, where no feature module exists to use a role.
@@ -502,6 +624,22 @@ for (const name of scannedFeatureModules ? CONTROL_ROLES.keys() : []) {
 	if (!rolesUsed.has(name)) {
 		errors.push(
 			`${ROOT}: CONTROL_ROLES lists ".${name}" but no button uses it — update CONTROL_ROLES in scripts/check-bridge-icon-contract.mjs so the role table cannot rot`,
+		);
+	}
+}
+
+// Same anti-rot for the two rule-6/7 tables, under the same real-tree guard.
+for (const rel of scannedFeatureModules ? FILLED_SURFACES.keys() : []) {
+	if (!filledUsed.has(rel)) {
+		errors.push(
+			`${ROOT}: FILLED_SURFACES lists "${rel}" but no rule there composes "filled" — update FILLED_SURFACES in scripts/check-bridge-icon-contract.mjs so the closed family cannot rot`,
+		);
+	}
+}
+for (const rel of scannedFeatureModules ? CHIP_EDGE_HOME.keys() : []) {
+	if (!readFileSync(join(ROOT, rel), "utf-8").includes("--shadow-chip")) {
+		errors.push(
+			`${ROOT}: CHIP_EDGE_HOME lists "${rel}" but it no longer mentions --shadow-chip — update CHIP_EDGE_HOME in scripts/check-bridge-icon-contract.mjs`,
 		);
 	}
 }

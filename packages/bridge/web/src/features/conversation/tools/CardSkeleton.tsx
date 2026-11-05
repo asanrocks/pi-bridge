@@ -7,7 +7,7 @@
 
 import { memo, useCallback, useRef, useState } from "react";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
-import { copyToClipboard } from "../../../infra/lib/clipboard.ts";
+import { COPIED_FEEDBACK_MS, copyToClipboard } from "../../../infra/lib/clipboard.ts";
 import { formatDuration } from "../../../infra/lib/time.ts";
 import {
 	CheckIcon,
@@ -105,7 +105,7 @@ export const TruncationNotice = memo(function TruncationNotice({
 	const handleCopy = useCallback(async () => {
 		if (fullPath && (await copyToClipboard(fullPath))) {
 			setCopied(true);
-			setTimeout(() => setCopied(false), 1200);
+			setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
 		}
 	}, [fullPath]);
 	return (
@@ -163,7 +163,7 @@ export const CardControls = memo(function CardControls({
 		if (await copyToClipboard(copyText)) {
 			setCopied(true);
 			clearTimeout(resetTimer.current);
-			resetTimer.current = setTimeout(() => setCopied(false), 1200);
+			resetTimer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
 		}
 	}, [copyText]);
 

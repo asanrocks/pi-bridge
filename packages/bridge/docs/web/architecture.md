@@ -792,7 +792,10 @@ Other `infra/lib` modules have narrow boundaries:
   `copyWithExecCommandFallback` is scoped to the guidance dialog, whose copy
   controls must work where `navigator.clipboard` is missing; a hidden-selection
   `execCommand("copy")` carries the text there. Ordinary app copy actions never
-  take that path.
+  take that path. A success also announces "Copied to clipboard" through a
+  visually hidden polite live region on both paths: the Check swap and the
+  button's `aria-label` change are invisible to a screen reader, and a label
+  change is not announced.
 - `secureContext.ts` detects a withheld secure context
   (`window.isSecureContext === false`, i.e. a plain-HTTP intranet origin) and
   builds the browser-detected fix steps: the Firefox pref and bare hostname,

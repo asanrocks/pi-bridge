@@ -12,7 +12,7 @@ import type { ViewModel } from "../../../../src/viewmodel/index.ts";
 import { useElementWidth } from "../../infra/lib/useElementWidth.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
-import { ChevronDownIcon } from "../../render/icons.tsx";
+import { ArrowDownIcon } from "../../render/icons.tsx";
 import { AssistantTurnView } from "./AssistantTurnView.tsx";
 import styles from "./conversation.module.css";
 import { GitChangeView } from "./GitChangeView.tsx";
@@ -214,7 +214,7 @@ export const ConversationArea = memo(function ConversationArea({
 								: "Jump to bottom"
 				}
 			>
-				<ChevronDownIcon size={16} />
+				<ArrowDownIcon size={16} />
 				<span className={styles.jumpDot} aria-hidden="true" />
 			</button>
 		</div>

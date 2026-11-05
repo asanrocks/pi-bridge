@@ -88,6 +88,17 @@
   --color-accent-hover: #3a6a9a;
   --color-on-accent: #ffffff;             /* text/icons on accent background */
   --color-surface-raised: #ffffff;        /* composer card (deliberately brighter than page) */
+  /* A raised surface's hover, and the one reason it is derived rather than a
+     second literal: a floating chip is opaque (it sits over text), so its state
+     layer cannot be a translucent fill — it has to be mixed *into* the surface
+     it covers. Mixing the ink rather than naming a surface token is also what
+     keeps the hue: `--color-muted` is the warm chrome tone, and a warm block
+     over the cool page tone read as a different (dimmed) control rather than as
+     the same chip under the pointer. Same strength as every other control
+     hover (`--state-fill-alpha`), so one weight, two surfaces. Follows both
+     themes through `--color-foreground` and `--color-surface-raised` — the dark
+     block restates those two and needs nothing here. */
+  --color-surface-raised-hover: color-mix(in srgb, var(--color-foreground) var(--state-fill-alpha), var(--color-surface-raised));
 
   /* ── User message ───────────────────────────────────────────────────── */
   --color-user-bg: #edf3f8;
@@ -152,6 +163,14 @@
   --dur-fast: 0.15s;  /* hover/fade/transform feedback, toast entrance */
   --dur-slow: 0.3s;   /* larger geometry moves (composer expansion) */
 
+  /* A control's state transition: ink and fill move together, or a hover lands
+     in two frames (the glyph crossfades while its surface snaps). Named because
+     `transition` is one property: a host that animates its own reveal
+     (opacity, transform) must restate the whole list, and restating it by hand
+     dropped these two channels — which is what left the floating chips' hover
+     colour switching with no animation while the ghost buttons' eased. */
+  --state-transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+
   /* ── Control state ──────────────────────────────────────────────────── */
   /* The one strength for a control's hover and engaged fill, derived from
      `currentColor` at the use site so it follows whatever hue the state already
@@ -199,6 +218,13 @@
      punched in the paragraph. Same technique as the compose card at chip scale:
      a short drop shadow plus a half-pixel ring. */
   --shadow-chip: 0 1px 2px rgba(0, 0, 0, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+  /* The floating copy chip's box. One value, because the chip exists twice:
+     as a composed class (`render/buttons.module.css` `.floating`) and as the
+     attribute override for Streamdown's own code-block button, whose class
+     cannot be composed. 24 rather than the row ladder's 28 is the glyph's
+     decision — the Copy mark is wide and squat, so 24 is what makes a 14-slot
+     glyph read at size. */
+  --chip-box: 24px;
 
   /* ── Letter tracking ────────────────────────────────────────────────── */
   --tracking-caps: 0.04em; /* uppercase structural labels — the one spec */
@@ -538,9 +564,89 @@ input, textarea {
 	pointer-events: none;
 	transition: opacity var(--dur-fast) ease;
 }
-[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"] {
+[data-streamdown="code-block"]:hover [data-streamdown="code-block-actions"],
+[data-streamdown="code-block"]:focus-within [data-streamdown="code-block-actions"] {
 	opacity: 1;
 	pointer-events: auto;
+}
+/* The copy button itself is the app's floating chip — the same recipe as the
+   per-message Copy chip and the jump button (`render/buttons.module.css`
+   `.floating`, documented in design.md). Streamdown ships it chromeless, which
+   is only legible on a stable surface, and code is content; the de-chrome
+   above stripped the pill that used to carry its boundary, so the container
+   moves onto the button. Streamdown is not ours, so the class cannot be
+   composed — these unlayered attribute rules outrank the button's Tailwind
+   utilities, the same seam as the rules above. Ink rests at the tier's
+   secondary, and hover is the recipe's two channels: the ink step plus the
+   opaque `--color-surface-raised-hover` state layer. `transition` replaces
+   Streamdown's `transition-all` with the app's state transition, so the node
+   animates exactly the two channels a composed chip does. */
+[data-streamdown="code-block-copy-button"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	/* Streamdown's own `p-1` would inset the glyph inside the chip's box; the
+	   box and the edge come from the same tokens the composed `.floating`
+	   recipe uses (`--chip-box`, `--shadow-chip`, `--color-surface-raised`), so
+	   the two copy chips cannot drift. `border-radius` restates the ghost tier's
+	   `--radius-sm` because a Streamdown element cannot compose the tier. */
+	padding: 0;
+	width: var(--chip-box);
+	height: var(--chip-box);
+	border-radius: var(--radius-sm);
+	background: var(--color-surface-raised);
+	color: var(--color-secondary);
+	box-shadow: var(--shadow-chip);
+	transition: var(--state-transition);
+}
+@media (hover: hover) {
+	[data-streamdown="code-block-copy-button"]:hover {
+		color: var(--color-foreground);
+		/* The chip's state layer: opaque, so it never shows code through, and the
+		   same value the composed `.floating` recipe's hover uses. */
+		background: var(--color-surface-raised-hover);
+	}
+}
+/* Keyboard focus gets the chip's own ink-and-surface restatement (the ghost
+   tier's focus treatment, which the Tailwind button cannot compose): the
+   wrapper's reveal covers :focus-within, and this keeps the surface opaque. */
+[data-streamdown="code-block-copy-button"]:focus-visible {
+	color: var(--color-foreground);
+	background: var(--color-surface-raised);
+}
+/* Coarse pointers have no hover, so the pill's hover-only reveal would strand
+   the copy unreachable — and an always-visible chip may not overlay content,
+   either. The same float idiom the per-message chip uses on coarse pointers
+   (turns.module.css): the wrapper leaves the overlay and enters the flow at
+   the block's top-right, and the code body — a scroll container, so its own
+   formatting context — shifts beside the float instead of sitting under it.
+   The 24px box is the WCAG 2.5.8 floor; the chip keeps the hover-revealed
+   chip's size so the two Copy controls read as one control. */
+@media (pointer: coarse) {
+	[data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]) {
+		position: relative;
+		top: auto;
+		right: auto;
+		float: right;
+		margin: 0 0 0 4px;
+		z-index: auto;
+	}
+	[data-streamdown="code-block-actions"] {
+		opacity: 1;
+		pointer-events: auto;
+	}
+	/* The same 36px target every annotation chip offers on a coarse pointer:
+	   the 24 box plus the flow's own gap, as a transparent overlay so the
+	   visible box never grows (the .copyBtn rule in turns.module.css). The
+	   button needs its own anchor for the overlay to hang from. */
+	[data-streamdown="code-block-copy-button"] {
+		position: relative;
+	}
+	[data-streamdown="code-block-copy-button"]::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
+	}
 }
 [data-streamdown="code-block-body"] {
 	/* Streamdown hardcodes text-sm (14px), which exceeds the 12px thinking and

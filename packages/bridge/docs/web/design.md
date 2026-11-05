@@ -373,7 +373,10 @@ and the peek's action is the one that pins the rail rather than a second close.
 
 The TopBar is fixed between the Sidebar and History gutters. Its left control
 is the Sidebar hamburger when the Sidebar is hidden or on mobile. Its center
-is the editable Session name, falling back to `pi-bridge`. Its right control
+is the editable Session name, falling back to `pi-bridge`: the name is a
+value the surface shows, so it takes no control box — a hover fill would
+paint the flex-wide strip rather than the name — and answers the pointer with
+an underline on the name itself, the same signal an inline link carries. Its right control
 is the History clock, symmetric with the hamburger: shown when a session is
 open and the History pane is hidden, hidden when the pane has a surface of
 its own, and hover-peeks the pane while it is hidden. It is not shown on the
@@ -397,7 +400,9 @@ light tinted rows with thin top and bottom rules. Assistant turns are flat and
 share the same horizontal alignment. System entries are compact dividers and
 summaries. Markdown is used for user and assistant prose, with syntax
 highlighting, tables, and copy controls supplied by the shared Markdown
-renderer.
+renderer — whose code-block copy button is restyled onto the app's floating
+chip through unlayered attribute overrides (`app/index.css`), so it matches
+the per-message Copy chip.
 
 Until the wire confirms the rendered address (an address-bearing initial
 sync), the published document is a local guess, and the conversation never
@@ -471,7 +476,9 @@ bottom-follow — never a wrong pin.
 
 Reading up outside a frozen turn, new readable text below the viewport adds a
 dot to the floating jump button; tool and thinking churn alone does not. The
-button floats horizontally centered on the conversation column (inset to the
+button is a round chip (the floating category's one shape variant — see
+"A control that floats over content keeps a container") drawing an arrow, and it
+floats horizontally centered on the conversation column (inset to the
 sidebar and history gutters), above the composer. With
 the dot showing, the button top-anchors the latest reply turn — the latest
 assistant turn, tool-only turns included, falling back to the last turn when
@@ -1087,6 +1094,17 @@ for new buttons, chips, action rows, and Markdown hosts.
   launcher, composer) and the cursor `blink` keep literal durations, and every
   consumer wraps its own animation declaration in a
   `prefers-reduced-motion: no-preference` guard.
+- **A control's state transition is one token.** `--state-transition`
+  (`app/index.css`) is `color` plus `background-color` at `--dur-fast`, and the
+  ghost tier declares it. `transition` is a single property, so a host that
+  animates its own reveal (`opacity`, `transform`, `visibility`) must restate
+  the whole list — and restating it by hand is how the floating chips' hover
+  colour came to switch in one frame while the ghost buttons' eased, since the
+  reveal rule's `transition: opacity …` replaced the tier's without naming the
+  state channels. Hosts append `var(--state-transition)` to their list instead,
+  and the one control outside the tier (Streamdown's code-block button, which
+  cannot compose it) states the same token so it animates exactly what a
+  composed chip animates.
 - **Elevation and layering are tokenized.** `--shadow-1` (small floating
   controls) and `--shadow-2` (popovers, panels, portals) cover the ambient
   shadows; the composer card's two-layer ring shadow has one token per state
@@ -1242,6 +1260,35 @@ transient (the pointer, or the keyboard cursor in a list that moves one).
 
 ### Iconography and control surfaces
 
+**Four categories, picked by usage scenario.** A control is added by naming
+its scenario, and the scenario picks the whole treatment — there are no axes to
+compose and no per-button reasoning. Each category is one mechanism with one
+home, `render/buttons.module.css`:
+
+- **A glyph action in a row** — the ghost tier, chromeless at rest: the glyph
+  is the only thing that marks the control as actionable. `dim` and `quiet` are
+  this tier's ink steps for dense rows and labels, not categories of their own.
+- **A worded action** — the outlined tier: a word cannot mark itself as
+  actionable, so it owns the lightest compliant boundary at rest.
+- **A control over content** — `floating` over uniform content,
+  `floatingOnImage` over an image: a glyph-only ghost *by rule*, plus the
+  container recipe that keeps it legible against what it floats on. It never
+  carries words — a worded chip hovering over prose is a dialog pretending not
+  to be one — so that combination is not discouraged but unnamed: the
+  icon-contract gate fails a worded button that resolves to the chromeless
+  tier, and `floating` composes ghost.
+- **A surface's primary command** — the filled tier, a closed family: Send,
+  Stop, a dialog's confirm, the compare menu's `Apply`, `Retry now`, the label
+  panel's Save. One command per surface, at its edge; a new member is a
+  decision made at review, recorded in the gate's allowlist.
+
+Everything else in this section is detail *under* a category — glyph slots and
+ink modes when a glyph is added, the container recipe and the reveal rules
+when a chip floats, the tier states when a control carries words — consulted
+after the scenario has named the control. The paragraphs that follow are that
+detail, in the order a control is built: the glyph set, the box, the tiers'
+ink, and the floating category's placement rules.
+
 A control is a hit target carrying one glyph, plus a label when it needs words.
 A glyph-only control paints no background and no border at rest, so its only ink
 is the symbol; a control that carries words takes a boundary, because a word has
@@ -1290,8 +1337,10 @@ header is the registry (role, glyph, one sentence each), exports are named
   per-call-site size.
 - **Two ink modes, assigned by family.** Outline is the default. Solid is a
   closed set of three families with their own slot rules. **Object marks** (Copy,
-  Check, Eye, Wrap, Markdown) sit beside Streamdown's own solid copy pair and
-  must match it in the same row; they are legal at 12 and 14 only, because a
+  Check, Eye, Wrap, Markdown) were drawn to match Streamdown's solid copy
+  pair and now ARE the pair it renders — the renderer draws this set's
+  `CopyIcon`/`CheckIcon` through its `icons` prop, so the copy art cannot
+  fork between ours and its; they are legal at 12 and 14 only, because a
   filled symbol at 16 or 20 reads as a badge rather than a control. The one
   exception is Check in the composer's dictation row, where the check is that
   row's command rather than a mark beside copy art. **Menu marks** (More, the
@@ -1497,13 +1546,20 @@ thing — a command issued at the edge of a surface whose state changes somethin
 rest of this section follows from. A glyph-only control earns a line or an edge
 by being a container or by floating over content — never because of what the
 glyph is; the proof is in the app twice: the turn header's Copy and the
-per-message Copy chip are the same glyph at the same slot, and only the floating
-one has an edge. Words are the other case: nobody can tell that a bare `Review`
+per-message Copy chip are the same glyph in the same box, and only the floating
+one has an edge. Their boxes agree because they are one token: `--chip-box`
+(`app/index.css`), which the compact copy controls consume by name — the
+composed `.floating` recipe and the attribute override for Streamdown's own
+code-block button. The header's Copy takes it too, even though its row's ladder
+would say 28: a glyph-only control's box follows its ink, and the Copy mark is
+wide and squat enough that 28 leaves it undersized. Words are the other case:
+nobody can tell that a bare `Review`
 is clickable, so a text control owns its boundary at rest and does not depend on
 a host container lending it one.
 
-**Three text tiers, one emphasis each.** A text control picks a tier by what it
-has to say, and the tiers differ in *kind*, not degree. Each tier is a class in
+**The tiers behind the categories.** The category decides which tier a control
+takes; this table is the detail — what each tier looks like and the ink steps
+between them. The tiers differ in *kind*, not degree. Each tier is a class in
 `render/buttons.module.css`, so a feature composes it rather than restating its
 states:
 
@@ -1529,7 +1585,11 @@ control, inline link) with the reason — and it fails a `<button>` whose own
 children are literal words but which composes the chromeless tier instead of
 `outlined`/`filled`. That second check is what the earlier sweeps lacked: a text
 control that composes no box at all is either a declared role or a bug, and
-`review`/`file` were the bug.
+`review`/`file` were the bug. The same gate closes the filled family (a file
+composes `filled` only when the gate's allowlist records the command it is the
+primary of, and a stale entry fails) and gives the chip's edge one home
+(`--shadow-chip` may appear only in the recipe and the Streamdown override
+seam).
 
 The outlined tier is the boundary's home, and it is the lightest compliant one:
 `--color-border-control` sits at 3.18:1 on the page and 3.35:1 on the raised
@@ -1546,9 +1606,23 @@ hover.
 
 **A control that floats over content keeps a container.** The attachment remove
 button sits on a thumbnail, the jump button floats over the conversation, and the
-per-message copy chip floats over Markdown: what is beneath them is content, not
-a row, so each keeps a container to stay legible against it. That is a legibility
-requirement, not chrome.
+per-message copy chip and the Markdown code-block copy chip float over content:
+what is beneath them is content, not a row, so each keeps a container to stay
+legible against it. That is a legibility requirement, not chrome. The whole
+category is one mechanism with one home — `render/buttons.module.css` composes
+it as `floating` (and `floatingOnImage`), a glyph-only ghost tier plus the
+container below, so a host states only placement, box, and reveal. Streamdown's
+own code copy button is ported onto the same recipe through the unlayered
+`[data-streamdown]` override seam in `app/index.css`, because its class cannot
+be composed; it carries the same ink, hover, box, reveal (including the
+keyboard focus branch), copied-check duration, and glyph — Streamdown renders
+the icon set's own `CopyIcon`/`CheckIcon` through its `icons` prop
+(`render/markdown.tsx`) — as the per-message chip, so the two Copy controls
+read as one control. The one confirmation detail every copy control shares is
+`COPIED_FEEDBACK_MS` (`infra/lib/clipboard.ts`), the Check-swap duration — and
+the same module announces "Copied to clipboard" through a visually hidden
+polite live region, because the swap and the button's `aria-label` change are
+invisible to a screen reader and a label change is not announced.
 
 The container has one recipe with two variants, chosen by what is underneath:
 
@@ -1563,10 +1637,48 @@ The container has one recipe with two variants, chosen by what is underneath:
 Two placement rules follow. A floating control stays inside the element it
 belongs to and never crosses that element's top edge upward — the copy chip's
 earlier `-8px` offset put it behind the fixed TopBar whenever its line sat at the
-top of the viewport, which reads as clipping. And the box takes the slot its
-glyph fills: the copy mark is wide and squat, so 24 rather than 28 is what makes
-a 14-slot glyph read at size. Elevation is never nested — a control inside a
-dialog, menu, or toast carries none, because its host already floats.
+top of the viewport, which reads as clipping (the attachment remove's corner hang
+is the scoped exception: a badge on media, where no fixed chrome sits above it).
+And the box takes the slot its glyph fills: the copy mark is wide and squat, so
+24 rather than 28 is what makes a 14-slot glyph read at size. Elevation is never
+nested — a control inside a dialog, menu, or toast carries none, because its host
+already floats.
+
+**Hover is a state layer plus the ink step, never the ink alone.** A control is a
+surface, so the surface answers the pointer: the chip's fill moves to
+`--color-surface-raised-hover` while the glyph steps `secondary` → `foreground`.
+That layer is the surface mixed with `--state-fill-alpha` of the ink
+(`app/index.css`), which is what makes it both opaque (a chip over content may
+never show the text beneath) and hue-correct: naming a chrome surface token
+instead — `--color-muted` — put a warm block over the cooler page tone and the
+chip read as a different, dimmed control rather than the same one under the
+pointer. Material's proportions put a pointer hover at an 8% layer and focus or
+press at 12%; the app's 20% is the same idea, and it is one weight for every
+control so a chip and the ghost beside it answer the pointer equally.
+
+The failure the rule exists to prevent is one channel doing the work of two: a
+chip that restated `--color-surface-raised` on hover changed nothing visible,
+and the only feedback was a glyph darkening, which reads as the control being
+*off* rather than under the pointer. The persistent member (the jump button)
+adds an elevation step on hover — it is visible whether or not it is hovered, so
+hover has to read as liveness rather than as the reveal.
+
+**Shape is the one place the category has a variant, and it is one member.** The
+copy chips are squares at `--chip-box`: their job is to look like a thing
+stamped onto content the reader is already looking at. The jump button is round,
+and is the app's only round control, because it is the only member that is not an
+annotation — it is a free-floating transport over the whole conversation, it never
+sits inside a text box, and it has no neighbours to align with. The circle is
+what distinguishes it from a chip at a glance without spending a colour or an
+edge on the distinction. Surface, edge, ink, and hover it shares with the
+category; only its shape and its hover elevation step are its own.
+
+**A transport glyph is not a disclosure glyph.** The jump button draws
+`ArrowDownIcon` (a shaft with a head), not a chevron: a chevron is the disclosure
+mark that opens something in place, and this control moves the reader through the
+document. The same reasoning that gives Send an arrow instead of a paper plane
+(`ArrowUpIcon`) applies in the other direction, and it keeps one mark meaning one
+thing across the app.
 
 **A hidden control takes no hit area.** Opacity is a paint channel, not an
 interaction channel: a control revealed by fading in must also disable
@@ -1576,7 +1688,14 @@ answering clicks, and on a fading chip that sits over prose the reader who taps
 the line's right end to place a caret copies the message instead, and a drag
 selection begun there never starts. When the input cannot hover at all, the
 control is visible and interactive unconditionally, so the faded state is never
-reached.
+reached. This rule is gated, and the gate is not scoped to buttons: the icon
+contract fails any rule that fades a class- or attribute-selected element to
+`opacity: 0` without taking it out of hit-testing — a wrapper that fades a
+cluster of controls (`cardControls`) and a mark that yields its slot (the
+sidebar timestamp) are the same bug on a `div` and a `span`, so the scan covers
+every element. Keyframe steps and pseudo-elements are out of its scope: the
+former is animation, not a reveal, and a pseudo-element's hits bubble to the
+element it hangs from.
 
 **A chip that cannot be hidden keeps one box and changes only its placement.**
 On coarse pointers the copy chip is visible and interactive at all times, so it
@@ -1585,10 +1704,13 @@ tap there would copy instead. It leaves the overlay and enters the flow as a
 float at the segment's top-right, so the paragraph wraps beside it and no text
 is painted over; scroll containers (the code-block body, the table wrapper)
 establish their own formatting context and shift beside the float rather than
-sitting under it. The width stays the hover-revealed chip's 24px, and the touch
-target comes from the `::after` overlay every `.toolbarBtn` grows on a coarse
-pointer — a 40px box here would read as a different control from the turn
-header's Copy even though both carry the same glyph.
+sitting under it. The code-block copy chip takes the same float idiom on coarse
+pointers (`app/index.css`): Streamdown's hover-only reveal would strand it
+unreachable without hover, so the pill enters the flow beside the code. The
+width stays the hover-revealed chip's 24px, and the touch target comes from the
+`::after` overlay every `.toolbarBtn` grows on a coarse pointer — a 40px box
+here would read as a different control from the turn header's Copy even though
+both carry the same glyph.
 
 The float's *height* is the one value that must differ, and it is a line-height
 rather than a slot: a float shortens every line box it intersects, so a box
@@ -1597,6 +1719,17 @@ two ragged line ends and a visibly empty wedge beside the chip. One line of the
 chip's own type (`1lh`, and the chip is `--fs-xs` inside body prose) stays inside
 the first line box, so exactly one line wraps and the waste is one ragged line
 end, which is what wrapping prose around a control costs.
+
+**A coarse-pointer target borrows only the flow's own gap — unless the control
+floats over nothing.** The annotation chips' target is the 24px box plus a 6px
+transparent overlay (36px, clearing the WCAG 2.5.8 floor with room): the chip
+sits inside text, and every invisible pixel the target adds is taken from the
+caret placement and selection that text needs, so the target stops at the
+flow's own gap rather than growing to the 44px of WCAG 2.5.5. The jump button
+is the other case — it floats over the conversation, not over characters, so
+its coarse-pointer target is the full 44. Both copy chips offer the same 36
+(the code-block chip through the Streamdown seam), because one control split
+across two hosts is exactly the drift the box ladder exists to forbid.
 
 **Text instead of a glyph, and the other way round.** Icon-only is the default
 for verbs. Text stays where the control carries a value rather than an action —

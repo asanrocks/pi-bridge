@@ -317,7 +317,7 @@ export const ComposeCard = memo(function ComposeCard({
 									aria-label="Remove image"
 									title="Remove image"
 								>
-									<CloseIcon size={12} />
+									<CloseIcon size={14} />
 								</button>
 							</span>
 						))}

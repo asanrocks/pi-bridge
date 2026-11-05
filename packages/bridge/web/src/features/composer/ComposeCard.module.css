@@ -242,28 +242,18 @@
 	border: 1px solid var(--color-border);
 }
 
-/* Floats on the thumbnail's corner, over an image rather than a row surface, so
-   it is the one control whose boundary must hold against arbitrary luminance:
-   a 1px ring at the control level (3:1 on anything) instead of the chip's
-   half-pixel, and no shadow — a drop shadow says nothing against a photograph.
-   It deliberately hangs off the corner; nothing between it and the card clips. */
+/* Attachment remove — the floating-chip category's image variant
+   (`.floatingOnImage` in render/buttons.module.css): opaque raised fill plus
+   a 1px control-boundary ring and no shadow, because a photograph's luminance
+   is arbitrary and a drop shadow says nothing against it. It deliberately
+   hangs off the corner (a corner badge on media, not an in-document overlay —
+   the no-crossing rule protects segments from the fixed TopBar, and a
+   thumbnail has none above it); nothing between it and the card clips. */
 .attachRemove {
+	composes: floatingOnImage from "../../render/buttons.module.css";
 	position: absolute;
 	top: -8px;
 	right: -8px;
-	width: 24px;
-	height: 24px;
-	padding: 0;
-	border: 1px solid var(--color-border-control);
-	border-radius: var(--radius-sm);
-	background: var(--color-surface-raised);
-	color: var(--color-secondary);
-	cursor: pointer;
-}
-
-.attachRemove:hover {
-	background: var(--color-muted);
-	color: var(--color-foreground);
 }
 
 .attachBtn {
@@ -972,11 +962,16 @@
 	height: 24px;
 	margin: 0 6px;
 	opacity: 0;
+	/* An invisible pin still answers clicks in the row's trailing slot — a tap
+	   that meant to select the row would pin the model instead. Hit-testing
+	   tracks visibility; the reveal and the pinned state restore it. */
+	pointer-events: none;
 }
 
 .portalItem:hover .portalPin,
 .portalItem[data-cursor] .portalPin {
 	opacity: 1;
+	pointer-events: auto;
 }
 
 /* Declared after `.portalPin`, so equal specificity resolves to the pinned
@@ -985,6 +980,7 @@
    pressed state (and the filled glyph) carries the rest. */
 .portalPinActive {
 	opacity: 1;
+	pointer-events: auto;
 }
 
 /* Reorder handle for a curated-group row (ADR 20). Ghost tier like the pin, but

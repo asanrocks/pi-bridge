@@ -20,19 +20,32 @@
 	margin-inline: auto;
 }
 
-/* Jump to bottom — floating affordance while the viewport is away from the
-   live end (the user scrolled up to read, or an anchor/focus scroll landed
-   mid-document). Fixed positioning: the scroll container is the document
-   itself (App.module.css). Offsets clear the live composer footprint
-   (--composer-h) and the history pane's right gutter (--history-w, 0 on
-   mobile where the pane is an overlay drawer). The accent dot marks content
-   that arrived while the reader was away — set by the auto-scroll effect's
-   skip branch, cleared whenever the live end is reached.
+/* Jump to bottom — the floating-chip category (`.floating` in
+   render/buttons.module.css) as a persistent navigation control: same surface,
+   edge, and hover as the copy chips, in the category's one permitted
+   shape exception. It is round where the copy chips are square, because it is
+   the only member that is *not* an annotation on something the reader is
+   already looking at: it is a free-floating transport control over the whole
+   conversation, it never sits inside a text box, and its neighbours are none.
+   A circle says that (it is the app's only round control, so the shape alone
+   identifies it); the square chip's job is to look like a thing stamped onto
+   content, which this button has no content to be stamped onto. It also steps
+   elevation on hover (see the hover rule below): the chips answer the pointer
+   with their surface, and this one — visible whether or not it is hovered —
+   answers with its height.
+
+   Fixed positioning: the scroll container is the document itself
+   (App.module.css). Offsets clear the live composer footprint (--composer-h)
+   and the history pane's right gutter (--history-w, 0 on mobile where the
+   pane is an overlay drawer). The accent dot marks content that arrived while
+   the reader was away — set by the auto-scroll effect's skip branch, cleared
+   whenever the live end is reached.
    Always mounted; data-visible toggles the fade/slide so appear/disappear
    animate instead of hard mount/unmount. Hidden state is fully inert:
    visibility (delayed to the end of the fade-out), pointer-events, and the
    component sets tabIndex=-1 + aria-hidden so it stays out of the tab order. */
 .jumpToBottom {
+	composes: floating from "../../render/buttons.module.css";
 	position: fixed;
 	/* Horizontally centered on the conversation column (the reading
 	   position), not pinned to an edge: left/right inset to the body's content
@@ -46,16 +59,6 @@
 	width: 36px;
 	height: 36px;
 	border-radius: 50%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	background: var(--color-surface-raised);
-	color: var(--color-secondary);
-	/* Floating control over arbitrary content: the chip recipe's edge (see
-	   docs/web/design.md). A hairline here was the one remaining border on a
-	   control that had to define its own extent. */
-	box-shadow: var(--shadow-chip);
-	cursor: pointer;
 	opacity: 0;
 	visibility: hidden;
 	transform: translateY(8px);
@@ -63,7 +66,8 @@
 	transition:
 		opacity var(--dur-fast) ease,
 		transform var(--dur-fast) ease,
-		visibility 0s linear var(--dur-fast);
+		visibility 0s linear var(--dur-fast),
+		var(--state-transition);
 }
 
 .jumpToBottom[data-visible="true"] {
@@ -74,20 +78,8 @@
 	transition:
 		opacity var(--dur-fast) ease,
 		transform var(--dur-fast) ease,
-		visibility 0s;
-}
-
-/* Hover scoped to hover-capable inputs so the tint doesn't stick after a
-   tap on touch. Opaque muted surface (the app's hover idiom — see
-   .toolbarBtn) plus an elevation step: a floating control over arbitrary
-   content must never go translucent, or the text beneath shows through. */
-@media (hover: hover) {
-	.jumpToBottom:hover {
-		color: var(--color-foreground);
-		border-color: var(--color-secondary);
-		background: var(--color-muted);
-		box-shadow: var(--shadow-2);
-	}
+		visibility 0s,
+		var(--state-transition);
 }
 
 /* Coarse pointers get a larger tap target, mirroring .toolbarBtn. */
@@ -95,6 +87,16 @@
 	.jumpToBottom {
 		width: 44px;
 		height: 44px;
+	}
+}
+
+/* The category's one persistent member takes the second hover channel as
+   well: it is always visible, so hover has to read as liveness, and an
+   elevation step is how a floating control says that. Hover-capable inputs
+   only, so a tap on touch never leaves the raised shadow behind. */
+@media (hover: hover) {
+	.jumpToBottom:hover {
+		box-shadow: var(--shadow-2);
 	}
 }
 
@@ -111,6 +113,10 @@
 	background: var(--color-accent);
 	border: 2px solid var(--color-surface-raised);
 	opacity: 0;
+	/* The dot is a state mark, never a target — its hits belong to the button
+	   it sits on, so the faded-out dot takes no hit area of its own (the
+	   hidden-takes-no-hit-area rule, gated tree-wide by the icon contract). */
+	pointer-events: none;
 	transform: scale(0.4);
 	transition:
 		opacity var(--dur-fast) ease,

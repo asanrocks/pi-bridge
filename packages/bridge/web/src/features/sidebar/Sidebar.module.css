@@ -317,6 +317,10 @@ difference between them. */
 	.sidebarItemWrap:hover .sidebarItemTime,
 	.sidebarItemWrap:focus-within .sidebarItemTime {
 		opacity: 0;
+		/* A faded element takes no hit area: the slot now belongs to the menu
+		   button, and a click the time still answered would race the very
+		   handover it is yielding (the hidden-takes-no-hit-area rule). */
+		pointer-events: none;
 	}
 }
 

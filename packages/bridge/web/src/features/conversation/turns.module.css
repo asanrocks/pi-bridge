@@ -168,7 +168,11 @@
 	white-space: nowrap;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
-	border: 1px solid var(--color-border);
+	/* The boundary defines a control the reader can click, so it is the control
+	   boundary token: --color-border (1.47:1) separates surfaces and cannot
+	   define a control (WCAG 1.4.11); --color-border-control is the lightest
+	   compliant one. The hover then steps the ink, not a correction. */
+	border: 1px solid var(--color-border-control);
 	border-radius: var(--radius-xs);
 	padding: 0 6px;
 	line-height: 16px;
@@ -500,6 +504,23 @@
 	}
 }
 
+/* Copy — the one glyph-only Copy box (`chip` in render/buttons.module.css, i.e.
+   `--chip-box`), so the header's Copy and the floating chips are the same glyph
+   in the same box. Positioned so the coarse-pointer overlay can outgrow it
+   without moving layout. */
+.copyBtn {
+	composes: chip from "../../render/buttons.module.css";
+	position: relative;
+}
+
+@media (pointer: coarse) {
+	.copyBtn::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
+	}
+}
+
 /* Dimmed messages in edit mode */
 .msgDimmed {
 	opacity: 0.4;
@@ -594,22 +615,20 @@
 	margin-bottom: 6px;
 }
 
-/* Placement for the per-message copy chip on assistant text segments: the
-   .toolbarBtn spec (identical to the user-message Copy chip), anchored inside
-   the segment's top-right corner. Three placement decisions are deliberate:
+/* Placement for the per-message copy chip on assistant text segments:
+   the floating-chip category (`.floating` in render/buttons.module.css — the
+   same recipe as the code-block copy chip, the jump button, and the
+   attachment remove), anchored inside the segment's top-right corner. Two
+   placement decisions are deliberate:
 
    - It stays *inside* the segment. The earlier -8px offset pushed it above the
      segment, which put it behind the fixed TopBar whenever the line sat at the
      top of the viewport — the chip looked clipped. A control may overlap its
      own text (it is hover-revealed and opaque, so it never occludes anything
      being read) but it must not cross its own box upward.
-   - 24 is the box slot, not 28: the Copy mark is wide and squat (its ink is
-     ~7.7px tall once fitted), so in a 28px box it filled 27% of the height and
-     read as an undersized glyph. In 24 the same 14 slot fills 58%.
-   - Solid fill plus `--shadow-chip`: the ghost spec's transparent background
-     would let markdown show through, and a raised surface alone is 1.05:1 on
-     the page tone, so the half-pixel ring is what makes the chip a shape rather
-     than a hole in the paragraph.
+   - The box is the shared `chip` slot (`--chip-box`), not this host's ladder:
+     every Copy control in the app draws the same square, so the header's Copy
+     and this chip are one control.
 
    Hit-testing tracks visibility as well: a `pointer-events: none` chip is not
    a click target while it is invisible, and the reveal (a rule on the hovered
@@ -617,28 +636,23 @@
    still answered clicks on the first line's right end — a tap that meant to
    place a caret or start a selection copied the message instead.
 
-   Only placement, box, hit-testing, and reveal live here — states belong to
-   .toolbarBtn. */
+   Only placement, hit-testing, and reveal live here — recipe, ink, hover, and
+   box belong to `.floating`. */
 .msgCopyBtn {
+	composes: floating from "../../render/buttons.module.css";
 	position: absolute;
 	top: 2px;
 	right: 0;
-	width: 24px;
-	height: 24px;
 	/* Intra-component stacking stays literal: keep the chip above any positioned
 	   Markdown (code-block chrome, table wrappers) inside the same segment. */
 	z-index: 1;
 	opacity: 0;
 	pointer-events: none;
-	box-shadow: var(--shadow-chip);
-	transition: opacity var(--dur-fast) ease;
-}
-
-/* Hover restates the opaque surface at the same specificity as the ghost spec,
-   so the floating chip never turns translucent over live text. */
-.msgCopyBtn,
-.msgCopyBtn:hover {
-	background: var(--color-surface-raised);
+	/* The reveal plus the state transition: restating `transition` here would
+	   otherwise drop the ghost's ink and fill channels (see --state-transition). */
+	transition:
+		opacity var(--dur-fast) ease,
+		var(--state-transition);
 }
 
 .textSegment:hover .msgCopyBtn,
@@ -664,7 +678,7 @@
 	   and left two ragged line ends (the chip is taller than one 22px prose
 	   line). One line box of the chip is what keeps the squeeze to the opening
 	   line. The left margin is optical clearance from the wrapped text, not
-	   padding; the target still comes from the shared ::after overlay. */
+	   padding; the target still comes from the chip's own ::after overlay. */
 	.msgCopyBtn {
 		position: relative;
 		top: auto;
@@ -674,6 +688,17 @@
 		margin: 0 0 0 4px;
 		opacity: 1;
 		pointer-events: auto;
+	}
+}
+
+/* Touch targets grow outward by the row's own gap rather than by repainting the
+   box (the `.toolbarBtn` rule): the chip keeps the one 24 box every copy
+   control has on screen and still offers a 36px target. */
+@media (pointer: coarse) {
+	.msgCopyBtn::after {
+		content: "";
+		position: absolute;
+		inset: -6px;
 	}
 }
 

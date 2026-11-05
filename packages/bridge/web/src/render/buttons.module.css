@@ -65,9 +65,7 @@
 		color: var(--color-secondary);
 		cursor: pointer;
 		user-select: none;
-		transition:
-			color var(--dur-fast) ease-out,
-			background-color var(--dur-fast) ease-out;
+		transition: var(--state-transition);
 	}
 
 	/* One class selector per state, so a host's own single-class `:hover`
@@ -160,6 +158,82 @@
 	@media (hover: hover) {
 		.quiet:hover:not([data-on]) {
 			background: none;
+		}
+	}
+}
+
+/* ============================================================================
+   `floating` and `floatingOnImage` — the floating-chip category: a glyph-only
+   ghost control that hovers over content, so it keeps a container (see
+   docs/web/design.md, "A control that floats over content keeps a container").
+   This is the recipe's one home: a host composes it and states only what is
+   local — placement, box, and reveal.
+
+   Over uniform content (page tone, a card): opaque `--color-surface-raised`
+   fill plus `--shadow-chip`. The fill alone is 1.05:1 on the page, so the
+   half-pixel ring in the shadow is what makes the chip a shape rather than a
+   hole in the text; a bare ghost is only legible on a stable surface, and
+   content is not one.
+
+   Over an image: the luminance beneath is arbitrary, so the boundary clears
+   3:1 on its own (`--color-border-control` ring) and a drop shadow says
+   nothing against a photograph.
+
+   Hover is a state layer on the chip's own surface *plus* the ink step: the
+   fill moves to `--color-surface-raised-hover` and the glyph goes `secondary`
+   → `foreground`. A glyph-only step is one channel out of two, and it reads
+   dim: the chip is a surface, so the surface has to answer the pointer. The
+   layer is mixed into the opaque base rather than laid on as a translucent
+   fill, because a chip over content may never show the text beneath it — the
+   reason this recipe restates its background at all, at the same specificity
+   as the ghost hover fill — and it is mixed from the ink rather than named as
+   a surface tone, so the hover keeps the chip's hue instead of turning a warm
+   block over a cool page. A *persistent* member (the jump button) steps
+   elevation as well: it is already visible, so hover must read as liveness
+   rather than as the reveal.
+
+   The host owns reveal and hit-testing: a chip revealed by fading in gates
+   `pointer-events` on the same rule (an invisible box that still answers
+   clicks copies the message a tap meant to place a caret in), and on a coarse
+   pointer an always-visible chip leaves the text box rather than overlaying
+   it. Both are prose in design.md because the reveal's ancestor differs per
+   host and cannot live here.
+   ========================================================================= */
+
+@layer control {
+	/* The glyph-only chip box: every Copy control in the app is this one box, so
+	   the header's, the card cluster's, the message chip's, and the Markdown
+	   code-block chip's are the same control in the same place. 24 rather than
+	   the row ladder's 28 is the glyph's decision — the Copy mark is wide and
+	   squat, so 28 leaves its ink at 27% of the box height. A host whose row
+	   needs another size states it (the jump button's 36). */
+	.chip {
+		composes: ghost;
+		width: var(--chip-box);
+		height: var(--chip-box);
+	}
+
+	.floating {
+		composes: chip;
+		background: var(--color-surface-raised);
+		box-shadow: var(--shadow-chip);
+	}
+
+	@media (hover: hover) {
+		.floating:hover {
+			background: var(--color-surface-raised-hover);
+		}
+	}
+
+	.floatingOnImage {
+		composes: chip;
+		background: var(--color-surface-raised);
+		border: 1px solid var(--color-border-control);
+	}
+
+	@media (hover: hover) {
+		.floatingOnImage:hover {
+			background: var(--color-surface-raised-hover);
 		}
 	}
 }

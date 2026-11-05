@@ -31,7 +31,11 @@
 }
 
 /* App chrome, not document text — click-to-rename makes the title a control
-   (the name stays selectable in the rename input). */
+   (the name stays selectable in the rename input). The title is bold
+   foreground — there is no ink step left — and its box is the flex-wide
+   center strip, so a hover fill would paint the strip rather than the name.
+   The pointer answer is an underline on the name itself: an edit affordance
+   that scales with the value, the same signal an inline link carries. */
 .topBarTitle {
 	flex: 1;
 	font-weight: bold;
@@ -43,6 +47,13 @@
 	padding: 0;
 	cursor: pointer;
 	user-select: none;
+}
+
+@media (hover: hover) {
+	.topBarTitle:hover {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
 }
 
 .topBarTitle:disabled {

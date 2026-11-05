@@ -5,10 +5,11 @@
 //
 // Copy is attached here — per message, not per turn: a merged turn holds
 // several messages, so the turn header cannot copy "the message". The
-// button uses the same .toolbarBtn chip spec as the user-message Copy,
-// floating at the segment's top-right, revealed on hover/focus. The reveal
-// also gates hit-testing (pointer-events), so the invisible chip never answers
-// a click that meant to place a caret.
+// button is the app's floating chip (`.floating` in render/buttons.module.css
+// — the same recipe as the code-block copy chip and the jump button), placed
+// at the segment's top-right, revealed on hover/focus. The reveal also gates
+// hit-testing (pointer-events), so the invisible chip never answers a click
+// that meant to place a caret.
 //
 // The chip precedes the Markdown in DOM order: on a coarse pointer it leaves
 // the overlay and floats at the segment's top-right, and a float can only sit
@@ -17,7 +18,7 @@
 // Copies this block's markdown source.
 
 import { memo, useCallback, useDeferredValue, useState } from "react";
-import { copyToClipboard } from "../../infra/lib/clipboard.ts";
+import { COPIED_FEEDBACK_MS, copyToClipboard } from "../../infra/lib/clipboard.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CheckIcon, CopyIcon } from "../../render/icons.tsx";
 import { AppMarkdown } from "../viewer/AppMarkdown.tsx";
@@ -52,7 +53,7 @@ export const TextBlockView = memo(function TextBlockView({
 	const handleCopy = useCallback(async () => {
 		if (await copyToClipboard(text)) {
 			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
+			setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
 		}
 	}, [text]);
 
@@ -61,7 +62,7 @@ export const TextBlockView = memo(function TextBlockView({
 			{text.length > 0 && (
 				<button
 					type="button"
-					className={`${styles.toolbarBtn} ${styles.msgCopyBtn}`}
+					className={styles.msgCopyBtn}
 					onClick={handleCopy}
 					aria-label={copied ? "Copied" : "Copy message"}
 					title={copied ? "Copied" : "Copy message"}

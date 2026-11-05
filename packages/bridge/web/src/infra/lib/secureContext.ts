@@ -14,7 +14,9 @@
 // (`sessionStorage`), so repeated copy attempts never stack dialogs.
 // ============================================================================
 
-import { getStore } from "../state/store.tsx";
+// The vanilla store singleton, not the React context re-export: this module is
+// on the imperative path and must stay JSX-free in the import graph.
+import { getStore } from "../state/store.ts";
 
 const SEEN_KEY = "pi-bridge:secure-context-hint";
 

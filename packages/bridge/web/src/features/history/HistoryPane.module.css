@@ -253,14 +253,23 @@
 	margin-right: 6px;
 }
 
-/* Superseded badge — compact "+N" icon-button in its own flex slot before
-   the text. Present only on keepers with folded turns; an absent badge
-   leaves no gutter so text reclaims the space. Fixed width keeps the text
-   column's left edge stable across rows that share a branch point.
+/* Superseded badge — compact "+N" chip in its own flex slot before the text.
+   Present only on keepers with folded turns; an absent badge leaves no gutter
+   so text reclaims the space. Fixed width keeps the text column's left edge
+   stable across rows that share a branch point.
+   The chrome (cursor, border, padding, the dim ink pair, the hover ink) composes
+   the `dim` tier — this chip restates no tier state. Its one host decision is
+   the surface: it rests on `--color-muted` (a tinted chip reads on the row,
+   unlike the header's bordered label chip), and the hover steps that surface
+   from the ink at `--state-fill-alpha` — the state-layer recipe, mixed into the
+   opaque base so the step keeps the chip's hue — instead of painting the
+   hairline token, whose single job is separating surfaces.
    The badge is the only interactive child of the row (the row itself is a
    div role=button); re-enable pointer events here so clicks toggle the
-   popover instead of navigating. */
+   popover instead of navigating. The open state (accent tint) is unlayered and
+   outranks the composed tier. */
 .supersededBadge {
+	composes: dim from "../../render/buttons.module.css";
 	flex: 0 0 auto;
 	display: inline-flex;
 	align-items: center;
@@ -268,21 +277,18 @@
 	width: var(--superseded-badge-w, 28px);
 	height: 18px;
 	font-size: var(--fs-xs);
-	color: var(--color-muted-foreground);
 	background: var(--color-muted);
-	border: none;
 	border-radius: var(--radius-xs);
-	padding: 0;
-	cursor: pointer;
 	white-space: nowrap;
 	line-height: 1;
 	pointer-events: auto;
 	font-variant-numeric: tabular-nums;
 }
 
-.supersededBadge:hover {
-	color: var(--color-foreground);
-	background: var(--color-border);
+@media (hover: hover) {
+	.supersededBadge:hover {
+		background: color-mix(in srgb, var(--color-foreground) var(--state-fill-alpha), var(--color-muted));
+	}
 }
 
 .supersededBadgeOpen {

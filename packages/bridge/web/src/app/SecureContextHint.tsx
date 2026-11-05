@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { copyWithExecCommandFallback } from "../infra/lib/clipboard.ts";
+import { COPIED_FEEDBACK_MS, copyWithExecCommandFallback } from "../infra/lib/clipboard.ts";
 import { type SecureContextStep, secureContextGuide } from "../infra/lib/secureContext.ts";
 import { useStore } from "../infra/state/store.tsx";
 import dialogStyles from "../render/Dialog.module.css";
@@ -99,7 +99,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 		if (!(await copyWithExecCommandFallback(value))) return;
 		setCopied(true);
 		window.clearTimeout(timer.current);
-		timer.current = window.setTimeout(() => setCopied(false), 1500);
+		timer.current = window.setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
 	}, [value]);
 
 	return (

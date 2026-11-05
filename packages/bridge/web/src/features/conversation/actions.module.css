@@ -746,13 +746,19 @@
    bar: copy, wrap, md, show-all. Hidden (opacity, keeps layout stable)
    until the action tinted row is hovered or a control is focused; on
    hover-incapable pointers (touch) always visible — hover-only controls
-   would be unreachable there. */
+   would be unreachable there. Hit-testing tracks visibility like every
+   revealed control: an invisible cluster over the top bar would answer
+   clicks meant for the card body (the same rule the floating chips and the
+   picker's pin follow; this wrapper is a div, so the icon-contract's
+   opacity gate cannot see it). Keyboard focus is unaffected — pointer-events
+   does not block tabbing into the cluster. */
 .cardControls {
 	display: flex;
 	align-items: center;
 	gap: 2px;
 	flex-shrink: 0;
 	opacity: 0;
+	pointer-events: none;
 	transition: opacity var(--dur-fast) ease;
 }
 
@@ -760,17 +766,24 @@
 .action:focus-within .cardControls,
 .cardControls:focus-within {
 	opacity: 1;
+	pointer-events: auto;
 }
 
 @media (hover: none) {
 	.cardControls {
 		opacity: 1;
+		pointer-events: auto;
 	}
 }
 
 .cardCtrlBtn {
-	composes: dim from "../../render/buttons.module.css";
-	padding: 4px 6px;
+	/* The card cluster keeps the `dim` ink step (its glyphs sit in a dense bar
+	   above the content) but takes the one Copy box, so the cluster's Copy and
+	   the floating chips are one control in one place. A text-sized box
+	   (`padding: 4px 6px`) made these glyphs read as inline text beside the
+	   wrap/md toggles, which carry a fill. */
+	composes: chip dim from "../../render/buttons.module.css";
+	padding: 0;
 	font: inherit;
 	font-size: var(--fs-xs);
 }
