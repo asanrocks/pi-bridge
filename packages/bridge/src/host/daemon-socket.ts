@@ -19,10 +19,11 @@
 // of discovery (`discovery.ts` holds the decision).
 // ============================================================================
 
+import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, rmSync } from "node:fs";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createConnection } from "node:net";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
 import type { ProbeResult } from "./discovery.ts";
@@ -43,9 +44,91 @@ const PROBE_TIMEOUT_MS = 1_500;
  * upgrades and never greets is neither a probe nor a Worker. */
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 
-/** The default local discovery address: one per user, independent of pi's agent
- * directory. */
-export function defaultDaemonSocketPath(): string {
+/** The Windows named-pipe namespace, where `node:net` binds and nowhere else.
+ * Pipes live in one machine-global namespace, so the user name in the default
+ * carries the per-user isolation the UNIX default gets from `$HOME`. */
+const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\";
+
+/** The longest pipe address Windows binds. Beyond it `listen()` answers with the
+ * same bare `EACCES` a plain filesystem path gets, so an address over budget is
+ * made to fit here rather than left to fail unexplained. */
+const WINDOWS_PIPE_NAME_LIMIT = 256;
+
+/** Hex digits of the name hash appended to a shortened address: enough that two
+ * accounts sharing a long prefix stay distinct, short enough to leave the
+ * readable head most of the budget. */
+const PIPE_HASH_CHARS = 10;
+
+/** True when `socketPath` is already a pipe name in either Windows form. */
+function isWindowsPipeName(socketPath: string): boolean {
+	return socketPath.startsWith(WINDOWS_PIPE_PREFIX) || socketPath.startsWith("\\\\?\\pipe\\");
+}
+
+/** Encode an arbitrary name segment into an ASCII token that `new URL("ws+unix:…")`
+ * leaves untouched (`ws` parses `ws+unix:` through `URL` without percent-decoding
+ * the socket path, and splits on `:`). `[0-9A-Za-z.-]` stay verbatim; every other
+ * UTF-8 byte — including `_` itself — becomes `_xx`, so distinct names cannot
+ * collide. */
+function encodePipeSegment(raw: string): string {
+	let out = "";
+	for (const byte of Buffer.from(raw, "utf8")) {
+		const plain =
+			(byte >= 0x30 && byte <= 0x39) ||
+			(byte >= 0x41 && byte <= 0x5a) ||
+			(byte >= 0x61 && byte <= 0x7a) ||
+			byte === 0x2d ||
+			byte === 0x2e;
+		out += plain ? String.fromCharCode(byte) : `_${byte.toString(16).padStart(2, "0")}`;
+	}
+	return out;
+}
+
+/** The account name, or a shared default when the environment is stripped:
+ * `userInfo` can fail there, and a default still beats no default. */
+function accountName(username?: string): string {
+	if (username !== undefined) return username === "" ? "default" : username;
+	try {
+		return userInfo().username || "default";
+	} catch {
+		return "default";
+	}
+}
+
+/**
+ * A bindable, dialable pipe address for one name segment.
+ *
+ * Escaping is not cosmetic: `new URL()` percent-encodes non-ASCII, so `ws` would
+ * dial `\\.\pipe\pi-bridge-%E5%BC%A0…` and fail with `ENOENT`, and it splits the
+ * `ws+unix:` path on the first `:`, which silently truncates a name containing
+ * one.
+ *
+ * Escaping expands each byte to three characters, so a long non-ASCII segment
+ * can exceed what Windows binds — and the over-long bind fails with the same
+ * bare `EACCES` that a wrong-shaped address does. The tail therefore carries a
+ * hash of the full escaped name: shortened addresses stay distinct and cannot
+ * collide with a short one.
+ */
+export function windowsPipeName(segment: string): string {
+	const escaped = encodePipeSegment(segment);
+	const budget = WINDOWS_PIPE_NAME_LIMIT - WINDOWS_PIPE_PREFIX.length;
+	if (escaped.length <= budget) return `${WINDOWS_PIPE_PREFIX}${escaped}`;
+	const tail = `-${createHash("sha256").update(escaped).digest("hex").slice(0, PIPE_HASH_CHARS)}`;
+	// Never cut inside an `_xx` escape: a partial escape would read as a different
+	// plain byte sequence, borrowing another name's prefix.
+	const head = escaped.slice(0, budget - tail.length).replace(/_x?$/, "");
+	return `${WINDOWS_PIPE_PREFIX}${head}${tail}`;
+}
+
+/**
+ * The default local discovery address: one per user, independent of pi's agent
+ * directory.
+ *
+ * Windows has no UNIX socket for `net.Server.listen()`: a plain filesystem path
+ * is rejected with `EACCES`, so the default names a pipe instead of a file under
+ * `$HOME`.
+ */
+export function defaultDaemonSocketPath(username?: string): string {
+	if (process.platform === "win32") return windowsPipeName(`pi-bridge-${accountName(username)}`);
 	return join(homedir(), ".pi", "bridge.sock");
 }
 
@@ -213,7 +296,7 @@ export async function probeDaemonSocket(socketPath: string): Promise<ProbeResult
 }
 
 export interface DaemonSocketOptions {
-	/** Bind here (a UNIX socket path). */
+	/** Bind here: a UNIX socket path, or a Windows named-pipe name. */
 	readonly socketPath: string;
 	/** One accepted Worker registration. The handshake frame was consumed by the
 	 * socket's peek and is supplied here, so the host can adopt the socket
@@ -252,6 +335,18 @@ function asHello(frame: Record<string, unknown>): WorkerHello | null {
 	return frame as unknown as WorkerHello;
 }
 
+/** A bind failure worded for what the caller can actually change. Windows
+ * rejects a non-pipe name with EACCES and no cause, so the expected shape is
+ * named; the raw code reads as a permissions problem in the home directory. */
+function listenFailure(socketPath: string, err: Error): Error {
+	if (process.platform === "win32" && !isWindowsPipeName(socketPath)) {
+		return new Error(
+			`cannot listen on ${socketPath}: on Windows the daemon socket must be a named pipe (${WINDOWS_PIPE_PREFIX}<name>)`,
+		);
+	}
+	return err;
+}
+
 /**
  * Bind the registration socket. A Worker dials this path; the Daemon never dials
  * out for a local registration, which is what makes discovery possible.
@@ -259,9 +354,12 @@ function asHello(frame: Record<string, unknown>): WorkerHello | null {
  * The parent directory is created first: the default path lives under
  * `$HOME/.pi`, and a standalone daemon hosts no Worker, so nothing else would
  * create it — a missing parent otherwise fails with EACCES and names no cause.
+ * A Windows pipe name has no parent directory, so nothing is created for it.
  */
 export async function startDaemonSocket(options: DaemonSocketOptions): Promise<DaemonSocket> {
-	mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 });
+	if (!isWindowsPipeName(options.socketPath)) {
+		mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 });
+	}
 
 	const wss = new WebSocketServer({ noServer: true });
 	const server: HttpServer = createServer();
@@ -301,7 +399,7 @@ export async function startDaemonSocket(options: DaemonSocketOptions): Promise<D
 	};
 
 	await new Promise<void>((resolve, reject) => {
-		const onError = (err: Error) => reject(err);
+		const onError = (err: Error) => reject(listenFailure(options.socketPath, err));
 		server.once("error", onError);
 		server.listen(options.socketPath, () => {
 			server.off("error", onError);

@@ -20,10 +20,16 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-function tempSocket(): { dir: string; socketPath: string } {
+let pipeSeq = 0;
+
+function tempSocket(): { socketPath: string } {
+	if (process.platform === "win32") {
+		pipeSeq += 1;
+		return { socketPath: `\\\\.\\pipe\\pi-bridge-spawn-${process.pid}-${pipeSeq}` };
+	}
 	const dir = mkdtempSync(join(tmpdir(), "pi-bridge-spawn-"));
 	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-	return { dir, socketPath: join(dir, "worker.sock") };
+	return { socketPath: join(dir, "worker.sock") };
 }
 
 describe("worker spawn mode", () => {

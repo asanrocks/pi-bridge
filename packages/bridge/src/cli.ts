@@ -14,6 +14,7 @@
 // exiting it disconnects other Workers' browsers while those Workers keep
 // running.
 
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,7 @@ import {
 	probeDaemonSocket,
 	removeStaleSocket,
 	webBaseUrlFromEndpoint,
+	windowsPipeName,
 } from "./host/daemon-socket.ts";
 import { isSocketTaken, resolveStartupRole } from "./host/discovery.ts";
 import { Daemon, type DaemonOptions } from "./host/index.ts";
@@ -38,7 +40,7 @@ const USAGE = `Usage: pi-bridge [--mode=auto|daemon|worker] [--socket <path>] [-
 
 Options:
   --mode=auto|daemon|worker  Role to take (default: auto)
-  --socket <path>            Daemon discovery socket (default: ~/.pi/bridge.sock)
+  --socket <path>            Daemon discovery socket (default: ${defaultDaemonSocketPath()})
   --daemon <ws-url>          Remote daemon to register with (implies worker mode)
   --allow <[id=]dir>         Project to serve (repeatable; worker role)
   --port <port>              Web listener port (daemon role)
@@ -56,10 +58,13 @@ Roles:
   daemon   serve the web app and registered Workers only
   worker   register these Projects with an existing daemon, fail if none answers`;
 
-/** One UNIX socket path inside a private temp directory: used only by the
- * internal spawn deployment, where the Daemon dials a child it started. A UNIX
- * socket path is length-limited, so it must not derive from the user's cwd. */
+/** One local socket address for the internal spawn deployment, where the Daemon
+ * dials a child it started: a private temp-dir socket on UNIX (length-limited,
+ * so never derived from cwd), or a unique named pipe on Windows. The pipe
+ * namespace, its escaping, and its length budget come from `windowsPipeName`,
+ * so this address is dialable on the same terms as the default one. */
 function spawnSocketPath(): string {
+	if (process.platform === "win32") return windowsPipeName(`pi-bridge-worker-${process.pid}-${randomUUID()}`);
 	return join(mkdtempSync(join(tmpdir(), "pi-bridge-worker-")), "worker.sock");
 }
 

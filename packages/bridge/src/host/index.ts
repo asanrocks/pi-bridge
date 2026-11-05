@@ -7,6 +7,7 @@ export {
 	probeDaemonSocket,
 	removeStaleSocket,
 	startDaemonSocket,
+	windowsPipeName,
 } from "./daemon-socket.ts";
 export type { DiscoverySteps, ProbeResult, StartupRole } from "./discovery.ts";
 export { isSocketTaken, resolveStartupRole } from "./discovery.ts";
