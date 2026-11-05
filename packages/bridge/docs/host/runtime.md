@@ -84,10 +84,17 @@ Local discovery uses one address per user, independent of pi's agent directory:
 `$HOME/.pi/bridge.sock`, or the named pipe `\\.\pipe\pi-bridge-<user>` on
 Windows, where `node:net` will not bind a plain filesystem path (it reports the
 rejection as `EACCES`). The user segment keeps the isolation `$HOME` provides
-there, because the pipe namespace is machine-global. `--socket` overrides the
-default. The socket carries the discovery probe and Worker registration only —
-never the browser surface — so a local Worker needs no port guess and the web
-listener stays free to move.
+there, because the pipe namespace is machine-global. `windowsPipeName()` is the
+one place an address is built from a name segment: every byte outside
+`[0-9A-Za-z.-]` is escaped as `_xx`, because `new URL()` percent-encodes
+non-ASCII (so `ws` would dial a path that does not exist) and splits the
+`ws+unix:` path on the first `:` (so a name containing one is silently
+truncated). Escaping expands each byte to three characters, so a name over the
+256-character Windows limit is shortened and hashed instead of inheriting the
+same bare `EACCES` an over-long bind reports; the spawned Worker's pipe comes
+from the same helper. `--socket` overrides the default. The socket carries the
+discovery probe and Worker registration only — never the browser surface — so a
+local Worker needs no port guess and the web listener stays free to move.
 
 ```text
 pi-bridge                     join a live daemon as a Worker, else start both

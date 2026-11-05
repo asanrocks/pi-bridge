@@ -25,6 +25,7 @@ import {
 	probeDaemonSocket,
 	removeStaleSocket,
 	webBaseUrlFromEndpoint,
+	windowsPipeName,
 } from "./host/daemon-socket.ts";
 import { isSocketTaken, resolveStartupRole } from "./host/discovery.ts";
 import { Daemon, type DaemonOptions } from "./host/index.ts";
@@ -59,9 +60,11 @@ Roles:
 
 /** One local socket address for the internal spawn deployment, where the Daemon
  * dials a child it started: a private temp-dir socket on UNIX (length-limited,
- * so never derived from cwd), or a unique named pipe on Windows. */
+ * so never derived from cwd), or a unique named pipe on Windows. The pipe
+ * namespace, its escaping, and its length budget come from `windowsPipeName`,
+ * so this address is dialable on the same terms as the default one. */
 function spawnSocketPath(): string {
-	if (process.platform === "win32") return `\\\\.\\pipe\\pi-bridge-worker-${process.pid}-${randomUUID()}`;
+	if (process.platform === "win32") return windowsPipeName(`pi-bridge-worker-${process.pid}-${randomUUID()}`);
 	return join(mkdtempSync(join(tmpdir(), "pi-bridge-worker-")), "worker.sock");
 }
 

@@ -19,6 +19,7 @@
 // of discovery (`discovery.ts` holds the decision).
 // ============================================================================
 
+import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, rmSync } from "node:fs";
 import { createServer, type Server as HttpServer } from "node:http";
 import { createConnection } from "node:net";
@@ -48,12 +49,22 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
  * carries the per-user isolation the UNIX default gets from `$HOME`. */
 const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\";
 
+/** The longest pipe address Windows binds. Beyond it `listen()` answers with the
+ * same bare `EACCES` a plain filesystem path gets, so an address over budget is
+ * made to fit here rather than left to fail unexplained. */
+const WINDOWS_PIPE_NAME_LIMIT = 256;
+
+/** Hex digits of the name hash appended to a shortened address: enough that two
+ * accounts sharing a long prefix stay distinct, short enough to leave the
+ * readable head most of the budget. */
+const PIPE_HASH_CHARS = 10;
+
 /** True when `socketPath` is already a pipe name in either Windows form. */
 function isWindowsPipeName(socketPath: string): boolean {
 	return socketPath.startsWith(WINDOWS_PIPE_PREFIX) || socketPath.startsWith("\\\\?\\pipe\\");
 }
 
-/** Encode an arbitrary account name into an ASCII token that `new URL("ws+unix:…")`
+/** Encode an arbitrary name segment into an ASCII token that `new URL("ws+unix:…")`
  * leaves untouched (`ws` parses `ws+unix:` through `URL` without percent-decoding
  * the socket path, and splits on `:`). `[0-9A-Za-z.-]` stay verbatim; every other
  * UTF-8 byte — including `_` itself — becomes `_xx`, so distinct names cannot
@@ -72,18 +83,40 @@ function encodePipeSegment(raw: string): string {
 	return out;
 }
 
-/** The account segment of the Windows pipe name. `userInfo` can fail on a
- * stripped environment, where a shared default still beats no default. */
-function windowsUserSegment(username?: string): string {
-	let raw = username;
-	if (raw === undefined) {
-		try {
-			raw = userInfo().username;
-		} catch {
-			return "default";
-		}
+/** The account name, or a shared default when the environment is stripped:
+ * `userInfo` can fail there, and a default still beats no default. */
+function accountName(username?: string): string {
+	if (username !== undefined) return username === "" ? "default" : username;
+	try {
+		return userInfo().username || "default";
+	} catch {
+		return "default";
 	}
-	return raw === "" ? "default" : encodePipeSegment(raw);
+}
+
+/**
+ * A bindable, dialable pipe address for one name segment.
+ *
+ * Escaping is not cosmetic: `new URL()` percent-encodes non-ASCII, so `ws` would
+ * dial `\\.\pipe\pi-bridge-%E5%BC%A0…` and fail with `ENOENT`, and it splits the
+ * `ws+unix:` path on the first `:`, which silently truncates a name containing
+ * one.
+ *
+ * Escaping expands each byte to three characters, so a long non-ASCII segment
+ * can exceed what Windows binds — and the over-long bind fails with the same
+ * bare `EACCES` that a wrong-shaped address does. The tail therefore carries a
+ * hash of the full escaped name: shortened addresses stay distinct and cannot
+ * collide with a short one.
+ */
+export function windowsPipeName(segment: string): string {
+	const escaped = encodePipeSegment(segment);
+	const budget = WINDOWS_PIPE_NAME_LIMIT - WINDOWS_PIPE_PREFIX.length;
+	if (escaped.length <= budget) return `${WINDOWS_PIPE_PREFIX}${escaped}`;
+	const tail = `-${createHash("sha256").update(escaped).digest("hex").slice(0, PIPE_HASH_CHARS)}`;
+	// Never cut inside an `_xx` escape: a partial escape would read as a different
+	// plain byte sequence, borrowing another name's prefix.
+	const head = escaped.slice(0, budget - tail.length).replace(/_x?$/, "");
+	return `${WINDOWS_PIPE_PREFIX}${head}${tail}`;
 }
 
 /**
@@ -95,7 +128,7 @@ function windowsUserSegment(username?: string): string {
  * `$HOME`.
  */
 export function defaultDaemonSocketPath(username?: string): string {
-	if (process.platform === "win32") return `${WINDOWS_PIPE_PREFIX}pi-bridge-${windowsUserSegment(username)}`;
+	if (process.platform === "win32") return windowsPipeName(`pi-bridge-${accountName(username)}`);
 	return join(homedir(), ".pi", "bridge.sock");
 }
 

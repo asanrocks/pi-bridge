@@ -135,6 +135,9 @@ async function abandonSocket(path: string): Promise<void> {
 
 const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\";
 
+/** One non-ASCII code point, for the escaping and length cases. */
+const CJK = "\u5f20";
+
 /** Tests that bind or leave behind a UNIX socket file: Windows binds a named
  * pipe and the namespace entry vanishes with the process, so neither a plain
  * path is bindable nor is a stale file left to find. */
@@ -243,6 +246,22 @@ describe("daemon socket default address", () => {
 		expect(special).not.toBe(underscore);
 	});
 
+	it("shortens a name the pipe namespace cannot hold instead of failing bare", () => {
+		// Escaping triples every non-ASCII byte, so a long account name can exceed
+		// the 256-character pipe limit, where Windows answers the bind with the very
+		// bare EACCES a wrong-shaped path gets — the failure this default exists to
+		// explain away.
+		const address = (name: string) => withPlatform("win32", () => defaultDaemonSocketPath(name));
+		const first = address(`${CJK.repeat(30)}a`);
+		const second = address(`${CJK.repeat(30)}b`);
+		expect(first.length).toBeLessThanOrEqual(256);
+		expect(first.slice(WINDOWS_PIPE_PREFIX.length)).toMatch(/^pi-bridge-[0-9A-Za-z._-]+$/);
+		// A hash, not a cut: both names share their first 90 escaped characters, so
+		// truncation alone would address one pipe for two accounts.
+		expect(first).not.toBe(second);
+		expect(new URL(`ws+unix:${first}:/`).pathname).toBe(`${first}:/`);
+	});
+
 	// Runs only where a pipe can actually be bound: it pins the address shape the
 	// Windows default uses, end to end rather than by string.
 	itOnWindows("binds a pipe name and refuses a plain path by name", async () => {
@@ -255,6 +274,15 @@ describe("daemon socket default address", () => {
 		// what the caller can change instead.
 		const plain = join(workdir(), "plain-path");
 		await expect(startDaemonSocket({ socketPath: plain, onWorker: () => {} })).rejects.toThrow(/named pipe/);
+	});
+
+	// Shortening is only correct if the shortened address still binds and dials; a
+	// string assertion cannot show that.
+	itOnWindows("binds a shortened over-long address", async () => {
+		const socketPath = defaultDaemonSocketPath(`${CJK.repeat(40)}-${process.pid}-${++pipeSeq}`);
+		const socket = await startDaemonSocket({ socketPath, onWorker: () => {} });
+		cleanups.push(() => socket.close());
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null });
 	});
 });
 
