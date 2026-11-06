@@ -187,6 +187,10 @@ function codeLines(src) {
 
 const errors = [];
 const files = walk(ROOT).filter((f) => f.endsWith(".tsx") || f.endsWith(".ts"));
+// Markup fixtures in tests are strings, not controls: a test that asserts on a
+// rendered `<button>` tag has no tier to resolve and never ships. The scan is
+// about what the document renders.
+const sourceTsx = files.filter((f) => f.endsWith(".tsx") && !f.includes(".test."));
 const iconSetSource = readFileSync(ICON_SET, "utf-8");
 const exported = new Set([...iconSetSource.matchAll(/export const (\w+Icon)\b/g)].map((m) => m[1]));
 
@@ -421,7 +425,7 @@ function resolvedTiers(file, name, seen = new Set()) {
 }
 
 const rolesUsed = new Set();
-for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+for (const file of sourceTsx) {
 	// Comments are stripped: the transcript's own prose mentions `<button>`.
 	const source = codeLines(readFileSync(file, "utf-8")).join("\n");
 	const imports = new Map();
@@ -521,7 +525,7 @@ function literalLabel(body) {
 	return out.trim();
 }
 
-for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+for (const file of sourceTsx) {
 	const source = codeLines(readFileSync(file, "utf-8")).join("\n");
 	const imports = new Map();
 	for (const m of source.matchAll(/import\s+(\w+)\s+from\s+["']([^"']+\.module\.css)["']/g)) {
@@ -550,7 +554,64 @@ for (const file of files.filter((f) => f.endsWith(".tsx"))) {
 	}
 }
 
-// ── Rule 6: `filled` is a closed family ──────────────────────────────
+// ── Rule 6: a text control carries no glyph ─────────────────────────
+//
+// Text and a glyph are two ways of saying one thing, so a control takes one of
+// them: a glyph marks itself actionable, and a word is marked by being read.
+// A value chip that also wears a caret said the same thing twice, and the caret
+// was the weaker half — it announced "opens" to a reader who had already read
+// the value. The value readouts are recorded here so the rule has a subject; a
+// worded chromeless control is a value disclosure (rule 5's `TEXT_VALUE_OK`),
+// never a decoration carrier.
+const TEXT_CONTROLS = new Map(
+	Object.entries({
+		composerModelBtn: "the model in force — a value readout",
+		composerCostBtn: "the session cost — a value readout",
+		changesBadge: "the uncommitted-file count — a value readout",
+		stateChipBtn: "the comparison endpoint — a value chip",
+		turnHeaderDate: "the turn's instant — a value readout",
+		sidebarSectionToggle: "the fold-all label — a text control, not a verb",
+	}),
+);
+
+// The two glyphs that are content rather than decoration, and stay: a fold caret
+// IS the state (open/closed, like a check mark), and a clock stands in for an
+// instant the text has no characters for.
+const TEXT_GLYPH_OK = new Map(
+	Object.entries({
+		sidebarSectionToggle: "the caret is the fold state, not decoration",
+		turnHeaderDate: "the clock is the value when no instant is known",
+		changesBadge: "the branch mark names what the count counts",
+	}),
+);
+
+for (const file of sourceTsx) {
+	const source = codeLines(readFileSync(file, "utf-8")).join("\n");
+	const imports = new Map();
+	for (const m of source.matchAll(/import\s+(\w+)\s+from\s+["']([^"']+\.module\.css)["']/g)) {
+		imports.set(m[1], join(file, "..", m[2]));
+	}
+	for (const open of source.matchAll(/<button\b/g)) {
+		const openEnd = tagEnd(source, open.index + open[0].length);
+		if (openEnd === -1) continue;
+		const tag = source.slice(open.index, openEnd + 1);
+		const close = source.indexOf("</button>", openEnd);
+		if (close === -1) continue;
+		const inner = source.slice(openEnd + 1, close);
+		const glyph = /<\w*Icon\b/.exec(inner);
+		if (!glyph) continue;
+		const names = [...classNameExpression(tag).matchAll(/(\w+)\.(\w+)/g)]
+			.map((m) => m[2])
+			.filter((name) => TEXT_CONTROLS.has(name));
+		const offending = names.filter((name) => !TEXT_GLYPH_OK.has(name));
+		if (offending.length === 0) continue;
+		errors.push(
+			`${file}: <button className={…${offending.map((n) => `.${n}`).join(", ")}}> is a text control (${TEXT_CONTROLS.get(offending[0])}) but renders ${glyph[0].slice(1)} — a text-based control is text only: no leading mark, no trailing caret. Mark it with the hover fill and aria-expanded instead, or take the outlined tier. See docs/web/design.md, "Iconography and control surfaces"`,
+		);
+	}
+}
+
+// ── Rule 7: `filled` is a closed family ──────────────────────────────
 //
 // The tier's meaning is "this surface's one primary command". That cannot be
 // checked from the CSS alone — the check is the list: a file composes `filled`

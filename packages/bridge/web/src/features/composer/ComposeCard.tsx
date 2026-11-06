@@ -24,7 +24,7 @@ import type {
 } from "../../../../src/core/index.ts";
 import { MAX_ATTACHMENTS } from "../../infra/lib/imageResize.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
-import { ArrowUpIcon, ChevronDownIcon, CloseIcon, PaperclipIcon, StopIcon } from "../../render/icons.tsx";
+import { ArrowUpIcon, CloseIcon, PaperclipIcon, StopIcon } from "../../render/icons.tsx";
 import { displayModelName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 import { ModelPickerPortal } from "./ModelPickerPortal.tsx";
@@ -340,7 +340,7 @@ export const ComposeCard = memo(function ComposeCard({
 				{/* Control row. Left group ordered context-first (pct, bar, cost):
 				   context is the actionable metric, cost is a ledger. Mobile and
 				   desktop share this layout; the breakpoint only hides the bar and
-				   swaps the model name for a fixed "Models" label (CSS-driven). */}
+				   clips the model name (CSS-driven). */}
 				<div className={styles.composerControlRow}>
 					<div className={styles.composerControlLeft}>
 						<button
@@ -367,19 +367,15 @@ export const ComposeCard = memo(function ComposeCard({
 								setPortalOpen((v) => !v);
 							}}
 							disabled={!connected}
-							title="Switch model (Ctrl+P cycles)"
+							title={`${modelName} — switch model (Ctrl+P cycles)`}
 						>
-							{/* Label swap is CSS-driven: full name on desktop, fixed "Models"
-							   label on narrow screens. */}
+							{/* One label, clipped by CSS on narrow rows (see
+							   `.composerModelName`): the row never renames the value it shows. */}
 							<span className={styles.composerModelName}>
 								{modelName}
 								{model && thinkingLevel ? (
 									<span className={styles.composerModelMuted}> {thinkingLevel}</span>
 								) : null}
-							</span>
-							<span className={styles.composerModelMobileLabel}>Models</span>
-							<span className={styles.composerModelChevron}>
-								<ChevronDownIcon size={14} />
 							</span>
 						</button>
 

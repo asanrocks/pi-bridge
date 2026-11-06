@@ -1,13 +1,19 @@
 /* Chrome, placement, layering, and surface are render/Popover.module.css; a menu
-   only adds its own width. */
+   only adds its own width — wide enough that a label and its detail share one
+   line, which is the row's whole anatomy (see AnchoredMenu.tsx). */
 .menu {
-	width: min(320px, calc(100vw - 16px));
+	width: min(360px, calc(100vw - 16px));
 }
 
+/* One line per row, because the item count is the line count: a second line
+   reads as a second item, which is how a four-item menu was read as six. The
+   label yields first (ellipsis) since the detail is the disambiguating value —
+   an oid pair, a count, the reason a command is unavailable — and a truncated
+   reason explains nothing. */
 .item {
 	display: flex;
-	flex-direction: column;
-	gap: 2px;
+	align-items: baseline;
+	gap: 8px;
 	width: 100%;
 	padding: 5px 8px;
 	background: none;
@@ -24,13 +30,33 @@
 }
 
 .itemLabel {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: var(--fs-sm);
 }
 
+.item[aria-disabled="true"] {
+	color: var(--color-secondary);
+	opacity: 0.4;
+	cursor: default;
+}
+
+.item[aria-disabled="true"]:hover,
+.item[aria-disabled="true"]:focus-visible {
+	background: none;
+}
+
+/* Inline after the label, capped so a pathological detail cannot squeeze the
+   label out of the row. */
 .itemDetail {
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	font-size: var(--fs-xs);
-	color: var(--color-muted-foreground);
+	flex: 0 0 auto;
+	max-width: 55%;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
 }

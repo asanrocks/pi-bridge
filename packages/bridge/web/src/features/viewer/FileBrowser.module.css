@@ -367,11 +367,12 @@
 	font-family: inherit;
 }
 
-/* Chip as a selector: a button, so it needs the ghost reset and a caret. */
+/* Chip as a selector: a button, so it needs the ghost reset. Its content is the
+   label alone — a text control carries no glyph (design.md); the hover fill and
+   `aria-expanded` are the disclosure. */
 .stateChipBtn {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
 	cursor: pointer;
 }
 
@@ -531,7 +532,6 @@
 
 .sectionCounts {
 	flex-shrink: 0;
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: var(--fs-xs);
 	display: flex;
 	gap: 6px;

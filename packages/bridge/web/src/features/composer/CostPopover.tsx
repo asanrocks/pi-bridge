@@ -31,24 +31,24 @@ export function CostPopover({ anchor, onClose }: { anchor: HTMLElement | null; o
 			{/* The panel's box is chrome (the shared overlay surface and its 4px pad);
 			    this body is content, so its own padding and type live with it rather
 			    than in the popover spec. */}
-			<div className={styles.costBody}>
-				<div className={styles.costPopoverHeader}>
-					<span className={styles.costPopoverLabel}>Session cost</span>
-					<span className={styles.costPopoverTotal}>{formatCost(accounting.cost)}</span>
+			<div className={styles.ledgerBody}>
+				<div className={styles.ledgerHeader}>
+					<span className={styles.ledgerLabel}>Session cost</span>
+					<span className={styles.ledgerValue}>{formatCost(accounting.cost)}</span>
 				</div>
 				{accounting.byModel.length > 0 && (
-					<div className={styles.costPopoverModels}>
+					<div className={`${styles.ledgerSection} ${styles.ledgerRows}`}>
 						{accounting.byModel.map((row) => (
-							<div key={row.key} className={styles.costPopoverModelRow}>
-								<span className={styles.costPopoverModelKey} title={row.key}>
+							<div key={row.key} className={styles.ledgerRow}>
+								<span className={styles.ledgerKey} title={row.key}>
 									{displayModelLabel(row.provider, row.modelId, models)}
 								</span>
-								<span className={styles.costPopoverModelCost}>{formatCost(row.cost)}</span>
+								<span className={styles.ledgerNote}>{formatCost(row.cost)}</span>
 							</div>
 						))}
 					</div>
 				)}
-				<div className={styles.costPopoverTokens}>
+				<div className={`${styles.ledgerSection} ${styles.ledgerNote}`}>
 					<div>
 						In {formatTokens(accounting.input)} · Out {formatTokens(accounting.output)}
 					</div>

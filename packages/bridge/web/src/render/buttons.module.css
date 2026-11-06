@@ -32,7 +32,7 @@
    not link rules: the bundler inlines a copy of this module into every
    consumer, so the copies land between — and after — host rules and the last
    copy wins the plain-class cascade. That silently stripped host padding
-   (`.composerModelBtn`'s 6px 10px lost to this file's `padding: 0`) in the
+   (`.composerValueBtn`'s 4px 6px lost to this file's `padding: 0`) in the
    production build while the dev server, which injects one copy first, looked
    correct. Unlayered declarations beat layered ones whatever their order or
    specificity, so a host always keeps its own box, hue, and disabled rule,

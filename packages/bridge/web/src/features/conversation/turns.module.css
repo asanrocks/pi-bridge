@@ -41,7 +41,6 @@
 .turnHeaderDate {
 	composes: dim from "../../render/buttons.module.css";
 	position: relative;
-	gap: 2px;
 	min-height: 28px;
 	padding: 0 2px;
 	font: inherit;
@@ -534,11 +533,13 @@
 }
 
 /* Text segment */
+/* The turn's failure line is a sentence the user reads, not machine output, so
+   it takes the UI stack; only the attribute rows below it (`errorAttrs`: status
+   codes, ids) are machine tokens and keep the mono face. */
 .errorLine {
 	margin-top: 6px;
 	padding: 6px 10px;
 	font-size: var(--fs-sm);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	color: var(--color-error);
 	background: color-mix(in srgb, var(--color-error) 6%, transparent);
 	border-left: 2px solid var(--color-error);

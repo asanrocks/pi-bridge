@@ -16,7 +16,7 @@ import { formatWhenFull } from "../../infra/lib/time.ts";
 import { gitDiffRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
-import { BranchIcon, ChevronDownIcon } from "../../render/icons.tsx";
+import { BranchIcon } from "../../render/icons.tsx";
 import styles from "./TopBar.module.css";
 
 type Uncommitted =
@@ -72,7 +72,9 @@ export function ChangesBadge() {
 	// lands, so a switch cannot show the previous worktree's dirt.
 	if (state.status !== "ok" || state.count === 0 || state.stem !== currentStem) return null;
 
-	const omittedNote = state.omitted > 0 ? ` (+${state.omitted} untracked omitted)` : "";
+	// Inline row detail: the count of untracked files the review drops stays
+	// short enough to survive one line beside the label.
+	const omittedNote = state.omitted > 0 ? ` (+${state.omitted} omitted)` : "";
 	const items: MenuItem[] = [
 		{
 			key: "review",
@@ -94,9 +96,11 @@ export function ChangesBadge() {
 				aria-label={`${state.count} uncommitted file${state.count === 1 ? "" : "s"}`}
 				title={`${state.count} file${state.count === 1 ? "" : "s"} differ from HEAD — as of ${formatWhenFull(state.asOf)}`}
 			>
-				<BranchIcon size={12} />
+				{/* The one glyph a text control may carry: it names what the count
+				    counts. Sized by the row's slot (20, like every other TopBar
+				    mark), not by the label's meta step — the slot follows the row. */}
+				<BranchIcon size={20} />
 				{state.count}
-				<ChevronDownIcon size={12} />
 			</button>
 			{menuOpen && (
 				<AnchoredMenu

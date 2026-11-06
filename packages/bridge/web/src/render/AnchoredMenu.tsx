@@ -3,9 +3,18 @@
 // header's overflow menu, the TopBar's dirty-now badge).
 //
 // Chrome, placement, and dismissal are `Popover`'s; this file owns only the
-// item list. The item anatomy (a label plus an optional detail line) is the
-// one spec every anchored menu shares, so a host supplies `MenuItem[]` rather
-// than its own buttons.
+// item list. The item anatomy — one line: a label and an optional inline
+// detail — is the one spec every anchored menu shares, so a host supplies
+// `MenuItem[]` rather than its own buttons. Two lines per row was the earlier
+// anatomy and it made the item count unreadable: a wrapped label plus a detail
+// line renders as three rows, so readers counted more items than existed.
+//
+// There is no checkbox item. An item that flips a setting is an *instant*
+// effect, and a menu row cannot say so: a `menuitemcheckbox`'s only state cue is
+// a check mark that is absent when the setting is off, which makes an off
+// toggle look like a command. Such a control is a `role="switch"` in a dialog
+// (see docs/web/design.md, "One anchored panel"). What a row may carry is a
+// state the press *chooses*, never a state the press *changes*.
 //
 // Keyboard: the menu is a keyboard surface, so opening it moves focus to the
 // first item and arrows/Home/End roam (`role="menu"` with `menuitem` children,
@@ -21,8 +30,14 @@ import { Popover } from "./Popover.tsx";
 export interface MenuItem {
 	key: string;
 	label: string;
-	/** Secondary text — the commit subject or the endpoint pair. */
+	/** Inline secondary text — an oid pair, a count, the reason this command is
+	 * unavailable. Short by convention: it never wraps and never truncates the
+	 * label out of the row. */
 	detail?: string;
+	/** Refuse without closing: the item stays reachable (and focusable) so its
+	 * `detail` can name the reason, which is the only explanation touch users
+	 * get. */
+	disabled?: boolean;
 	onSelect: () => void;
 }
 
@@ -88,8 +103,10 @@ export function AnchoredMenu({
 						key={item.key}
 						type="button"
 						role="menuitem"
+						aria-disabled={item.disabled === true ? true : undefined}
 						className={styles.item}
 						onClick={() => {
+							if (item.disabled === true) return;
 							onClose();
 							item.onSelect();
 						}}

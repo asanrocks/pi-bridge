@@ -25,7 +25,7 @@ import { memo, type ReactNode, useCallback, useRef, useState } from "react";
 import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
 import { useNow } from "../../infra/lib/useNow.ts";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
-import { ChevronDownIcon, ClockIcon, MoreIcon } from "../../render/icons.tsx";
+import { ClockIcon, MoreIcon } from "../../render/icons.tsx";
 import type { HeaderDensity } from "./headerDensity.ts";
 import { LabelChip, LabelEditor } from "./LabelSlot.tsx";
 import { type DetailSection, TurnDetailsPanel } from "./TurnDetailsPanel.tsx";
@@ -117,7 +117,6 @@ export const TurnHeader = memo(function TurnHeader({
 				    shape as a mark rather than borrowing the word `Details`: the slot holds a
 				    time everywhere else, and a word there reads as a verb among values. */}
 				{dateText ? <time dateTime={timestamp}>{dateText}</time> : <ClockIcon size={12} />}
-				<ChevronDownIcon size={12} />
 			</button>
 			{label?.label !== undefined && (
 				<LabelChip buttonRef={labelRef} label={label.label} onOpen={() => setLabelEditing(true)} />

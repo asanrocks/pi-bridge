@@ -96,6 +96,21 @@
 //     states — prose described the alignment, and five copies of the arithmetic
 //     disagreed with it.
 //
+//   - Type comes from the one `--fs-*` scale, and a documented role keeps the step
+//     it was decided at. Type was the last styling dimension with no gate: the
+//     model picker's rows sat at `--fs-md` while the shared menu's sat at
+//     `--fs-sm` and the doc called "dropdowns" `--fs-lg`, so one role had three
+//     sizes and only a hand audit found it. A `font-size` is a scale token (or
+//     `inherit`, or a relative `em` inside a Markdown host), and the table in
+//     pass 1g pins the steps the Typography section names.
+//
+//   - The monospace face is an allowlist. It means "machine text" (code,
+//     terminal I/O, a path or URL, a git ref or status letter), and it stops
+//     meaning that the moment a count or a sentence borrows it — the changes
+//     badge's number, the thinking row's label, and the error line's English all
+//     did. Pass 1h holds every mono rule to `MONO_SITES`, which is also how a new
+//     one has to say what in that surface is machine text.
+//
 //   - The OS preference is the only theme trigger and index.css is its only
 //     branch site: `prefers-color-scheme` in any other sheet is an error. The
 //     app has no stored theme preference, so a second trigger would mean a
@@ -549,6 +564,138 @@ for (const [f, source] of css) {
 	if (source.includes(RETIRED_ROW_TOKEN)) {
 		errors.push(
 			`${f}: ${RETIRED_ROW_TOKEN} is retired — row identity is the accent tint at var(--row-selected-alpha), with var(--row-selected-hover-alpha) for its hover step`,
+		);
+	}
+}
+
+// ── Pass 1g: type comes from the one scale, and a role keeps its step ──────
+//
+// Type was the last styling dimension with no gate: the model picker's rows sat
+// at `--fs-md` while the shared menu's rows sat at `--fs-sm` and the doc called
+// "dropdowns" `--fs-lg`, so one role had three sizes and only a hand audit could
+// find it. Two rules close it — a size is a scale token, and the steps the
+// Typography section describes are pinned by name.
+
+// A Markdown host's internal sizes are a ratio of its own prose (a heading is
+// 1.875 of the size it inherits), so those files may state `em`; everywhere else
+// a size is a token.
+const RELATIVE_TYPE_FILES = ["app/index.css", "features/conversation/actions.module.css"];
+const FONT_SIZE = /(?:^|;|\s)font-size\s*:\s*([^;]+);/g;
+
+for (const [f, source] of css) {
+	const file = f.replace(/\\/g, "/");
+	const relativeOk = RELATIVE_TYPE_FILES.some((p) => file.endsWith(`/${p}`));
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const selector = (block[1].split("\n").map((s) => s.trim()).filter(Boolean).pop() ?? "").replace(/\s+/g, " ");
+		for (const decl of block[2].matchAll(FONT_SIZE)) {
+			const value = decl[1].trim();
+			if (/^var\(--fs-[a-z]+\)$/.test(value) || value === "inherit") continue;
+			if (relativeOk && /^[\d.]+em$/.test(value)) continue;
+			errors.push(
+				`${file}: ${selector} { font-size: ${value} } — sizes come from the --fs-* scale; relative em belongs to a Markdown host's own ratio (${RELATIVE_TYPE_FILES.join(", ")})`,
+			);
+		}
+	}
+}
+
+// The documented roles (docs/web/design.md, "Typography"). Each row says: this
+// control class takes this step, because the prose names it for that role. A
+// retune that moves the control to another step has to come here and say so,
+// which is what keeps the table and the prose from quietly disagreeing.
+const CONTROL_TYPE = [
+	["render/Dialog.module.css", ".primary", "--fs-md", "a dialog's verbs — the one worded step above the tier's --fs-xs"],
+	["render/AnchoredMenu.module.css", ".itemLabel", "--fs-sm", "a menu row"],
+	["render/AnchoredMenu.module.css", ".itemDetail", "--fs-xs", "a menu row's inline detail, one step below the label"],
+	["features/composer/ComposeCard.module.css", ".ledgerBody", "--fs-xs", "a ledger panel's rows, on the meta step every row takes"],
+	["features/composer/ComposeCard.module.css", ".composerControlRow", "--fs-xs", "the composer row's value readouts"],
+	["features/composer/ComposeCard.module.css", ".portalItemSelect", "--fs-sm", "the model picker's rows, which are menu rows"],
+	["features/composer/ComposeCard.module.css", ".portalSearchInput", "--fs-sm", "the picker's field: one step with the rows it filters"],
+	["features/conversation/turns.module.css", ".labelSave", "--fs-xs", "a worded verb in a row"],
+];
+
+const controlTypeSeen = new Set();
+for (const [f, source] of css) {
+	const file = f.replace(/\\/g, "/");
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const selector = (block[1].split("\n").map((s) => s.trim()).filter(Boolean).pop() ?? "").replace(/\s+/g, " ");
+		for (const [wantFile, wantSelector, token, role] of CONTROL_TYPE) {
+			if (!file.endsWith(`/${wantFile}`) || selector !== wantSelector) continue;
+			const decl = /(?:^|;|\s)font-size\s*:\s*([^;]+);/.exec(block[2]);
+			if (!decl) continue;
+			controlTypeSeen.add(`${wantFile}|${wantSelector}`);
+			if (decl[1].trim() !== `var(${token})`) {
+				errors.push(
+					`${file}: ${wantSelector} { font-size: ${decl[1].trim()} } — the documented step for ${role} is var(${token}) (docs/web/design.md, "Typography"); update CONTROL_TYPE if the role moved`,
+				);
+			}
+		}
+	}
+}
+for (const [wantFile, wantSelector, token, role] of CONTROL_TYPE) {
+	if (!controlTypeSeen.has(`${wantFile}|${wantSelector}`)) {
+		errors.push(
+			`${wantFile}: type row "${wantSelector} { font-size }" no longer exists — the documented step for ${role} is var(${token}); update CONTROL_TYPE in scripts/check-bridge-styling-tokens.mjs`,
+		);
+	}
+}
+
+// ── Pass 1h: the monospace face is machine text, and it is an allowlist ─────
+
+// Every rule that declares the mono face, with what in that surface is machine
+// text. A face is a claim about content: code, terminal I/O, a path or URL, a
+// git ref, a status letter. A count, a form label, or a sentence in the same
+// face makes the claim false for the whole app, so adding a use is a decision
+// recorded here rather than a declaration a reviewer has to notice.
+const MONO_SITES = [
+	["app/index.css", "pre, code, .mono", "code — Markdown/Streamdown bodies and the manual override"],
+	["app/SecureContextHint.module.css", ".rowValue", "the URL a secure-context capability depends on"],
+	["render/Dialog.module.css", ".value", "the path or URL a confirmation names"],
+	["features/composer/ComposeCard.module.css", ".completionItem", "the path completion offers"],
+	["features/conversation/actions.module.css", ".editDiff", "the edit diff"],
+	["features/conversation/actions.module.css", ".rowPreview", "the command a tool call runs"],
+	["features/conversation/actions.module.css", ".cardOutput", "command output"],
+	["features/conversation/actions.module.css", ".outputHint", "the elision line inside a terminal block"],
+	["features/conversation/actions.module.css", ".cardHeader", "the shell command line"],
+	["features/conversation/actions.module.css", ".toolEditOld", "a diff side"],
+	["features/conversation/actions.module.css", ".toolEditNew", "a diff side"],
+	["features/conversation/turns.module.css", ".userBashPrompt", "the user's shell prompt"],
+	["features/conversation/turns.module.css", ".systemRaw", "the raw system payload as JSON"],
+	["features/conversation/turns.module.css", ".errorAttrs", "error attribute values (status codes, ids)"],
+	["features/conversation/turns.module.css", ".gitActionMeta", "branch and short oid"],
+	["features/launcher/Launcher.module.css", ".rowCwd", "a project's working directory"],
+	["features/viewer/FileBrowser.module.css", ".treeStatus", "a file's status letter"],
+	["features/viewer/FileBrowser.module.css", ".fileBarPath", "the open file's path"],
+	["features/viewer/FileBrowser.module.css", ".sectionPath", "a diff section's path"],
+	["features/viewer/FileBrowser.module.css", ".fileNote", "the file's label and path"],
+	["features/viewer/FileBrowser.module.css", ".diffLines", "the diff body"],
+	["features/viewer/FileBrowser.module.css", ".stateChip", "a comparison endpoint (HEAD, Index, an oid)"],
+	["features/viewer/FileBrowser.module.css", ".pickerOptionLabel", "a comparison endpoint in the picker"],
+	["features/viewer/FileBrowser.module.css", ".comparePresetNote", "a preset's HEAD → Working tree range"],
+	["features/viewer/Viewer.module.css", ".viewerPath", "the viewed file's path"],
+	["dev/glyphs.module.css", ".name", "the dev glyph browser's export name (never built)"],
+];
+
+const monoSeen = new Set();
+for (const [f, source] of css) {
+	const file = f.replace(/\\/g, "/");
+	for (const block of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+		const decl = /(?:^|;|\s)font-family\s*:\s*([^;]+);/.exec(block[2]);
+		if (!decl || !/monospace/.test(decl[1])) continue;
+		const selector = (block[1].split("\n").map((s) => s.trim()).filter(Boolean).pop() ?? "").replace(/\s+/g, " ");
+		const row = MONO_SITES.find(([wantFile, wantSelector]) => file.endsWith(`/${wantFile}`) && selector === wantSelector);
+		if (!row) {
+			errors.push(
+				`${file}: ${selector} declares the mono face — it is reserved for code, terminal I/O, paths/URLs, and machine tokens (git refs, status letters); if this surface is one of those, add it to MONO_SITES with the reason, otherwise it is UI stack`,
+			);
+			continue;
+		}
+		monoSeen.add(`${row[0]}|${row[1]}`);
+	}
+}
+for (const [wantFile, wantSelector, reason] of MONO_SITES) {
+	if (!monoSeen.has(`${wantFile}|${wantSelector}`)) {
+		errors.push(
+			`${wantFile}: mono row "${wantSelector} { font-family }" no longer exists (${reason}) — update MONO_SITES in scripts/check-bridge-styling-tokens.mjs`,
 		);
 	}
 }

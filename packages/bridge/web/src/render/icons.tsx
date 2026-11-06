@@ -389,16 +389,18 @@ export const PlusIcon = memo(function PlusIcon(props: IconProps) {
  * the badge counting files that differ from HEAD. The fork joins the trunk above
  * the trunk's own node, the way a branch actually leaves a line, so the two
  * nodes stay separate marks instead of the curve ending in a lump. Nodes are
- * filled dots: a 1.5px ring at the 12px slot closes its own hole, and a dot only
- * slightly wider than the stroke reads as a fat line end rather than a node, so
- * they are deliberately half again the stroke's width. */
+ * filled dots: a 1.25px stroke is too thin to close its own hole at the 12px
+ * slot, and a dot only slightly wider than the stroke reads as a fat line end
+ * rather than a node, so they are deliberately twice the stroke's width. The art
+ * fills the 12x12 live area (2..14), because a mark drawn smaller reads as a
+ * size bug beside text even when nothing is clipped. */
 export const BranchIcon = memo(function BranchIcon(props: IconProps) {
 	return (
 		<OutlineIcon {...props}>
-			<path d="M4.8 3.9v6.3" />
-			<path d="M11.2 5.7C11.2 7.8 8.6 9.2 4.8 9.2" />
-			<circle cx="4.8" cy="11.4" r="1.4" fill="currentColor" stroke="none" />
-			<circle cx="11.2" cy="4.3" r="1.4" fill="currentColor" stroke="none" />
+			<path d="M4.1 3.2v7.7" />
+			<path d="M11.9 5.8C11.9 7.9 8.7 9.6 4.1 9.6" />
+			<circle cx="4.1" cy="12.3" r="1.7" fill="currentColor" stroke="none" />
+			<circle cx="11.9" cy="3.8" r="1.7" fill="currentColor" stroke="none" />
 		</OutlineIcon>
 	);
 });

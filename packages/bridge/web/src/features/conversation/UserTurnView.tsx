@@ -19,11 +19,6 @@ import { TurnHeader } from "./TurnHeader.tsx";
 import { userTurnDetails } from "./turnDetails.ts";
 import styles from "./turns.module.css";
 
-/** Abbreviated commit id for a menu detail line. */
-function shortOid(oid: string): string {
-	return oid.slice(0, 8);
-}
-
 export const UserTurnView = memo(function UserTurnView({
 	turn,
 	entriesRef,
@@ -70,10 +65,15 @@ export const UserTurnView = memo(function UserTurnView({
 		[turn.timestamp, turn.thoughtForMs, turn.gitIdentity, turn.gitCommitSubject],
 	);
 
-	// The reviewable pairs stay explicit: the turn's observed commits (or one
+	// The reviewable windows stay explicit: the turn's observed commits (or one
 	// union window), plus the live tail's comparison against the current
-	// worktree. No open-ended "next commit" window is inferred, so the menu
-	// never claims turn-scoped changes git cannot know.
+	// worktree. No open-ended "next commit" window is inferred, so the menu never
+	// claims turn-scoped changes git cannot know.
+	//
+	// Every row is a verb and its object — the row is a command, so it reads as
+	// one. The endpoint pair is not repeated here: an oid pair in a 12px row is
+	// 17 characters the reader cannot use, and the browser this opens names both
+	// endpoints in its own header.
 	const gitItems = useMemo<MenuItem[]>(() => {
 		const items: MenuItem[] = [];
 		const first = transitions[0];
@@ -82,23 +82,20 @@ export const UserTurnView = memo(function UserTurnView({
 			items.push({
 				key: "all",
 				label: `Review all ${transitions.length} commits`,
-				detail: `${shortOid(first.old)} → ${shortOid(last.new)}`,
 				onSelect: () => openDiffView({ old: first.old, new: last.new }, turn.text),
 			});
 		}
-		for (const t of transitions) {
+		for (const [index, t] of transitions.entries()) {
 			items.push({
 				key: t.entryId,
-				label: t.subject ?? `Review ${shortOid(t.new)}`,
-				detail: `${shortOid(t.old)} → ${shortOid(t.new)}`,
+				label: `Review ${t.subject ?? `commit ${index + 1}`}`,
 				onSelect: () => openDiffView({ old: t.old, new: t.new }, t.subject ?? turn.text),
 			});
 		}
 		if (isLiveTail && baseline !== null) {
 			items.push({
 				key: "worktree",
-				label: "Compare with the current worktree",
-				detail: `${shortOid(baseline)} → working tree`,
+				label: "Compare with worktree",
 				onSelect: () => openDiffView({ old: baseline, new: "worktree" }, turn.text),
 			});
 		}

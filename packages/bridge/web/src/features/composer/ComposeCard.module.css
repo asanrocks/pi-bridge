@@ -438,29 +438,29 @@
 
 /* Narrow: compact control row, hide non-essential metrics. Mobile and
    desktop keep the same element order (ledger | model, send) — only the
-   presentation changes: bar hidden, model name swapped for the fixed
-   "Models" label. */
+   presentation changes: bar hidden, model name clipped.
+
+   The clip keeps the name's own words: a fixed "Models" label told the row
+   nothing, while a name's leading token (its family) is what identifies the
+   model at a glance. The tail — version, thinking suffix — is what an ellipsis
+   eats, so the thinking part drops here instead of dangling half-cut; the
+   picker's own toggle still shows it. */
 @media (max-width: 640px) {
 	.composerContextBar {
 		display: none;
 	}
 
-	.composerModelBtn {
-		font-size: var(--fs-xs);
-		padding: 4px 8px;
-		min-height: 32px;
-	}
-
-	.composerModelName {
+	.composerModelMuted {
 		display: none;
 	}
 
-	.composerModelMobileLabel {
-		display: inline;
+	.composerModelName {
+		/* `em`, not `rem`: the cap has to follow `--ui-scale` with the label's
+		   own `--fs-xs` size, or a reader scale clips a shorter word. */
+		max-width: 8em;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
-
-	/* Primary CTAs keep their 36px tap target on mobile; only the
-	   secondary model button shrinks for density. */
 }
 
 .composerControlLeft {
@@ -478,25 +478,49 @@
 	flex-shrink: 0;
 }
 
+/* ── The row's value readouts ──────────────────────────────────────────── */
+
+/* One box for the row's two value readouts — cost and model. The words
+   are the value, so the box is the row's small step (28, the same box as the
+   attach and microphone squares) rather than a box of the readout's own: the
+   model picker carried a 32px box and a `--fs-sm` label beside a 26px ledger,
+   which left three heights in a strip that reads as one line, and a caret pair
+   at two optical sizes. Send and Stop are now the row's only boxes of their own
+   size.
+
+   `position: relative` is for the coarse-pointer target below. */
+.composerValueBtn {
+	position: relative;
+	font: inherit;
+	padding: 4px 6px;
+	min-height: 28px;
+	white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+	/* Touch grows the target, never the border box (design.md): the row's own 8px
+	   gap, split between the two controls that share it, takes the 28px box to
+	   36 without repainting the control or lifting the row. */
+	.composerValueBtn::after {
+		content: "";
+		position: absolute;
+		inset: -4px;
+	}
+}
+
 /* ── Cost button (token-breakdown popover) — session ledger ────────────── */
 
 .composerCostBtn {
 	composes: dim from "../../render/buttons.module.css";
-	gap: 3px;
-	font: inherit;
-	padding: 4px 6px;
-	white-space: nowrap;
+	composes: composerValueBtn;
 }
 
-.composerCostChevron {
-	display: inline-flex;
-	color: var(--color-muted-foreground);
-}
+/* ── Cost ledger — the readout's panel ────────────────────────────────── */
 
-/* The ledger's body: block content, not rows, so it owns the inner padding the
-   shared panel does not carry, plus its own type. The panel itself is the
-   shared overlay surface (render/Popover.module.css). */
-.costBody {
+/* The ledger anatomy: a body that owns the inner padding the shared panel does
+   not carry, hairline-separated sections, and key/value rows on the meta step
+   (--fs-xs, the step every row in a ledger takes). */
+.ledgerBody {
 	padding: 4px 8px;
 	font-size: var(--fs-xs);
 	color: var(--color-secondary);
@@ -504,50 +528,50 @@
 	line-height: 1.6;
 }
 
-.costPopoverHeader {
+.ledgerHeader {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
 	gap: 12px;
 }
 
-.costPopoverLabel {
+.ledgerLabel {
 	color: var(--color-muted-foreground);
 }
 
-.costPopoverTotal {
+.ledgerValue {
 	color: var(--color-primary);
 	font-weight: 600;
 }
 
-.costPopoverModels {
+/* The next section: a hairline in the panel's own edge color, like every other
+   in-panel edge. */
+.ledgerSection {
 	margin-top: 6px;
 	padding-top: 6px;
 	border-top: 1px solid var(--color-border);
+}
+
+.ledgerRows {
 	display: flex;
 	flex-direction: column;
 }
 
-.costPopoverModelRow {
+.ledgerRow {
 	display: flex;
 	align-items: baseline;
 	justify-content: space-between;
 	gap: 12px;
 }
 
-.costPopoverModelKey {
+/* A model id is prose-shaped chrome, not code: the monospace stack is for code,
+   terminal I/O, and paths (Typography). The picker rows keep the UI stack. */
+.ledgerKey {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
 
-.costPopoverModelCost {
-	color: var(--color-muted-foreground);
-}
-
-.costPopoverTokens {
-	margin-top: 6px;
-	padding-top: 6px;
-	border-top: 1px solid var(--color-border);
+.ledgerNote {
 	color: var(--color-muted-foreground);
 }
 
@@ -580,38 +604,26 @@
 /* ── Model picker button ──────────────────────────────────────────────── */
 
 /* A value control: the label is the model name, so the glyph budget is one
-   chevron and the words stay. */
+   chevron and the words stay. Same box as the ledger it sits beside
+   (`.composerValueBtn`); its ink is the tier's own rest step because the model
+   in force is a value, not meta. */
 .composerModelBtn {
 	composes: ghost from "../../render/buttons.module.css";
+	composes: composerValueBtn;
 	gap: 4px;
 	color: var(--color-foreground);
-	font-size: var(--fs-sm);
-	font-family: inherit;
-	padding: 6px 10px;
-	min-height: 32px;
-	white-space: nowrap;
 }
 
 .composerModelMuted {
 	color: var(--color-muted-foreground);
 }
 
+/* The label is a model id, which is a name rather than code, so it takes the UI
+   stack like any other control chrome (Typography). Narrow rows clip it
+   (`text-overflow`) rather than renaming it; the button's `title` carries the
+   whole name for a hover on a narrow desktop window. */
 .composerModelName {
 	white-space: nowrap;
-}
-
-/* Mobile label for the model button. The full model name is unusable on a
-   narrow row (no useful truncation point; mid-word ellipsis carries no
-   information) and mobile use is read/monitor, so the button swaps to this
-   fixed, self-describing label. Both spans always render; the media query
-   toggles which is visible — no JS breakpoint plumbing. */
-.composerModelMobileLabel {
-	display: none;
-}
-
-.composerModelChevron {
-	display: inline-flex;
-	color: var(--color-muted-foreground);
 }
 
 /* ── Send / Stop ─────────────────────────────────────────────────────── */
@@ -710,6 +722,7 @@
 }
 
 /* ── ThinkingLevelRow — pill toggle inside the model picker portal ──── */
+/* A form control's label ("Thinking") and a level word: UI stack. */
 .thinkingLevelRow {
 	display: flex;
 	align-items: center;
@@ -717,7 +730,6 @@
 	padding: 8px 10px;
 	border-bottom: 1px solid var(--color-border);
 	font-size: var(--fs-sm);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	color: var(--color-muted-foreground);
 	user-select: none;
 }
@@ -857,7 +869,7 @@
 	background: var(--color-muted);
 	color: var(--color-foreground);
 	border: 1px solid var(--color-border);
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	padding: 4px 8px;
 	border-radius: var(--radius-sm);
@@ -893,7 +905,7 @@
 	width: 100%;
 	text-align: left;
 	padding: 4px 10px 4px 16px;
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	color: var(--color-muted-foreground);
 	background: none;
@@ -915,6 +927,10 @@
 	user-select: none;
 }
 
+/* `--fs-sm` is the menu-row step — `render/AnchoredMenu` and this portal's own
+   thinking row take it. The picker's rows were `--fs-md`, one step above the
+   trigger label they open from and above every other menu row in the app, which
+   made the panel read as a page of content rather than a list of choices. */
 .portalItemSelect {
 	flex: 1;
 	min-width: 0;
@@ -923,7 +939,7 @@
 	gap: 6px;
 	text-align: left;
 	padding: 4px 0 4px 16px;
-	font-size: var(--fs-md);
+	font-size: var(--fs-sm);
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 	color: var(--color-foreground);
 	background: none;

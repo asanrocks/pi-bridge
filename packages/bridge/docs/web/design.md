@@ -542,15 +542,25 @@ automatically close on turn completion.
 
 The session control row contains context percentage and bar, a read-only cost
 ledger popover, model and thinking controls, Send, and Stop. The context bar
-is hidden below 640px and the model name becomes the fixed `Models` label;
-otherwise control order is shared between desktop and mobile. Send is disabled
+is hidden below 640px and the model name is clipped to an 8em box with an
+ellipsis, its thinking suffix dropping with the tail; otherwise control order
+is shared between desktop and mobile. The clip is a truncation, never a
+substitute label: the row keeps the name it was given, so its leading token
+still says which family (`Claude…`, `GPT…`, `DeepSeek…`) is in force, and the
+button's `title` carries the whole name. Send is disabled
 when disconnected, empty, compacting, or already committing, but is enabled
 during streaming to queue a steer. Model and thinking selection are separate
 from Send and can be changed while connected. Send and Stop are the row's only
 filled controls and the client's only two; every other control in the row is
 chromeless — the glyph-only ones compose `ghost` or `dim`, and the model and
-cost readouts hold their value (see
+cost readouts are value disclosures: their words are the whole control, with no
+caret beside them, because a text control carries no glyph (see
 [Iconography and control surfaces](#iconography-and-control-surfaces)).
+The two readouts share one box, `.composerValueBtn`: 28px, the same step as the
+attach and microphone squares, holding `--fs-xs` words and nothing else — so
+Send and Stop at 32 are the row's only boxes of their own size. On a coarse
+pointer that box keeps its 28px and a transparent overlay of the row's own gap carries
+the target to 36, the rule the chip category follows.
 
 When the tail turn is broken — it ended in an error after retries were
 exhausted, was stopped (a user Stop or a session close mid-run, which leave
@@ -634,20 +644,24 @@ accent so both are legible where they share ancestors.
 ### Git affordances
 
 Repository evolution has three discovery surfaces, one per question the user
-asks, and no separate timeline pane. Each names its endpoint pair explicitly;
-none infers a turn-scoped window git cannot know.
+asks, and no separate timeline pane. Each opens the browser on an explicit
+endpoint pair; none infers a turn-scoped window git cannot know.
 
 - **The turn menu** carries the review windows for a user turn: the commits
-  observed during the turn (`UserTurn.gitTransitions`): a stamp whose commit
-  differs from the previously observed one, attributed to the turn open at its
-  path position — a prompt stamp is persisted before the message it labels, so
+  observed during the turn (`UserTurn.gitTransitions`). Each row is a verb and
+  its object — `Review all 3 commits`, `Review <subject>`, `Compare with
+  worktree` — because the row is a command and reads as one; the endpoint pair
+  belongs to the browser's header, which names both ends, not to a 12px row
+  where an abbreviated oid pair is seventeen characters the reader cannot use.
+  The rows name observed identity transitions: a stamp whose commit differs
+  from the previously observed one, attributed to the turn open at its path
+  position — a prompt stamp is persisted before the message it labels, so
   it closes the previous turn while its identity becomes the next turn's
   baseline. A turn with several commits also offers one union window from the
   first transition's old commit to the last one's new commit. The live path's
-  last user turn additionally offers **Compare with the current
-  worktree** (its send state → `worktree`), the honest form of "what happened
-  since this prompt" — it is a sampling point, so the browser marks it `as of`
-  and refetches on settle. Earlier turns and peeked paths offer no worktree
+  last user turn additionally offers **Compare with worktree** (its send state
+  → `worktree`), the honest form of "what happened since this prompt" — it is a
+  sampling point, so the browser marks it `as of` and refetches on settle. Earlier turns and peeked paths offer no worktree
   item, because comparing them to the current worktree would silently span
   other turns. The turn's own identity at send (branch and short commit, with
   the commit subject) is a row in its
@@ -860,9 +874,10 @@ label a user one), so neither competes for the other's width. Two rules make it
 hold at every width.
 
 - **The date is the statistics disclosure.** It renders the shared relative /
-  calendar time ladder as a value readout — chromeless ink plus a caret, the
-  same classification as the composer's cost readout — and opens a read-only
-  ledger (`role="dialog"`, anchored, width-capped, body scrolls) of
+  calendar time ladder as a value readout — chromeless text, no caret, the same
+  classification as the composer's cost readout, with `aria-expanded` and the
+  hover fill as the only marks — and opens a read-only ledger (`role="dialog"`,
+  anchored, width-capped, body scrolls) of
   hairline-separated sections, each a list of labelled rows. Assistant turns
   show three sections: the producer (`Model`, `Provider` — as separate rows,
   because composing them into one string duplicates the provider that many
@@ -1041,16 +1056,30 @@ are no `--font-*` tokens):
   Helvetica, Arial, sans-serif`. The document body, composer, and all control
   chrome.
 - **Literal text:** `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-  monospace`. Reserved for code, terminal I/O, file paths, and model names —
-  never for labels or prose.
+  monospace`. Reserved for code, terminal I/O, file paths and URLs, and machine
+  tokens (git refs and short oids, status letters) — never for labels, prose,
+  names, or counts: a count in mono, an error sentence in mono, or a setting's
+  `Off · global setting` in mono makes the face stop meaning machine text, and
+  each of those was in the app until the face became an allowlist. A model id is
+  a name, not code: the composer's model label, the picker's rows, and the cost
+  ledger's per-model keys are UI-stack chrome, like the picker's search field and
+  its `More…` verb. `check-bridge-styling-tokens.mjs` holds the face to its
+  `MONO_SITES` table, so a new mono rule has to name what in that surface is
+  machine text.
 
 Sizes come from the five-step `--fs-*` token scale: `--fs-xs` (11px — meta,
-group headers), `--fs-sm` (12px — action summaries, sidebar rows), `--fs-md`
-(13px — small body, code, card content), `--fs-lg` (14px — empty states,
-dropdowns), `--fs-xl` (16px — body and composer, the reading baseline). The
+group headers), `--fs-sm` (12px — action summaries, sidebar rows, menu rows
+including the model picker's), `--fs-md` (13px — small body, code, card
+content), `--fs-lg` (14px — empty states, the path-completion dropdown), `--fs-xl`
+(16px — body and composer, the reading baseline). The
 mobile breakpoint drops only `--fs-xl` to 14px; Markdown inline content scales
 relatively (see the inline-scale invariant below).
-
+`check-bridge-styling-tokens.mjs` holds both ends of this: a `font-size` must be
+a scale token (or `inherit`, or a relative `em` inside a Markdown host), and the
+steps this section names for a role — a menu row, a dialog's verbs, the
+composer row's readouts, a worded verb in a row — are pinned in its
+`CONTROL_TYPE` table, so moving a control to another step is a recorded
+decision rather than a silent drift.
 Markdown list indentation is one of those relative sizes: per-level marker
 clearance in `em` (`--list-indent` 1.5em, `--list-indent-nested` 1.15em in
 `index.css`), applied by one rule on Streamdown's list markers with `outside`
@@ -1289,11 +1318,12 @@ after the scenario has named the control. The paragraphs that follow are that
 detail, in the order a control is built: the glyph set, the box, the tiers'
 ink, and the floating category's placement rules.
 
-A control is a hit target carrying one glyph, plus a label when it needs words.
-A glyph-only control paints no background and no border at rest, so its only ink
-is the symbol; a control that carries words takes a boundary, because a word has
-nothing else marking it as actionable. Chrome that exists to announce
-clickability competes with `--color-border`'s single job — hairlines between
+A control is a hit target carrying one glyph **or** one label, never both: the
+two are alternative ways of saying what the control is, and a control that wears
+both says it twice. A glyph-only control paints no background and no border at
+rest, so its only ink is the symbol; a control that carries words takes a
+boundary, because a word has nothing else marking it as actionable. Chrome that
+exists to announce clickability competes with `--color-border`'s single job — hairlines between
 surfaces — so the boundary a control may own is the outlined tier's
 `--color-border-control` and nothing else.
 
@@ -1332,7 +1362,11 @@ header is the registry (role, glyph, one sentence each), exports are named
   12 for meta marks (chip marks, section carets, a chevron beside a short
   label), 14 in compact control rows (card toolbars and turn headers, row menus), 16 for
   full-size icon controls (composer row, dialog and portal actions, the
-  fullscreen viewer's close), 20 for chrome (TopBar and pane-header toggles). A
+  fullscreen viewer's close), 20 for chrome (TopBar and pane-header toggles).
+  "The row" outranks "the label": a mark that leads words takes its row's slot,
+  not the words' step — the changes badge's branch is a 20px mark in a pill of
+  `--fs-xs` words, because the pill is a TopBar sibling and a meta-sized mark
+  beside 20px neighbours reads as a clipped glyph. A
   feature picks a slot, never a number; 11, 13, and 18 are drift, and so is a
   per-call-site size.
 - **Two ink modes, assigned by family.** Outline is the default. Solid is a
@@ -1423,15 +1457,25 @@ header is the registry (role, glyph, one sentence each), exports are named
   inherited it would be recessed in one theme by construction; the gate asserts
   both that `--color-popover-bg` aliases `--color-surface-raised` and that the
   raised tier stays lighter than the page in each theme. What a consumer adds is
-  content, not chrome: **action rows** (a label, an optional detail line, a hover
-  fill, `role="menu"` with `menuitem` children) or a **read-only ledger**
-  (labelled sections and key/value rows at `--fs-xs`, `role="dialog"` with a
-  name, no focus management). The ledger owns its inner padding in a body
-  wrapper rather than widening the panel, and in-panel separators are
-  `--color-border` like every other in-panel edge. The History pane's superseded
-  list composes the shared surface (`composes: surface`) while keeping its own
-  position: it is an in-flow disclosure inside the scrolling content, so it comes
-  from row pitch and scrolls with the rows instead of hanging in the viewport.
+  content, not chrome: **action rows** (one line: a label and an optional inline
+  detail at `--fs-sm` and `--fs-xs`, a hover fill, `role="menu"` with `menuitem`
+  children; an unavailable row keeps its place with `aria-disabled` so its
+  detail can name the reason — touch has no tooltip) or a **ledger** (labelled
+  sections and key/value rows at `--fs-xs`, `role="dialog"` with a name, no
+  focus management, and at most one `role="switch"` row).
+  A row is one line because the item count is the line count: a wrapped label
+  over a detail line renders as three rows, and a four-item menu was read as
+  six. There is no checkable row. A state that a press *changes* is an instant
+  effect, and a `menuitemcheckbox`'s only cue is a mark that is absent when the
+  setting is off — so an off toggle looks exactly like a command, which is
+  NN/g's toggle-switch anti-pattern ("separate controls that produce instant
+  results from those that require clicking a command button"). The ARIA menu
+  pattern leaves no middle ground: menu children are `menuitem*`, so a setting
+  belongs in a `role="switch"` row of a dialog ledger instead. The ledger owns
+  its inner padding in a body wrapper rather than widening the panel, and
+  in-panel separators are `--color-border` like every other in-panel edge. The History
+  pane's superseded list composes the shared surface (`composes: surface`) while
+  keeping its own position: it is an in-flow disclosure inside the scrolling content, so it comes
   This assumes the client's browser floor (`anchor()`, `subgrid`, `color-mix()`,
   cascade layers) — a 2026 baseline, not a 2021 one.
 - **Nothing in the document is a font glyph.** No emoji, and no geometric
@@ -1449,6 +1493,21 @@ header is the registry (role, glyph, one sentence each), exports are named
 - **A glyph carries no words.** An icon-only control carries `aria-label` and
   its `<svg>` is `aria-hidden`. Never both: `role="img"` with an `aria-label`
   inside an already-labelled button announces the control twice.
+- **A worded control carries no glyph.** The converse, and the rule the value
+  readouts broke: a text-based control is text and nothing else — no leading
+  mark, no trailing caret, no badge glyph. A wording control's marks are the
+  hover fill, `aria-expanded`, and its own boundary where the tier gives it one
+  (the outlined tier, because a word cannot mark itself actionable). Two glyphs
+  are content rather than decoration and stay: a **fold caret**, whose direction
+  *is* the open/closed state — `sidebarSectionToggle`, the folder row, a tool
+  card's fold, expand-all-lines, the output cap, load-more — and a glyph that
+  carries the **value's own meaning** where the text cannot: the unknown
+  instant's clock, and the branch mark that names what the uncommitted count
+  counts. A chip or readout that states a value and decorates it with a chevron
+  says the value twice, and the cheaper half never carried information.
+  `check-bridge-icon-contract.mjs` holds the line: a recorded text control
+  (`TEXT_CONTROLS`) may not render an `<…Icon>` unless its glyph is one of the
+  named content cases (`TEXT_GLYPH_OK`).
 
 **State is ink, not chrome.** A ghost control — and the outlined tier, which
 composes it — has five states and one ink channel each:
@@ -1566,7 +1625,7 @@ states:
 | Tier | Shape | When |
 | --- | --- | --- |
 | ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn header's Copy |
-| `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's chevrons, the topbar's changes badge |
+| `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's fold carets, the topbar's changes badge |
 | `quiet` | `dim` without the hover fill | the one text control that is a label rather than a verb — the `Projects` fold-all toggle |
 | outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
 | filled | accent fill, `--color-on-accent` | the primary command *of the surface* — Send, Stop, `Retry now`, a dialog's confirm, the compare menu's `Apply` |
@@ -1583,8 +1642,13 @@ fails a `<button>` whose class resolves to none of them, unless its class is in
 the gate's role table (backdrop, row, menu item, fold header, chip, floating
 control, inline link) with the reason — and it fails a `<button>` whose own
 children are literal words but which composes the chromeless tier instead of
-`outlined`/`filled`. That second check is what the earlier sweeps lacked: a text
-control that composes no box at all is either a declared role or a bug, and
+`outlined`/`filled`. The one sanctioned worded chromeless control is the **value
+disclosure** — a readout whose words *are* a value (the composer's model and
+cost, the turn's date, the comparison chip, the uncommitted count) and not a
+verb; those are recorded in the gate (`TEXT_VALUE_OK`, `TEXT_CONTROLS`) and, by
+the rule above, carry no glyph of their own. That second check is what the
+earlier sweeps lacked: a text control that composes no box at all is either a
+declared role or a bug, and
 `review`/`file` were the bug. The same gate closes the filled family (a file
 composes `filled` only when the gate's allowlist records the command it is the
 primary of, and a stale entry fails) and gives the chip's edge one home
@@ -1947,9 +2011,9 @@ The principal breakpoint is 768px for docked panes. Below it:
 - The body font token drops from 16px to 14px, while the relative Markdown
   scale preserves hierarchy.
 - The composer keeps the same element order but hides the context bar and
-  replaces the live model label with `Models`. Primary Send and Stop targets
-  retain their touch size. The model picker flips below its anchor when there
-  is insufficient space above.
+  clips the live model label to its first characters with an ellipsis. Primary
+  Send and Stop targets retain their touch size. The model picker flips below
+  its anchor when there is insufficient space above.
 - Hover-only card controls become visible on touch-capable inputs, and
   coarse-pointer targets grow. Safe-area insets protect overlays, the drawer,
   and the fixed composer from notches and the home indicator.

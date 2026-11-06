@@ -10,7 +10,6 @@
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDownIcon } from "../../render/icons.tsx";
 import { Popover } from "../../render/Popover.tsx";
 import type { DiffStateOption } from "./diffStates.ts";
 import styles from "./FileBrowser.module.css";
@@ -57,7 +56,6 @@ export function StatePicker({
 				title={title}
 			>
 				<span className={styles.stateChipLabel}>{label}</span>
-				<ChevronDownIcon size={12} />
 			</button>
 			{open && (
 				<Popover

@@ -76,13 +76,13 @@
    vertical padding it was a ~24px chip, and a short pill next to two square
    buttons read as a different class of control — a badge rather than the git
    toggle it is. Width stays content-driven because it holds a value, so the
-   height and the corners are what make it a sibling. */
+   height and the corners are what make it a sibling — and so does the branch
+   mark's 20 slot: the label is a meta step, but the mark is sized by the row. */
 .changesBadge {
 	composes: dim from "../../render/buttons.module.css";
 	gap: 2px;
 	height: var(--topbar-row);
 	font-size: var(--fs-xs);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	padding: 0 8px;
 	white-space: nowrap;
 }
