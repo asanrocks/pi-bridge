@@ -43,6 +43,40 @@ afterEach(async () => {
 });
 
 describe("lifecycle trace", () => {
+	it("a full turn through the real runtime lands the queue busy, then notified (ADR 22)", async () => {
+		const d = await startTraceDaemon(["trace-queue"], { tokensPerSecond: 200 });
+		daemons.push(d);
+		d.setResponses([fauxAssistantMessage("the streamed answer")]);
+		resetStoreState();
+		const tc = await connectClient(d.port);
+		clients.push(tc);
+		await openAndCommit(d.projectId, "trace-queue");
+
+		const reply = await tc.client.prompt("hello");
+		expect(reply.ok).toBe(true);
+
+		// Admission landed busy in the durable queue — the wire, the actor
+		// relay, and the store all agree while the turn still streams.
+		let sawBusy = false;
+		for (let i = 0; i < 200 && !sawBusy; i++) {
+			if ((await d.daemon.listQueue()).some((row) => row.state === "busy")) sawBusy = true;
+			else await new Promise((r) => setTimeout(r, 5));
+		}
+		expect(sawBusy).toBe(true);
+
+		await waitFor(() => !getStore().getState().document.status.isStreaming, "the turn to settle");
+		const settledQueue = await d.daemon.listQueue();
+		expect(settledQueue).toHaveLength(1);
+		expect(settledQueue[0].state).toBe("notified");
+
+		// Defer through the wire verb: the queue is user-togglable once the
+		// execution settled.
+		const defer = await tc.client.setSessionState(d.projectId, "trace-queue", "deferred");
+		expect(defer.ok).toBe(true);
+		const deferred = await d.daemon.listQueue();
+		expect(deferred[0].state).toBe("deferred");
+	});
+
 	it("attach, stream, and seal converge: the mirror projects the canonical Document", async () => {
 		const d = await startTraceDaemon(["trace-a"]);
 		daemons.push(d);

@@ -52,6 +52,7 @@ function gatedStub(sessionId: string, sessionFile: string, opts?: { holdDispose?
 		createdAt: new Date(0).toISOString(),
 		onPatch: () => () => {},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		addConnection(handle: ConnectionHandle, session: Parameters<Manager["addConnection"]>[1]) {
@@ -146,6 +147,7 @@ function makeHarness(): Harness {
 		idleGcMs: 60_000,
 		unflushedIdleGcMs: 60_000,
 		onSettled: () => {},
+		onFullySettled: () => {},
 		onStreamingChange: () => {},
 		onRegistryChange: () => {},
 	});

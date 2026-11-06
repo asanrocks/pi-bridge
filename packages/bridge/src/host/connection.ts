@@ -209,7 +209,7 @@ export class Connection {
 		return this.transitions.close();
 	}
 
-	/** Push a daemon-originated frame (sessions_changed / active_sessions_changed). */
+	/** Push a daemon-originated frame (sessions_changed / queue_changed). */
 	push(frame: Record<string, unknown>): void {
 		this.send(frame);
 	}

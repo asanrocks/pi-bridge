@@ -255,8 +255,12 @@ export async function serveWorkerConnection(
 					)) as unknown as JsonValue,
 				);
 				return;
-			case "listActiveSessions":
-				replyOk(request.id, (await service.listActiveSessions()) as unknown as JsonValue);
+			case "listQueue":
+				replyOk(request.id, (await service.listQueue()) as unknown as JsonValue);
+				return;
+			case "setSessionState":
+				await service.setSessionState(request.address, request.state);
+				replyOk(request.id, null);
 				return;
 			case "info":
 				replyOk(request.id, (await service.info()) as unknown as JsonValue);

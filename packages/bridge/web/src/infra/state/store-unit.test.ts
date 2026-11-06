@@ -14,8 +14,7 @@ function session(stem: string): SessionInfo {
 		projectId: "proj",
 		sessionId: `sess-${stem}`,
 		stem,
-		active: false,
-		isStreaming: false,
+		state: "inactive" as const,
 		timestamp: new Date(0).toISOString(),
 	};
 }
@@ -63,10 +62,10 @@ describe("clearCurrentSession", () => {
 		expect(s.document.entries).toEqual({});
 	});
 
-	it("keeps the static Project list and the global active snapshot", () => {
+	it("keeps the static Project list and the global queue", () => {
 		const store = createClientStore();
 		store.getState().setProjects([{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]);
-		store.getState().setActiveSessions([session("a")]);
+		store.getState().setQueue([session("a")]);
 		openAndDirty(store);
 
 		store.getState().clearCurrentSession();
@@ -74,7 +73,7 @@ describe("clearCurrentSession", () => {
 		expect(store.getState().projects).toEqual([
 			{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null },
 		]);
-		expect(store.getState().activeSessions).toHaveLength(1);
+		expect(store.getState().queue).toHaveLength(1);
 	});
 
 	it("resets the alias view (ADR 13)", () => {

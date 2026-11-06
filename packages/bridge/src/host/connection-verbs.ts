@@ -48,6 +48,7 @@ import type {
 	SessionRef,
 	SetLabelRequest,
 	SetPinnedModelsRequest,
+	SetSessionStateRequest,
 	SnapshotFile,
 	TextPolishReply,
 	TextPolishRequest,
@@ -102,8 +103,17 @@ export interface DaemonVerbs {
 		max?: number,
 		cursor?: SessionListCursor | null,
 	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
-	/** Global active/streaming snapshot. */
-	listActiveSessions: () => Promise<SessionInfo[]>;
+	/** The global work queue (ADR 22): the non-inactive snapshot, ordered
+	 * notified → busy → deferred, then last activity descending. */
+	listQueue: () => Promise<SessionInfo[]>;
+	/** The user's defer/restore toggle (ADR 22). Refused while the session is
+	 * busy; legal on a dormant session. The queue change arrives as a
+	 * `queue_changed` push. */
+	setSessionState: (
+		projectId: string,
+		stem: string,
+		state: "notified" | "deferred",
+	) => Promise<{ ok: boolean; error?: string }>;
 	/** Resolve-or-activate `(projectId, stem)` and attach this Connection. */
 	openSession: (
 		projectId: string,
@@ -348,8 +358,16 @@ const daemonVerbs: Record<string, VerbHandler> = {
 		if (result.nextCursor) reply.nextCursor = result.nextCursor;
 		ctx.send(reply);
 	},
-	listActiveSessions: async (ctx, msg) => {
-		ctx.send({ id: msg.id, ok: true, sessions: await ctx.daemonVerbs.listActiveSessions() });
+	listQueue: async (ctx, msg) => {
+		ctx.send({ id: msg.id, ok: true, sessions: await ctx.daemonVerbs.listQueue() });
+	},
+	setSessionState: async (ctx, msg) => {
+		const m = msg as unknown as SetSessionStateRequest;
+		if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
+		if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
+		if (m.state !== "notified" && m.state !== "deferred") throw new Error("Invalid `state`");
+		const result = await ctx.daemonVerbs.setSessionState(m.projectId, m.stem, m.state);
+		ctx.reply(msg.id, result.ok, result.error);
 	},
 	getDaemonInfo: async (ctx, msg) => {
 		const info = await ctx.daemonVerbs.getDaemonInfo();

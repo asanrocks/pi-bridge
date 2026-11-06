@@ -338,6 +338,7 @@ describe("initial sync: subscription reset", () => {
 			createdAt: new Date(0).toISOString(),
 			onPatch: () => () => {},
 			onSettled: () => () => {},
+			onFullySettled: () => () => {},
 			activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 			onActivityChange: () => () => {},
 			addConnection(handle) {
@@ -467,13 +468,13 @@ describe("initial sync: session listing identity", () => {
 
 		const reply = (await waitForFrame(frames, (f) => (f as { id?: string }).id === "1")) as {
 			ok: boolean;
-			sessions: Array<{ projectId: string; sessionId: string; stem: string; active: boolean }>;
+			sessions: Array<{ projectId: string; sessionId: string; stem: string; state: string }>;
 		};
 		expect(reply.ok).toBe(true);
 		expect(reply.sessions.length).toBe(1);
 		expect(reply.sessions[0].projectId).toBe(projectId);
 		expect(reply.sessions[0].sessionId).toBe("durable-id-1234");
 		expect(reply.sessions[0].stem).toBe(stem);
-		expect(reply.sessions[0].active).toBe(false);
+		expect(reply.sessions[0].state).toBe("inactive");
 	});
 });

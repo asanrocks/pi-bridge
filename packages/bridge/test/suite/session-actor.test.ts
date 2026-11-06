@@ -57,6 +57,7 @@ function stubManager(): Manager & {
 			log.push("remove");
 		},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},

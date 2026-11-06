@@ -16,9 +16,10 @@
 import { Buffer } from "node:buffer";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
-import type { SessionInfo, SessionListCursor, SessionRef } from "../core/index.ts";
+import type { SessionInfo, SessionListCursor, SessionRef, SessionState } from "../core/index.ts";
 import { containedSessionFile, isArchivedStem, type ProjectConfig } from "./projects.ts";
 import { type ActorMetadata, clampPreview } from "./session-actor.ts";
+
 import type { SessionPage } from "./worker-contract.ts";
 
 /** One live Activation as the catalog needs it: the address for the row, and
@@ -44,6 +45,13 @@ interface ScanEntry {
 	active?: CatalogLiveEntry;
 }
 
+/** The durable, user-visible session states the catalog overlays onto every
+ * row (ADR 22): the Worker supplies its state store; the catalog owns only the
+ * lookup. */
+export interface CatalogStateOverlay {
+	stateOf(projectId: string, sessionId: string): SessionState;
+}
+
 export interface SessionCatalog {
 	/** One page of a Project's Session history, newest first (sort time desc,
 	 * then canonical stem desc — ADR 11). */
@@ -52,9 +60,12 @@ export interface SessionCatalog {
 		max: number | undefined,
 		cursor: SessionListCursor | null,
 		live: readonly CatalogLiveEntry[],
+		states: CatalogStateOverlay,
 	): SessionPage;
-	/** The global active/streaming snapshot across every Project. */
-	listActiveSessions(live: readonly CatalogLiveEntry[]): SessionInfo[];
+	/** The global work queue (ADR 22): every non-inactive session across every
+	 * Project, ordered notified → busy → deferred, then by last activity
+	 * descending. */
+	listQueue(live: readonly CatalogLiveEntry[], states: CatalogStateOverlay): SessionInfo[];
 }
 
 /** Cap for the header-only scan. A pi session header is a single short line. */
@@ -130,7 +141,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		return [...byStem.values()];
 	};
 
-	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry): SessionInfo => {
+	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry, states: CatalogStateOverlay): SessionInfo => {
 		const active = entry.active;
 		// A durable file is the metadata source even while active; only an
 		// unflushed activation has no file to read, so its document is used.
@@ -142,18 +153,17 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 				projectId: project.id,
 				sessionId: entry.stem,
 				stem: entry.stem,
-				active: false,
-				isStreaming: false,
+				state: "inactive",
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
 		const liveMeta = active?.metadata;
+		const sessionId = meta?.sessionId ?? active?.ref.sessionId ?? entry.stem;
 		return {
 			projectId: project.id,
-			sessionId: meta?.sessionId ?? active?.ref.sessionId ?? entry.stem,
+			sessionId,
 			stem: entry.stem,
-			active: active !== undefined,
-			isStreaming: liveMeta ? liveMeta.isStreaming : false,
+			state: states.stateOf(project.id, sessionId),
 			name: meta?.name ?? liveMeta?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? liveMeta?.firstMessageText,
@@ -166,7 +176,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 	};
 
 	return {
-		listSessions(projectId, max, cursor, live): SessionPage {
+		listSessions(projectId, max, cursor, live, states): SessionPage {
 			const project = projects.get(projectId);
 			if (!project) throw new Error(`Unknown project: ${projectId}`);
 
@@ -187,7 +197,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			const limit = max !== undefined && max > 0 ? max : after.length;
 			const sliced = after.slice(0, limit);
 			const hasMore = after.length > sliced.length;
-			const sessions = sliced.map((e) => toSessionInfo(project, e));
+			const sessions = sliced.map((e) => toSessionInfo(project, e, states));
 			const last = sliced[sliced.length - 1];
 			return {
 				sessions,
@@ -196,29 +206,33 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			};
 		},
 
-		listActiveSessions(live): SessionInfo[] {
+		listQueue(live, states): SessionInfo[] {
+			// Queue membership is the durable state, not the registry (ADR 22): a
+			// dormant notified session is a queue row with no runtime, and a
+			// browsed inactive session with a live runtime is not. The scan's live
+			// overlay still covers an unflushed busy session, which has a file row
+			// in neither place yet.
 			const out: SessionInfo[] = [];
-			for (const entry of live) {
-				const project = projects.get(entry.ref.projectId);
-				if (!project) continue;
-				let sortTimeMs = Date.parse(entry.metadata.createdAt);
-				if (existsSync(entry.metadata.sessionFile)) {
-					try {
-						sortTimeMs = statSync(entry.metadata.sessionFile).mtimeMs;
-					} catch {
-						// fall back to the header creation time
-					}
+			for (const project of projects.values()) {
+				for (const entry of scan(project, live)) {
+					const row = toSessionInfo(project, entry, states);
+					if ((row.state ?? "inactive") !== "inactive") out.push(row);
 				}
-				out.push(
-					toSessionInfo(project, {
-						stem: entry.ref.stem,
-						abs: entry.metadata.sessionFile,
-						sortTimeMs,
-						active: entry,
-					}),
-				);
 			}
-			out.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+			// Notified first (the work waiting for the user), busy next (it will
+			// demote itself into notified when it lands), deferred last (parked by
+			// decision); each group by last activity descending.
+			const rank: Record<SessionState, number> = { inactive: 3, notified: 0, busy: 1, deferred: 2 };
+			const activity = (row: SessionInfo): number => {
+				const ms = Date.parse(row.lastActivityAt ?? "");
+				return Number.isNaN(ms) ? Date.parse(row.timestamp) : ms;
+			};
+			out.sort(
+				(a, b) =>
+					rank[a.state ?? "inactive"] - rank[b.state ?? "inactive"] ||
+					activity(b) - activity(a) ||
+					(a.stem < b.stem ? -1 : a.stem > b.stem ? 1 : 0),
+			);
 			return out;
 		},
 	};
@@ -232,25 +246,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 export function assertNoSessionIdConflicts(projects: Map<string, ProjectConfig>): void {
 	const owners = new Map<string, string>();
 	for (const project of projects.values()) {
-		let rels: string[];
-		try {
-			rels = readdirSync(project.sessionDir, { recursive: true }) as string[];
-		} catch {
-			continue;
-		}
-		for (const rel of rels) {
-			if (!rel.endsWith(".jsonl")) continue;
-			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-			// Archived sessions are outside discovery, so they must not
-			// participate in the uniqueness invariant either: a manual copy into
-			// `.archive/` would otherwise fail daemon startup.
-			if (isArchivedStem(stem)) continue;
-			// A symlinked `.jsonl` that escapes the namespace must not leak a
-			// foreign session id into the conflict registry.
-			const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
-			if (real === null) continue;
-			const sessionId = readSessionHeaderId(real);
-			if (sessionId === null) continue;
+		for (const [stem, sessionId] of scanDurableSessionIds(project)) {
 			const address = `${project.id}/${stem}`;
 			const owner = owners.get(sessionId);
 			if (owner !== undefined && owner !== address) {
@@ -259,6 +255,36 @@ export function assertNoSessionIdConflicts(projects: Map<string, ProjectConfig>)
 			owners.set(sessionId, address);
 		}
 	}
+}
+
+/** The durable session ids a Project's storage holds, keyed by stem: the
+ * discovery scan (recursive `*.jsonl`, archive prefix excluded, symlink
+ * containment enforced) reduced to the header ids. Shared by the startup
+ * conflict check and the session-state store's recovery pruning, so both see
+ * the same notion of "a session that exists". */
+export function scanDurableSessionIds(project: ProjectConfig): Map<string, string> {
+	const ids = new Map<string, string>();
+	let rels: string[];
+	try {
+		rels = readdirSync(project.sessionDir, { recursive: true }) as string[];
+	} catch {
+		return ids;
+	}
+	for (const rel of rels) {
+		if (!rel.endsWith(".jsonl")) continue;
+		const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
+		// The archive prefix is a storage namespace, not discovery: a manual
+		// copy into `.archive/` must not fail the uniqueness invariant.
+		if (isArchivedStem(stem)) continue;
+		// statSync below follows symlinks, so a symlinked `.jsonl` pointing
+		// outside the namespace must not leak a foreign id (ADR 11 boundary).
+		const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));
+		if (real === null) continue;
+		const sessionId = readSessionHeaderId(real);
+		if (sessionId === null) continue;
+		ids.set(stem, sessionId);
+	}
+	return ids;
 }
 
 // ── Durable-file parsing ────────────────────────────────────────────────
@@ -272,8 +298,10 @@ interface FileSessionEntry {
 	[key: string]: unknown;
 }
 
-/** Read just the session id from a file's first line, or null. */
-function readSessionHeaderId(filePath: string): string | null {
+/** Read just the session id from a file's first line, or null. Exported for
+ * the session-state store's address resolution (a dormant session's record is
+ * keyed by the header id, and the verb layer has only the stem). */
+export function readSessionHeaderId(filePath: string): string | null {
 	let fd: number | undefined;
 	try {
 		const st = statSync(filePath);

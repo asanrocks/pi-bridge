@@ -53,7 +53,9 @@ attach and stamps the frames it forwards, which is the rule in
 owns the Activation registry, the per-session choreography (Manager creation,
 registration, the pre-attach model/thinking choices, first-prompt admission),
 the Session catalog (`src/host/session-catalog.ts`: directory scan, durable
-metadata parse, live overlay), and the observation table. The Daemon holds no
+metadata parse, live overlay), the session-state store
+(`src/host/session-state.ts`: the durable user-visible session lifecycle,
+ADR 22), and the observation table. The Daemon holds no
 Activation state and never sees a Manager: it resolves a Project, asks the
 Worker for an observation, and stamps the frames the observation delivers.
 The repository read surface (`src/host/repository.ts`: snapshot reads,
@@ -476,6 +478,18 @@ installed by the next refresh, which reads it from pi's list in file order. A
 listener that appends while another entry is being published therefore cannot
 produce a child whose parent the Document has not installed.
 
+The Manager exposes two settlement signals. `onSettled` fires on `turn_end`
+and `agent_settled` (the rescan trigger for the session list). `onFullySettled`
+is the full-execution signal (ADR 22): it fires on `agent_settled` alone —
+`turn_end` lands between model/tool cycles inside one execution — on the
+completion of an admitted dispatch that started no run of its own (a handled
+extension command, a queued steer after the run it joined), and on a recovery
+continuation's compensated end. Every fire carries the execution tag the
+settling dispatch was admitted with (`prompt`/`promptAdmitted`/`recoverTurn`
+accept one), so the owner of a work queue can ignore the settle of an
+execution a newer admission already superseded; a dispatch completing while a
+run is still in flight does not fire at all.
+
 The Manager API has these Session operations:
 
 - `prompt(text, images?, model?, thinkingLevel?)` sends a user message and
@@ -793,11 +807,20 @@ resulting active-session snapshot broadcast. Collection never deletes a
 Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
-normalizes and resolves the Project address, waits out a creation in flight
-for it, requires an active non-collecting Activation, and immediately uses
-the same collect/dispose path regardless of attached Connections, streaming
-state, or idle policy. It then refreshes the Project's first session page.
-Collection is also the terminal ownership boundary: every Connection
+normalizes and resolves the Project address and waits out a creation in flight
+for it. With a live non-collecting Activation it immediately uses the same
+collect/dispose path regardless of attached Connections, streaming state, or
+idle policy, then writes the session inactive through the state store (ADR
+22): the close captures the current execution token before collecting, so
+disposal's abort — whose settle lands notified first — is followed by the
+close's write as the last one for that execution; an admission that began
+after the capture is a newer user intent, and the close's write is skipped so
+the session stays busy while the close still reports the disposal it
+performed. A dormant Session (no Activation) closes legally too: the state
+write is the whole operation, addressed by the stem's durable header id, and
+a stem with no session at all is an error. The verb then refreshes the
+Project's first session page. Collection is also the terminal ownership
+boundary: every Connection
 attached to the address is detached — its Manager handle and attachment
 fields are severed — and each receives a `session_closed` push
 (`projectId`, `stem`) after the disposal's final patches and before the close
@@ -823,6 +846,38 @@ Session whose first turn never flushed) is an error reply — the close still
 happened, but nothing was archived.
 
 The timer model and its reservation invariant govern this runtime.
+
+## Session states
+
+`src/host/session-state.ts` is the durable, user-visible session lifecycle
+(ADR 22): every session carries one of `inactive | notified | busy |
+deferred`, persisted by the Worker at `<sessionDir>/.pi-bridge/states.json`
+(one file per Project, keyed by the durable session id so a moved file keeps
+its state). The store owns the transitions, not just the writes: an admission
+(`admit`) mints an execution token and lands `busy`; a full settlement
+(`settle`, carrying the token the Manager reports) lands `notified` only when
+the token is still the current execution; a failed admission (`abandon`)
+restores the pre-admission state; the defer/restore `toggle` is refused while
+busy; `markInactive` (close) is skipped when an admission newer than the one
+the close began under has landed; `prune` drops an archived session's record.
+
+Writes are whole-file, atomic (temp + rename), and synchronous, so arrival
+order is the serialization and no transition's decision can interleave with
+another's. A missing file is the normal first state. A corrupt file is
+quarantined (renamed to a `.corrupt` sibling, never overwritten) and
+surfaced on the console — the store restarts empty rather than silently
+dropping unfinished work. Turn-boundary write failures (admission,
+settlement, abandonment) degrade to in-memory state and retry on the next
+transition; user-action writes (toggle, close, prune) throw, so the verb is
+retryable instead of silently losing the intent.
+
+Startup recovery runs in the store's constructor: every persisted `busy`
+becomes `notified` (the Worker's process died with the runtimes, so nothing
+is executing), and a record whose session file does not exist is dropped
+(ADR 12's accepted loss, made visible: a first turn that never flushed has no
+durable conversation to be notified about). The scan is the catalog's
+`scanDurableSessionIds` — the same discovery notion the startup conflict
+check uses.
 
 ## Session Operations
 
@@ -894,7 +949,8 @@ canonical stem. The cursor is exclusive and compound: `{ sortTimeMs, stem }`.
 The reply reports `sessions`, `hasMore`, and the last row as `nextCursor`.
 
 `SessionInfo` carries `projectId`, durable `sessionId` when known, stem,
-`active`, `isStreaming`, timestamp, and available name, first-message text,
+`active`, `isStreaming`, `timestamp`, the durable user-visible `state`
+(ADR 22: `inactive` by default), and available name, first-message text,
 latest-message preview, message count, and last-activity time. A durable file
 supplies metadata; an unflushed active Session supplies the actor's
 `metadata()` — the typed read surface over the canonical Document. For
@@ -903,6 +959,17 @@ the file scan; `timestamp` remains the durable sort key (mtime / header
 creation). `listActiveSessions` uses the Activation
 registry instead of a disk scan, is global across Projects, is not paginated,
 and returns the same row shape ordered by timestamp.
+
+`listQueue` (ADR 22) is the global work queue: every non-inactive session
+across every Project — membership is the durable state overlay, not the
+registry, so a dormant notified session is a queue row with no runtime and a
+browsed inactive session is not a row at all. It is ordered notified → busy →
+deferred, each group by last activity descending. `setSessionState(projectId,
+stem, state)` is the user's defer/restore toggle: refused while the session is
+busy (the state store owns the precondition), legal on a dormant session (the
+Worker resolves the stem's durable header id; a stem with no session at all
+is an error). Both report through the `queue_changed` Worker event, which the
+Daemon aggregates and pushes to every browser.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
 model and thinking defaults, available model metadata, the daemon-global

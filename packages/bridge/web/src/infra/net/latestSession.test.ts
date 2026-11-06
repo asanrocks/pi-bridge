@@ -1,6 +1,6 @@
-// resolveLatestSession — the `/@latest` target (ADR 13): the most recently
-// active live Session, else the most recent durable Session across Projects.
-// Fake client, hand-built rows.
+// resolveLatestSession — the `/@latest` target (ADR 13, revised by ADR 22):
+// the most recently active queued Session that is not deferred, else the most
+// recent durable Session across Projects. Fake client, hand-built rows.
 
 import { describe, expect, it, vi } from "vitest";
 import type { BridgeClient, ProjectInfo, RpcReply, SessionInfo } from "../../../../src/core/index.ts";
@@ -10,14 +10,13 @@ function row(
 	projectId: string,
 	stem: string,
 	timestamp: string,
-	opts: { active?: boolean; lastActivityAt?: string } = {},
+	opts: { state?: SessionInfo["state"]; lastActivityAt?: string } = {},
 ): SessionInfo {
 	return {
 		projectId,
 		sessionId: `sess-${stem}`,
 		stem,
-		active: opts.active ?? false,
-		isStreaming: false,
+		state: opts.state ?? "inactive",
 		timestamp,
 		...(opts.lastActivityAt ? { lastActivityAt: opts.lastActivityAt } : {}),
 	};
@@ -35,15 +34,32 @@ function fakeClient(pages: Record<string, SessionInfo[]>, ok = true) {
 }
 
 describe("resolveLatestSession", () => {
-	it("prefers the most recently active live session without scanning", async () => {
+	it("prefers the most recently active queued session without scanning", async () => {
 		const { client, listSessions } = fakeClient({ p1: [row("p1", "durable", "2030-01-01T00:00:00.000Z")] });
-		const active = [
-			row("p2", "older", "2025-01-01T00:00:00.000Z", { active: true, lastActivityAt: "2025-01-01T00:00:00.000Z" }),
-			row("p2", "newer", "2026-01-01T00:00:00.000Z", { active: true, lastActivityAt: "2026-01-01T00:00:00.000Z" }),
+		const queue = [
+			row("p2", "older", "2025-01-01T00:00:00.000Z", {
+				state: "notified",
+				lastActivityAt: "2025-01-01T00:00:00.000Z",
+			}),
+			row("p2", "newer", "2026-01-01T00:00:00.000Z", { state: "busy", lastActivityAt: "2026-01-01T00:00:00.000Z" }),
 		];
-		const target = await resolveLatestSession(client, [project("p1"), project("p2")], active);
+		const target = await resolveLatestSession(client, [project("p1"), project("p2")], queue);
 		expect(target?.stem).toBe("newer");
 		expect(listSessions).not.toHaveBeenCalled();
+	});
+
+	it("excludes deferred rows: a deferred-only queue resolves as empty (ADR 22)", async () => {
+		const { client, listSessions } = fakeClient({ p1: [row("p1", "durable", "2025-06-01T00:00:00.000Z")] });
+		const queue = [
+			row("p2", "parked", "2030-01-01T00:00:00.000Z", {
+				state: "deferred",
+				lastActivityAt: "2030-01-01T00:00:00.000Z",
+			}),
+		];
+		const target = await resolveLatestSession(client, [project("p1"), project("p2")], queue);
+		// Deferred is "not next": the durable fallback applies.
+		expect(target).toMatchObject({ projectId: "p1", stem: "durable" });
+		expect(listSessions).toHaveBeenCalled();
 	});
 
 	it("falls back to the most recent durable session across projects", async () => {
@@ -63,10 +79,10 @@ describe("resolveLatestSession", () => {
 		expect(await resolveLatestSession(client, [project("p1")], [])).toBeNull();
 	});
 
-	it("scopes the live preference to the alias's Project", async () => {
+	it("scopes the queue preference to the alias's Project", async () => {
 		const { client } = fakeClient({ p1: [row("p1", "durable", "2025-06-01T00:00:00.000Z")] });
-		const active = [row("p2", "elsewhere", "2026-01-01T00:00:00.000Z", { active: true })];
-		expect(await resolveLatestSession(client, [project("p1"), project("p2")], active, "p1")).toMatchObject({
+		const queue = [row("p2", "elsewhere", "2026-01-01T00:00:00.000Z", { state: "notified" })];
+		expect(await resolveLatestSession(client, [project("p1"), project("p2")], queue, "p1")).toMatchObject({
 			projectId: "p1",
 			stem: "durable",
 		});

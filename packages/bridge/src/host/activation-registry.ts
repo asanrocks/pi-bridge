@@ -86,6 +86,11 @@ export interface ActivationRegistryOptions {
 	unflushedIdleGcMs: number;
 	/** A session settled (its file may have just been written). */
 	onSettled: (ref: SessionRef) => void;
+	/** An execution fully settled (ADR 22): the run reached pi's full-idle
+	 * predicate, an admitted dispatch completed without a run of its own, or
+	 * a recovery continuation compensated. `execution` is the tag the Worker
+	 * admitted the settling execution under. */
+	onFullySettled?: (ref: SessionRef, execution: string | undefined) => void;
 	/** A live Activation's streaming flag changed. */
 	onStreamingChange: () => void;
 	/** A live Activation's activity phase changed (the process title's source). */
@@ -285,6 +290,7 @@ export class ActivationRegistry {
 				if (record !== undefined) void this.collect(record);
 			},
 			onSettled: () => this.options.onSettled(ref),
+			onFullySettled: (execution) => this.options.onFullySettled?.(ref, execution),
 			onStreamingChange: () => this.options.onStreamingChange(),
 			onActivityChange: () => this.options.onActivityChange?.(),
 		});

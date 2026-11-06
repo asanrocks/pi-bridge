@@ -412,10 +412,14 @@ export interface SessionsChangedMessage {
 	nextCursor?: SessionListCursor;
 }
 
-/** Global snapshot of active/streaming sessions across all Projects (ADR 11).
- * `SessionInfo.projectId` carries the Project identity. */
-export interface ActiveSessionsChangedMessage {
-	kind: "active_sessions_changed";
+/** The work queue changed (ADR 22): the complete global snapshot of
+ * non-inactive sessions — notified, busy, and deferred — ordered notified →
+ * busy → deferred, each group by last activity descending. Replaces the
+ * activation report as the launcher/sidebar's queue source: a row is here
+ * because the user or an execution put it here, not because a runtime is
+ * retained. */
+export interface QueueChangedMessage {
+	kind: "queue_changed";
 	sessions: SessionInfo[];
 }
 
@@ -446,7 +450,7 @@ export type ServerPushMessage =
 	| ReplaceMessage
 	| PatchMessage
 	| SessionsChangedMessage
-	| ActiveSessionsChangedMessage
+	| QueueChangedMessage
 	| PinnedModelsChangedMessage
 	| SessionClosedMessage;
 
@@ -855,9 +859,33 @@ export interface SessionListCursor {
 	stem: string;
 }
 
-/** Global active-session query (ADR 11). Not project-scoped, not paginated. */
-export interface ListActiveSessionsRequest {
-	verb: "listActiveSessions";
+/** The toggle's two targets (ADR 22): the only user-settable non-inactive
+ * states. */
+export type SessionToggleState = "notified" | "deferred";
+
+/** The durable, user-visible session lifecycle state (ADR 22): `inactive` —
+ * the default, a history row; `busy` — an execution is in flight; `notified`
+ * — the agent finished its turn and awaits input; `deferred` — the user
+ * parked a non-busy session. The set of non-inactive sessions is the work
+ * queue. */
+export type SessionState = "inactive" | "notified" | "busy" | "deferred";
+
+/** The work-queue query (ADR 22): the global non-inactive snapshot, ordered
+ * notified → busy → deferred, each group by last activity descending. Not
+ * project-scoped, not paginated. */
+export interface ListQueueRequest {
+	verb: "listQueue";
+}
+
+/** The user's defer/restore toggle (ADR 22): moves a non-busy session between
+ * `notified` and `deferred`. Refused while the session is busy — the state
+ * machine owns the precondition, not the client. Legal on a dormant session
+ * (it is a storage write; no runtime is needed). */
+export interface SetSessionStateRequest {
+	verb: "setSessionState";
+	projectId: string;
+	stem: string;
+	state: SessionToggleState;
 }
 
 /** Detach the Connection from its activation (ADR 11). Connection-local:
@@ -902,7 +930,8 @@ export type RpcRequestBody =
 	| OpenSessionRequest
 	| NewSessionRequest
 	| ListSessionsRequest
-	| ListActiveSessionsRequest
+	| ListQueueRequest
+	| SetSessionStateRequest
 	| GetDaemonInfoRequest
 	| AsrCredentialsRequest
 	| TextPolishRequest
@@ -929,10 +958,10 @@ export interface SessionInfo {
 	sessionId: string;
 	/** Relative session path minus the `.jsonl` extension. */
 	stem: string;
-	/** A live activation exists for this session. */
-	active: boolean;
-	/** The active session is streaming a turn. False when inactive. */
-	isStreaming: boolean;
+	/** The durable, user-visible state (ADR 22). `inactive` is the default —
+	 * a history row; whether a runtime is retained is execution detail that
+	 * stays in the Document, never in a listing row. */
+	state: SessionState;
 	name?: string;
 	timestamp: string;
 	firstMessageText?: string;
@@ -955,7 +984,9 @@ export interface ListSessionsReply {
 	nextCursor?: SessionListCursor;
 }
 
-export interface ListActiveSessionsReply {
+/** The work-queue query's reply (ADR 22): the same row shape as the active
+ * list. */
+export interface ListQueueReply {
 	id: string;
 	ok: true;
 	sessions: SessionInfo[];

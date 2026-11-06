@@ -94,6 +94,20 @@
 	background: var(--color-streaming);
 }
 
+/* Parked by decision (ADR 22): the accent tint, distinct from notified's
+   green — still open, but not next. */
+.dotDeferred {
+	background: var(--color-accent);
+}
+
+/* The parked chip: same treatment as .streaming, muted. */
+.deferred {
+	font-size: var(--fs-xs);
+	color: var(--color-accent);
+	font-weight: 500;
+	flex-shrink: 0;
+}
+
 @media (prefers-reduced-motion: no-preference) {
 	.dotStreaming {
 		animation: streaming-pulse 1.5s infinite;

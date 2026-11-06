@@ -79,6 +79,7 @@ function stubManager(sessionPath: string | undefined): StubManager {
 			connectionHandles.delete(handle);
 		},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},
@@ -142,7 +143,8 @@ function makeWorker(): StubBundle {
  * notified — no verb is exercised through it here. */
 const stubVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [], hasMore: false }),
-	listActiveSessions: async () => [],
+	listQueue: async () => [],
+	setSessionState: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		projects: [],
 		models: [],

@@ -33,9 +33,15 @@ export type {
 } from "./session-actor.ts";
 export { createSessionActor } from "./session-actor.ts";
 export type { CatalogLiveEntry, SessionCatalog } from "./session-catalog.ts";
-export { assertNoSessionIdConflicts, createSessionCatalog } from "./session-catalog.ts";
+export { assertNoSessionIdConflicts, createSessionCatalog, scanDurableSessionIds } from "./session-catalog.ts";
 export type { SessionCommandSurface, SessionCommands } from "./session-commands.ts";
 export { bindSessionCommands, bindWorkerCommands } from "./session-commands.ts";
+export type {
+	ExecutionToken,
+	SessionStates,
+	SessionToggleState,
+} from "./session-state.ts";
+export { createSessionStates } from "./session-state.ts";
 export type {
 	AcquireStorageLockOptions,
 	StorageLock,

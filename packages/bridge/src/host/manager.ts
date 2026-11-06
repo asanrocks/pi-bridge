@@ -143,6 +143,17 @@ export interface Manager {
 	 */
 	onSettled(listener: () => void): () => void;
 	/**
+	 * Register a listener for full execution settlement (ADR 22): the run
+	 * reached pi's full-idle predicate (`agent_settled`), an admitted dispatch
+	 * completed without starting a run of its own, or a recovery continuation
+	 * compensated. `turn_end` alone never fires it — it lands between model /
+	 * tool cycles inside one execution. The listener receives the execution
+	 * tag the settling dispatch was admitted with (undefined for a run no
+	 * tagged dispatch started), so the owner of a work queue can ignore the
+	 * settle of an execution a newer admission already superseded.
+	 */
+	onFullySettled(listener: (execution: string | undefined) => void): () => void;
+	/**
 	 * What this Session is doing right now, as pi's event stream reports it.
 	 * Derived from the events themselves rather than from the projection: the
 	 * process title needs one word, and building a ViewModel per delta for it
@@ -158,15 +169,30 @@ export interface Manager {
 	/** Send a user message and await the whole turn. The optional carries are
 	 * the stateless client API's selection: applied to pi's session before the
 	 * turn (see the implementation) and recorded on the path, so the next
-	 * send's inheritance and a cold resume agree with what ran. */
-	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
+	 * send's inheritance and a cold resume agree with what ran. `execution` is
+	 * the caller's identity for this execution; it is reported back through
+	 * `onFullySettled` when the execution settles. */
+	prompt(
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+		execution?: string,
+	): Promise<void>;
 	/** Admit a prompt without awaiting the turn: resolves once pi's preflight
 	 * accepts it (model/auth validated, message enqueued — the turn runs on in
 	 * the background), rejects if admission fails. A rejection *after*
 	 * admission never surfaces here; it becomes document state. This is the
 	 * wire `prompt` verb's path (ADR 12 Reply semantics) and the first prompt of
-	 * the text-bearing `newSession` (ADR 12 slice). */
-	promptAdmitted(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
+	 * the text-bearing `newSession` (ADR 12 slice). `execution` names the
+	 * execution for `onFullySettled` (see `prompt`). */
+	promptAdmitted(
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+		execution?: string,
+	): Promise<void>;
 	/** Run a user `!` command in the instance cwd. Recorded as a
 	 * `bashExecution` entry — also an ADR 10 user_bash_end observation
 	 * boundary. */
@@ -196,8 +222,10 @@ export interface Manager {
 	 * dangling calls or a tool terminated mid-run). Refuses (throws) when the
 	 * tail is not recoverable or a turn is in flight. Returns which ran. The
 	 * silent continuation is tracked by the Manager: `abort` and `dispose`
-	 * await it, since pi's own idle-wait cannot see it. */
-	recoverTurn(): Promise<"retry" | "continue">;
+	 * await it, since pi's own idle-wait cannot see it. `execution` names the
+	 * recovery as an execution for `onFullySettled` (see `prompt`); the
+	 * continuation's compensated end is its full settlement. */
+	recoverTurn(execution?: string): Promise<"retry" | "continue">;
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -231,6 +259,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 
 	const patchListeners = new Set<(patch: Patch) => void>();
 	const settledListeners = new Set<() => void>();
+	const fullySettledListeners = new Set<(execution: string | undefined) => void>();
 	const activityListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
@@ -254,6 +283,29 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		const out: Record<string, number> = {};
 		for (const [id, startedAt] of inFlightStart) out[id] = Math.max(0, now - startedAt);
 		return out;
+	};
+
+	// ── Full settlement (ADR 22) ─────────────────────────────────────
+	//
+	// One execution is one admitted dispatch and everything it runs (tools,
+	// retries, compaction, queued steers). `lastExecution` is the tag of the
+	// newest dispatch that started, so a run's `agent_settled` reports the
+	// execution the run belongs to — a steer admitted mid-run advances the tag,
+	// and the combined run settles under the newest one. A dispatch that never
+	// started a run of its own (a handled extension command, a queued steer
+	// after the queue's last turn) settles through its own completion instead.
+	let lastExecution: string | undefined;
+	const fireFullySettled = (execution: string | undefined): void => {
+		for (const l of fullySettledListeners) l(execution);
+	};
+	/** A dispatch's completion settles its execution only when nothing is
+	 * still executing: a handled command or queued steer that lands while a
+	 * run is in flight settles with that run (at its `agent_settled`), not on
+	 * its own. */
+	const dispatchSettled = (execution: string | undefined): void => {
+		if (state.document.status.isStreaming || state.document.status.isCompacting) return;
+		if (recoveryRun !== null) return;
+		fireFullySettled(execution);
 	};
 
 	// ── Event processing (captured in closure) ──
@@ -373,6 +425,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// after newSession writes the session file, and listeners can rescan
 			// to pick up the now-on-disk metadata (name, message count, etc.).
 			for (const l of settledListeners) l();
+			// Full settlement keys on `agent_settled` alone: `turn_end` fires
+			// between model/tool cycles inside one execution (ADR 22).
+			if (event.type === "agent_settled") fireFullySettled(lastExecution);
 		}
 
 		// ADR 10 v2: a persisted user bash entry (a `!`/`!!` command) is a Git
@@ -639,6 +694,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
+		onFullySettled(listener) {
+			fullySettledListeners.add(listener);
+			return () => fullySettledListeners.delete(listener);
+		},
 		activity() {
 			const status = state.document.status;
 			return resolveActivity({
@@ -655,8 +714,18 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			return () => activityListeners.delete(listener);
 		},
 
-		async prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
+		async prompt(
+			text: string,
+			images?: ImageContent[],
+			model?: ModelRef,
+			thinkingLevel?: string,
+			execution?: string,
+		) {
 			await applySelection(model, thinkingLevel);
+			// The tag is recorded at dispatch start: the run this prompt joins or
+			// starts reports it at `agent_settled` (a steer is one continuing
+			// execution, so the combined run settles under the newest tag).
+			lastExecution = execution;
 			await session.prompt(text, {
 				source: "rpc",
 				streamingBehavior: "steer",
@@ -665,7 +734,13 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			});
 		},
 
-		async promptAdmitted(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
+		async promptAdmitted(
+			text: string,
+			images?: ImageContent[],
+			model?: ModelRef,
+			thinkingLevel?: string,
+			execution?: string,
+		) {
 			// Carries are applied before admission too: a reply that lands at
 			// preflight must already describe the selection the run will use.
 			await applySelection(model, thinkingLevel);
@@ -676,6 +751,11 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// fire-and-forget turn never leaks an unhandled rejection.
 			return new Promise<void>((resolve, reject) => {
 				let admitted = false;
+				// The tag is recorded at dispatch start, after the carries: a run
+				// settling while a newer dispatch is still between carries and
+				// dispatch reports the older tag, and the newer dispatch keeps the
+				// execution live until its own settle.
+				lastExecution = execution;
 				session
 					.prompt(text, {
 						source: "rpc",
@@ -691,9 +771,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 							// Belt for a resolution path pi takes without calling preflight —
 							// resolve instead of hanging.
 							if (!admitted) resolve();
+							dispatchSettled(execution);
 						},
 						(err) => {
 							if (!admitted) reject(err instanceof Error ? err : new Error(String(err)));
+							// A failure after admission is a completed execution too — its
+							// outcome is visible document state, and the session awaits
+							// input (ADR 22: errors and interruptions settle).
+							else dispatchSettled(execution);
 						},
 					);
 			});
@@ -784,7 +869,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			tryReconcile();
 		},
 
-		async recoverTurn(): Promise<"retry" | "continue"> {
+		async recoverTurn(execution?: string): Promise<"retry" | "continue"> {
 			// Same mutation lock as navigate: recovery branches (swapping the LLM
 			// context) and then starts a run.
 			if (state.document.status.isStreaming || state.document.status.isCompacting) {
@@ -794,6 +879,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			if (!info) {
 				throw new Error("No failed or interrupted turn to recover");
 			}
+			// The recovery is an execution (ADR 22): its tag is recorded before any
+			// path starts, so both the relay run's `agent_settled` and the silent
+			// continuation's compensated end report it.
+			lastExecution = execution;
 			const repair = RECOVERY_REPAIRS[info.kind];
 			// The relay must be built from the pre-branch leaf path: the dangling
 			// assistant and its completed results leave the path when recovery
@@ -857,6 +946,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				const recPatch = boundaryReconcile(true);
 				if (recPatch) emitPatch(recPatch);
 				for (const l of settledListeners) l();
+				// The continuation runs outside pi's settle events, so its compensated
+				// end *is* the full settlement of the recovery execution (ADR 22).
+				fireFullySettled(execution);
 			}
 			return "retry";
 		},

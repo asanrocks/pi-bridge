@@ -80,6 +80,7 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {
@@ -173,7 +174,8 @@ function makeBundle(): Bundle {
 
 	const verbs: DaemonVerbs = {
 		listSessions: async () => ({ sessions: [], hasMore: false }),
-		listActiveSessions: async () => [],
+		listQueue: async () => [],
+		setSessionState: async () => ({ ok: true }),
 		getDaemonInfo: async () => ({
 			projects: [],
 			models: [],

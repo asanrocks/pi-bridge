@@ -302,7 +302,7 @@ const defaultDeps: NavigationDeps = {
 	// holds (projects, active sessions) — directory input, not view
 	// authority; the seam itself is injectable.
 	resolveLatest: (client, projectId) =>
-		resolveLatestSession(client, getStore().getState().projects, getStore().getState().activeSessions, projectId),
+		resolveLatestSession(client, getStore().getState().projects, getStore().getState().queue, projectId),
 };
 
 // ---------------------------------------------------------------------------

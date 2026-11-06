@@ -88,10 +88,10 @@ export class Daemon {
 	/** The routing table: a Project id is served by exactly one Worker. Claiming
 	 * is atomic across registrations, so `/<projectId>` is never ambiguous. */
 	private routes = new Map<string, WorkerHost>();
-	/** Each Worker's last reported active/streaming snapshot. The browser store
-	 * replaces its list on every push, so a push carries the aggregate rather
-	 * than one Worker's slice. */
-	private activeByHost = new Map<WorkerHost, SessionInfo[]>();
+	/** Each Worker's last reported work-queue snapshot (ADR 22). The browser
+	 * store replaces its list on every push, so a push carries the aggregate
+	 * rather than one Worker's slice. */
+	private queueByHost = new Map<WorkerHost, SessionInfo[]>();
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
 	/** The dial-in registration listener, when one was requested. */
@@ -252,7 +252,7 @@ export class Daemon {
 			throw error;
 		}
 		this.workers = created;
-		this.activeByHost = new Map(created.map((host) => [host, []]));
+		this.queueByHost = new Map(created.map((host) => [host, []]));
 		this.publishTitle();
 	}
 
@@ -336,12 +336,12 @@ export class Daemon {
 
 		for (const project of host.info.projects) this.routes.set(project.id, host);
 		this.workers = [...this.workers, host];
-		this.activeByHost.set(host, []);
+		this.queueByHost.set(host, []);
 		this.publishTitle();
 		// A newly registered Worker changes the aggregate; the browser's Project
 		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
 		// reload), because the surface has no project-list push.
-		this.broadcastActiveSessions();
+		this.broadcastQueue();
 	}
 
 	/**
@@ -437,7 +437,7 @@ export class Daemon {
 		const workers = this.workers;
 		this.workers = [];
 		this.routes.clear();
-		this.activeByHost.clear();
+		this.queueByHost.clear();
 		setDaemonTitle(null);
 		await Promise.allSettled(workers.map((host) => host.dispose()));
 	}
@@ -451,9 +451,9 @@ export class Daemon {
 			this.pushSessionsChanged(event.projectId, event.page.sessions, event.page.hasMore, event.page.nextCursor);
 			return;
 		}
-		if (event.kind === "active_sessions_changed") {
-			this.activeByHost.set(host, event.sessions);
-			this.broadcastActiveSessions();
+		if (event.kind === "queue_changed") {
+			this.queueByHost.set(host, event.sessions);
+			this.broadcastQueue();
 			return;
 		}
 		if (event.kind === "pinned_models_changed") {
@@ -476,18 +476,19 @@ export class Daemon {
 			if (routed === host) this.routes.delete(projectId);
 		}
 		this.workers = this.workers.filter((worker) => worker !== host);
-		this.activeByHost.delete(host);
+		this.queueByHost.delete(host);
 		this.publishTitle();
-		this.broadcastActiveSessions();
+		this.broadcastQueue();
 		console.error(`Daemon: worker unavailable, routes withdrawn: ${reason}`);
 		await host.dispose().catch(() => {});
 	}
 
-	/** The global active/streaming snapshot: the Workers own the Documents those
-	 * rows describe, so each reports its own slice and the Daemon concatenates. */
-	async listActiveSessions(): Promise<SessionInfo[]> {
+	/** The global work queue (ADR 22): the Workers own the durable states those
+	 * rows describe, so each reports its own slice. The queue order is each
+	 * Worker's; slices concatenate. */
+	async listQueue(): Promise<SessionInfo[]> {
 		if (this.workers.length === 0) return [];
-		const slices = await Promise.all(this.workers.map((host) => host.service.listActiveSessions()));
+		const slices = await Promise.all(this.workers.map((host) => host.service.listQueue()));
 		return slices.flat();
 	}
 
@@ -523,11 +524,11 @@ export class Daemon {
 			});
 	}
 
-	/** Push the aggregate of every Worker's last reported snapshot. A per-Worker
-	 * push would replace the browser's list with one slice. */
-	private broadcastActiveSessions(): void {
-		const sessions = this.workers.flatMap((host) => this.activeByHost.get(host) ?? []);
-		this.pushToAll({ kind: "active_sessions_changed", sessions });
+	/** Push the aggregate work queue (ADR 22): one push carries the join of
+	 * every registration's last report, never one Worker's slice. */
+	private broadcastQueue(): void {
+		const sessions = this.workers.flatMap((host) => this.queueByHost.get(host) ?? []);
+		this.pushToAll({ kind: "queue_changed", sessions });
 	}
 
 	/** Where the text-polish guest identity lives: the operator's override, else a
@@ -570,7 +571,18 @@ export class Daemon {
 		listSessions: (projectId, max, cursor) =>
 			this.requirement(projectId).service.listSessions(projectId, max, cursor ?? null),
 
-		listActiveSessions: () => this.listActiveSessions(),
+		listQueue: () => this.listQueue(),
+
+		setSessionState: async (projectId, stem, state) => {
+			try {
+				const host = this.route(projectId);
+				if (host === undefined) throw new Error(`Unknown project: ${projectId}`);
+				await host.service.setSessionState({ projectId, stem }, state);
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
+			return { ok: true };
+		},
 
 		openSession: async (projectId, stem, conn, cursor) => {
 			try {
@@ -608,7 +620,8 @@ export class Daemon {
 				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
 				await host.service.closeSession({ projectId, stem });
 				// Refresh the Project's first page everywhere: the kill's flush
-				// (and an unflushed session's disappearance) reorders history.
+				// (and an unflushed session's disappearance) reorders history. The
+				// queue change rides the Worker's own queue_changed event.
 				this.broadcastSessionsChanged(projectId);
 				return { ok: true };
 			} catch (err) {

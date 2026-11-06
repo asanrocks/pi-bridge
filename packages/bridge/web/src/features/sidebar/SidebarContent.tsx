@@ -26,7 +26,7 @@ export const SidebarContent = memo(function SidebarContent({
 	projects,
 	currentProjectId,
 	currentStem,
-	activeSessions,
+	queue,
 	sessionPages,
 	folds,
 	onToggleAllFolders,
@@ -34,6 +34,7 @@ export const SidebarContent = memo(function SidebarContent({
 	onOpenSession,
 	onOpenProject,
 	onCloseSession,
+	onSetSessionState,
 	onArchiveSession,
 	onShowLauncher,
 	onLoadFolder,
@@ -43,9 +44,9 @@ export const SidebarContent = memo(function SidebarContent({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** Global active/streaming snapshot (ADR 11) — the authority for the
-	 * pinned section at the top of each folder. */
-	activeSessions: SessionInfo[];
+	/** The global work queue (ADR 22) — the authority for the pinned section
+	 * at the top of each folder, sliced per Project in queue order. */
+	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
 	/** Per-Project fold states; missing entries default to "active". */
@@ -56,6 +57,8 @@ export const SidebarContent = memo(function SidebarContent({
 	onOpenSession: (session: SessionInfo) => void;
 	onOpenProject: (projectId: string) => void;
 	onCloseSession: (session: SessionInfo) => void;
+	/** The user's defer/restore toggle (row menu) — non-busy queued rows. */
+	onSetSessionState: (session: SessionInfo, state: "notified" | "deferred") => void;
 	/** Close then archive a session (row menu Archive) — live and dormant rows. */
 	onArchiveSession: (session: SessionInfo) => void;
 	/** Detach and return to the Launcher (global project picker); overlay
@@ -64,30 +67,30 @@ export const SidebarContent = memo(function SidebarContent({
 	onLoadFolder: (projectId: string) => void;
 	onLoadMoreFolder: (projectId: string) => void;
 }) {
-	const activeByProject = useMemo(() => {
+	const queueByProject = useMemo(() => {
 		const map = new Map<string, SessionInfo[]>();
-		for (const s of activeSessions) {
+		for (const s of queue) {
 			const arr = map.get(s.projectId);
 			if (arr) arr.push(s);
 			else map.set(s.projectId, [s]);
 		}
 		return map;
-	}, [activeSessions]);
+	}, [queue]);
 
-	// Per-folder "has pinned active rows" — the cycle input that decides
-	// whether a folder has the active step at all. Also feeds the header
-	// chevron's effective-folded test.
-	const hasActiveById = useMemo(() => {
+	// Per-folder "has queued rows" — the cycle input that decides whether a
+	// folder has the active step at all. Also feeds the header chevron's
+	// effective-folded test.
+	const hasQueuedById = useMemo(() => {
 		const out: Record<string, boolean> = {};
-		for (const p of projects) out[p.id] = (activeByProject.get(p.id)?.length ?? 0) > 0;
+		for (const p of projects) out[p.id] = (queueByProject.get(p.id)?.length ?? 0) > 0;
 		return out;
-	}, [projects, activeByProject]);
+	}, [projects, queueByProject]);
 
 	// Header chevron mirrors the folders: down while every folder is open,
 	// right while every folder is effectively folded, diagonal in between.
 	const effectiveFold = (id: string): FolderFoldState => {
 		const f = folds[id] ?? "active";
-		return f === "active" && !hasActiveById[id] ? "folded" : f;
+		return f === "active" && !hasQueuedById[id] ? "folded" : f;
 	};
 	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "open");
 	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "folded");
@@ -101,7 +104,7 @@ export const SidebarContent = memo(function SidebarContent({
 				<button
 					type="button"
 					className={styles.sidebarSectionToggle}
-					onClick={() => onToggleAllFolders(hasActiveById)}
+					onClick={() => onToggleAllFolders(hasQueuedById)}
 					title="Fold / active / unfold all"
 				>
 					<CaretIcon size={12} direction={headerCaret} className={styles.sidebarChevron} />
@@ -137,12 +140,13 @@ export const SidebarContent = memo(function SidebarContent({
 						currentProjectId={currentProjectId}
 						currentStem={currentStem}
 						fold={folds[project.id] ?? "active"}
-						activeRows={activeByProject.get(project.id) ?? NO_SESSIONS}
+						queueRows={queueByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
 						onToggle={onToggleFolder}
 						onOpenProject={onOpenProject}
 						onOpen={onOpenSession}
 						onClose={onCloseSession}
+						onSetState={onSetSessionState}
 						onArchive={onArchiveSession}
 						onLoad={onLoadFolder}
 						onLoadMore={onLoadMoreFolder}

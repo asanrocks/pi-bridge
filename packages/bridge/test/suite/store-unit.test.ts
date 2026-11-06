@@ -53,7 +53,7 @@ describe("createClientStore", () => {
 		expect(state.currentProjectId).toBeNull();
 		expect(state.currentStem).toBeNull();
 		expect(state.projects).toEqual([]);
-		expect(state.activeSessions).toEqual([]);
+		expect(state.queue).toEqual([]);
 		expect(state.expandedActionGroups).toEqual(new Set());
 		expect(state.expandedActions).toEqual(new Set());
 		expect(state.frozenActionGroups).toEqual(new Set());
@@ -92,7 +92,7 @@ describe("createClientStore", () => {
 		expect(store.getState().connection).toEqual({ kind: "init_failed", error: "boom" });
 	});
 
-	it("setProjects and setActiveSessions update the ADR 11 registries", () => {
+	it("setProjects and setQueue update the daemon registries", () => {
 		const store = createClientStore();
 
 		const projects = [
@@ -102,18 +102,17 @@ describe("createClientStore", () => {
 		store.getState().setProjects(projects);
 		expect(store.getState().projects).toEqual(projects);
 
-		const sessions = [
+		const queue = [
 			{
 				projectId: "a",
 				sessionId: "s1",
 				stem: "2024-01-01_s1",
-				active: true,
-				isStreaming: false,
+				state: "notified" as const,
 				timestamp: new Date(0).toISOString(),
 			},
 		];
-		store.getState().setActiveSessions(sessions);
-		expect(store.getState().activeSessions).toEqual(sessions);
+		store.getState().setQueue(queue);
+		expect(store.getState().queue).toEqual(queue);
 	});
 
 	it("clearCurrentSession resets to initial state but keeps the registries", () => {

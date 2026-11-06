@@ -59,7 +59,8 @@ function fakeWorker(
 		navigate: notImplemented,
 		recoverTurn: notImplemented,
 		listSessions: notImplemented,
-		listActiveSessions: notImplemented,
+		listQueue: notImplemented,
+		setSessionState: notImplemented,
 		setPinnedModels: notImplemented,
 		listFiles: notImplemented,
 		readFile: notImplemented,
@@ -190,7 +191,7 @@ describe("worker registration", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		expect(reasons.length).toBeGreaterThan(0);
-		await expect(remote.listActiveSessions()).rejects.toThrow(/unavailable/);
+		await expect(remote.listQueue()).rejects.toThrow(/unavailable/);
 	});
 });
 

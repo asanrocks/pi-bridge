@@ -153,14 +153,15 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 		[vm, navigate],
 	);
 
-	// Alt+↑/↓ — cycle the active sessions (global snapshot, newest first —
-	// the sidebar's pinned order). Cyclic; from the launcher (nothing
-	// attached) both directions open the newest. Live mid-stream: switching is
-	// an attach (ADR 11), not a retarget of the streaming instance.
+	// Alt+↑/↓ — cycle the work queue (ADR 22 order: notified → busy →
+	// deferred, activity desc — the sidebar's pinned order). Cyclic; from the
+	// launcher (nothing attached) both directions open the first. Live
+	// mid-stream: switching is an attach (ADR 11), not a retarget of the
+	// streaming instance.
 	const onCycleActiveSession = useCallback(
 		(direction: "prev" | "next") => {
 			const s = getStore().getState();
-			const list = s.activeSessions;
+			const list = s.queue;
 			if (list.length === 0) return;
 			const idx = list.findIndex(
 				(r) =>

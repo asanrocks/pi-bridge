@@ -129,7 +129,8 @@ function fakeWorker(): FakeWorker {
 			order.push("list:done");
 			return { sessions: [], hasMore: false };
 		},
-		listActiveSessions: async () => [],
+		listQueue: async () => [],
+		setSessionState: async () => {},
 		setPinnedModels: notImplemented,
 		listFiles: notImplemented,
 		readFile: notImplemented,

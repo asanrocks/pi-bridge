@@ -86,7 +86,6 @@ export const DEFAULT_UNFLUSHED_IDLE_GC_MS = 30 * 60_000;
 export interface ActorMetadata {
 	readonly sessionFile: string;
 	readonly createdAt: string;
-	readonly isStreaming: boolean;
 	readonly name?: string;
 	readonly messageCount?: number;
 	readonly firstMessageText?: string;
@@ -134,16 +133,26 @@ export interface SessionAdmission {
 	readonly cwd: string;
 	// ── Typed session verbs (admitted by the actor) ─────────────────────
 	/** A turn. Immediate admitted work — a Stop must not queue behind it.
-	 * Carries the send's model selection (the stateless client API). */
-	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
+	 * Carries the send's model selection (the stateless client API).
+	 * `execution` is the caller's identity for the execution; the Manager
+	 * reports it at full settlement (ADR 22). */
+	prompt(
+		text: string,
+		images?: ImageContent[],
+		model?: ModelRef,
+		thinkingLevel?: string,
+		execution?: string,
+	): Promise<void>;
 	abort(): Promise<void>;
 	discardSteer(): Promise<void>;
 	/** A serialized mutation: one at a time, in admission order. */
 	renameSession(name: string): Promise<void>;
 	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
-	/** Recover the broken tail turn (ADR 16); `action` reports the repair. */
-	recoverTurn(): Promise<"retry" | "continue">;
+	/** Recover the broken tail turn (ADR 16); `action` reports the repair.
+	 * `execution` names the recovery as an execution for full settlement
+	 * (ADR 22), like `prompt`'s tag. */
+	recoverTurn(execution?: string): Promise<"retry" | "continue">;
 	/** Read lazy values at field paths (the pull verb). */
 	pull(requests: PullRequestItem[]): Promise<PulledValue[]>;
 	// ── Admission for everything else (reads, tests) ─────────────────
@@ -177,6 +186,11 @@ export interface SessionActorOptions {
 	 * registry's broadcast hook, riding the actor's own observation of its
 	 * runtime. */
 	onSettled?: () => void;
+	/** An execution fully settled (ADR 22): the run reached pi's full-idle
+	 * predicate, an admitted dispatch completed without a run of its own, or
+	 * a recovery continuation compensated. `execution` is the tag the settling
+	 * dispatch was admitted with. */
+	onFullySettled?: (execution: string | undefined) => void;
 	/** The runtime's streaming flag changed — the registry's broadcast hook,
 	 * riding the actor's own observation of its runtime. The actor dedups
 	 * transitions itself; the hook fires once per real transition. */
@@ -238,6 +252,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	// runtime state of their own (ADR 19).
 	let lastStreaming = manager.document.status.isStreaming;
 	manager.onSettled(() => options.onSettled?.());
+	manager.onFullySettled((execution) => options.onFullySettled?.(execution));
 	manager.onActivityChange(() => options.onActivityChange?.());
 	manager.onPatch(() => {
 		const streaming = manager.document.status.isStreaming;
@@ -338,14 +353,14 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			// wait for the turn, so the tracked accounting ends at preflight. The
 			// run stays live through the Document's streaming status, and the
 			// actor's close disposes an in-flight turn.
-			prompt: (text, images, model, thinkingLevel) =>
-				commandOp((session) => session.promptAdmitted(text, images, model, thinkingLevel)),
+			prompt: (text, images, model, thinkingLevel, execution) =>
+				commandOp((session) => session.promptAdmitted(text, images, model, thinkingLevel, execution)),
 			abort: () => commandOp((session) => session.abort()),
 			discardSteer: () => commandOp((session) => session.discardSteer()),
 			renameSession: (name) => mutateOp((session) => session.renameSession(name)),
 			setLabel: (entryId, label) => mutateOp((session) => session.setLabel(entryId, label)),
 			navigate: (entryId) => mutateOp((session) => session.navigate(entryId)),
-			recoverTurn: () => commandOp((session) => session.recoverTurn()),
+			recoverTurn: (execution) => commandOp((session) => session.recoverTurn(execution)),
 			pull: (requests) =>
 				commandOp((session) => {
 					const out: PulledValue[] = [];
@@ -423,7 +438,6 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			return {
 				sessionFile: manager.sessionFile,
 				createdAt: manager.createdAt,
-				isStreaming: doc.status.isStreaming,
 				name: doc.status.name || undefined,
 				messageCount: doc.status.stats.messages || undefined,
 				firstMessageText: summary.firstMessageText,

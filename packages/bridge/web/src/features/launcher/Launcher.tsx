@@ -1,6 +1,6 @@
 // ============================================================================
 // Launcher — the unattached home view (ADR 11). Two surfaces:
-//  - `/` (global): browse Projects and resume an active session.
+//  - `/` (global): browse Projects and pick up work from the queue (ADR 22).
 //  - `/<projectId>` (Project home): the compose card only (HomeCompose) —
 //    centered and always expanded, it starts a new session on send (the
 //    daemon admits the first prompt, attachments, and the pre-session model
@@ -27,7 +27,7 @@ import styles from "./Launcher.module.css";
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
 	const connection = useStore((s) => s.connection);
 	const projects = useStore((s) => s.projects);
-	const activeSessions = useStore((s) => s.activeSessions);
+	const queue = useStore((s) => s.queue);
 	/** When set, the Launcher is the Project home (compose only). */
 	const projectId = useStore((s) => s.currentProjectId);
 	/** The daemon's model list (getDaemonInfo) — feeds the home's picker. */
@@ -38,10 +38,16 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
 	const now = useNow();
-	const active = useMemo(() => sortByLastActivity(activeSessions), [activeSessions]);
-	/** ADR 13: the launcher's discovery entry for the `@latest` alias — the
-	 * most recently active live session. */
-	const latest = active[0] ?? null;
+	/** The daemon's queue order is the presentation order (ADR 22): notified →
+	 * busy → deferred, each group by last activity descending — the same
+	 * order the sidebar's pinned sections show. */
+	const queued = useMemo(() => [...queue], [queue]);
+	/** ADR 13 + 22: the launcher's discovery entry for the `@latest` alias —
+	 * the most recently active queued session that is not deferred. */
+	const latest = useMemo(
+		() => sortByLastActivity(queued.filter((s) => s.state === "notified" || s.state === "busy"))[0] ?? null,
+		[queued],
+	);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	// Wording and visible state come from the shared connectionStatus mapping
@@ -105,7 +111,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 							type="button"
 							className={styles.rowMain}
 							onClick={() => void rpc.openLatest()}
-							title="Opens the most recently active session in any project (/@latest)"
+							title="Opens the most recently active queued session in any project (/@latest)"
 						>
 							<div className={styles.rowLine1}>
 								<span className={styles.rowName}>Latest session</span>
@@ -147,22 +153,34 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 			)}
 
 			<div className={styles.header}>
-				<span className={styles.headerTitle}>Active sessions</span>
+				<span className={styles.headerTitle}>Work queue</span>
 			</div>
-			{active.length === 0 ? (
+			{queued.length === 0 ? (
 				<div className={styles.empty}>
-					<div className={styles.emptyTitle}>No active sessions</div>
-					<div className={styles.emptyHint}>Start one from a project above.</div>
+					<div className={styles.emptyTitle}>Nothing waiting</div>
+					<div className={styles.emptyHint}>
+						Sessions land here when they finish a turn — or when you park one for later.
+					</div>
 				</div>
 			) : (
 				<div className={styles.rows}>
-					{active.map((session) => {
+					{queued.map((session) => {
 						const label = session.name || session.firstMessageText || session.stem;
 						// Preview the latest message; fall back to the first when the copy
 						// only has one (or the file scan predates the field).
 						const preview = session.lastMessageText ?? session.firstMessageText;
 						const when = session.lastActivityAt ?? session.timestamp;
-						const dotCls = [styles.dot, session.isStreaming ? styles.dotStreaming : ""].filter(Boolean).join(" ");
+						// The mark derives from the durable state alone (ADR 22).
+						const dotCls = [
+							styles.dot,
+							session.state === "busy"
+								? styles.dotStreaming
+								: session.state === "deferred"
+									? styles.dotDeferred
+									: "",
+						]
+							.filter(Boolean)
+							.join(" ");
 						return (
 							<div key={`${session.projectId}/${session.stem}`} className={styles.row}>
 								<span className={dotCls} aria-hidden="true" />
@@ -179,7 +197,8 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 										<span className={styles.rowCwd} title={session.stem}>
 											<bdi>{session.projectId}</bdi>
 										</span>
-										{session.isStreaming && <span className={styles.streaming}>streaming</span>}
+										{session.state === "busy" && <span className={styles.streaming}>running</span>}
+										{session.state === "deferred" && <span className={styles.deferred}>parked</span>}
 										<time className={styles.rowTime} dateTime={when} title={formatWhenFull(when)}>
 											{formatWhen(when, now)}
 										</time>

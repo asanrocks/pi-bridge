@@ -1,9 +1,12 @@
 // ============================================================================
-// SessionRow — one sidebar leaf: liveness dot + label + relative time, plus
-// the row menu. Close appears on live rows, Archive on any durable row (a
-// dormant row's close is a no-op, so only the move remains). The menu's glyph
-// is the overflow dots, never the hamburger: that one is the Sidebar's own
-// disclosure, and this row's menu is not that menu.
+// SessionRow — one sidebar leaf: state dot + label + relative time, plus
+// the row menu. Queue rows (ADR 22) carry the session's durable state:
+// notified (green), busy (streaming pulse), deferred (parked tint). History
+// rows keep the muted dot. The menu's verbs: Close and Defer/Restore on
+// queue rows (a queued session can be closed or parked without opening it),
+// Archive on any durable row. The menu's glyph is the overflow dots, never
+// the hamburger: that one is the Sidebar's own disclosure, and this row's
+// menu is not that menu.
 // ============================================================================
 
 import { memo, useRef, useState } from "react";
@@ -14,30 +17,38 @@ import { MoreIcon } from "../../render/icons.tsx";
 import { Popover } from "../../render/Popover.tsx";
 import styles from "./Sidebar.module.css";
 
+/** The row's mark, derived from the session's durable state alone (ADR 22). */
+export type RowMark = "notified" | "busy" | "deferred" | "idle";
+
 export const SessionRow = memo(function SessionRow({
 	session,
-	dot,
+	mark,
 	selected,
 	onOpen,
 	onClose,
 	onArchive,
+	onSetState,
 }: {
 	session: SessionInfo;
-	/** Green = active, orange + pulse = streaming, muted = dormant history. */
-	dot: "active" | "streaming" | "idle";
+	/** The durable state's mark: notified = awaits input, busy = execution in
+	 * flight, deferred = parked, idle = dormant history. */
+	mark: RowMark;
 	/** Attached session ("you are here"): the one row wearing the accent
 	 * tint. Matched on (projectId, stem) — rows always carry stems, so no
 	 * sessionId fallback is needed. */
 	selected?: boolean;
 	onOpen: (session: SessionInfo) => void;
-	/** Present only on rows with a live instance (the pinned active section):
-	 * adds Close to the row menu, which terminates it. No confirmation —
-	 * the kill is the point. */
+	/** Present only on queue rows: adds Close to the row menu, which clears
+	 * queue membership (terminating a runtime first when one exists). No
+	 * confirmation — the kill is the point. */
 	onClose?: (session: SessionInfo) => void;
-	/** Present on any row with a durable file (pinned and history): adds
+	/** Present on any row with a durable file (queue and history): adds
 	 * Archive, which closes the session then moves its file out of
 	 * discovery. Also unconfirmed — the file survives. */
 	onArchive?: (session: SessionInfo) => void;
+	/** Present only on non-busy queue rows: adds Defer (from notified) or
+	 * Restore (from deferred) — the user's parking toggle (ADR 22). */
+	onSetState?: (session: SessionInfo, state: "notified" | "deferred") => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
 	const now = useNow();
@@ -45,10 +56,17 @@ export const SessionRow = memo(function SessionRow({
 	const [menuOpen, setMenuOpen] = useState(false);
 	const dotCls = [
 		styles.sidebarLiveDot,
-		dot === "streaming" ? styles.sidebarLiveDotStreaming : dot === "idle" ? styles.sidebarDotIdle : "",
+		mark === "busy"
+			? styles.sidebarLiveDotStreaming
+			: mark === "deferred"
+				? styles.sidebarDotDeferred
+				: mark === "idle"
+					? styles.sidebarDotIdle
+					: "",
 	]
 		.filter(Boolean)
 		.join(" ");
+	const deferTarget = session.state === "deferred" ? "notified" : "deferred";
 	return (
 		<div className={styles.sidebarItemWrap}>
 			<button
@@ -70,7 +88,7 @@ export const SessionRow = memo(function SessionRow({
 					</time>
 				</span>
 			</button>
-			{(onClose || onArchive) && (
+			{(onClose || onArchive || onSetState) && (
 				<button
 					ref={menuBtnRef}
 					type="button"
@@ -104,6 +122,18 @@ export const SessionRow = memo(function SessionRow({
 							}}
 						>
 							Close
+						</button>
+					)}
+					{onSetState && (
+						<button
+							type="button"
+							className={styles.sidebarMenuItem}
+							onClick={() => {
+								setMenuOpen(false);
+								onSetState(session, deferTarget);
+							}}
+						>
+							{deferTarget === "deferred" ? "Defer" : "Restore"}
 						</button>
 					)}
 					{onArchive && (

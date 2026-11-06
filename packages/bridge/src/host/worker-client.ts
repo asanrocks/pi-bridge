@@ -412,7 +412,8 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 
 			listSessions: (projectId, max, cursor) =>
 				request<SessionPage>({ kind: "listSessions", projectId, max, cursor: cursor ?? null }),
-			listActiveSessions: () => request<SessionInfo[]>({ kind: "listActiveSessions" }),
+			listQueue: () => request<SessionInfo[]>({ kind: "listQueue" }),
+			setSessionState: (address, state) => request<void>({ kind: "setSessionState", address, state }),
 
 			info: () => request<WorkerInfo>({ kind: "info" }),
 			setPinnedModels: (models) => request<void>({ kind: "setPinnedModels", models }),

@@ -412,9 +412,10 @@ difference between them. */
 	height: var(--control-box-sm);
 }
 
-/* Liveness indicator on a session row: green when the session is active,
-   orange + pulse while streaming. A dormant history row keeps the column
-   aligned with .sidebarDotIdle instead of claiming to be live. */
+/* Queue-state indicator on a session row (ADR 22): notified = green
+   (awaits input), busy = orange + pulse (execution in flight), deferred =
+   the parked tint, idle = muted history. The mark derives from the durable
+   state alone — never from runtime retention. */
 .sidebarLiveDot {
 	display: inline-block;
 	width: 6px;
@@ -429,6 +430,12 @@ difference between them. */
 	background: var(--color-border);
 }
 
+/* Parked by decision (ADR 22): the accent tint says "still open, not
+   next" — distinct from dormant history, which makes no claim. */
+.sidebarDotDeferred {
+	background: var(--color-accent);
+}
+
 .sidebarLiveDotStreaming {
 	background: var(--color-streaming);
 }
@@ -440,7 +447,7 @@ difference between them. */
 }
 
 /* Row menu: chrome and placement are render/Popover.module.css; the panel only
-   sizes itself to its two verbs (Close, Archive). */
+   sizes itself to its verbs (Close, Defer/Restore, Archive). */
 .rowMenu {
 	display: flex;
 	flex-direction: column;

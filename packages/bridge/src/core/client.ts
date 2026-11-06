@@ -51,7 +51,7 @@ const PUSH_KINDS = new Set([
 	"replace",
 	"patch",
 	"sessions_changed",
-	"active_sessions_changed",
+	"queue_changed",
 	"pinned_models_changed",
 	"session_closed",
 ]);
@@ -335,8 +335,17 @@ export class BridgeClient {
 		return this.call(body as RpcRequestBody);
 	}
 
-	listActiveSessions(): Promise<RpcReply> {
-		return this.call({ verb: "listActiveSessions" });
+	/** The work queue (ADR 22): the global non-inactive snapshot, ordered
+	 * notified → busy → deferred, then last activity descending. */
+	listQueue(): Promise<RpcReply> {
+		return this.call({ verb: "listQueue" });
+	}
+
+	/** The user's defer/restore toggle (ADR 22). Refused while the session is
+	 * busy; legal on a dormant session. The result arrives as a `queue_changed`
+	 * push. */
+	setSessionState(projectId: string, stem: string, state: "notified" | "deferred"): Promise<RpcReply> {
+		return this.call({ verb: "setSessionState", projectId, stem, state });
 	}
 
 	getDaemonInfo(): Promise<RpcReply> {

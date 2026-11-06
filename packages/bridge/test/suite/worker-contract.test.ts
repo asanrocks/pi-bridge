@@ -68,8 +68,7 @@ describe("worker contract values", () => {
 							projectId: "proj",
 							sessionId: "sess-1",
 							stem: "work/review",
-							active: true,
-							isStreaming: true,
+							state: "busy",
 							timestamp: "2024-01-01T00:00:00Z",
 						},
 					],
@@ -77,7 +76,7 @@ describe("worker contract values", () => {
 					nextCursor: { sortTimeMs: 1704067200000, stem: "work/review" },
 				},
 			},
-			{ kind: "active_sessions_changed", sessions: [] },
+			{ kind: "queue_changed", sessions: [] },
 			{ kind: "unavailable", reason: "drain failed" },
 		];
 		for (const event of events) expect(roundTrip(event)).toEqual(event);

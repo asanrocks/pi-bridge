@@ -384,8 +384,8 @@ describe("BridgeClient", () => {
 		expect(listFrame.projectId).toBe("proj");
 		expect(listFrame.cursor).toEqual({ sortTimeMs: 42, stem: "a" });
 
-		client.listActiveSessions();
-		expect(JSON.parse(transport.sent[4]).verb).toBe("listActiveSessions");
+		client.listQueue();
+		expect(JSON.parse(transport.sent[4]).verb).toBe("listQueue");
 
 		client.getDaemonInfo();
 		expect(JSON.parse(transport.sent[5]).verb).toBe("getDaemonInfo");
@@ -508,8 +508,8 @@ describe("BridgeClient", () => {
 		expect(errors).toEqual(["unknown frame kind: from_the_future"]);
 		// Latched, not blocking: the violation never silently stops the
 		// recognized traffic that shares the burst.
-		transport.inject({ kind: "active_sessions_changed", sessions: [] });
-		expect(seen).toEqual(["sessions_changed", "active_sessions_changed"]);
+		transport.inject({ kind: "queue_changed", sessions: [] });
+		expect(seen).toEqual(["sessions_changed", "queue_changed"]);
 		expect(errors).toHaveLength(1);
 	});
 });

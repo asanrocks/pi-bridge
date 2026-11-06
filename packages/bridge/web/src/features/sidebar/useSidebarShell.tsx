@@ -22,7 +22,7 @@ export function useSidebarShell() {
 	const projects = useStore((s) => s.projects);
 	const currentProjectId = useStore((s) => s.currentProjectId);
 	const currentStem = useStore((s) => s.currentStem);
-	const activeSessions = useStore((s) => s.activeSessions);
+	const queue = useStore((s) => s.queue);
 	const sessionPages = useStore((s) => s.sessionPages);
 	const rpc = useRpc();
 	const isWide = useMediaQuery(SIDEBAR_BREAKPOINT);
@@ -55,11 +55,12 @@ export function useSidebarShell() {
 			projects={projects}
 			currentProjectId={currentProjectId}
 			currentStem={currentStem}
-			activeSessions={activeSessions}
+			queue={queue}
 			sessionPages={sessionPages}
 			onOpenSession={rpc.openSession}
 			onOpenProject={rpc.openProject}
 			onCloseSession={rpc.closeSession}
+			onSetSessionState={rpc.setSessionState}
 			onArchiveSession={rpc.archiveSession}
 			onShowLauncher={showLauncher}
 			onLoadFolder={rpc.loadFolderSessions}

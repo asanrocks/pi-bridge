@@ -65,11 +65,12 @@ export const Sidebar = memo(function Sidebar({
 	projects,
 	currentProjectId,
 	currentStem,
-	activeSessions,
+	queue,
 	sessionPages,
 	onOpenSession,
 	onOpenProject,
 	onCloseSession,
+	onSetSessionState,
 	onArchiveSession,
 	onShowLauncher,
 	onLoadFolder,
@@ -84,17 +85,19 @@ export const Sidebar = memo(function Sidebar({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** Global active/streaming snapshot (ADR 11) — the authority for the
-	 *  pinned section at the top of each folder. */
-	activeSessions: SessionInfo[];
+	/** The global work queue (ADR 22) — the authority for the pinned section
+	 *  at the top of each folder. */
+	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
 	onOpenSession: (projectId: string, stem: string, sessionId?: string) => void;
 	/** Navigate to a Project's home (the compose surface) — the sidebar's
 	 *  folder-name click. */
 	onOpenProject: (projectId: string) => void;
-	/** Terminate a session's live instance (row menu Close, no confirmation). */
+	/** Clear a session's queue membership (row menu Close, no confirmation). */
 	onCloseSession: (projectId: string, stem: string) => void;
+	/** The user's defer/restore toggle (row menu) — non-busy queued rows. */
+	onSetSessionState: (projectId: string, stem: string, state: "notified" | "deferred") => void;
 	/** Close then archive a session (row menu Archive, no confirmation) —
 	 *  available on dormant rows too, where only the move happens. */
 	onArchiveSession: (projectId: string, stem: string) => void;
@@ -132,6 +135,13 @@ export const Sidebar = memo(function Sidebar({
 		[onArchiveSession],
 	);
 
+	const handleSetSessionState = useCallback(
+		(session: SessionInfo, state: "notified" | "deferred") => {
+			onSetSessionState(session.projectId, session.stem, state);
+		},
+		[onSetSessionState],
+	);
+
 	// All-projects leaves the current Project: detach, and the fullscreen
 	// overlay backs off (desktop → rail; mobile has nothing to dismiss from
 	// hidden mode).
@@ -160,7 +170,7 @@ export const Sidebar = memo(function Sidebar({
 					projects={projects}
 					currentProjectId={currentProjectId}
 					currentStem={currentStem}
-					activeSessions={activeSessions}
+					queue={queue}
 					sessionPages={sessionPages}
 					folds={folds}
 					onToggleAllFolders={cycleAllFolders}
@@ -177,6 +187,7 @@ export const Sidebar = memo(function Sidebar({
 						api.dismissAfterPick();
 					}}
 					onCloseSession={handleCloseSession}
+					onSetSessionState={handleSetSessionState}
 					onArchiveSession={handleArchiveSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={onLoadFolder}

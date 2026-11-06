@@ -15,7 +15,7 @@ function iso(y: number, m: number, d: number, h: number, min: number): string {
 const NOW = new Date(2026, 10, 3, 14, 5).getTime();
 
 function session(stem: string, timestamp: string): SessionInfo {
-	return { projectId: "p", sessionId: `id-${stem}`, stem, active: false, isStreaming: false, timestamp };
+	return { projectId: "p", sessionId: `id-${stem}`, stem, state: "inactive" as const, timestamp };
 }
 
 describe("sessionGroup", () => {

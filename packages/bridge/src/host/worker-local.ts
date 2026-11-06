@@ -53,6 +53,7 @@ import { resolveVisibleModelKeys } from "./model-visibility.ts";
 import { setWorkerTitle } from "./process-title.ts";
 import {
 	archiveStemFile,
+	containedSessionFile,
 	normalizeStem,
 	type ProjectConfig,
 	resolveStemPath,
@@ -66,10 +67,17 @@ import {
 	type SessionAdmission,
 	type SessionCapability,
 } from "./session-actor.ts";
-import { assertNoSessionIdConflicts, type CatalogLiveEntry, createSessionCatalog } from "./session-catalog.ts";
+import {
+	assertNoSessionIdConflicts,
+	type CatalogLiveEntry,
+	createSessionCatalog,
+	readSessionHeaderId,
+} from "./session-catalog.ts";
+import { createSessionStates, type SessionStates, type SessionToggleState } from "./session-state.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.ts";
 import type {
+	SessionAddress,
 	SessionPage,
 	SessionTarget,
 	WorkerEvent,
@@ -171,6 +179,11 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		registry.live().map((record) => ({ ref: record.ref, metadata: record.actor.metadata() }));
 
 	const catalog = createSessionCatalog(projects);
+	// The durable, user-visible session lifecycle (ADR 22): Worker-owned
+	// storage beside the sessions it describes, loaded and recovered once at
+	// construction — a persisted busy is rewritten to notified here, because
+	// this process died with the runtimes that were executing.
+	const states: SessionStates = createSessionStates(projects);
 
 	// ── Environment: settings, catalogue, repository ───────────────────
 	//
@@ -250,9 +263,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		};
 	};
 
-	const emitActiveSessions = (): void => {
+	/** The work-queue snapshot (ADR 22): membership is the durable state, so
+	 * browsing a session never reaches this list and idle collection never
+	 * removes a row from it. */
+	const emitQueue = (): void => {
 		if (disposed) return;
-		emit({ kind: "active_sessions_changed", sessions: catalog.listActiveSessions(liveEntries()) });
+		emit({ kind: "queue_changed", sessions: catalog.listQueue(liveEntries(), states) });
 	};
 
 	const emitSessionsChanged = (projectId: string): void => {
@@ -261,7 +277,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			emit({
 				kind: "sessions_changed",
 				projectId,
-				page: catalog.listSessions(projectId, SESSION_PAGE_SIZE, null, liveEntries()),
+				page: catalog.listSessions(projectId, SESSION_PAGE_SIZE, null, liveEntries(), states),
 			});
 		} catch {
 			// An unknown project or an unreadable directory is not a reason to
@@ -284,15 +300,22 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// The first settle after newSession flushes the file — rescan so the
 			// session moves to mtime ordering and its metadata appears.
 			emitSessionsChanged(ref.projectId);
-			emitActiveSessions();
+			emitQueue();
 			refreshTitle();
 		},
+		onFullySettled: (ref, execution) => {
+			// Full settlement of an admitted execution (ADR 22): busy becomes
+			// notified when the token is still current — the settle of an
+			// execution a newer admission superseded changes nothing.
+			if (typeof execution === "string") states.settle(ref.projectId, ref.sessionId, execution);
+			emitQueue();
+		},
 		onStreamingChange: () => {
-			emitActiveSessions();
+			emitQueue();
 			refreshTitle();
 		},
 		onRegistryChange: () => {
-			emitActiveSessions();
+			emitQueue();
 			refreshTitle();
 		},
 		onActivityChange: () => refreshTitle(),
@@ -355,6 +378,16 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			throw new Error("stale session target: replaced activation");
 		}
 		return record.admission;
+	};
+
+	/** Resolve a stem to the durable session id that addresses its state
+	 * record (ADR 22): a live activation's identity, else the file header's.
+	 * Null when neither exists — the stem names no session this Worker serves. */
+	const resolveDurableSessionId = async (project: ProjectConfig, stem: string): Promise<string | null> => {
+		const record = await registry.awaitSettled(project.id, stem);
+		if (record) return record.ref.sessionId;
+		const real = containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
+		return real === null ? null : readSessionHeaderId(real);
 	};
 
 	/** Install one observation on a live record: the counted capability that
@@ -505,7 +538,16 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 						}
 					}
 					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
-					await manager.promptAdmitted(text, images);
+					// The first prompt is an execution like any other (ADR 22):
+					// admitted under a store token, so its full settlement lands
+					// notified and a refused preflight restores the empty state.
+					const execution = states.admit(project.id, record.ref.sessionId);
+					try {
+						await manager.promptAdmitted(text, images, undefined, undefined, execution);
+					} catch (err) {
+						states.abandon(project.id, record.ref.sessionId, execution);
+						throw err;
+					}
 				} catch (err) {
 					await registry.collect(record);
 					throw err;
@@ -520,10 +562,30 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			const project = requireProject(address.projectId);
 			const stem = normalizeStem(address.stem);
 			const record = await registry.awaitSettled(project.id, stem);
-			if (!record || record.actor.phase !== "live" || record.collecting !== null) {
+			if (record && record.actor.phase !== "live") {
+				// A collecting activation is mid-disposal: today's window where
+				// the close is refused rather than joined.
 				throw new Error(`Session is not active: ${stem}`);
 			}
-			await registry.collect(record);
+			if (record && record.collecting === null) {
+				// Live runtime: the close captures the current execution token,
+				// then collects — disposal aborts and finalizes the in-flight
+				// turn, whose settle lands notified first — and finally writes
+				// inactive, so the close is the last write for that execution.
+				// An admission that began after the capture is a newer user
+				// intent: the write is skipped, the session stays busy (ADR 22).
+				const since = states.tokenOf(project.id, record.ref.sessionId);
+				await registry.collect(record);
+				states.markInactive(project.id, record.ref.sessionId, since);
+				emitQueue();
+				return;
+			}
+			// Dormant close (ADR 22): legal without a runtime — the state write
+			// is the whole operation. The stem's durable id addresses the record.
+			const sessionId = await resolveDurableSessionId(project, stem);
+			if (sessionId === null) throw new Error(`No such session: ${stem}`);
+			states.markInactive(project.id, sessionId, states.tokenOf(project.id, sessionId));
+			emitQueue();
 		},
 
 		archiveSession: async (address) => {
@@ -535,13 +597,33 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Close first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
 			if (record) await registry.collect(record);
+			// Resolve before the move: the archived file is no longer
+			// addressable at this stem. The archived session leaves discovery
+			// and the queue together (ADR 22) — its record is dropped.
+			const sessionId = record ? record.ref.sessionId : await resolveDurableSessionId(project, stem);
 			archiveStemFile(project.sessionDir, stem);
+			if (sessionId !== null) states.prune(project.id, sessionId);
 			emitSessionsChanged(project.id);
+			emitQueue();
 		},
 
 		// ── Session commands (target-addressed) ─────────────────────────
-		prompt: async (target, text, images, model, thinkingLevel) =>
-			admissionFor(target).prompt(text, images, model, thinkingLevel),
+		prompt: async (target, text, images, model, thinkingLevel) => {
+			const admission = admissionFor(target);
+			// Admission is an execution (ADR 22): the store lands busy under a
+			// fresh token before the turn starts, so any transition racing the
+			// admission — a defer from another tab — evaluates against busy,
+			// and a refused preflight restores the pre-admission state.
+			const execution = states.admit(target.projectId, target.sessionId);
+			emitQueue();
+			try {
+				await admission.prompt(text, images, model, thinkingLevel, execution);
+			} catch (err) {
+				states.abandon(target.projectId, target.sessionId, execution);
+				emitQueue();
+				throw err;
+			}
+		},
 		abort: async (target) => admissionFor(target).abort(),
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
 		renameSession: async (target, name) => {
@@ -550,12 +632,37 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		},
 		setLabel: async (target, entryId, label) => admissionFor(target).setLabel(entryId, label),
 		navigate: async (target, entryId) => admissionFor(target).navigate(entryId),
-		recoverTurn: async (target) => admissionFor(target).recoverTurn(),
+		recoverTurn: async (target) => {
+			const admission = admissionFor(target);
+			// Recovery is an execution on both of its paths (ADR 22): the relay
+			// prompt and the silent continuation report admission and completion
+			// through the same seams as any other turn.
+			const execution = states.admit(target.projectId, target.sessionId);
+			emitQueue();
+			try {
+				return await admission.recoverTurn(execution);
+			} catch (err) {
+				states.abandon(target.projectId, target.sessionId, execution);
+				emitQueue();
+				throw err;
+			}
+		},
 
 		// ── Queries ─────────────────────────────────────────────────────
 		listSessions: async (projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage> =>
-			catalog.listSessions(projectId, max, cursor ?? null, liveEntries()),
-		listActiveSessions: async (): Promise<SessionInfo[]> => catalog.listActiveSessions(liveEntries()),
+			catalog.listSessions(projectId, max, cursor ?? null, liveEntries(), states),
+		listQueue: async (): Promise<SessionInfo[]> => catalog.listQueue(liveEntries(), states),
+
+		setSessionState: async (address: SessionAddress, state: SessionToggleState): Promise<void> => {
+			const project = requireProject(address.projectId);
+			const stem = normalizeStem(address.stem);
+			const sessionId = await resolveDurableSessionId(project, stem);
+			if (sessionId === null) throw new Error(`No such session: ${stem}`);
+			// The store owns the precondition: a defer racing an admission is
+			// refused here, not by a caller that may have raced it (ADR 22).
+			states.toggle(project.id, sessionId, state);
+			emitQueue();
+		},
 
 		// ── Environment (Worker-owned reads and settings) ───────────────
 		info: async (): Promise<WorkerInfo> => {

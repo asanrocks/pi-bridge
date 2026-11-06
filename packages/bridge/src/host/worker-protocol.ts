@@ -145,7 +145,13 @@ export type WorkerRequest =
 			readonly max?: number;
 			readonly cursor?: SessionListCursor | null;
 	  }
-	| { readonly id: string; readonly kind: "listActiveSessions" }
+	| { readonly id: string; readonly kind: "listQueue" }
+	| {
+			readonly id: string;
+			readonly kind: "setSessionState";
+			readonly address: SessionAddress;
+			readonly state: "notified" | "deferred";
+	  }
 	| { readonly id: string; readonly kind: "info" }
 	| {
 			readonly id: string;

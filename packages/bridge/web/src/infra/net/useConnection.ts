@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";
-import { BridgeClient, type GetDaemonInfoReply, type ListActiveSessionsReply } from "../../../../src/core/index.ts";
+import { BridgeClient, type GetDaemonInfoReply, type ListQueueReply } from "../../../../src/core/index.ts";
 import { parseRoute } from "../lib/routes.ts";
 import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
@@ -39,7 +39,7 @@ import { restoreLocalSession } from "./sessionBoot.ts";
 
 // After this many failed reconnect attempts, state shifts to "unreachable".
 const UNREACHABLE_THRESHOLD = 5;
-// If the init RPC (getDaemonInfo + listActiveSessions) doesn't resolve in this
+// If the init RPC (getDaemonInfo + listQueue) doesn't resolve in this
 // window, treat it as init_failed rather than hanging in "connecting".
 const INIT_TIMEOUT_MS = 8000;
 
@@ -59,8 +59,8 @@ export function useConnection(): { retry: () => void } {
 			const timeout = new Promise<never>((_, reject) => {
 				timer = setTimeout(() => reject(new Error("daemon did not respond")), INIT_TIMEOUT_MS);
 			});
-			const [daemonReply, activeReply] = await Promise.race([
-				Promise.all([client.getDaemonInfo(), client.listActiveSessions()]),
+			const [daemonReply, queueReply] = await Promise.race([
+				Promise.all([client.getDaemonInfo(), client.listQueue()]),
 				timeout,
 			]);
 
@@ -82,11 +82,11 @@ export function useConnection(): { retry: () => void } {
 				hookConsole(client);
 			}
 
-			// Global active/streaming snapshot
-			const active = activeReply as unknown as ListActiveSessionsReply;
-			const activeSessions = active.sessions ?? [];
-			for (const row of activeSessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-			store.getState().setActiveSessions(activeSessions);
+			// Global work-queue snapshot (ADR 22)
+			const queue = queueReply as unknown as ListQueueReply;
+			const queueRows = queue.sessions ?? [];
+			for (const row of queueRows) rememberAddress(row.projectId, row.stem, row.sessionId);
+			store.getState().setQueue(queueRows);
 
 			// Sidebar folder pages are connection-scoped: a reconnect may be
 			// talking to a restarted daemon, so drop them. Expanded folders see

@@ -37,6 +37,8 @@ interface StubHandles {
 	 * exercises both the daemon's onPatch listener and the GC eligibility
 	 * check, which reads `document.status.isStreaming`. */
 	setStreaming: (streaming: boolean) => void;
+	/** The current execution fully settled (ADR 22). */
+	settle: () => void;
 	patchListenerCount: () => number;
 	disposed: () => boolean;
 }
@@ -93,7 +95,9 @@ function makeStubManager(opts: {
 }): StubManager {
 	const cwd = opts.cwd ?? "";
 	const agentDir = opts.agentDir ?? "";
-	const sessionId = opts.sessionId ?? `sess-${++stubCounter}`;
+	const sessionId =
+		opts.sessionId ??
+		(opts.sessionPath ? (readHeaderId(opts.sessionPath) ?? `sess-${++stubCounter}`) : `sess-${++stubCounter}`);
 	const sessionFile =
 		opts.sessionPath ?? join(sessionDirFor(cwd, agentDir), `2026-01-01T00-00-00-000Z_${sessionId}.jsonl`);
 	const document = emptyStubDocument();
@@ -105,8 +109,10 @@ function makeStubManager(opts: {
 	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	const setThinkingLevelCalls: string[] = [];
 	const settledListeners = new Set<() => void>();
+	const fullySettledListeners = new Set<(execution: string | undefined) => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
+	let lastExecution: string | undefined;
 
 	const manager: Manager = {
 		get document() {
@@ -124,6 +130,10 @@ function makeStubManager(opts: {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
+		onFullySettled(listener: (execution: string | undefined) => void) {
+			fullySettledListeners.add(listener);
+			return () => fullySettledListeners.delete(listener);
+		},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		addConnection(handle, session: SessionRef) {
@@ -134,10 +144,13 @@ function makeStubManager(opts: {
 		removeConnection(handle) {
 			connectionHandles.delete(handle);
 		},
-		async prompt() {},
-		async promptAdmitted(text: string, images?: unknown[]) {
+		async prompt(_text: string, _images?: unknown[], _model?: unknown, _level?: unknown, execution?: string) {
+			lastExecution = execution;
+		},
+		async promptAdmitted(text: string, images?: unknown[], _model?: unknown, _level?: unknown, execution?: string) {
 			events.push("admit");
 			if (opts.admitError) throw opts.admitError;
+			lastExecution = execution;
 			admittedTexts.push(text);
 			admittedCalls.push({ text, images });
 		},
@@ -156,7 +169,8 @@ function makeStubManager(opts: {
 		async renameSession() {},
 		async setLabel() {},
 		async navigate() {},
-		async recoverTurn(): Promise<"retry" | "continue"> {
+		async recoverTurn(execution?: string): Promise<"retry" | "continue"> {
+			lastExecution = execution;
 			return "retry";
 		},
 		async dispose() {
@@ -179,6 +193,11 @@ function makeStubManager(opts: {
 		setStreaming: (streaming: boolean) => {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
+		},
+		/** The current execution fully settled (ADR 22): fires the Manager's
+		 * signal with the token its admission carried. */
+		settle: () => {
+			for (const listener of fullySettledListeners) listener(lastExecution);
 		},
 		patchListenerCount: () => patchListenerCount(patchListeners, connectionHandles),
 		disposed: () => wasDisposed,
@@ -344,6 +363,19 @@ function sessionFileText(sessionId: string, cwd: string): string {
 function writeSessionAt(file: string, sessionId: string, cwd: string): void {
 	mkdirSync(dirname(file), { recursive: true });
 	writeFileSync(file, sessionFileText(sessionId, cwd));
+}
+
+/** The durable id a resumed file's header carries — what the real Manager's
+ * `liveSessionId` reports and the session-state store is keyed by (ADR 22). */
+function readHeaderId(file: string): string | null {
+	try {
+		const first = readFileSync(file, "utf8").split("\n", 1)[0];
+		const parsed = JSON.parse(first) as { type?: string; id?: string };
+		if (parsed.type === "session" && typeof parsed.id === "string") return parsed.id;
+	} catch {
+		// fall through to the fallback
+	}
+	return null;
 }
 
 /** Write a minimal durable session file; returns its stem. */
@@ -837,18 +869,19 @@ describe("daemon: session activation", () => {
 		expect(reply.session.stem).toContain(reply.session.sessionId);
 		await waitForPush(frames, "replace");
 
-		const listId = send(ws, { verb: "listActiveSessions" });
+		const listId = send(ws, { verb: "listQueue" });
 		const list = (await waitForReply(frames, listId)) as unknown as {
-			sessions: Array<{ sessionId: string; stem: string; active: boolean }>;
+			sessions: Array<{ sessionId: string; stem: string; state: string }>;
 		};
 		expect(list.sessions).toHaveLength(1);
 		expect(list.sessions[0].sessionId).toBe(reply.session.sessionId);
-		expect(list.sessions[0].active).toBe(true);
+		// The first prompt's admission landed busy (ADR 22).
+		expect(list.sessions[0].state).toBe("busy");
 
 		ws.close();
 	});
 
-	it("listActiveSessions previews the live document's latest message and activity", async () => {
+	it("listQueue previews the live document's latest message and activity", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const entries: Document["entries"] = {
 			m1: {
@@ -881,7 +914,7 @@ describe("daemon: session activation", () => {
 		const id = send(ws, { verb: "newSession", projectId, text: "first prompt", operationId: "op-1" });
 		await waitForReply(frames, id);
 
-		const listId = send(ws, { verb: "listActiveSessions" });
+		const listId = send(ws, { verb: "listQueue" });
 		const reply = (await waitForReply(frames, listId)) as unknown as {
 			sessions: Array<{ firstMessageText?: string; lastMessageText?: string; lastActivityAt?: string }>;
 		};
@@ -1026,7 +1059,7 @@ describe("daemon: session activation", () => {
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("Model not found");
 		// Nothing survives: the activation was disposed, not left for idle GC.
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		ws.close();
 	});
@@ -1053,7 +1086,7 @@ describe("daemon: session activation", () => {
 		expect(reply.error).toContain("no model selected");
 		// No empty session survives: the activation was disposed, not left for
 		// idle GC.
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		// A later retry works (the address was released cleanly).
 		refuseAdmission = false;
@@ -1100,7 +1133,7 @@ describe("daemon: session activation", () => {
 			expect(reply.error).toMatch(errorRe);
 		}
 		// Nothing was created — text is a precondition, not an option.
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		ws.close();
 	});
@@ -1285,14 +1318,14 @@ describe("daemon: session activation", () => {
 		// The creation is in flight (the factory is gated).
 		await settle();
 		expect(factoryCalls).toBe(1);
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		ws.close();
 		// Shutdown while the factory is still pending: the drain parks on the
 		// in-flight creation instead of clearing the registry and returning.
 		const disposePromise = daemon.dispose();
 		await settle(100);
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		// The factory completes after shutdown. The registration must be
 		// refused — nothing appears in the active snapshot — and the Manager
@@ -1300,7 +1333,7 @@ describe("daemon: session activation", () => {
 		releaseFactory();
 		await disposePromise;
 		await settle();
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 		expect(stubRef.current?.handles.disposed()).toBe(true);
 
 		// Idempotent: the afterEach drain runs dispose again.
@@ -1342,7 +1375,7 @@ describe("daemon: session activation", () => {
 		// The fresh-session creation is in flight (the factory is gated) and
 		// has no address yet — there is nothing in the active snapshot for the
 		// drain to see.
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 
 		ws.close();
 		const disposePromise = daemon.dispose();
@@ -1354,7 +1387,7 @@ describe("daemon: session activation", () => {
 		releaseFactory();
 		await disposePromise;
 		expect(stubRef.current?.handles.disposed()).toBe(true);
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 	}, 10000);
 
 	it("dispose disposes every live manager exactly once and admits nothing afterwards", async () => {
@@ -1385,7 +1418,12 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem2 }))).ok).toBe(true);
-		expect(await daemon.listActiveSessions()).toHaveLength(2);
+		// Browsing is inert (ADR 22): an opened session is not a queue row, so
+		// admit work on both to make them observable in the queue.
+		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
+		expect(await daemon.listQueue()).toHaveLength(2);
 
 		ws.close();
 		await daemon.dispose();
@@ -1393,7 +1431,7 @@ describe("daemon: session activation", () => {
 
 		expect(disposals).toHaveLength(2);
 		expect(new Set(disposals).size).toBe(2);
-		expect(await daemon.listActiveSessions()).toHaveLength(0);
+		expect(await daemon.listQueue()).toHaveLength(0);
 	}, 10000);
 });
 
@@ -1422,7 +1460,7 @@ describe("daemon: idle GC", () => {
 
 		// Let the GC fire, then observe the empty active snapshot.
 		await settle(150);
-		const listId = send(ws, { verb: "listActiveSessions" });
+		const listId = send(ws, { verb: "listQueue" });
 		const list = (await waitForReply(frames, listId)) as unknown as { sessions: unknown[] };
 		expect(list.sessions).toEqual([]);
 		// GC disposes the runtime; it never deletes the session file.
@@ -1462,9 +1500,12 @@ describe("daemon: idle GC", () => {
 
 		await settle(150);
 		expect(stubRef.current?.handles.disposed()).toBe(false);
-		const listId = send(ws, { verb: "listActiveSessions" });
+		// Browsing is inert (ADR 22): an opened session holds no queue row —
+		// the activation's existence is the factory/dispose observable, not a
+		// queue membership.
+		const listId = send(ws, { verb: "listQueue" });
 		const list = (await waitForReply(frames, listId)) as unknown as { sessions: unknown[] };
-		expect(list.sessions).toHaveLength(1);
+		expect(list.sessions).toHaveLength(0);
 		expect(factoryCalls).toBe(1);
 
 		ws.close();
@@ -1560,14 +1601,14 @@ describe("daemon: idle GC", () => {
 
 		// Past the short idle delay: the longer unflushed cap still holds.
 		await settle(150);
-		let list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+		let list = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
 			sessions: unknown[];
 		};
 		expect(list.sessions).toHaveLength(1);
 
 		// Past the longer cap: collected (entries were never durable).
 		await settle(400);
-		list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
+		list = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
 			sessions: unknown[];
 		};
 		expect(list.sessions).toEqual([]);
@@ -1599,26 +1640,32 @@ describe("daemon: idle GC", () => {
 
 		const stub = stubRef.current;
 		if (!stub) throw new Error("stub not created");
+		// Admit work so the queue holds the row (ADR 22): busy through the run.
+		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
 		stub.handles.setStreaming(true);
 		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
 
 		// The idle timer fires but re-arms while the session is streaming.
 		await settle(150);
-		const list = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
-			sessions: Array<{ stem: string; isStreaming: boolean }>;
+		const list = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
+			sessions: Array<{ stem: string; state: string }>;
 		};
 		expect(list.sessions).toHaveLength(1);
-		expect(list.sessions[0].isStreaming).toBe(true);
+		expect(list.sessions[0].state).toBe("busy");
 		expect(stub.handles.disposed()).toBe(false);
 
-		// Settling releases the re-armed timer.
+		// Settling releases the re-armed timer — and the queue row survives the
+		// collection (ADR 22): idle collection removes the runtime, never the
+		// durable state.
 		stub.handles.setStreaming(false);
+		stub.handles.settle();
 		await settle(150);
-		const settled = (await waitForReply(frames, send(ws, { verb: "listActiveSessions" }))) as unknown as {
-			sessions: unknown[];
+		const settled = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
+			sessions: Array<{ stem: string; state: string }>;
 		};
-		expect(settled.sessions).toEqual([]);
 		expect(stub.handles.disposed()).toBe(true);
+		expect(settled.sessions).toHaveLength(1);
+		expect(settled.sessions[0].state).toBe("notified");
 
 		ws.close();
 	});
@@ -1663,7 +1710,7 @@ describe("daemon: idle GC", () => {
 
 		const ws2 = await openClient(port);
 		const frames2 = collectFrames(ws2);
-		const list = (await waitForReply(frames2, send(ws2, { verb: "listActiveSessions" }))) as unknown as {
+		const list = (await waitForReply(frames2, send(ws2, { verb: "listQueue" }))) as unknown as {
 			sessions: unknown[];
 		};
 		expect(list.sessions).toEqual([]);
@@ -1701,17 +1748,17 @@ describe("daemon: closeSession", () => {
 		expect((await waitForReply(frames, closeId)).ok).toBe(true);
 		expect(stub!.handles.disposed()).toBe(true);
 
-		// The global snapshot drops the row; the history file survives.
+		// The queue drops the row (the close wrote inactive); the history file
+		// survives.
 		await waitFor(
 			frames,
-			(f) =>
-				f.kind === "active_sessions_changed" &&
-				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
 		);
 		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
 
-		// Closing again fails (nothing is active) and re-opening resumes fresh.
-		expect((await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem }))).ok).toBe(false);
+		// Closing again is legal (ADR 22: a dormant close is a state write)
+		// and re-opening resumes fresh.
+		expect((await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
 		await waitForPush(frames, "replace");
 		expect(factoryCalls).toBe(2);
@@ -1719,11 +1766,11 @@ describe("daemon: closeSession", () => {
 		ws.close();
 	});
 
-	it("rejects unknown projects and never-active sessions", async () => {
+	it("rejects unknown projects and stems with no session at all; a dormant file closes (ADR 22)", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
-		writeSessionFile(a, agentDir, "kill-2");
+		const dormantStem = writeSessionFile(a, agentDir, "kill-2");
 
 		const ws = await openClient(port);
 		const frames = collectFrames(ws);
@@ -1734,8 +1781,18 @@ describe("daemon: closeSession", () => {
 		expect(unknownProject.ok).toBe(false);
 		expect(unknownProject.error).toContain("Unknown project");
 
-		const inactive = await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem: "kill-2" }));
-		expect(inactive.ok).toBe(false);
+		// A dormant session (a file, never activated) closes legally now: the
+		// state write is the whole operation.
+		const dormant = await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem: dormantStem }));
+		expect(dormant.ok).toBe(true);
+
+		// A stem with no session at all is still an error.
+		const ghost = (await waitForReply(
+			frames,
+			send(ws, { verb: "closeSession", projectId, stem: "ghost" }),
+		)) as unknown as RpcReply & { error?: string };
+		expect(ghost.ok).toBe(false);
+		expect(ghost.error).toContain("No such session");
 
 		ws.close();
 	});
@@ -1990,9 +2047,7 @@ describe("daemon: archiveSession", () => {
 		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
 		await waitFor(
 			frames,
-			(f) =>
-				f.kind === "active_sessions_changed" &&
-				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
 		);
 
 		ws.close();
@@ -2059,7 +2114,7 @@ describe("daemon: archiveSession", () => {
 		await waitFor(
 			frames,
 			(f) =>
-				f.kind === "active_sessions_changed" &&
+				f.kind === "queue_changed" &&
 				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === created.session.stem),
 		);
 
@@ -2194,16 +2249,17 @@ describe("daemon: session listing", () => {
 		expect(page2.sessions.map((s) => s.stem)).toEqual([older]);
 		expect(page2.hasMore).toBe(false);
 
-		// An unflushed active session is included as a normal row.
+		// An unflushed session with admitted work is included as a normal row —
+		// and queued as busy (ADR 22).
 		const newId = send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		const created = (await waitForReply(frames, newId)) as unknown as { session: SessionRef };
 		const allId = send(ws, { verb: "listSessions", projectId });
 		const all = (await waitForReply(frames, allId)) as unknown as {
-			sessions: Array<{ stem: string; active: boolean; sessionId: string }>;
+			sessions: Array<{ stem: string; state: string; sessionId: string }>;
 		};
 		const createdRow = all.sessions.find((s) => s.stem === created.session.stem);
 		expect(createdRow).toBeDefined();
-		expect(createdRow?.active).toBe(true);
+		expect(createdRow?.state).toBe("busy");
 		expect(createdRow?.sessionId).toBe(created.session.sessionId);
 
 		ws.close();
@@ -2314,7 +2370,7 @@ describe("daemon: session listing", () => {
 		ws.close();
 	});
 
-	it("broadcasts sessions_changed for the Project and a global active snapshot", async () => {
+	it("broadcasts sessions_changed for the Project and the global queue", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2336,8 +2392,13 @@ describe("daemon: session listing", () => {
 		expect(changed.projectId).toBe(projectId);
 		expect(Array.isArray(changed.sessions)).toBe(true);
 
-		const active = await waitForPush(launcherFrames, "active_sessions_changed");
-		expect((active.sessions as Array<{ stem: string }>).some((s) => s.stem === stem)).toBe(true);
+		// Admitted work reaches the launcher's queue (ADR 22): the push carries
+		// the busy row.
+		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
+		await waitFor(
+			launcherFrames,
+			(f) => f.kind === "queue_changed" && (f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+		);
 
 		ws.close();
 		launcher.close();

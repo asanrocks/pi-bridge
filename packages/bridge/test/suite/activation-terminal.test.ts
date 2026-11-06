@@ -28,6 +28,7 @@ function stubManager(sessionId: string): Manager & { disposeCalls(): number } {
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},
@@ -69,6 +70,7 @@ describe("Activation terminal state", () => {
 			idleGcMs: 60_000,
 			unflushedIdleGcMs: 60_000,
 			onSettled: () => {},
+			onFullySettled: () => {},
 			onStreamingChange: () => {},
 			onRegistryChange: () => {},
 		});

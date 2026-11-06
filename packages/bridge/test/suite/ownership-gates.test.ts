@@ -42,6 +42,7 @@ function gatedManager(onDispose: () => Promise<void>): Manager {
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
+		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},
@@ -66,6 +67,7 @@ function makeRegistry(manager: Manager): ActivationRegistry {
 		idleGcMs: 60_000,
 		unflushedIdleGcMs: 60_000,
 		onSettled: () => {},
+		onFullySettled: () => {},
 		onStreamingChange: () => {},
 		onRegistryChange: () => {},
 	});

@@ -14,9 +14,9 @@ import type {
 	GitDiffState,
 	GitShowReply,
 	ImageContent,
-	ListActiveSessionsReply,
 	ListDirectoryReply,
 	ListFilesReply,
+	ListQueueReply,
 	ListSessionsReply,
 	ModelRef,
 	PinnedModelSelection,
@@ -239,16 +239,23 @@ export function useRpc() {
 		[openProject],
 	);
 
-	/** Refresh the global active/streaming snapshot without side effects. */
-	const refreshActiveSessions = useCallback(async () => {
-		const reply = await getGlobalClient()?.listActiveSessions();
+	/** Refresh the global work queue without side effects. */
+	const refreshQueue = useCallback(async () => {
+		const reply = await getGlobalClient()?.listQueue();
 		if (reply?.ok) {
-			const data = reply as unknown as ListActiveSessionsReply;
+			const data = reply as unknown as ListQueueReply;
 			rememberRows(data.sessions);
 			getStore()
 				.getState()
-				.setActiveSessions(data.sessions ?? []);
+				.setQueue(data.sessions ?? []);
 		}
+	}, []);
+
+	/** The user's defer/restore toggle (ADR 22): moves a non-busy queued session
+	 * between `notified` and `deferred`. The refusal (busy) and the resulting
+	 * queue both arrive from the daemon — the push converges every tab. */
+	const setSessionState = useCallback(async (projectId: string, stem: string, state: "notified" | "deferred") => {
+		await rpc(() => getGlobalClient()?.setSessionState(projectId, stem, state), "update session state failed");
 	}, []);
 
 	/** Fetch a sidebar folder's first session page (lazy, on expand). Also the
@@ -310,7 +317,8 @@ export function useRpc() {
 			detach,
 			closeSession,
 			archiveSession,
-			refreshActiveSessions,
+			refreshQueue,
+			setSessionState,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 		}),
@@ -330,7 +338,8 @@ export function useRpc() {
 			detach,
 			closeSession,
 			archiveSession,
-			refreshActiveSessions,
+			refreshQueue,
+			setSessionState,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 		],

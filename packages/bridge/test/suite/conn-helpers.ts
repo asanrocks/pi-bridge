@@ -165,8 +165,7 @@ const stubSession: SessionInfo = {
 	projectId: "proj",
 	sessionId: "s1",
 	stem: "2024-01-01_s1",
-	active: false,
-	isStreaming: false,
+	state: "inactive",
 	name: "Session 1",
 	timestamp: "2024-01-01T00:00:00Z",
 	messageCount: 5,
@@ -174,7 +173,8 @@ const stubSession: SessionInfo = {
 
 export const mockDaemonVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [stubSession], hasMore: false }),
-	listActiveSessions: async () => [],
+	listQueue: async () => [],
+	setSessionState: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
