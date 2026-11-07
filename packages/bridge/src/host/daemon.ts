@@ -88,7 +88,7 @@ export class Daemon {
 	/** The routing table: a Project id is served by exactly one Worker. Claiming
 	 * is atomic across registrations, so `/<projectId>` is never ambiguous. */
 	private routes = new Map<string, WorkerHost>();
-	/** Each Worker's last reported work-queue snapshot (ADR 22). The browser
+	/** Each Worker's last reported work-queue snapshot. The browser
 	 * store replaces its list on every push, so a push carries the aggregate
 	 * rather than one Worker's slice. */
 	private queueByHost = new Map<WorkerHost, SessionInfo[]>();
@@ -483,7 +483,7 @@ export class Daemon {
 		await host.dispose().catch(() => {});
 	}
 
-	/** The global work queue (ADR 22): the Workers own the durable states those
+	/** The global work queue: the Workers own the durable states those
 	 * rows describe, so each reports its own slice. The queue order is each
 	 * Worker's; slices concatenate. */
 	async listQueue(): Promise<SessionInfo[]> {
@@ -524,7 +524,7 @@ export class Daemon {
 			});
 	}
 
-	/** Push the aggregate work queue (ADR 22): one push carries the join of
+	/** Push the aggregate work queue: one push carries the join of
 	 * every registration's last report, never one Worker's slice. */
 	private broadcastQueue(): void {
 		const sessions = this.workers.flatMap((host) => this.queueByHost.get(host) ?? []);

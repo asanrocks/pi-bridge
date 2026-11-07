@@ -1,6 +1,11 @@
 # ADR 0013: The `@latest` alias
 
-**Status:** Implemented
+**Status:** Implemented. The resolution source has since changed (the
+durable session states, whose change record is merged into the permanent docs): the
+alias now resolves to the most recently active queued session that is
+not deferred, and a deferred-only scope resolves as empty. Scopes,
+fallbacks, and the URL behavior are unchanged; see glossary A.7 for the
+current rule.
 
 ## Context
 

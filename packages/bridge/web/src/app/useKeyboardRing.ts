@@ -153,7 +153,7 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 		[vm, navigate],
 	);
 
-	// Alt+↑/↓ — cycle the work queue (ADR 22 order: notified → busy →
+	// Alt+↑/↓ — cycle the work queue (queue order: notified → busy →
 	// deferred, activity desc — the sidebar's pinned order). Cyclic; from the
 	// launcher (nothing attached) both directions open the first. Live
 	// mid-stream: switching is an attach (ADR 11), not a retarget of the

@@ -1,6 +1,6 @@
 // ============================================================================
 // Launcher — the unattached home view (ADR 11). Two surfaces:
-//  - `/` (global): browse Projects and pick up work from the queue (ADR 22).
+//  - `/` (global): browse Projects and pick up work from the queue.
 //  - `/<projectId>` (Project home): the compose card only (HomeCompose) —
 //    centered and always expanded, it starts a new session on send (the
 //    daemon admits the first prompt, attachments, and the pre-session model
@@ -38,7 +38,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
 	const now = useNow();
-	/** The daemon's queue order is the presentation order (ADR 22): notified →
+	/** The daemon's queue order is the presentation order: notified →
 	 * busy → deferred, each group by last activity descending — the same
 	 * order the sidebar's pinned sections show. */
 	const queued = useMemo(() => [...queue], [queue]);
@@ -170,7 +170,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 						// only has one (or the file scan predates the field).
 						const preview = session.lastMessageText ?? session.firstMessageText;
 						const when = session.lastActivityAt ?? session.timestamp;
-						// The mark derives from the durable state alone (ADR 22).
+						// The mark derives from the durable state alone.
 						const dotCls = [
 							styles.dot,
 							session.state === "busy"

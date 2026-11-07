@@ -37,7 +37,7 @@ interface StubHandles {
 	 * exercises both the daemon's onPatch listener and the GC eligibility
 	 * check, which reads `document.status.isStreaming`. */
 	setStreaming: (streaming: boolean) => void;
-	/** The current execution fully settled (ADR 22). */
+	/** The current execution fully settled. */
 	settle: () => void;
 	patchListenerCount: () => number;
 	disposed: () => boolean;
@@ -194,7 +194,7 @@ function makeStubManager(opts: {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
 		},
-		/** The current execution fully settled (ADR 22): fires the Manager's
+		/** The current execution fully settled: fires the Manager's
 		 * signal with the token its admission carried. */
 		settle: () => {
 			for (const listener of fullySettledListeners) listener(lastExecution);
@@ -366,7 +366,7 @@ function writeSessionAt(file: string, sessionId: string, cwd: string): void {
 }
 
 /** The durable id a resumed file's header carries — what the real Manager's
- * `liveSessionId` reports and the session-state store is keyed by (ADR 22). */
+ * `liveSessionId` reports and the session-state store is keyed by. */
 function readHeaderId(file: string): string | null {
 	try {
 		const first = readFileSync(file, "utf8").split("\n", 1)[0];
@@ -875,7 +875,7 @@ describe("daemon: session activation", () => {
 		};
 		expect(list.sessions).toHaveLength(1);
 		expect(list.sessions[0].sessionId).toBe(reply.session.sessionId);
-		// The first prompt's admission landed busy (ADR 22).
+		// The first prompt's admission landed busy.
 		expect(list.sessions[0].state).toBe("busy");
 
 		ws.close();
@@ -1418,7 +1418,7 @@ describe("daemon: session activation", () => {
 		const frames = collectFrames(ws);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem2 }))).ok).toBe(true);
-		// Browsing is inert (ADR 22): an opened session is not a queue row, so
+		// Browsing is inert: an opened session is not a queue row, so
 		// admit work on both to make them observable in the queue.
 		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem: stem1 }))).ok).toBe(true);
@@ -1500,7 +1500,7 @@ describe("daemon: idle GC", () => {
 
 		await settle(150);
 		expect(stubRef.current?.handles.disposed()).toBe(false);
-		// Browsing is inert (ADR 22): an opened session holds no queue row —
+		// Browsing is inert: an opened session holds no queue row —
 		// the activation's existence is the factory/dispose observable, not a
 		// queue membership.
 		const listId = send(ws, { verb: "listQueue" });
@@ -1640,7 +1640,7 @@ describe("daemon: idle GC", () => {
 
 		const stub = stubRef.current;
 		if (!stub) throw new Error("stub not created");
-		// Admit work so the queue holds the row (ADR 22): busy through the run.
+		// Admit work so the queue holds the row: busy through the run.
 		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
 		stub.handles.setStreaming(true);
 		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
@@ -1655,7 +1655,7 @@ describe("daemon: idle GC", () => {
 		expect(stub.handles.disposed()).toBe(false);
 
 		// Settling releases the re-armed timer — and the queue row survives the
-		// collection (ADR 22): idle collection removes the runtime, never the
+		// collection: idle collection removes the runtime, never the
 		// durable state.
 		stub.handles.setStreaming(false);
 		stub.handles.settle();
@@ -1756,7 +1756,7 @@ describe("daemon: closeSession", () => {
 		);
 		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
 
-		// Closing again is legal (ADR 22: a dormant close is a state write)
+		// Closing again is legal ( a dormant close is a state write)
 		// and re-opening resumes fresh.
 		expect((await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem }))).ok).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
@@ -1766,7 +1766,7 @@ describe("daemon: closeSession", () => {
 		ws.close();
 	});
 
-	it("rejects unknown projects and stems with no session at all; a dormant file closes (ADR 22)", async () => {
+	it("rejects unknown projects and stems with no session at all; a dormant file closes", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2250,7 +2250,7 @@ describe("daemon: session listing", () => {
 		expect(page2.hasMore).toBe(false);
 
 		// An unflushed session with admitted work is included as a normal row —
-		// and queued as busy (ADR 22).
+		// and queued as busy.
 		const newId = send(ws, { verb: "newSession", projectId, text: "hello", operationId: "op-1" });
 		const created = (await waitForReply(frames, newId)) as unknown as { session: SessionRef };
 		const allId = send(ws, { verb: "listSessions", projectId });
@@ -2392,7 +2392,7 @@ describe("daemon: session listing", () => {
 		expect(changed.projectId).toBe(projectId);
 		expect(Array.isArray(changed.sessions)).toBe(true);
 
-		// Admitted work reaches the launcher's queue (ADR 22): the push carries
+		// Admitted work reaches the launcher's queue: the push carries
 		// the busy row.
 		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
 		await waitFor(

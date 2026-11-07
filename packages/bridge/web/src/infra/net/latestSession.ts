@@ -1,11 +1,11 @@
 // resolveLatestSession — the `@latest` alias target (ADR 13, revised by
-// ADR 22).
+// the durable session states).
 //
 // The scope comes from the alias's position in the URL: the root form spans
 // Projects, a Project's `@latest` resolves inside that Project. Within the
 // scope: the most recently active queued Session — a notified or busy row of
 // the work queue; deferred is excluded, because that state's own meaning is
-// "not next" (ADR 22). With the queue holding no such row in scope, the most
+// "not next". With the queue holding no such row in scope, the most
 // recent durable Session applies (each in-scope Project's first `listSessions`
 // row, ordered by its durable sort time). The caller opens the result, which
 // activates a durable Session. Returns null when nothing exists in scope.

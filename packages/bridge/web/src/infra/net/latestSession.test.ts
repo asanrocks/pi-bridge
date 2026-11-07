@@ -1,4 +1,4 @@
-// resolveLatestSession — the `/@latest` target (ADR 13, revised by ADR 22):
+// resolveLatestSession — the `/@latest` target (ADR 13, revised by the durable session states):
 // the most recently active queued Session that is not deferred, else the most
 // recent durable Session across Projects. Fake client, hand-built rows.
 
@@ -48,7 +48,7 @@ describe("resolveLatestSession", () => {
 		expect(listSessions).not.toHaveBeenCalled();
 	});
 
-	it("excludes deferred rows: a deferred-only queue resolves as empty (ADR 22)", async () => {
+	it("excludes deferred rows: a deferred-only queue resolves as empty", async () => {
 		const { client, listSessions } = fakeClient({ p1: [row("p1", "durable", "2025-06-01T00:00:00.000Z")] });
 		const queue = [
 			row("p2", "parked", "2030-01-01T00:00:00.000Z", {

@@ -31,7 +31,7 @@ and rejects exactly once, so a failed request leaves nothing pending.
 | `replace` | `{ session: SessionRef, document: Document, generation, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
 | `patch` | `{ ops: PatchOp[], session?: SessionRef, generation, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
 | `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
-| `active_sessions_changed` | `{ sessions }`, the global snapshot of active or streaming Sessions. |
+| `queue_changed` | `{ sessions }`, the global work queue: every non-inactive Session, ordered notified → busy → deferred, each group by last activity descending. Membership is the durable session state, never runtime retention. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
 | `session_closed` | `{ projectId, stem, generation }`. The live runtime behind that address ended (`closeSession` or `archiveSession`). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
@@ -70,11 +70,14 @@ no live frame. A `pull` reply carries the generation current when its
 request was admitted, so a reply that lands after a reattach is dropped
 instead of filling the successor with the old observation's values.
 
-A push is unsolicited. `sessions_changed`, `active_sessions_changed`,
+A push is unsolicited. `sessions_changed`, `queue_changed`,
 `pinned_models_changed`, and `session_closed` do not alter the Document
-mirror. The connection sends session-list pushes to every
-socket; the web client updates the relevant Project page or global active
-snapshot, and a `session_closed` for the rendered Session ends that view
+mirror. Every listing row (`sessions_changed`, `queue_changed`,
+`listSessions`, `listQueue`) carries the Session's durable `state`
+(`inactive | notified | busy | deferred`) and never a runtime
+retention fact — streaming is Document state, not a listing field. The connection sends session-list pushes to every
+socket; the web client updates the relevant Project page or the work queue,
+and a `session_closed` for the rendered Session ends that view
 without touching the mirror.
 
 ## RPC verb contracts
@@ -106,10 +109,11 @@ immediately but tracked (see [host runtime](../host/runtime.md)).
 | `openSession` | Project plus `stem`; reattaches this Connection | `{ ok: true, session: SessionRef }`. The initial `replace` or cursor patch is pushed before the reply. An optional `PrefixCursor` selects the delta path. |
 | `newSession` | Project; first prompt text and an `operationId` are required | `{ ok: true, session: SessionRef, operationId }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn and the operation id. Refused admission leaves no empty live Session. A missing `operationId` is refused — an unattributed creation cannot be admitted by a selection owner. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
-| `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation is disposed. The session file survives; Project and active-session pushes refresh observers. Every Connection attached to the address is detached and receives a `session_closed` push — after the disposal's final patches, before this reply. |
-| `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix. The file survives but is no longer discovered, and its stem is no longer addressable; Project and active-session pushes refresh observers. Attached Connections are detached and receive a `session_closed` push, as with `closeSession`. Fails when no durable file exists to move. |
+| `closeSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session's durable state is written `inactive`: the close captures the current execution token, so disposal's abort — whose settle lands notified first — is followed by the close's write as the last one for that execution; an admission that began after the capture keeps the session busy. Legal on a dormant Session (the state write is the whole operation); a stem with no session at all is an error. The session file survives; Project and queue pushes refresh observers. Every Connection attached to the address is detached and receives a `session_closed` push — after the disposal's final patches, before this reply. |
+| `archiveSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved archive prefix; the archived session's queue record is dropped. The file survives but is no longer discovered, and its stem is no longer addressable; Project and queue pushes refresh observers. Attached Connections are detached and receive a `session_closed` push, as with `closeSession`. Fails when no durable file exists to move. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
-| `listActiveSessions` | Daemon-global | `{ ok: true, sessions }`; no attachment and no Document push. |
+| `listQueue` | Daemon-global | `{ ok: true, sessions }`; the work queue: non-inactive Sessions, ordered notified → busy → deferred, then last activity descending. No attachment and no Document push. |
+| `setSessionState` | Project plus `stem` and a `state` of `notified` or `deferred` | `{ ok: true }` after the user's defer/restore toggle. Refused while the session is busy — the state store owns the precondition; legal on a dormant Session. The queue change arrives as a `queue_changed` push. |
 | `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, pinnedModels, visibleModels, thinkingLevels, devMode }`; no attachment and no Document push. `pinnedModels` is the resolved daemon-global pinned list (not Document state, ADR 15); `visibleModels` is the resolved `provider/modelId` key list of the picker's normal tier. |
 | `asrCredentials` | Daemon-global | `{ ok: true, auth }` where `auth` is `{ kind: "device", deviceId }` or `{ kind: "token", token, expiresAt }`. The daemon mints or registers it because a page can neither mint a SAMI token nor register a device; a secret access key never crosses the wire. No attachment, no Document push: the ASR session itself runs from the browser to the endpoint. Failure is an ordinary `ok: false` and is retried on the next request. |
 | `textPolish` | Daemon-global | `{ ok: true, text }` after the daemon rewrote the request's whole `text` through the upstream polish service. Only the draft crosses this socket: the protocol's keys and signatures were never the page's. The reply is the text to show instead, which equals the request's text when there was nothing to arrange. A failure is an ordinary `ok: false` whose `error` is written for the composer's row (unavailable, too long, timed out). Requests are serialized daemon-side. No attachment, no Document push. |
@@ -126,7 +130,7 @@ absolute paths (ADR 14), so they need no Session to resolve a base, and a
 Connection that never opened one can still browse the filesystem and the
 repository. Project-addressed verbs validate their `projectId` and, where
 applicable, normalize and resolve the `stem` within that Project's session
-namespace. `getDaemonInfo`, `listActiveSessions`, `listFiles`, `asrCredentials`,
+namespace. `getDaemonInfo`, `listQueue`, `listFiles`, `asrCredentials`,
 `textPolish`, and `console` are not Session reads.
 
 ## Patch operations

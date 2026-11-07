@@ -1,7 +1,11 @@
 # ADR 12: Activation Lifetime and the Connection State Machine
 
 **Status:** Proposed. Amends ADR 11 (activation lifecycle, unflushed sessions,
-navigation verbs). Retains ADR 11's domain model, addresses, security rules,
+navigation verbs). Its "user-facing session states" projection (derived from
+runtime retention) has been superseded and replaced by the shipped durable
+session states — see the Session states sections of
+[host runtime](../host/runtime.md) and [architecture](../architecture.md);
+the durable-state change record is merged into those docs. Retains ADR 11's domain model, addresses, security rules,
 and the activation reservation. Three slices have shipped: (1) the
 text-bearing `newSession` — `text` is required, and the daemon admits the
 first prompt (with optional `images`, and an optional `model`/

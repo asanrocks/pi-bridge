@@ -335,13 +335,13 @@ export class BridgeClient {
 		return this.call(body as RpcRequestBody);
 	}
 
-	/** The work queue (ADR 22): the global non-inactive snapshot, ordered
+	/** The work queue: the global non-inactive snapshot, ordered
 	 * notified → busy → deferred, then last activity descending. */
 	listQueue(): Promise<RpcReply> {
 		return this.call({ verb: "listQueue" });
 	}
 
-	/** The user's defer/restore toggle (ADR 22). Refused while the session is
+	/** The user's defer/restore toggle. Refused while the session is
 	 * busy; legal on a dormant session. The result arrives as a `queue_changed`
 	 * push. */
 	setSessionState(projectId: string, stem: string, state: "notified" | "deferred"): Promise<RpcReply> {

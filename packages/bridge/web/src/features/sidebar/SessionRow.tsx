@@ -1,6 +1,6 @@
 // ============================================================================
 // SessionRow — one sidebar leaf: state dot + label + relative time, plus
-// the row menu. Queue rows (ADR 22) carry the session's durable state:
+// the row menu. Queue rows carry the session's durable state:
 // notified (green), busy (streaming pulse), deferred (parked tint). History
 // rows keep the muted dot. The menu's verbs: Close and Defer/Restore on
 // queue rows (a queued session can be closed or parked without opening it),
@@ -17,7 +17,7 @@ import { MoreIcon } from "../../render/icons.tsx";
 import { Popover } from "../../render/Popover.tsx";
 import styles from "./Sidebar.module.css";
 
-/** The row's mark, derived from the session's durable state alone (ADR 22). */
+/** The row's mark, derived from the session's durable state alone. */
 export type RowMark = "notified" | "busy" | "deferred" | "idle";
 
 export const SessionRow = memo(function SessionRow({
@@ -47,7 +47,7 @@ export const SessionRow = memo(function SessionRow({
 	 * discovery. Also unconfirmed — the file survives. */
 	onArchive?: (session: SessionInfo) => void;
 	/** Present only on non-busy queue rows: adds Defer (from notified) or
-	 * Restore (from deferred) — the user's parking toggle (ADR 22). */
+	 * Restore (from deferred) — the user's parking toggle. */
 	onSetState?: (session: SessionInfo, state: "notified" | "deferred") => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";

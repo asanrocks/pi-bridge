@@ -412,7 +412,7 @@ difference between them. */
 	height: var(--control-box-sm);
 }
 
-/* Queue-state indicator on a session row (ADR 22): notified = green
+/* Queue-state indicator on a session row: notified = green
    (awaits input), busy = orange + pulse (execution in flight), deferred =
    the parked tint, idle = muted history. The mark derives from the durable
    state alone — never from runtime retention. */
@@ -430,7 +430,7 @@ difference between them. */
 	background: var(--color-border);
 }
 
-/* Parked by decision (ADR 22): the accent tint says "still open, not
+/* Parked by decision: the accent tint says "still open, not
    next" — distinct from dormant history, which makes no claim. */
 .sidebarDotDeferred {
 	background: var(--color-accent);

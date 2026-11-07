@@ -217,7 +217,7 @@ export interface WorkerEnvironment {
  * Daemon's job: a Worker never encodes browser frames. */
 export type WorkerEvent =
 	| { readonly kind: "sessions_changed"; readonly projectId: string; readonly page: SessionPage }
-	/** The work queue changed (ADR 22): the complete non-inactive snapshot. */
+	/** The work queue changed: the complete non-inactive snapshot. */
 	| { readonly kind: "queue_changed"; readonly sessions: SessionInfo[] }
 	/** The global pinned list changed (a `setPinnedModels` mutation). */
 	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
@@ -283,10 +283,10 @@ export interface WorkerService extends WorkerEnvironment {
 
 	// ── Project and Session queries ─────────────────────────────────────
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage>;
-	/** The work queue (ADR 22: the global non-inactive snapshot, ordered
+	/** The work queue ( the global non-inactive snapshot, ordered
 	 * notified → busy → deferred, then last activity descending. */
 	listQueue(): Promise<SessionInfo[]>;
-	/** The user's defer/restore toggle (ADR 22): refused while the session is
+	/** The user's defer/restore toggle: refused while the session is
 	 * busy; legal on a dormant session (the Worker resolves the stem's durable
 	 * id — no runtime is needed). The Daemon broadcasts the resulting queue. */
 	setSessionState(address: SessionAddress, state: SessionToggleState): Promise<void>;

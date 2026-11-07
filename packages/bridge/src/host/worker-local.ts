@@ -179,7 +179,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		registry.live().map((record) => ({ ref: record.ref, metadata: record.actor.metadata() }));
 
 	const catalog = createSessionCatalog(projects);
-	// The durable, user-visible session lifecycle (ADR 22): Worker-owned
+	// The durable, user-visible session lifecycle: Worker-owned
 	// storage beside the sessions it describes, loaded and recovered once at
 	// construction — a persisted busy is rewritten to notified here, because
 	// this process died with the runtimes that were executing.
@@ -263,7 +263,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		};
 	};
 
-	/** The work-queue snapshot (ADR 22): membership is the durable state, so
+	/** The work-queue snapshot: membership is the durable state, so
 	 * browsing a session never reaches this list and idle collection never
 	 * removes a row from it. */
 	const emitQueue = (): void => {
@@ -304,7 +304,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			refreshTitle();
 		},
 		onFullySettled: (ref, execution) => {
-			// Full settlement of an admitted execution (ADR 22): busy becomes
+			// Full settlement of an admitted execution: busy becomes
 			// notified when the token is still current — the settle of an
 			// execution a newer admission superseded changes nothing.
 			if (typeof execution === "string") states.settle(ref.projectId, ref.sessionId, execution);
@@ -381,7 +381,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	};
 
 	/** Resolve a stem to the durable session id that addresses its state
-	 * record (ADR 22): a live activation's identity, else the file header's.
+	 * record: a live activation's identity, else the file header's.
 	 * Null when neither exists — the stem names no session this Worker serves. */
 	const resolveDurableSessionId = async (project: ProjectConfig, stem: string): Promise<string | null> => {
 		const record = await registry.awaitSettled(project.id, stem);
@@ -538,7 +538,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 						}
 					}
 					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
-					// The first prompt is an execution like any other (ADR 22):
+					// The first prompt is an execution like any other:
 					// admitted under a store token, so its full settlement lands
 					// notified and a refused preflight restores the empty state.
 					const execution = states.admit(project.id, record.ref.sessionId);
@@ -573,14 +573,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 				// turn, whose settle lands notified first — and finally writes
 				// inactive, so the close is the last write for that execution.
 				// An admission that began after the capture is a newer user
-				// intent: the write is skipped, the session stays busy (ADR 22).
+				// intent: the write is skipped, the session stays busy.
 				const since = states.tokenOf(project.id, record.ref.sessionId);
 				await registry.collect(record);
 				states.markInactive(project.id, record.ref.sessionId, since);
 				emitQueue();
 				return;
 			}
-			// Dormant close (ADR 22): legal without a runtime — the state write
+			// Dormant close: legal without a runtime — the state write
 			// is the whole operation. The stem's durable id addresses the record.
 			const sessionId = await resolveDurableSessionId(project, stem);
 			if (sessionId === null) throw new Error(`No such session: ${stem}`);
@@ -599,7 +599,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			if (record) await registry.collect(record);
 			// Resolve before the move: the archived file is no longer
 			// addressable at this stem. The archived session leaves discovery
-			// and the queue together (ADR 22) — its record is dropped.
+			// and the queue together — its record is dropped.
 			const sessionId = record ? record.ref.sessionId : await resolveDurableSessionId(project, stem);
 			archiveStemFile(project.sessionDir, stem);
 			if (sessionId !== null) states.prune(project.id, sessionId);
@@ -610,7 +610,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		// ── Session commands (target-addressed) ─────────────────────────
 		prompt: async (target, text, images, model, thinkingLevel) => {
 			const admission = admissionFor(target);
-			// Admission is an execution (ADR 22): the store lands busy under a
+			// Admission is an execution: the store lands busy under a
 			// fresh token before the turn starts, so any transition racing the
 			// admission — a defer from another tab — evaluates against busy,
 			// and a refused preflight restores the pre-admission state.
@@ -634,7 +634,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		navigate: async (target, entryId) => admissionFor(target).navigate(entryId),
 		recoverTurn: async (target) => {
 			const admission = admissionFor(target);
-			// Recovery is an execution on both of its paths (ADR 22): the relay
+			// Recovery is an execution on both of its paths: the relay
 			// prompt and the silent continuation report admission and completion
 			// through the same seams as any other turn.
 			const execution = states.admit(target.projectId, target.sessionId);
@@ -659,7 +659,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			const sessionId = await resolveDurableSessionId(project, stem);
 			if (sessionId === null) throw new Error(`No such session: ${stem}`);
 			// The store owns the precondition: a defer racing an admission is
-			// refused here, not by a caller that may have raced it (ADR 22).
+			// refused here, not by a caller that may have raced it.
 			states.toggle(project.id, sessionId, state);
 			emitQueue();
 		},

@@ -251,7 +251,7 @@ export function useRpc() {
 		}
 	}, []);
 
-	/** The user's defer/restore toggle (ADR 22): moves a non-busy queued session
+	/** The user's defer/restore toggle: moves a non-busy queued session
 	 * between `notified` and `deferred`. The refusal (busy) and the resulting
 	 * queue both arrive from the daemon — the push converges every tab. */
 	const setSessionState = useCallback(async (projectId: string, stem: string, state: "notified" | "deferred") => {

@@ -143,7 +143,7 @@ export interface Manager {
 	 */
 	onSettled(listener: () => void): () => void;
 	/**
-	 * Register a listener for full execution settlement (ADR 22): the run
+	 * Register a listener for full execution settlement: the run
 	 * reached pi's full-idle predicate (`agent_settled`), an admitted dispatch
 	 * completed without starting a run of its own, or a recovery continuation
 	 * compensated. `turn_end` alone never fires it — it lands between model /
@@ -285,7 +285,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		return out;
 	};
 
-	// ── Full settlement (ADR 22) ─────────────────────────────────────
+	// ── Full settlement ─────────────────────────────────────
 	//
 	// One execution is one admitted dispatch and everything it runs (tools,
 	// retries, compaction, queued steers). `lastExecution` is the tag of the
@@ -426,7 +426,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// to pick up the now-on-disk metadata (name, message count, etc.).
 			for (const l of settledListeners) l();
 			// Full settlement keys on `agent_settled` alone: `turn_end` fires
-			// between model/tool cycles inside one execution (ADR 22).
+			// between model/tool cycles inside one execution.
 			if (event.type === "agent_settled") fireFullySettled(lastExecution);
 		}
 
@@ -777,7 +777,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 							if (!admitted) reject(err instanceof Error ? err : new Error(String(err)));
 							// A failure after admission is a completed execution too — its
 							// outcome is visible document state, and the session awaits
-							// input (ADR 22: errors and interruptions settle).
+							// input ( errors and interruptions settle).
 							else dispatchSettled(execution);
 						},
 					);
@@ -879,7 +879,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			if (!info) {
 				throw new Error("No failed or interrupted turn to recover");
 			}
-			// The recovery is an execution (ADR 22): its tag is recorded before any
+			// The recovery is an execution: its tag is recorded before any
 			// path starts, so both the relay run's `agent_settled` and the silent
 			// continuation's compensated end report it.
 			lastExecution = execution;
@@ -947,7 +947,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				if (recPatch) emitPatch(recPatch);
 				for (const l of settledListeners) l();
 				// The continuation runs outside pi's settle events, so its compensated
-				// end *is* the full settlement of the recovery execution (ADR 22).
+				// end *is* the full settlement of the recovery execution.
 				fireFullySettled(execution);
 			}
 			return "retry";

@@ -85,7 +85,7 @@ export const Sidebar = memo(function Sidebar({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** The global work queue (ADR 22) — the authority for the pinned section
+	/** The global work queue — the authority for the pinned section
 	 *  at the top of each folder. */
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */

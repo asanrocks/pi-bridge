@@ -135,7 +135,7 @@ export interface SessionAdmission {
 	/** A turn. Immediate admitted work — a Stop must not queue behind it.
 	 * Carries the send's model selection (the stateless client API).
 	 * `execution` is the caller's identity for the execution; the Manager
-	 * reports it at full settlement (ADR 22). */
+	 * reports it at full settlement. */
 	prompt(
 		text: string,
 		images?: ImageContent[],
@@ -151,7 +151,7 @@ export interface SessionAdmission {
 	navigate(entryId: string | null): Promise<void>;
 	/** Recover the broken tail turn (ADR 16); `action` reports the repair.
 	 * `execution` names the recovery as an execution for full settlement
-	 * (ADR 22), like `prompt`'s tag. */
+	 *, like `prompt`'s tag. */
 	recoverTurn(execution?: string): Promise<"retry" | "continue">;
 	/** Read lazy values at field paths (the pull verb). */
 	pull(requests: PullRequestItem[]): Promise<PulledValue[]>;
@@ -186,7 +186,7 @@ export interface SessionActorOptions {
 	 * registry's broadcast hook, riding the actor's own observation of its
 	 * runtime. */
 	onSettled?: () => void;
-	/** An execution fully settled (ADR 22): the run reached pi's full-idle
+	/** An execution fully settled: the run reached pi's full-idle
 	 * predicate, an admitted dispatch completed without a run of its own, or
 	 * a recovery continuation compensated. `execution` is the tag the settling
 	 * dispatch was admitted with. */

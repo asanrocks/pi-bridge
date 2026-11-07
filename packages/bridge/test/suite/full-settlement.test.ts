@@ -1,5 +1,5 @@
 // ============================================================================
-// Full execution settlement (ADR 22): the Manager's onFullySettled signal —
+// Full execution settlement: the Manager's onFullySettled signal —
 // `agent_settled` (never `turn_end` alone), the admitted dispatch that
 // completes without a run of its own, and the recovery continuation's
 // compensated end — each carrying the execution tag the dispatch was

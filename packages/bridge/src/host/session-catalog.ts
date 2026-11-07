@@ -46,7 +46,7 @@ interface ScanEntry {
 }
 
 /** The durable, user-visible session states the catalog overlays onto every
- * row (ADR 22): the Worker supplies its state store; the catalog owns only the
+ * row: the Worker supplies its state store; the catalog owns only the
  * lookup. */
 export interface CatalogStateOverlay {
 	stateOf(projectId: string, sessionId: string): SessionState;
@@ -62,7 +62,7 @@ export interface SessionCatalog {
 		live: readonly CatalogLiveEntry[],
 		states: CatalogStateOverlay,
 	): SessionPage;
-	/** The global work queue (ADR 22): every non-inactive session across every
+	/** The global work queue: every non-inactive session across every
 	 * Project, ordered notified → busy → deferred, then by last activity
 	 * descending. */
 	listQueue(live: readonly CatalogLiveEntry[], states: CatalogStateOverlay): SessionInfo[];
@@ -207,7 +207,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		},
 
 		listQueue(live, states): SessionInfo[] {
-			// Queue membership is the durable state, not the registry (ADR 22): a
+			// Queue membership is the durable state, not the registry: a
 			// dormant notified session is a queue row with no runtime, and a
 			// browsed inactive session with a live runtime is not. The scan's live
 			// overlay still covers an unflushed busy session, which has a file row

@@ -1,5 +1,5 @@
 // ============================================================================
-// Session states — the durable, user-visible session lifecycle (ADR 22).
+// Session states — the durable, user-visible session lifecycle.
 //
 // Each session carries one of four states — inactive (the default; a history
 // row), busy (an execution is in flight), notified (the agent finished and
@@ -114,7 +114,7 @@ export function createSessionStates(
 		const known = new Set(scanDurableSessionIds(project).values());
 		const loaded = new Map<string, StateRecord>();
 		for (const [sessionId, record] of stored) {
-			// Recovery (ADR 22): the Worker's process died with the runtimes, so
+			// Recovery: the Worker's process died with the runtimes, so
 			// nothing is executing — a persisted busy becomes notified, which is
 			// what the next boot's settle would have written anyway. A record
 			// whose session file does not exist is dropped: a first turn that
@@ -314,7 +314,7 @@ export function createSessionStates(
 			if (record === undefined) return;
 			// A newer admission after the close began is a newer user intent: the
 			// close still disposed the runtime it addressed, but its write is
-			// skipped so the session stays busy (ADR 22 close-wins rule).
+			// skipped so the session stays busy (close-wins rule).
 			if ((record.token ?? null) !== since) return;
 			map.delete(sessionId);
 			persist(projectId);

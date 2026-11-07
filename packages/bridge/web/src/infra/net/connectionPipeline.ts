@@ -185,7 +185,7 @@ export function createConnectionPipeline(client: BridgeClient, scheduler: FlushS
 			return;
 		}
 
-		// Global work-queue snapshot (ADR 22): membership is the durable session
+		// Global work-queue snapshot: membership is the durable session
 		// state, so the queue replaces its list wholesale on every push.
 		if (push.kind === "queue_changed") {
 			for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);

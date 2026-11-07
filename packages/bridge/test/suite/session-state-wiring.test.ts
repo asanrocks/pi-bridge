@@ -1,5 +1,5 @@
 // ============================================================================
-// Session-state wiring (ADR 22): the Worker's transitions between the
+// Session-state wiring: the Worker's transitions between the
 // admission seams, the full-settlement relay, and the durable store — driven
 // through the Worker service contract. The Manager is a controllable stand-in
 // (the real Manager's settlement signal is covered by full-settlement.test.ts

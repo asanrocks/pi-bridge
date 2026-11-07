@@ -15,7 +15,7 @@ ViewModel, persistence, and reconnect ownership are described in
 ## Interaction
 
 A viewer can open the launcher, choose a Project, open a Session from its
-sidebar history, browse active Sessions, read the conversation, inspect
+sidebar history, pick up queued work, read the conversation, inspect
 thinking and tool actions, copy text or tool artifacts, open file links, and
 browse branches in History. A steerer can do the following:
 
@@ -86,7 +86,7 @@ browse branches in History. A steerer can do the following:
   at its nearest edge), and it commits once on release; membership is frozen
   while the picker is open, order is not. Reordering is pointer-only: the grip
   drag is the one gesture that moves a row, because the app's global
-  Alt+Up/Down chord already cycles active Sessions. A refused replacement
+  Alt+Up/Down chord already cycles the work queue. A refused replacement
   (connection lost, verb rejected) rolls the rows back to the last accepted
   order. The head of the list
   carries a `default` label: it is the model a fresh Session starts on, which is
@@ -230,19 +230,22 @@ browser zoom menu remain the desktop paths.
 ### Launcher and Project home
 
 The global launcher at `/` lists configured Projects with their working
-directories and active Sessions, ordered newest-activity-first. Above the
-Project list, a plain Latest button (ADR 13) reads "Latest session" plus the
-owning Project's id — selecting it navigates to `/@latest`, which resolves
-to the newest active session without redirecting. The same alias is available
+directories and, below them, the work queue: every queued Session —
+notified (awaits input), busy (an execution in flight), deferred (parked) —
+in the daemon's queue order (notified → busy → deferred, each group newest
+activity first). Above the Project list, a plain Latest button (ADR 13) reads
+"Latest session" plus the owning Project's id — selecting it navigates to
+`/@latest`, which resolves to the most recently active queued Session that is
+not deferred, without redirecting. The same alias is available
 scoped to a Project (`/<projectId>/@latest`): deep links and the CLI banner
 use that form, which resolves inside the Project and falls back to its home.
-It is deliberately not an
-active-row duplicate: no liveness dot, preview, or time. It exists only
-while something is active. Active rows
-show a liveness dot, name or first-message fallback, Project, the shared time
-label tracked to the Session's last activity, and a latest-message preview;
-streaming rows use the streaming color and pulse. Selecting a Project opens
-its Project home at `/<projectId>`.
+The Latest button is deliberately not a queue-row duplicate: no state mark,
+preview, or time. It exists only while something is queued. Queue rows show a
+state mark — notified keeps the success-green dot, busy uses the streaming
+color and pulse with a "running" chip, deferred uses the accent tint with a
+"parked" chip — name or first-message fallback, Project, the shared time label
+tracked to the Session's last activity, and a latest-message preview.
+Selecting a Project opens its Project home at `/<projectId>`.
 
 Project home is an unattached, compose-first surface. It shows the expanded
 `HomeCompose` card, focuses the textarea, and starts a new Session when the
@@ -279,18 +282,19 @@ no Session is attached.
 ### Sidebar
 
 The Sidebar is a Project tree. Each folder is a tri-state fold — folded
-(nothing below the row), active (only the pinned rows), open (pinned rows
-plus history) — cycled by clicking the folder row (chevron + name are one
-target; the name does not navigate). The chevron mirrors the state: right
-(folded), diagonal (active only), down (open). Missing fold state defaults
-to `active`, so a fresh Project shows liveness without history. A folder
-with no pinned active rows has only two states: the active step is skipped
+(nothing below the row), active (only the Project's queued rows), open
+(queued rows plus history) — cycled by clicking the folder row (chevron +
+name are one target; the name does not navigate). The chevron mirrors the
+state: right (folded), diagonal (queued only), down (open). Missing fold
+state defaults to `active`, so a fresh Project shows its queue without
+history. A folder with no queued rows has only two states: the active step is
+skipped
 in the cycle and a stale persisted `active` renders folded, since "active
 only" is indistinguishable from folded there. The `Projects` header label
 is the fold-all toggle: it applies one uniform state to every folder — the
 smallest step strictly above every folder's current effective state, up
 the ladder `folded` → `active` → `open` (the `active` step exists only
-when some folder has pinned rows), wrapping to `folded` at the top. A
+when some folder has queued rows), wrapping to `folded` at the top. A
 click therefore always changes every folder — no dead clicks — and
 fold/unfold mixing never survives a click. Each folder also
 has exactly one navigation affordance, the `+` button, which opens the
@@ -307,11 +311,15 @@ channel belongs to rows that carry identity or position.
 
 Folder children:
 
-- Active Sessions are pinned first and remain visible in the `active` and
-  `open` states. A green dot means active and an orange pulsing dot means
-  streaming. The attached `(Project, stem)` row is the only selected row: the
-  accent tint plus weight `500` on its name, per Row states below. A folder row
-  never carries identity — it is a fold control, not a target.
+- The Project's queued Sessions are pinned first and remain visible
+  in the `active` and `open` states, in queue order: notified → busy →
+  deferred, each group newest activity first. The state mark derives from the
+  durable state alone — a green dot means notified (awaits input), an orange
+  pulsing dot means busy (an execution in flight), and the accent tint means
+  deferred (parked: still open, but not next). The attached `(Project, stem)`
+  row is the only selected row: the accent tint plus weight `500` on its name,
+  per Row states below. A folder row never carries identity — it is a fold
+  control, not a target.
 - Dormant Session history is fetched when a folder unfolds, ordered into
   `Today`, `This week`, and `Earlier`, and each row carries the shared time
   label (relative while fresh, then a clock, a weekday, or a date). The bucket
@@ -321,14 +329,17 @@ Folder children:
   one sidebar control drawn as a glyph rather than words, because "more below"
   is the meaning a chevron already carries, and this one sits below the content
   it extends while the pane's fold carets sit on the row above theirs. A dormant
-  row has a muted status dot and no close action.
+  row has a muted status dot and no row menu.
 
-The active rows and history rows open Sessions. A row menu exposes `Close`
-without confirmation on live rows and `Archive` on any durable row — archive
-closes the session then moves its file out of discovery, and a dormant row's
-close is a no-op, so it is how history is thinned without opening each
-session. The grid action beside the `Projects` header returns to the global
-launcher. Empty, loading, failed-with-retry, and
+The queued rows and history rows open Sessions. A row menu exposes `Close`
+without confirmation on queued rows — close clears queue membership,
+terminating a runtime first when one exists, and is legal on a dormant queued
+Session — `Defer`/`Restore` on non-busy queued rows (the user's
+parking toggle; a deferred row's menu reads `Restore`, a notified row's reads
+`Defer`, and a busy row hides it), and `Archive` on any durable row — archive
+closes the session then moves its file out of discovery, so it is how history
+is thinned without opening each session. The grid action beside the `Projects`
+header returns to the global launcher. Empty, loading, failed-with-retry, and
 no-session states occupy the same quiet message position in the folder.
 
 On desktop the Sidebar has three modes: hidden, a docked resizable rail, and
@@ -1958,7 +1969,7 @@ Modifier commands remain global where they represent shell intent.
 - Ctrl/Cmd+B toggles the Sidebar and Ctrl/Cmd+H toggles History, including
   while typing. Ctrl/Cmd+P cycles models in the composer; the textarea owns
   that shortcut to avoid a duplicate cycle.
-- Alt+Up and Alt+Down cycle active Sessions. Alt+N opens the only Project's
+- Alt+Up and Alt+Down cycle the work queue (queue order). Alt+N opens the only Project's
   home, or opens the Sidebar when a Project choice is needed.
 
 The focused-turn frame and visible keyboard focus ring use the accent token.

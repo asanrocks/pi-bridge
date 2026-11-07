@@ -94,7 +94,7 @@
 	background: var(--color-streaming);
 }
 
-/* Parked by decision (ADR 22): the accent tint, distinct from notified's
+/* Parked by decision: the accent tint, distinct from notified's
    green — still open, but not next. */
 .dotDeferred {
 	background: var(--color-accent);

@@ -103,10 +103,10 @@ export interface DaemonVerbs {
 		max?: number,
 		cursor?: SessionListCursor | null,
 	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
-	/** The global work queue (ADR 22): the non-inactive snapshot, ordered
+	/** The global work queue: the non-inactive snapshot, ordered
 	 * notified → busy → deferred, then last activity descending. */
 	listQueue: () => Promise<SessionInfo[]>;
-	/** The user's defer/restore toggle (ADR 22). Refused while the session is
+	/** The user's defer/restore toggle. Refused while the session is
 	 * busy; legal on a dormant session. The queue change arrives as a
 	 * `queue_changed` push. */
 	setSessionState: (

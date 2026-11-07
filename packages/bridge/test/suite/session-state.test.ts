@@ -1,5 +1,5 @@
 // ============================================================================
-// Session states (ADR 22): unit tests of the durable state store — the
+// Session states: unit tests of the durable state store — the
 // transition rules (token-keyed settlement, close-wins, the busy-refusing
 // toggle), the per-Project persistence at `<sessionDir>/.pi-bridge/
 // states.json`, and startup recovery (busy → notified, pruning, quarantine).

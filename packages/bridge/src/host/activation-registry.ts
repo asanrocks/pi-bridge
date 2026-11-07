@@ -86,7 +86,7 @@ export interface ActivationRegistryOptions {
 	unflushedIdleGcMs: number;
 	/** A session settled (its file may have just been written). */
 	onSettled: (ref: SessionRef) => void;
-	/** An execution fully settled (ADR 22): the run reached pi's full-idle
+	/** An execution fully settled: the run reached pi's full-idle
 	 * predicate, an admitted dispatch completed without a run of its own, or
 	 * a recovery continuation compensated. `execution` is the tag the Worker
 	 * admitted the settling execution under. */

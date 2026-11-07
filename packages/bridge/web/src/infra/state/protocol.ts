@@ -93,7 +93,7 @@ export interface ProtocolSlice {
 	sessionPages: Record<string, SessionFolderPage>;
 	/** Static Project configuration (ADR 11). */
 	projects: ProjectInfo[];
-	/** The global work queue (ADR 22): every non-inactive session, ordered
+	/** The global work queue: every non-inactive session, ordered
 	 * notified → busy → deferred, then last activity descending. */
 	queue: SessionInfo[];
 	models: ModelInfo[];

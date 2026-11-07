@@ -54,8 +54,8 @@ owns the Activation registry, the per-session choreography (Manager creation,
 registration, the pre-attach model/thinking choices, first-prompt admission),
 the Session catalog (`src/host/session-catalog.ts`: directory scan, durable
 metadata parse, live overlay), the session-state store
-(`src/host/session-state.ts`: the durable user-visible session lifecycle,
-ADR 22), and the observation table. The Daemon holds no
+(`src/host/session-state.ts`: the durable user-visible session lifecycle),
+and the observation table. The Daemon holds no
 Activation state and never sees a Manager: it resolves a Project, asks the
 Worker for an observation, and stamps the frames the observation delivers.
 The repository read surface (`src/host/repository.ts`: snapshot reads,
@@ -198,7 +198,7 @@ startup — every Worker created so far is disposed, including the one whose
 claim failed, so a spawned Worker cannot leak past a failed startup holding
 its socket and its storage claims — and a Worker that becomes
 unavailable withdraws only its own Projects; the others keep serving, and the
-browser's active-session list is republished as the aggregate of the survivors.
+browser's work queue is republished as the aggregate of the survivors.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity.
 
@@ -480,7 +480,7 @@ produce a child whose parent the Document has not installed.
 
 The Manager exposes two settlement signals. `onSettled` fires on `turn_end`
 and `agent_settled` (the rescan trigger for the session list). `onFullySettled`
-is the full-execution signal (ADR 22): it fires on `agent_settled` alone —
+is the full-execution signal: it fires on `agent_settled` alone —
 `turn_end` lands between model/tool cycles inside one execution — on the
 completion of an admitted dispatch that started no run of its own (a handled
 extension command, a queued steer after the run it joined), and on a recovery
@@ -683,7 +683,7 @@ by the daemon's teardown), so the sentence is enforced, not aspirational: the
 daemon snapshots the Connections, stops the server, and awaits each drain
 before it disposes Session execution.
 `closeSession` and `archiveSession` change Activation state, not this
-Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listActiveSessions`,
+Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listQueue`,
 `getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,
 `gitBase`, and `gitDiff`. `listFiles` is Project-addressed; `readFile`,
 `listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),
@@ -803,7 +803,8 @@ under the same `collecting` reservation `openSession` uses: the actor's
 close, the address held reserved through the async disposal, the Activation
 and Session ownership index removal, the detach-and-notify loop over every
 attached Connection (the terminal ownership boundary below), and the
-resulting active-session snapshot broadcast. Collection never deletes a
+resulting queue broadcast (a queued row's preview fields refresh; its
+membership is the durable state and never changes). Collection never deletes a
 Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
@@ -849,8 +850,8 @@ The timer model and its reservation invariant govern this runtime.
 
 ## Session states
 
-`src/host/session-state.ts` is the durable, user-visible session lifecycle
-(ADR 22): every session carries one of `inactive | notified | busy |
+`src/host/session-state.ts` is the durable, user-visible session lifecycle:
+every session carries one of `inactive | notified | busy |
 deferred`, persisted by the Worker at `<sessionDir>/.pi-bridge/states.json`
 (one file per Project, keyed by the durable session id so a moved file keeps
 its state). The store owns the transitions, not just the writes: an admission
@@ -863,7 +864,10 @@ the close began under has landed; `prune` drops an archived session's record.
 
 Writes are whole-file, atomic (temp + rename), and synchronous, so arrival
 order is the serialization and no transition's decision can interleave with
-another's. A missing file is the normal first state. A corrupt file is
+another's — and a graceful shutdown needs no suppression machinery: disposal
+of a busy session finalizes the turn, the settle write lands before Worker
+disposal resolves, and the next boot's recovery would rewrite the same
+thing anyway. A missing file is the normal first state. A corrupt file is
 quarantined (renamed to a `.corrupt` sibling, never overwritten) and
 surfaced on the console — the store restarts empty rather than silently
 dropping unfinished work. Turn-boundary write failures (admission,
@@ -949,18 +953,17 @@ canonical stem. The cursor is exclusive and compound: `{ sortTimeMs, stem }`.
 The reply reports `sessions`, `hasMore`, and the last row as `nextCursor`.
 
 `SessionInfo` carries `projectId`, durable `sessionId` when known, stem,
-`active`, `isStreaming`, `timestamp`, the durable user-visible `state`
-(ADR 22: `inactive` by default), and available name, first-message text,
+`timestamp`, the durable user-visible `state` ( `inactive` by default,
+and the only lifecycle fact a row carries — runtime retention is execution
+detail that stays in the Document), and available name, first-message text,
 latest-message preview, message count, and last-activity time. A durable file
 supplies metadata; an unflushed active Session supplies the actor's
 `metadata()` — the typed read surface over the canonical Document. For
 an active row the live latest-message preview and last-activity time win over
 the file scan; `timestamp` remains the durable sort key (mtime / header
-creation). `listActiveSessions` uses the Activation
-registry instead of a disk scan, is global across Projects, is not paginated,
-and returns the same row shape ordered by timestamp.
+creation).
 
-`listQueue` (ADR 22) is the global work queue: every non-inactive session
+`listQueue` is the global work queue: every non-inactive session
 across every Project — membership is the durable state overlay, not the
 registry, so a dormant notified session is a queue row with no runtime and a
 browsed inactive session is not a row at all. It is ordered notified → busy →
@@ -1122,11 +1125,13 @@ and cursor. The Daemon publishes it after a Session settles, after a rename,
 and after explicit close disposal; a settle also refreshes metadata when a
 fresh Session first reaches disk.
 
-An `active_sessions_changed` push is global. It contains the complete current
-`listActiveSessions` snapshot. The Daemon sends it when an Activation is
-registered or collected and when a Manager's streaming state changes; settled
-listeners also refresh it. Connections receive these pushes regardless of
-which Project they currently have attached.
+A `queue_changed` push is global. It contains the complete current
+`listQueue` snapshot — the aggregate of every registered Worker's last report.
+The Daemon sends it when a session's durable state changes (an admitted
+execution, a full settlement, a toggle, a close, an archive) and when a live
+Activation's registration or streaming state changes (those refresh the
+queued rows' preview fields, never their membership). Connections receive
+these pushes regardless of which Project they currently have attached.
 
 The Daemon serves the built web assets and the SPA shell from one
 `AssetSource` — the disk web root in development, the base64 map inlined at

@@ -2,7 +2,7 @@
 // ProjectFolder — one sidebar branch: a single fold button (chevron + name —
 // the name toggles, it does not navigate), one new-session button (opens the
 // Project home, the compose surface — there is no empty-session creation
-// path), and the children below: the Project's queued rows (ADR 22) and
+// path), and the children below: the Project's queued rows and
 // lazily fetched, group-labeled history, all flush-left (no indent).
 // ============================================================================
 
@@ -38,7 +38,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 	currentStem: string | null;
 	/** Tri-state fold: folded (nothing) / active (queued rows) / open (all). */
 	fold: FolderFoldState;
-	/** The Project's queued sessions (ADR 22), pinned below the folder row in
+	/** The Project's queued sessions, pinned below the folder row in
 	 * the daemon's queue order: notified → busy → deferred, activity desc. */
 	queueRows: SessionInfo[];
 	page: SessionFolderPage | undefined;
@@ -73,7 +73,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 	}, [showHistory, page, project.id, onLoad]);
 
 	const queueIds = useMemo(() => new Set(queueRows.map((r) => r.sessionId)), [queueRows]);
-	// The queue is the authority (ADR 22): queued rows render in the pinned
+	// The queue is the authority: queued rows render in the pinned
 	// section; a scanned row the store reports queued never renders twice —
 	// history filters by membership.
 	const history = useMemo(

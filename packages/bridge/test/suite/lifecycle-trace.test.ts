@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 describe("lifecycle trace", () => {
-	it("a full turn through the real runtime lands the queue busy, then notified (ADR 22)", async () => {
+	it("a full turn through the real runtime lands the queue busy, then notified", async () => {
 		const d = await startTraceDaemon(["trace-queue"], { tokensPerSecond: 200 });
 		daemons.push(d);
 		d.setResponses([fauxAssistantMessage("the streamed answer")]);

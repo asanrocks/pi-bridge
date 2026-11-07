@@ -82,7 +82,7 @@ export function useConnection(): { retry: () => void } {
 				hookConsole(client);
 			}
 
-			// Global work-queue snapshot (ADR 22)
+			// Global work-queue snapshot
 			const queue = queueReply as unknown as ListQueueReply;
 			const queueRows = queue.sessions ?? [];
 			for (const row of queueRows) rememberAddress(row.projectId, row.stem, row.sessionId);

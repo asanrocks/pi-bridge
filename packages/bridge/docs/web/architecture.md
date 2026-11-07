@@ -113,7 +113,8 @@ The protocol slice contains:
   both down-state surfaces (the TopBar chip and the Launcher full panel), so
   no other module phrases connection state;
 - `projects`, models, thinking levels, and `devMode` from daemon information;
-- `activeSessions`, the global active/streaming Session snapshot; and
+- `queue`, the global work queue: every non-inactive Session,
+  ordered notified → busy → deferred, then last activity descending; and
 - `sessionPages`, lazily fetched Project history pages. Each page is
   `loading`, `error`, or `ready` with `sessions`, `hasMore`, and the compound
   `SessionListCursor` in `nextCursor`.
@@ -320,9 +321,9 @@ connected connection drop -> reconnecting -> unreachable
 ```
 
 A socket being open is not enough to become connected. Initialization must
-complete `getDaemonInfo` and `listActiveSessions` within 8 seconds, populate
-Projects, model metadata, development mode, and the global active-session
-snapshot, then open the route-driven address. Failure after the socket opens
+complete `getDaemonInfo` and `listQueue` within 8 seconds, populate
+Projects, model metadata, development mode, and the work queue, then open the
+route-driven address. Failure after the socket opens
 is `init_failed` and can be retried without replacing the socket.
 
 After a successful connection, drops count from one. Attempts below five are
@@ -371,8 +372,9 @@ cache updates:
 
 The pipeline handles registry pushes without touching the Document. A
 `sessions_changed` push refreshes an already loaded Project page and records
-address identities; it does not fetch a collapsed page. An
-`active_sessions_changed` push replaces the global active-session snapshot.
+address identities; it does not fetch a collapsed page. A `queue_changed`
+push replaces the work queue — membership is the durable session
+state, so the queue converges across tabs on every state transition.
 A `session_closed` push names an address whose live runtime ended on the
 host (`closeSession`/`archiveSession`); when it names the rendered Session,
 the server has already severed the attachment, so navigation clears to the
@@ -827,7 +829,8 @@ Other `infra/lib` modules have narrow boundaries:
 
 Reconnect is a new transport, not a continuation of the old WebSocket. The
 old pipeline is frozen before a new one is installed. Initialization refreshes
-Project metadata and the global active-session snapshot, drops cached sidebar
+Project metadata and the work queue (whose membership is daemon-persisted, so
+a daemon restart during the drop loses no queue entries), drops cached sidebar
 pages, and reopens the address currently in the URL.
 
 When an address-to-session mapping and cache prefix are available, the client

@@ -75,8 +75,8 @@ What exists, how it is named, how long it lives. Owned by
    stem)* is the session's jsonl path under the Project's session directory
    minus `.jsonl`; the durable `sessionId` is the cache key, not the address.
 4. An **Activation** *(coined)* is the live runtime of exactly one Session.
-   It is daemon-internal and never on the wire: "active" is Session
-   metadata, not a wire object.
+   It is daemon-internal and never on the wire: runtime retention is
+   execution detail that lives in the Document, never in a listing row.
 5. An Activation is created by opening a Session and is never rebound to
    another Session.
 6. An Activation is kept alive by its attached Connections and by streaming
@@ -89,16 +89,31 @@ What exists, how it is named, how long it lives. Owned by
    reserved — that names a Session target resolved once per boot. Its
    position in the URL is its scope: at the root (`/@latest`) it spans
    Projects, as a Project's last segment (`/<project>/@latest`) it is that
-   Project's. Either form resolves to the most recently active live Session
-   in scope; with none live it falls back to the most recent durable Session
-   in scope and opens it (activating it), and only with no Session at all
-   does it fall back to the scope's home — the Launcher, or the Project
-   home. The URL keeps the alias form; the client state holds the resolved
+   Project's. Either form resolves to the most recently
+   active queued Session in scope — a notified or busy row of the work queue;
+   deferred is excluded, because that state's own meaning is "not next". With
+   no such row it falls back to the most recent durable Session in scope and
+   opens it (activating it), and only with no Session at all does it fall
+   back to the scope's home — the Launcher, or the Project home. The URL keeps the alias form; the client state holds the resolved
    address until an explicit navigation commits a real one. A reload
    re-resolves, possibly onto a newer Session. The alias set is closed: new
    aliases are new claims in this document first.
 
-8. A Session is **archived** *(bound)* when its file has been moved under the
+8. A Session carries a durable, user-visible **session state** *(composed)*
+   — one of `inactive` *(bound)* (the default: a history row; nothing is
+   owed), `busy` *(bound)* (an execution is in flight: a prompt was admitted
+   and the run has not fully settled), `notified` *(bound)* (the agent
+   finished its turn and awaits input), or `deferred` *(bound)* (the user
+   parked a non-busy Session: not finished, but not next). The states are
+   persisted by the Worker beside the sessions they describe and survive idle
+   collection, daemon restarts, and crashes; the set of non-inactive Sessions
+   is the **work queue** *(composed)*. Browsing never changes a state, and
+   reading a notified Session does not clear it — only defer or close does.
+   The state transitions (admission lands busy, full settlement lands
+   notified, the defer/restore toggle, close wins over its own completion)
+   are decided inside the state store, which every request addresses with its
+   evidence: an execution token minted at admission.
+9. A Session is **archived** *(bound)* when its file has been moved under the
    reserved `.archive` prefix of its Project's session directory. An archived
    Session is not discovered and its stem is not addressable, so restoring it
    takes a manual filesystem move. Archiving closes the Session first:
