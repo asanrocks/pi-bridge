@@ -67,12 +67,7 @@ import {
 	type SessionAdmission,
 	type SessionCapability,
 } from "./session-actor.ts";
-import {
-	assertNoSessionIdConflicts,
-	type CatalogLiveEntry,
-	createSessionCatalog,
-	readSessionHeaderId,
-} from "./session-catalog.ts";
+import { assertNoSessionIdConflicts, type CatalogLiveEntry, createSessionCatalog } from "./session-catalog.ts";
 import { createSessionStates, type SessionStates, type SessionToggleState } from "./session-state.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.ts";
@@ -307,7 +302,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Full settlement of an admitted execution: busy becomes
 			// notified when the token is still current — the settle of an
 			// execution a newer admission superseded changes nothing.
-			if (typeof execution === "string") states.settle(ref.projectId, ref.sessionId, execution);
+			if (typeof execution === "string") states.settle(ref.projectId, ref.stem, execution);
 			emitQueue();
 		},
 		onStreamingChange: () => {
@@ -380,14 +375,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		return record.admission;
 	};
 
-	/** Resolve a stem to the durable session id that addresses its state
-	 * record: a live activation's identity, else the file header's.
-	 * Null when neither exists — the stem names no session this Worker serves. */
-	const resolveDurableSessionId = async (project: ProjectConfig, stem: string): Promise<string | null> => {
+	/** A session exists at this stem: a live activation (any phase — the
+	 * caller may need to wait out a collection), else a contained durable
+	 * file. False when neither exists — the stem names no session this
+	 * Worker serves. */
+	const sessionExistsAt = async (project: ProjectConfig, stem: string): Promise<boolean> => {
 		const record = await registry.awaitSettled(project.id, stem);
-		if (record) return record.ref.sessionId;
-		const real = containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
-		return real === null ? null : readSessionHeaderId(real);
+		if (record) return true;
+		return containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem)) !== null;
 	};
 
 	/** Install one observation on a live record: the counted capability that
@@ -541,11 +536,11 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 					// The first prompt is an execution like any other:
 					// admitted under a store token, so its full settlement lands
 					// notified and a refused preflight restores the empty state.
-					const execution = states.admit(project.id, record.ref.sessionId);
+					const execution = states.admit(project.id, record.ref.stem);
 					try {
 						await manager.promptAdmitted(text, images, undefined, undefined, execution);
 					} catch (err) {
-						states.abandon(project.id, record.ref.sessionId, execution);
+						states.abandon(project.id, record.ref.stem, execution);
 						throw err;
 					}
 				} catch (err) {
@@ -574,17 +569,20 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 				// inactive, so the close is the last write for that execution.
 				// An admission that began after the capture is a newer user
 				// intent: the write is skipped, the session stays busy.
-				const since = states.tokenOf(project.id, record.ref.sessionId);
+				const since = states.tokenOf(project.id, record.ref.stem);
 				await registry.collect(record);
-				states.markInactive(project.id, record.ref.sessionId, since);
+				states.markInactive(project.id, record.ref.stem, since);
 				emitQueue();
 				return;
 			}
 			// Dormant close: legal without a runtime — the state write
-			// is the whole operation. The stem's durable id addresses the record.
-			const sessionId = await resolveDurableSessionId(project, stem);
-			if (sessionId === null) throw new Error(`No such session: ${stem}`);
-			states.markInactive(project.id, sessionId, states.tokenOf(project.id, sessionId));
+			// is the whole operation, and the stem is the record's key. The token is
+			// captured before the existence probe's await: an admission landing in
+			// between is a newer intent, and the write must then be skipped rather
+			// than consume that execution's token as its own precondition.
+			const since = states.tokenOf(project.id, stem);
+			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
+			states.markInactive(project.id, stem, since);
 			emitQueue();
 		},
 
@@ -597,12 +595,11 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Close first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
 			if (record) await registry.collect(record);
-			// Resolve before the move: the archived file is no longer
-			// addressable at this stem. The archived session leaves discovery
-			// and the queue together — its record is dropped.
-			const sessionId = record ? record.ref.sessionId : await resolveDurableSessionId(project, stem);
+			// The archived session leaves discovery and the queue together: the
+			// move takes the file out of the Project's namespace and the prune
+			// drops the state record keyed by the stem it was addressed at.
 			archiveStemFile(project.sessionDir, stem);
-			if (sessionId !== null) states.prune(project.id, sessionId);
+			states.prune(project.id, stem);
 			emitSessionsChanged(project.id);
 			emitQueue();
 		},
@@ -614,12 +611,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// fresh token before the turn starts, so any transition racing the
 			// admission — a defer from another tab — evaluates against busy,
 			// and a refused preflight restores the pre-admission state.
-			const execution = states.admit(target.projectId, target.sessionId);
+			const execution = states.admit(target.projectId, target.stem);
 			emitQueue();
 			try {
 				await admission.prompt(text, images, model, thinkingLevel, execution);
 			} catch (err) {
-				states.abandon(target.projectId, target.sessionId, execution);
+				states.abandon(target.projectId, target.stem, execution);
 				emitQueue();
 				throw err;
 			}
@@ -637,12 +634,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Recovery is an execution on both of its paths: the relay
 			// prompt and the silent continuation report admission and completion
 			// through the same seams as any other turn.
-			const execution = states.admit(target.projectId, target.sessionId);
+			const execution = states.admit(target.projectId, target.stem);
 			emitQueue();
 			try {
 				return await admission.recoverTurn(execution);
 			} catch (err) {
-				states.abandon(target.projectId, target.sessionId, execution);
+				states.abandon(target.projectId, target.stem, execution);
 				emitQueue();
 				throw err;
 			}
@@ -656,11 +653,10 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		setSessionState: async (address: SessionAddress, state: SessionToggleState): Promise<void> => {
 			const project = requireProject(address.projectId);
 			const stem = normalizeStem(address.stem);
-			const sessionId = await resolveDurableSessionId(project, stem);
-			if (sessionId === null) throw new Error(`No such session: ${stem}`);
+			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
 			// The store owns the precondition: a defer racing an admission is
 			// refused here, not by a caller that may have raced it.
-			states.toggle(project.id, sessionId, state);
+			states.toggle(project.id, stem, state);
 			emitQueue();
 		},
 

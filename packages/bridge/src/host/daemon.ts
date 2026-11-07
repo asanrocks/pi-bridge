@@ -16,6 +16,7 @@ import { TrafficLogger } from "./logger.ts";
 import type { createManager, Manager } from "./manager.ts";
 import { setDaemonTitle } from "./process-title.ts";
 import { buildProjects } from "./projects.ts";
+import { compareQueueRows } from "./queue-order.ts";
 import { bindWorkerCommands } from "./session-commands.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
 import type { WorkerHello } from "./worker-client.ts";
@@ -252,7 +253,10 @@ export class Daemon {
 			throw error;
 		}
 		this.workers = created;
-		this.queueByHost = new Map(created.map((host) => [host, []]));
+		// Seed every slice from the live Worker (see `seedQueueSlice`): a fresh
+		// registration can hold persisted queue state.
+		this.queueByHost = new Map();
+		await Promise.all(created.map((host) => this.seedQueueSlice(host)));
 		this.publishTitle();
 	}
 
@@ -336,7 +340,10 @@ export class Daemon {
 
 		for (const project of host.info.projects) this.routes.set(project.id, host);
 		this.workers = [...this.workers, host];
-		this.queueByHost.set(host, []);
+		// Seed before the first broadcast: a dial-in registration can hold
+		// persisted queue state, and the empty default would hide it from every
+		// push until that Worker's next transition.
+		await this.seedQueueSlice(host);
 		this.publishTitle();
 		// A newly registered Worker changes the aggregate; the browser's Project
 		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
@@ -483,13 +490,35 @@ export class Daemon {
 		await host.dispose().catch(() => {});
 	}
 
-	/** The global work queue: the Workers own the durable states those
-	 * rows describe, so each reports its own slice. The queue order is each
-	 * Worker's; slices concatenate. */
+	/** Seed one registration's queue slice from the live Worker instead of an
+	 * empty default: a registration can carry persisted queue state (notified
+	 * or deferred rows, a turn left running). The placeholder identity closes
+	 * the race with a `queue_changed` arriving while the query is in flight —
+	 * the event installed a fresher full slice, and the snapshot must not
+	 * overwrite it; a removal (`dispose`, `onWorkerUnavailable`) drops the
+	 * placeholder, and the seed stands down. A failed query leaves the empty
+	 * default; the Worker's next event fills the slice. */
+	private async seedQueueSlice(host: WorkerHost): Promise<void> {
+		const placeholder: SessionInfo[] = [];
+		this.queueByHost.set(host, placeholder);
+		let seed: SessionInfo[];
+		try {
+			seed = await host.service.listQueue();
+		} catch {
+			return;
+		}
+		if (this.queueByHost.get(host) === placeholder) this.queueByHost.set(host, seed);
+	}
+
+	/** The global work queue: the Workers own the durable states those rows
+	 * describe, so each reports its own slice — each already in queue order.
+	 * The aggregate re-sorts with the shared comparator, so a multi-Worker
+	 * queue interleaves by the same rule instead of concatenating
+	 * per-registration blocks. */
 	async listQueue(): Promise<SessionInfo[]> {
 		if (this.workers.length === 0) return [];
 		const slices = await Promise.all(this.workers.map((host) => host.service.listQueue()));
-		return slices.flat();
+		return slices.flat().sort(compareQueueRows);
 	}
 
 	// ── Broadcasts ────────────────────────────────────────────────────────
@@ -524,10 +553,13 @@ export class Daemon {
 			});
 	}
 
-	/** Push the aggregate work queue: one push carries the join of
-	 * every registration's last report, never one Worker's slice. */
+	/** Push the aggregate work queue: one push carries the join of every
+	 * registration's last report, never one Worker's slice — re-sorted with
+	 * the shared comparator so the aggregate keeps the queue's global order
+	 * (each slice is already ordered, but a concatenation would interleave
+	 * the state groups across registrations). */
 	private broadcastQueue(): void {
-		const sessions = this.workers.flatMap((host) => this.queueByHost.get(host) ?? []);
+		const sessions = this.workers.flatMap((host) => this.queueByHost.get(host) ?? []).sort(compareQueueRows);
 		this.pushToAll({ kind: "queue_changed", sessions });
 	}
 

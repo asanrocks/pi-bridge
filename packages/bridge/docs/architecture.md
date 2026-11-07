@@ -50,7 +50,8 @@ Separately from runtime retention, every Session carries a durable,
 user-visible state: `inactive` (the default), `busy` (an execution is
 in flight), `notified` (the agent finished and awaits input), or `deferred`
 (parked by the user). The state is persisted by the Worker at
-`<sessionDir>/.pi-bridge/states.json`, keyed by the durable session id, and is
+`<sessionDir>/.pi-bridge/states.json`, keyed by the session's stem — its
+address, so the queue's membership is the store's key set — and is
 decided inside the state store: admission lands busy under a minted execution
 token, full settlement (the Manager's `agent_settled`-keyed signal) lands
 notified when the token is still current, the defer/restore toggle is refused

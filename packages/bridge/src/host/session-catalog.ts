@@ -17,7 +17,8 @@ import { Buffer } from "node:buffer";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 import type { SessionInfo, SessionListCursor, SessionRef, SessionState } from "../core/index.ts";
-import { containedSessionFile, isArchivedStem, type ProjectConfig } from "./projects.ts";
+import { containedSessionFile, isArchivedStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
+import { compareQueueRows } from "./queue-order.ts";
 import { type ActorMetadata, clampPreview } from "./session-actor.ts";
 
 import type { SessionPage } from "./worker-contract.ts";
@@ -47,9 +48,12 @@ interface ScanEntry {
 
 /** The durable, user-visible session states the catalog overlays onto every
  * row: the Worker supplies its state store; the catalog owns only the
- * lookup. */
+ * lookup. Keyed by stem — the state record's key is the row's address. */
 export interface CatalogStateOverlay {
-	stateOf(projectId: string, sessionId: string): SessionState;
+	stateOf(projectId: string, stem: string): SessionState;
+	/** The Project's recorded states, keyed by stem: the work queue's
+	 * membership, in memory. */
+	queued(projectId: string): ReadonlyMap<string, SessionState>;
 }
 
 export interface SessionCatalog {
@@ -148,12 +152,14 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		const durable = existsSync(entry.abs);
 		const meta = durable ? readFileMeta(entry.abs) : null;
 		if (!meta && !active) {
-			// Unreadable file: surface a minimal row rather than dropping it.
+			// Unreadable file: surface a minimal row rather than dropping it. The
+			// queue's state overlay still applies — an unparseable file says nothing
+			// about whether the user parked or awaits this session.
 			return {
 				projectId: project.id,
 				sessionId: entry.stem,
 				stem: entry.stem,
-				state: "inactive",
+				state: states.stateOf(project.id, entry.stem),
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
@@ -163,7 +169,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			projectId: project.id,
 			sessionId,
 			stem: entry.stem,
-			state: states.stateOf(project.id, sessionId),
+			state: states.stateOf(project.id, entry.stem),
 			name: meta?.name ?? liveMeta?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? liveMeta?.firstMessageText,
@@ -173,6 +179,42 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			lastActivityAt: liveMeta?.lastActivityAt ?? meta?.lastActivityAt,
 			messageCount: meta?.messageCount ?? liveMeta?.messageCount,
 		};
+	};
+
+	/** One queued row: the live overlay wins when an Activation exists (the
+	 * registry's in-memory metadata; the sort key is the file's mtime, else
+	 * the header creation time). A dormant row reads the one file its stem
+	 * names — mtime-cached like every catalog read. A queued record whose
+	 * stem resolves to no file and no Activation (moved or deleted on disk
+	 * after the record was written) renders no row: the same visible behavior
+	 * a full scan would produce, and the next boot's recovery prunes the
+	 * record. */
+	const queueRow = (
+		project: ProjectConfig,
+		stem: string,
+		active: CatalogLiveEntry | undefined,
+		states: CatalogStateOverlay,
+	): SessionInfo | null => {
+		if (active) {
+			let sortTimeMs = Date.parse(active.metadata.createdAt);
+			if (existsSync(active.metadata.sessionFile)) {
+				try {
+					sortTimeMs = statSync(active.metadata.sessionFile).mtimeMs;
+				} catch {
+					// fall back to the header creation time
+				}
+			}
+			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, states);
+		}
+		const real = containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
+		if (real === null) return null;
+		let sortTimeMs: number;
+		try {
+			sortTimeMs = statSync(real).mtimeMs;
+		} catch {
+			return null;
+		}
+		return toSessionInfo(project, { stem, abs: real, sortTimeMs }, states);
 	};
 
 	return {
@@ -207,32 +249,27 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		},
 
 		listQueue(live, states): SessionInfo[] {
-			// Queue membership is the durable state, not the registry: a
-			// dormant notified session is a queue row with no runtime, and a
-			// browsed inactive session with a live runtime is not. The scan's live
-			// overlay still covers an unflushed busy session, which has a file row
-			// in neither place yet.
+			// Membership is the durable state, in memory: the store's keys are
+			// the queued stems, so the queue never walks the Project's history —
+			// each row costs at most one file (a live row reads only the
+			// registry's metadata; a dormant row the one file its stem names).
 			const out: SessionInfo[] = [];
 			for (const project of projects.values()) {
-				for (const entry of scan(project, live)) {
-					const row = toSessionInfo(project, entry, states);
-					if ((row.state ?? "inactive") !== "inactive") out.push(row);
+				const liveByStem = new Map<string, CatalogLiveEntry>();
+				for (const entry of live) {
+					if (entry.ref.projectId !== project.id) continue;
+					liveByStem.set(entry.ref.stem, entry);
+				}
+				for (const stem of states.queued(project.id).keys()) {
+					const row = queueRow(project, stem, liveByStem.get(stem), states);
+					if (row !== null) out.push(row);
 				}
 			}
-			// Notified first (the work waiting for the user), busy next (it will
-			// demote itself into notified when it lands), deferred last (parked by
-			// decision); each group by last activity descending.
-			const rank: Record<SessionState, number> = { inactive: 3, notified: 0, busy: 1, deferred: 2 };
-			const activity = (row: SessionInfo): number => {
-				const ms = Date.parse(row.lastActivityAt ?? "");
-				return Number.isNaN(ms) ? Date.parse(row.timestamp) : ms;
-			};
-			out.sort(
-				(a, b) =>
-					rank[a.state ?? "inactive"] - rank[b.state ?? "inactive"] ||
-					activity(b) - activity(a) ||
-					(a.stem < b.stem ? -1 : a.stem > b.stem ? 1 : 0),
-			);
+			// The shared total order (queue-order.ts): notified first (the work
+			// waiting for the user), busy next (it demotes itself into notified
+			// when it lands), deferred last (parked by decision); each group by
+			// last activity descending.
+			out.sort(compareQueueRows);
 			return out;
 		},
 	};
@@ -259,9 +296,8 @@ export function assertNoSessionIdConflicts(projects: Map<string, ProjectConfig>)
 
 /** The durable session ids a Project's storage holds, keyed by stem: the
  * discovery scan (recursive `*.jsonl`, archive prefix excluded, symlink
- * containment enforced) reduced to the header ids. Shared by the startup
- * conflict check and the session-state store's recovery pruning, so both see
- * the same notion of "a session that exists". */
+ * containment enforced) reduced to the header ids — the startup conflict
+ * check's notion of "a session that exists". */
 export function scanDurableSessionIds(project: ProjectConfig): Map<string, string> {
 	const ids = new Map<string, string>();
 	let rels: string[];
@@ -298,10 +334,8 @@ interface FileSessionEntry {
 	[key: string]: unknown;
 }
 
-/** Read just the session id from a file's first line, or null. Exported for
- * the session-state store's address resolution (a dormant session's record is
- * keyed by the header id, and the verb layer has only the stem). */
-export function readSessionHeaderId(filePath: string): string | null {
+/** Read just the session id from a file's first line, or null. */
+function readSessionHeaderId(filePath: string): string | null {
 	let fd: number | undefined;
 	try {
 		const st = statSync(filePath);

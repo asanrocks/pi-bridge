@@ -32,19 +32,25 @@ afterEach(() => {
 });
 
 /** A Manager stand-in the tests drive: admissions are captured, full
- * settlement fires only when the test says the execution settled. */
+ * settlement fires only when the test says the execution settled, and the
+ * next admitted prompt can be refused before admission (mimicking the real
+ * Manager's contract: a refused dispatch rejects and never keeps the
+ * execution tag). */
 interface FakeManager extends Manager {
 	/** The execution tag of the last admitted dispatch. */
 	lastExecution: () => string | undefined;
 	/** The execution fully settled: fire the Manager's signal. */
 	settle: (execution?: string) => void;
+	/** Refuse the next admitted prompt before admission (one-shot). */
+	refuseNextPrompt: () => void;
 	disposeCalls: () => number;
 }
 
 function fakeManager(sessionPath: string | undefined): FakeManager {
 	// The durable id is the file header's (the cache key, never the path):
-	// the state store is keyed by it, and the catalog resolves queue rows
-	// through it, so the stand-in must read it the way the real Manager does.
+	// rows carry it, and the catalog resolves them through it — the state
+	// store is keyed by the stem, but the stand-in must read the header the
+	// way the real Manager does so the row shape matches.
 	const durableId = (path: string): string => {
 		try {
 			const first = readFileSync(path, "utf8").split("\n", 1)[0];
@@ -58,6 +64,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 	const sessionId = sessionPath ? durableId(sessionPath) : `fresh-${Math.random().toString(36).slice(2)}`;
 	const fullySettled = new Set<(execution: string | undefined) => void>();
 	let execution: string | undefined;
+	let refuseNext = false;
 	let disposed = 0;
 	const base = {
 		document: {
@@ -96,6 +103,12 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		onActivityChange: () => () => {},
 		prompt: async () => {},
 		promptAdmitted: async (_text: string, _images?: unknown, _model?: unknown, _level?: unknown, exec?: string) => {
+			if (refuseNext) {
+				// Refused before admission: reject, and never record the tag — the
+				// real Manager rolls its tag back on the same path.
+				refuseNext = false;
+				throw new Error("preflight refused");
+			}
 			execution = exec;
 		},
 		executeBash: async () => {},
@@ -120,6 +133,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		settle: (exec?: string) => {
 			const tag = exec ?? execution;
 			for (const listener of fullySettled) listener(tag);
+		},
+		refuseNextPrompt: () => {
+			refuseNext = true;
 		},
 		disposeCalls: () => disposed,
 	} as FakeManager;
@@ -227,6 +243,63 @@ describe("session-state wiring: transitions", () => {
 		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
 	});
 
+	it("a prompt refused mid-execution strands nothing: the running execution keeps the queue busy and its settle lands", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "one");
+		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
+
+		// A second prompt is refused at preflight while the first execution
+		// still runs: the abandon must restore that execution — not a busy row
+		// whose token no settle will ever carry (the fake refuses the way the
+		// real Manager does: the refused tag is never recorded).
+		fx.managers[0].refuseNextPrompt();
+		await expect(fx.worker.prompt(target, "two")).rejects.toThrow(/preflight refused/);
+		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
+
+		// The first execution settles under its own tag and the queue lands
+		// notified — not stuck busy until restart.
+		fx.managers[0].settle();
+		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+	});
+
+	// Dormant rows read their own file for content; inactive history is
+	// never touched.
+	const userMessage = (text: string): string =>
+		JSON.stringify({
+			type: "message",
+			timestamp: "2026-01-02T00:00:00Z",
+			message: { role: "user", content: [{ type: "text", text }] },
+		});
+
+	it("a dormant queued row carries its file's content; history stays out of the queue", async () => {
+		const fx = makeFixture();
+		// Many inactive sessions — none may cost the queue anything.
+		for (let i = 0; i < 50; i++) fx.addSession(`id-h${i}`, `history-${i}`);
+		// The queued dormant session has a name and a first message in its file.
+		writeFileSync(
+			join(fx.project.sessionDir, "queued.jsonl"),
+			`${[JSON.stringify({ type: "session", id: "id-queued" }), JSON.stringify({ type: "session_info", name: "The one that matters" }), userMessage("pick this up")].join("\n")}\n`,
+		);
+		await fx.worker.setSessionState({ projectId: "proj", stem: "queued" }, "notified");
+
+		const rows = await fx.worker.listQueue();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			stem: "queued",
+			sessionId: "id-queued",
+			state: "notified",
+			name: "The one that matters",
+			firstMessageText: "pick this up",
+		});
+
+		// A queued record whose file is gone after the record was written
+		// renders no row — the next boot's recovery prunes it.
+		rmSync(join(fx.project.sessionDir, "queued.jsonl"));
+		expect(await fx.worker.listQueue()).toEqual([]);
+	});
+
 	it("the toggle is refused while busy and legal on a dormant session", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
@@ -294,6 +367,15 @@ describe("session-state wiring: transitions", () => {
 			["busy", "b1"],
 			["deferred", "d1"],
 		]);
+	});
+
+	it("a queued row whose file is unparseable still carries its durable state", async () => {
+		const fx = makeFixture();
+		// Present and contained, but no session header: the catalog cannot parse
+		// it, so the row's metadata is empty while its queue state is not.
+		writeFileSync(join(fx.project.sessionDir, "broken.jsonl"), "not json\n");
+		await fx.worker.setSessionState({ projectId: "proj", stem: "broken" }, "deferred");
+		expect((await fx.worker.listQueue()).map((row) => [row.stem, row.state])).toEqual([["broken", "deferred"]]);
 	});
 
 	it("a refused admission restores the pre-admission state", async () => {

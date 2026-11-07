@@ -150,7 +150,9 @@ export interface Manager {
 	 * tool cycles inside one execution. The listener receives the execution
 	 * tag the settling dispatch was admitted with (undefined for a run no
 	 * tagged dispatch started), so the owner of a work queue can ignore the
-	 * settle of an execution a newer admission already superseded.
+	 * settle of an execution a newer admission already superseded; a dispatch
+	 * refused before admission never keeps the tag, so the run still in
+	 * flight settles under its own.
 	 */
 	onFullySettled(listener: (execution: string | undefined) => void): () => void;
 	/**
@@ -755,6 +757,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				// settling while a newer dispatch is still between carries and
 				// dispatch reports the older tag, and the newer dispatch keeps the
 				// execution live until its own settle.
+				const previousExecution = lastExecution;
 				lastExecution = execution;
 				session
 					.prompt(text, {
@@ -774,7 +777,17 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 							dispatchSettled(execution);
 						},
 						(err) => {
-							if (!admitted) reject(err instanceof Error ? err : new Error(String(err)));
+							if (!admitted) {
+								// A refused dispatch never started an execution, so it must
+								// not keep the tag: a run still in flight would settle under
+								// the tag of a dispatch that never ran, and no store token
+								// would match it. Roll back to the tag that stood at dispatch
+								// — unless a newer dispatch already replaced this one's.
+								if (execution !== undefined && lastExecution === execution) {
+									lastExecution = previousExecution;
+								}
+								reject(err instanceof Error ? err : new Error(String(err)));
+							}
 							// A failure after admission is a completed execution too — its
 							// outcome is visible document state, and the session awaits
 							// input ( errors and interruptions settle).
@@ -879,10 +892,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			if (!info) {
 				throw new Error("No failed or interrupted turn to recover");
 			}
-			// The recovery is an execution: its tag is recorded before any
-			// path starts, so both the relay run's `agent_settled` and the silent
-			// continuation's compensated end report it.
-			lastExecution = execution;
+			// The recovery is an execution: its tag is recorded after every
+			// refusal check, so both the relay run's `agent_settled` and the silent
+			// continuation's compensated end report it — and a refusal never
+			// leaves behind a tag no run will settle under.
 			const repair = RECOVERY_REPAIRS[info.kind];
 			// The relay must be built from the pre-branch leaf path: the dangling
 			// assistant and its completed results leave the path when recovery
@@ -909,6 +922,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				// re-derives what the new selection describes.
 				tryReconcile();
 			}
+			lastExecution = execution;
 
 			// interruptedTools: a visible relay through AgentSession's normal
 			// machinery (retry, overflow recovery, steering, settle events). It

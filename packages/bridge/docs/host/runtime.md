@@ -818,7 +818,7 @@ close's write as the last one for that execution; an admission that began
 after the capture is a newer user intent, and the close's write is skipped so
 the session stays busy while the close still reports the disposal it
 performed. A dormant Session (no Activation) closes legally too: the state
-write is the whole operation, addressed by the stem's durable header id, and
+write is the whole operation, keyed by the stem, and
 a stem with no session at all is an error. The verb then refreshes the
 Project's first session page. Collection is also the terminal ownership
 boundary: every Connection
@@ -853,35 +853,66 @@ The timer model and its reservation invariant govern this runtime.
 `src/host/session-state.ts` is the durable, user-visible session lifecycle:
 every session carries one of `inactive | notified | busy |
 deferred`, persisted by the Worker at `<sessionDir>/.pi-bridge/states.json`
-(one file per Project, keyed by the durable session id so a moved file keeps
-its state). The store owns the transitions, not just the writes: an admission
+(one file per Project, keyed by the session's stem — its address, so the
+record names the queue row it needs with no index and no directory scan; the
+stem is stable for every session the system serves, and the one case the
+durable session id would have covered — a manual move to a different stem —
+loses the state, by decision). The store owns the transitions, not just the
+writes: an admission
 (`admit`) mints an execution token and lands `busy`; a full settlement
 (`settle`, carrying the token the Manager reports) lands `notified` only when
 the token is still the current execution; a failed admission (`abandon`)
-restores the pre-admission state; the defer/restore `toggle` is refused while
-busy; `markInactive` (close) is skipped when an admission newer than the one
-the close began under has landed; `prune` drops an archived session's record.
+restores the record as it stood at admission — an in-flight execution's token
+included, so a superseding prompt refused at preflight hands the session back
+to the execution still running (whose settle then lands) instead of stranding
+it busy under a token no settle will carry; a late `abandon` whose token
+already settled is a no-op; a settle that names the execution the snapshot
+restores — the run ended between a newer admission's write and its dispatch
+recording the new tag — is remembered, so the refusal lands `notified`
+instead of restoring a busy record nothing will settle; the defer/restore
+`toggle` is refused while busy; `markInactive` (close) is skipped when an
+admission newer than the one the close began under has landed (both branches
+capture that token before their first await, so an admission landing mid-close
+is the newer intent); `prune` drops an archived session's record.
+The Manager holds the other half of the rule: a dispatch refused before
+admission never keeps the execution tag, so the run still in flight settles
+under its own tag.
+
+Transitions key on executions the bridge admits, which is the boundary this
+store can see: a run an extension starts on its own (`context.prompt`,
+fire-and-forget) streams while the row's state is unchanged — a `notified`
+session running by extension command stays `notified`. That is the same
+declared gap as extension-initiated compaction in ADR 12: the bridge adds no
+turn lifecycle of its own and cannot tag a run it did not admit.
 
 Writes are whole-file, atomic (temp + rename), and synchronous, so arrival
 order is the serialization and no transition's decision can interleave with
 another's — and a graceful shutdown needs no suppression machinery: disposal
 of a busy session finalizes the turn, the settle write lands before Worker
 disposal resolves, and the next boot's recovery would rewrite the same
-thing anyway. A missing file is the normal first state. A corrupt file is
-quarantined (renamed to a `.corrupt` sibling, never overwritten) and
-surfaced on the console — the store restarts empty rather than silently
-dropping unfinished work. Turn-boundary write failures (admission,
+thing anyway. A missing file is the normal first state. A present but
+unreadable or corrupt file is quarantined (renamed to a `.corrupt` sibling,
+never overwritten) and surfaced on the console — the store restarts empty
+rather than silently dropping unfinished work; only `ENOENT` counts as
+missing, so a permissions failure or a directory in the file's place is
+quarantined like corrupt content instead of silently serving an empty store
+that the next write would persist. Turn-boundary write failures (admission,
 settlement, abandonment) degrade to in-memory state and retry on the next
-transition; user-action writes (toggle, close, prune) throw, so the verb is
-retryable instead of silently losing the intent.
+transition; user-action writes (toggle, close, prune) decide against a
+candidate copy, persist it, and commit only on success — a failed verb
+leaves the store exactly as it was, so a retry re-attempts the write instead
+of reporting success against state that was never durable.
 
 Startup recovery runs in the store's constructor: every persisted `busy`
 becomes `notified` (the Worker's process died with the runtimes, so nothing
 is executing), and a record whose session file does not exist is dropped
 (ADR 12's accepted loss, made visible: a first turn that never flushed has no
-durable conversation to be notified about). The scan is the catalog's
-`scanDurableSessionIds` — the same discovery notion the startup conflict
-check uses.
+durable conversation to be notified about, and a stem moved or deleted on
+disk after the last write names no session this Worker serves). The check is
+one containment-checked existence probe per record — the queue's size, not
+the history's — and a store-file key that is not a canonical stem is a bad
+record, quarantined with the rest: the file is disk input, and no key may
+name a path the queue could resolve outside the Project's session directory.
 
 ## Session Operations
 
@@ -964,15 +995,25 @@ the file scan; `timestamp` remains the durable sort key (mtime / header
 creation).
 
 `listQueue` is the global work queue: every non-inactive session
-across every Project — membership is the durable state overlay, not the
-registry, so a dormant notified session is a queue row with no runtime and a
-browsed inactive session is not a row at all. It is ordered notified → busy →
-deferred, each group by last activity descending. `setSessionState(projectId,
+across every Project — membership is the state store's key set, in memory,
+not the registry and not a directory scan, so a dormant notified session is
+a queue row with no runtime and a browsed inactive session is not a row at
+all, and the query costs at most one file per row (a live row reads only the
+registry's metadata; a dormant row the one file its stem names,
+mtime-cached). A queued record whose stem resolves to no file and no
+Activation — moved or deleted on disk after the record was written —
+renders no row, and the next boot's recovery prunes it. It is ordered
+notified → busy → deferred, each group by last activity descending.
+`setSessionState(projectId,
 stem, state)` is the user's defer/restore toggle: refused while the session is
-busy (the state store owns the precondition), legal on a dormant session (the
-Worker resolves the stem's durable header id; a stem with no session at all
+busy (the state store owns the precondition), legal on a dormant session
+(the stem is the record's key; a stem with no session at all
 is an error). Both report through the `queue_changed` Worker event, which the
-Daemon aggregates and pushes to every browser.
+Daemon aggregates and pushes to every browser. The queue's total order lives
+in one comparator (`src/host/queue-order.ts`) shared by the Worker that
+orders its slice and the Daemon that aggregates the slices, so a
+multi-Worker queue interleaves by the same rule instead of concatenating
+per-registration blocks.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
 model and thinking defaults, available model metadata, the daemon-global
@@ -1126,8 +1167,14 @@ and after explicit close disposal; a settle also refreshes metadata when a
 fresh Session first reaches disk.
 
 A `queue_changed` push is global. It contains the complete current
-`listQueue` snapshot — the aggregate of every registered Worker's last report.
-The Daemon sends it when a session's durable state changes (an admitted
+`listQueue` snapshot — the aggregate of every registered Worker's last
+report, re-sorted into the queue's global order by the shared comparator. A
+registration's slice is seeded from a live `listQueue` when the link is
+accepted (a placeholder identity closes the race with a `queue_changed`
+arriving during the seed query, which is fresher than the snapshot), so a
+Worker that arrives holding persisted queue state is visible in the
+aggregate immediately rather than after its next transition. The Daemon
+sends the push when a session's durable state changes (an admitted
 execution, a full settlement, a toggle, a close, an archive) and when a live
 Activation's registration or streaming state changes (those refresh the
 queued rows' preview fields, never their membership). Connections receive

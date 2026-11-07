@@ -9,34 +9,45 @@
 // user sees, and it survives idle collection, daemon restarts, and crashes.
 //
 // The store owns the transitions, not just the writes: every request carries
-// its evidence — an admission mints an execution token, a completion carries
-// the token of the execution it settles (so the settle of a superseded
-// execution cannot mark notified a session a newer prompt already made
-// busy), a close carries the token it began under (skipped when a newer
-// admission followed), and the defer/restore toggle carries its "not busy"
-// precondition, checked here rather than by a caller that may have raced an
-// admission.
+// its evidence — an admission mints an execution token and snapshots the
+// record it replaces, a completion carries the token of the execution it
+// settles (so the settle of a superseded execution cannot mark notified a
+// session a newer prompt already made busy; that superseded settle is still
+// remembered, so an abandonment knows when the execution it restores has
+// already ended), an abandonment restores the
+// snapshot — a still-running execution's token included, so a refused
+// superseding admission hands the session back to that execution instead of
+// stranding it busy under a token no settle will ever carry — a close carries
+// the token it began under (skipped when a newer admission followed), and the
+// defer/restore toggle carries its "not busy" precondition, checked here
+// rather than by a caller that may have raced an admission.
 //
 // Persistence: one JSON file per Project at `<sessionDir>/.pi-bridge/
-// states.json`, keyed by the durable session id and carrying no address (a
-// moved session file keeps its state). Writes are whole-file, atomic (temp
-// file + rename), and synchronous — a transition decides and persists in one
+// states.json`, keyed by the session's stem — its address, so the record
+// names the row the queue needs with no index and no directory scan: the
+// queue's membership is this store's key set. The stem is stable for every
+// session the system serves (allocated before first flush, never renamed
+// in-system, dropped at archive), so the one case the durable session id
+// would have covered — a manual move to a different stem — loses the state,
+// by decision. Writes are whole-file, atomic (temp file + rename), and
+// synchronous — a transition decides and persists in one
 // event-loop turn, so arrival order is the serialization. A missing file is
-// the normal first state. A present but corrupt file is quarantined (renamed
-// to a `.corrupt` sibling, never overwritten) and surfaced: silently
-// degrading would make unfinished work disappear. Write failures split by
-// intent — turn-boundary writes (admission, settlement, abandonment) degrade
-// to in-memory and are retried by the next transition; user-action writes
-// (toggle, close, archive) throw, so a failed verb is retryable rather than
-// a silently lost intent.
+// the normal first state. A present but unreadable or corrupt file is
+// quarantined (renamed to a `.corrupt` sibling, never overwritten) and
+// surfaced: silently degrading would make unfinished work disappear. Write
+// failures split by intent — turn-boundary writes (admission, settlement,
+// abandonment) degrade to in-memory and are retried by the next transition;
+// user-action writes (toggle, close, archive) decide against a candidate copy,
+// persist it, and commit only on success, so a failed verb leaves the store
+// exactly as it was and a retry re-attempts the write instead of reporting
+// success against state that was never durable.
 // ============================================================================
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionState, SessionToggleState } from "../core/index.ts";
-import type { ProjectConfig } from "./projects.ts";
-import { scanDurableSessionIds } from "./session-catalog.ts";
+import { containedSessionFile, normalizeStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
 
 export type { SessionToggleState };
 
@@ -51,9 +62,17 @@ interface StateRecord {
 	updatedAt: string;
 	/** The current execution's token, set at admission. Not persisted. */
 	token?: ExecutionToken;
-	/** The state to restore when the current admission fails before starting
-	 * the execution (a refused preflight). Not persisted. */
-	preAdmission?: { state: SessionState; updatedAt: string };
+	/** The record to restore when the current admission fails before the
+	 * execution starts (a refused preflight): a copy of the record as it
+	 * stood at admission — an in-flight execution's token included, so that
+	 * execution's settle can still land. Not persisted. */
+	preAdmission?: StateRecord;
+	/** The execution `preAdmission` restores settled while this record was
+	 * current: the run ended between this admission's write and its dispatch
+	 * recording the new tag, so the settle named the previous execution. A
+	 * refusal must land that execution's outcome instead of restoring a busy
+	 * record no run will ever settle. Not persisted. */
+	preAdmissionSettled?: boolean;
 }
 
 interface StoredFile {
@@ -62,30 +81,36 @@ interface StoredFile {
 }
 
 export interface SessionStates {
-	/** The session's durable state; `inactive` when no record exists. */
-	stateOf(projectId: string, sessionId: string): SessionState;
+	/** The session's durable state at its stem; `inactive` when no record
+	 * exists. */
+	stateOf(projectId: string, stem: string): SessionState;
+	/** The Project's recorded states, keyed by stem — the work queue's
+	 * membership. The map is a projected copy: the caller cannot reach the
+	 * execution bookkeeping the wire never sees. */
+	queued(projectId: string): ReadonlyMap<string, SessionState>;
 	/** A prompt's admission succeeded: the session is busy under a fresh
 	 * execution token, which the caller passes back at settlement. */
-	admit(projectId: string, sessionId: string): ExecutionToken;
-	/** The admission failed before the execution started: restore the state
-	 * the session had before it. A no-op when a newer admission already
-	 * superseded the token. */
-	abandon(projectId: string, sessionId: string, token: ExecutionToken): void;
+	admit(projectId: string, stem: string): ExecutionToken;
+	/** The admission failed before the execution started: restore the record
+	 * as it stood at admission — an in-flight execution's token included, so
+	 * its settle still lands. A no-op when a newer admission already
+	 * superseded the token, or the token's execution already settled. */
+	abandon(projectId: string, stem: string, token: ExecutionToken): void;
 	/** An execution fully settled: busy becomes notified when the token is
 	 * still the current execution; otherwise the settle names a superseded
 	 * execution and changes nothing. */
-	settle(projectId: string, sessionId: string, token: ExecutionToken | undefined): void;
+	settle(projectId: string, stem: string, token: ExecutionToken | undefined): void;
 	/** The user's defer/restore toggle. Refused (throws) while busy — the
 	 * state machine owns the precondition, not the caller. Durable-or-fail. */
-	toggle(projectId: string, sessionId: string, state: SessionToggleState): void;
+	toggle(projectId: string, stem: string, state: SessionToggleState): void;
 	/** Close: the session becomes inactive. Skipped when an admission newer
 	 * than `since` began after the close did — a newer user intent keeps the
 	 * session busy. Durable-or-fail. */
-	markInactive(projectId: string, sessionId: string, since: ExecutionToken | null): void;
+	markInactive(projectId: string, stem: string, since: ExecutionToken | null): void;
 	/** Archive: drop the record entirely. Durable-or-fail. */
-	prune(projectId: string, sessionId: string): void;
+	prune(projectId: string, stem: string): void;
 	/** The current execution token, for a close's precondition capture. */
-	tokenOf(projectId: string, sessionId: string): ExecutionToken | null;
+	tokenOf(projectId: string, stem: string): ExecutionToken | null;
 }
 
 export interface SessionStatesOptions {
@@ -102,26 +127,40 @@ export function createSessionStates(
 	options: SessionStatesOptions = {},
 ): SessionStates {
 	const now = options.now ?? (() => new Date().toISOString());
-	/** Per-Project records, keyed by durable session id. */
+	/** Per-Project records, keyed by stem. */
 	const records = new Map<string, Map<string, StateRecord>>();
 	const files = new Map<string, string>();
+
+	/** A session file exists at this stem: containment-checked, so a stored
+	 * stem can never make recovery or the queue read outside the Project's
+	 * session directory. */
+	const sessionFileAt = (project: ProjectConfig, stem: string): string | null => {
+		try {
+			return containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
+		} catch {
+			// A stem that escapes the directory (only possible from a
+			// hand-edited store file — the verbs normalize) resolves to nothing.
+			return null;
+		}
+	};
 
 	const loadProject = (project: ProjectConfig): void => {
 		const dir = join(project.sessionDir, STORE_DIR);
 		const file = join(dir, STORE_FILE);
 		files.set(project.id, file);
 		const stored = readStored(file, project.id);
-		const known = new Set(scanDurableSessionIds(project).values());
 		const loaded = new Map<string, StateRecord>();
-		for (const [sessionId, record] of stored) {
+		for (const [stem, record] of stored) {
 			// Recovery: the Worker's process died with the runtimes, so
 			// nothing is executing — a persisted busy becomes notified, which is
 			// what the next boot's settle would have written anyway. A record
 			// whose session file does not exist is dropped: a first turn that
-			// never flushed has no durable conversation, so there is nothing to
-			// be notified about (ADR 12's accepted loss, made visible).
-			if (!known.has(sessionId)) continue;
-			loaded.set(sessionId, record.state === "busy" ? { ...record, state: "notified" } : record);
+			// never flushed has no durable conversation (ADR 12's accepted loss,
+			// made visible), and a stem moved or deleted on disk after the last
+			// write names no session this Worker serves. The check is one
+			// existence probe per record — the queue's size, not the history's.
+			if (sessionFileAt(project, stem) === null) continue;
+			loaded.set(stem, record.state === "busy" ? { ...record, state: "notified" } : record);
 		}
 		records.set(project.id, loaded);
 		if (stored.size !== loaded.size || [...stored.values()].some((r) => r.state === "busy")) {
@@ -136,7 +175,14 @@ export function createSessionStates(
 		let raw: string;
 		try {
 			raw = readFileSync(file, "utf8");
-		} catch {
+		} catch (error) {
+			// Only a missing file is the normal first state. Anything else — a
+			// directory in the file's place, permissions, an I/O error — is a
+			// present file the store cannot read, and serving empty would silently
+			// discard its queue state at the next write: quarantine it like
+			// corrupt content, keeping the evidence on disk.
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+			quarantine(file, projectId, `unreadable (${error instanceof Error ? error.message : String(error)})`);
 			return new Map();
 		}
 		let parsed: unknown;
@@ -158,17 +204,28 @@ export function createSessionStates(
 			return new Map();
 		}
 		const out = new Map<string, StateRecord>();
-		for (const [sessionId, record] of Object.entries(shape.sessions)) {
+		for (const [stem, record] of Object.entries(shape.sessions)) {
+			// The store file is disk input: a key that is not a canonical stem
+			// (an escaping path, an archived stem, a `.jsonl` suffix) is a bad
+			// record, quarantined with the rest — never a key the queue could
+			// resolve against the filesystem.
+			let valid = false;
+			try {
+				valid = normalizeStem(stem) === stem;
+			} catch {
+				valid = false;
+			}
 			if (
+				!valid ||
 				record === null ||
 				typeof record !== "object" ||
 				!STATE_VALUES.includes((record as StateRecord).state) ||
 				typeof (record as StateRecord).updatedAt !== "string"
 			) {
-				quarantine(file, projectId, `bad record for session ${sessionId}`);
+				quarantine(file, projectId, `bad record for session ${stem}`);
 				return new Map();
 			}
-			out.set(sessionId, { state: (record as StateRecord).state, updatedAt: (record as StateRecord).updatedAt });
+			out.set(stem, { state: (record as StateRecord).state, updatedAt: (record as StateRecord).updatedAt });
 		}
 		return out;
 	};
@@ -193,8 +250,7 @@ export function createSessionStates(
 		}
 	};
 
-	const recordOf = (projectId: string, sessionId: string): StateRecord | undefined =>
-		records.get(projectId)?.get(sessionId);
+	const recordOf = (projectId: string, stem: string): StateRecord | undefined => records.get(projectId)?.get(stem);
 
 	const requireRecords = (projectId: string): Map<string, StateRecord> => {
 		const map = records.get(projectId);
@@ -204,17 +260,16 @@ export function createSessionStates(
 
 	/** Whole-file atomic persist. Turn-boundary callers tolerate a failure (the
 	 * in-memory state is already decided; the next transition retries); user
-	 * actions let it throw. */
-	const persist = (projectId: string): void => {
+	 * actions let it throw. `sessions` is the map to serialize — the live
+	 * records for a turn boundary, a candidate copy for a user action (see
+	 * `userAction`). */
+	const persist = (projectId: string, sessions: Map<string, StateRecord> = requireRecords(projectId)): void => {
 		const file = files.get(projectId);
 		if (file === undefined) throw new Error(`Unknown project: ${projectId}`);
 		const stored: StoredFile = {
 			version: 1,
 			sessions: Object.fromEntries(
-				[...requireRecords(projectId)].map(([sessionId, record]) => [
-					sessionId,
-					{ state: record.state, updatedAt: record.updatedAt },
-				]),
+				[...sessions].map(([stem, record]) => [stem, { state: record.state, updatedAt: record.updatedAt }]),
 			),
 		};
 		const temp = `${file}.${process.pid}.tmp`;
@@ -223,7 +278,18 @@ export function createSessionStates(
 		// `*.jsonl`, so the store directory is invisible to discovery either way).
 		mkdirSync(dirname(file), { recursive: true });
 		writeFileSync(temp, `${JSON.stringify(stored, null, "\t")}\n`);
-		renameSync(temp, file);
+		try {
+			renameSync(temp, file);
+		} catch (error) {
+			// The temp file is garbage once the rename failed; leave nothing
+			// behind for the next write to trip over.
+			try {
+				rmSync(temp);
+			} catch {
+				// The rename's error is the one to surface.
+			}
+			throw error;
+		}
 	};
 
 	/** Decide a turn-boundary transition and persist on a best-effort basis: a
@@ -244,90 +310,129 @@ export function createSessionStates(
 		}
 	};
 
+	/** Decide a user-action transition against a candidate copy, persist the
+	 * candidate, and commit it only once the write landed: a failed verb
+	 * leaves the store exactly as it was, so a retry re-attempts the write
+	 * instead of reporting success against state that was never durable —
+	 * the opposite of `turnBoundary`'s trade, because the user's intent must
+	 * not stand half-applied. The candidate is a shallow copy whose entries
+	 * are replaced wholesale (never mutated in place), so the live records
+	 * are untouched until the commit. */
+	const userAction = (projectId: string, decide: (map: Map<string, StateRecord>) => boolean): void => {
+		const candidate = new Map(requireRecords(projectId));
+		if (!decide(candidate)) return;
+		persist(projectId, candidate);
+		records.set(projectId, candidate);
+	};
+
 	for (const project of projects.values()) loadProject(project);
 	return {
-		stateOf(projectId, sessionId) {
-			return recordOf(projectId, sessionId)?.state ?? "inactive";
+		stateOf(projectId, stem) {
+			return recordOf(projectId, stem)?.state ?? "inactive";
 		},
 
-		admit(projectId, sessionId) {
+		queued(projectId) {
+			const projected = new Map<string, SessionState>();
+			for (const [stem, record] of requireRecords(projectId)) projected.set(stem, record.state);
+			return projected;
+		},
+
+		admit(projectId, stem) {
 			const token = randomUUID();
 			turnBoundary(projectId, (map) => {
-				const previous = map.get(sessionId);
+				const previous = map.get(stem);
 				// Every admission is a new execution, busy or not: the token names
 				// the execution whose settlement the store will accept, and a
 				// steer admitted mid-turn is one continuing execution whose settle
-				// lands under the newest token.
-				map.set(sessionId, {
+				// lands under the newest token. The snapshot is the whole previous
+				// record — a still-running execution's token included — so an
+				// abandoned superseding admission restores that execution rather
+				// than a busy row no settle can ever land on.
+				map.set(stem, {
 					state: "busy",
 					updatedAt: now(),
 					token,
-					preAdmission: previous
-						? { state: previous.state, updatedAt: previous.updatedAt }
-						: { state: "inactive", updatedAt: now() },
+					preAdmission: previous ? { ...previous } : undefined,
 				});
 				return true;
 			});
 			return token;
 		},
 
-		abandon(projectId, sessionId, token) {
+		abandon(projectId, stem, token) {
 			turnBoundary(projectId, (map) => {
-				const record = map.get(sessionId);
-				if (record?.token !== token) return false;
-				const restore = record.preAdmission ?? { state: "inactive" as const, updatedAt: now() };
+				const record = map.get(stem);
+				// A settle already landed under this token — a run settling while
+				// the refused dispatch was still pending reported its tag — so the
+				// execution completed; restoring now would un-settle it.
+				if (record?.token !== token || record.state !== "busy") return false;
 				// A fresh session whose first prompt was refused has no state to
 				// show: the record disappears rather than lingering as a row that
 				// was never anything.
-				if (restore.state === "inactive") map.delete(sessionId);
-				else map.set(sessionId, { state: restore.state, updatedAt: restore.updatedAt });
+				const restore = record.preAdmission;
+				if (restore === undefined) map.delete(stem);
+				// The execution being restored already settled while this admission
+				// was still pending (see `settle`): its outcome is the record, not the
+				// busy state it was in at admission.
+				else if (record.preAdmissionSettled) map.set(stem, { state: "notified", updatedAt: now() });
+				else map.set(stem, restore);
 				return true;
 			});
 		},
 
-		settle(projectId, sessionId, token) {
+		settle(projectId, stem, token) {
 			turnBoundary(projectId, (map) => {
-				const record = map.get(sessionId);
-				// The settle of a superseded execution changes nothing: a newer
-				// admission already made the session busy under its own token,
-				// and that execution's settle is the one that will land.
-				if (record === undefined || record.token !== token || record.state !== "busy") return false;
+				const record = map.get(stem);
+				// The settle of a superseded execution leaves the state alone: a
+				// newer admission already made the session busy under its own token,
+				// and that execution's settle is the one that will land. It is still
+				// remembered — a run can end between a newer admission's write and its
+				// dispatch recording the tag, so the settle names the execution that
+				// admission snapshotted, and a refusal of that admission lands this
+				// outcome rather than restoring a busy record nothing will settle.
+				if (record === undefined || token === undefined || record.state !== "busy") return false;
+				if (record.token !== token) {
+					if (record.preAdmission?.token !== token) return false;
+					record.preAdmissionSettled = true;
+					return false;
+				}
 				record.state = "notified";
 				record.updatedAt = now();
 				return true;
 			});
 		},
 
-		toggle(projectId, sessionId, state) {
-			const map = requireRecords(projectId);
-			const record = map.get(sessionId);
-			if (record?.state === "busy") {
+		toggle(projectId, stem, state) {
+			// The store owns the precondition: a defer racing an admission is
+			// refused here, not by a caller that may have raced it.
+			if (recordOf(projectId, stem)?.state === "busy") {
 				throw new Error("Session is busy: defer or restore it after the run settles");
 			}
-			map.set(sessionId, { state, updatedAt: now() });
-			persist(projectId);
+			userAction(projectId, (map) => {
+				map.set(stem, { state, updatedAt: now() });
+				return true;
+			});
 		},
 
-		markInactive(projectId, sessionId, since) {
-			const map = requireRecords(projectId);
-			const record = map.get(sessionId);
-			if (record === undefined) return;
-			// A newer admission after the close began is a newer user intent: the
-			// close still disposed the runtime it addressed, but its write is
-			// skipped so the session stays busy (close-wins rule).
-			if ((record.token ?? null) !== since) return;
-			map.delete(sessionId);
-			persist(projectId);
+		markInactive(projectId, stem, since) {
+			userAction(projectId, (map) => {
+				const record = map.get(stem);
+				if (record === undefined) return false;
+				// A newer admission after the close began is a newer user intent: the
+				// close still disposed the runtime it addressed, but its write is
+				// skipped so the session stays busy (close-wins rule).
+				if ((record.token ?? null) !== since) return false;
+				map.delete(stem);
+				return true;
+			});
 		},
 
-		prune(projectId, sessionId) {
-			const map = requireRecords(projectId);
-			if (!map.delete(sessionId)) return;
-			persist(projectId);
+		prune(projectId, stem) {
+			userAction(projectId, (map) => map.delete(stem));
 		},
 
-		tokenOf(projectId, sessionId) {
-			return recordOf(projectId, sessionId)?.token ?? null;
+		tokenOf(projectId, stem) {
+			return recordOf(projectId, stem)?.token ?? null;
 		},
 	};
 }
