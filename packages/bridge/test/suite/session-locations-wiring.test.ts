@@ -1,11 +1,10 @@
 // ============================================================================
-// Session-state wiring: the Worker's transitions between the
-// admission seams, the full-settlement relay, and the durable store — driven
-// through the Worker service contract. The Manager is a controllable stand-in
-// (the real Manager's settlement signal is covered by full-settlement.test.ts
-// and one end-to-end turn below), so these tests pin the wiring's decisions:
-// the queue's membership and order, browsing invariance, the toggle's busy
-// precondition, close-wins, dormant closes, and restart recovery.
+// Session-location wiring: the Worker's transitions between the admission
+// seams and the durable location store — driven through the Worker service
+// contract. The Manager is a controllable stand-in, so these tests pin the
+// wiring's decisions: a submission's Inbox promotion and its rollback, the
+// queue's membership and order, moves that leave execution alone, Archive and
+// Trash stopping the runtime, browsing invariance, and restart recovery.
 // ============================================================================
 
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -31,16 +30,11 @@ afterEach(() => {
 	}
 });
 
-/** A Manager stand-in the tests drive: admissions are captured, full
- * settlement fires only when the test says the execution settled, and the
- * next admitted prompt can be refused before admission (mimicking the real
- * Manager's contract: a refused dispatch rejects and never keeps the
- * execution tag). */
+/** A Manager stand-in the tests drive: the next admitted prompt can be
+ * refused before admission (mimicking the real Manager's contract), and the
+ * liveness the listing reads — the activity phase and the Document's streaming
+ * flag — is moved by the test. */
 interface FakeManager extends Manager {
-	/** The execution tag of the last admitted dispatch. */
-	lastExecution: () => string | undefined;
-	/** The execution fully settled: fire the Manager's signal. */
-	settle: (execution?: string) => void;
 	/** Refuse the next admitted prompt before admission (one-shot). */
 	refuseNextPrompt: () => void;
 	/** Report a new runtime activity (fires the Manager's listener, as the
@@ -67,8 +61,6 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		return basename(path, ".jsonl");
 	};
 	const sessionId = sessionPath ? durableId(sessionPath) : `fresh-${Math.random().toString(36).slice(2)}`;
-	const fullySettled = new Set<(execution: string | undefined) => void>();
-	let execution: string | undefined;
 	let refuseNext = false;
 	let disposed = 0;
 	// Mutable liveness the actor reads: `activity()` reports the phase word and
@@ -107,24 +99,17 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
-		onFullySettled(listener: (execution: string | undefined) => void) {
-			fullySettled.add(listener);
-			return () => fullySettled.delete(listener);
-		},
 		activity: () => ({ phase: activityPhase, tool: activityTool, recoverable: false }),
 		onActivityChange(listener: () => void) {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		},
 		prompt: async () => {},
-		promptAdmitted: async (_text: string, _images?: unknown, _model?: unknown, _level?: unknown, exec?: string) => {
+		promptAdmitted: async (_text: string, _images?: unknown, _model?: unknown, _level?: unknown) => {
 			if (refuseNext) {
-				// Refused before admission: reject, and never record the tag — the
-				// real Manager rolls its tag back on the same path.
 				refuseNext = false;
 				throw new Error("preflight refused");
 			}
-			execution = exec;
 		},
 		executeBash: async () => {},
 		abort: async () => {},
@@ -134,21 +119,13 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		renameSession: async () => {},
 		setLabel: async () => {},
 		navigate: async () => {},
-		recoverTurn: async (exec?: string) => {
-			execution = exec;
-			return "retry" as const;
-		},
+		recoverTurn: async () => "retry" as const,
 		dispose: async () => {
 			disposed += 1;
 		},
 	};
 	return {
 		...(base as unknown as Manager),
-		lastExecution: () => execution,
-		settle: (exec?: string) => {
-			const tag = exec ?? execution;
-			for (const listener of fullySettled) listener(tag);
-		},
 		refuseNextPrompt: () => {
 			refuseNext = true;
 		},
@@ -209,85 +186,87 @@ function makeFixture(): Fixture {
 	};
 }
 
-/** The queue as seen through the contract: [state, stem] rows. */
+/** The queue as seen through the contract: [location, stem] rows. */
 async function queueOf(worker: LocalWorker): Promise<Array<[string, string]>> {
-	return (await worker.listQueue()).map((row) => [row.state ?? "inactive", row.stem]);
+	return (await worker.listQueue()).map((row) => [row.location, row.stem]);
+}
+
+/** Whether the row reports a running execution (its activity, which is the
+ * one running fact on the wire). */
+async function runningOf(worker: LocalWorker, stem: string): Promise<boolean> {
+	return (await worker.listQueue()).some((row) => row.stem === stem && row.activity !== undefined);
 }
 
 // ---------------------------------------------------------------------------
 // Transitions
 // ---------------------------------------------------------------------------
 
-describe("session-state wiring: transitions", () => {
-	it("an admitted prompt lands busy; full settlement lands notified", async () => {
+describe("session-location wiring: transitions", () => {
+	it("a submitted message places the session in Inbox — running or not", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		expect(await queueOf(fx.worker)).toEqual([]);
 
 		await fx.worker.prompt(target, "hello");
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
-
-		fx.managers[0].settle();
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
+		// The turn ends: the placement is untouched, the running fact clears.
+		expect(await runningOf(fx.worker, "a")).toBe(false);
 	});
 
-	it("the queue_changed event fires on every transition", async () => {
+	it("the queue_changed event fires on every placement transition", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const events: string[] = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "queue_changed") events.push(event.sessions.map((s) => `${s.stem}:${s.state}`).join(","));
+			if (event.kind === "queue_changed") {
+				events.push(event.sessions.map((s) => `${s.stem}:${s.location}`).join(","));
+			}
 		});
 
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		fx.managers[0].settle();
-		await fx.worker.setSessionState({ projectId: "proj", stem: "a" }, "deferred");
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
 
-		expect(events.length).toBeGreaterThanOrEqual(3);
-		expect(events.some((e) => e.includes("a:busy"))).toBe(true);
-		expect(events.some((e) => e.includes("a:notified"))).toBe(true);
-		expect(events[events.length - 1]).toContain("a:deferred");
+		// The opening publish is an empty snapshot; the transitions follow it.
+		expect(events.some((event) => event === "a:inbox")).toBe(true);
+		expect(events[events.length - 1]).toBe("a:later");
 	});
 
-	it("deferred is not sticky: a new prompt makes it busy, its settle notified", async () => {
+	it("Later is not sticky: the next message brings the session back to Inbox", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "one");
-		fx.managers[0].settle();
-		await fx.worker.setSessionState({ projectId: "proj", stem: "a" }, "deferred");
-		expect(await queueOf(fx.worker)).toEqual([["deferred", "a"]]);
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
+		expect(await queueOf(fx.worker)).toEqual([["later", "a"]]);
 
 		await fx.worker.prompt(target, "two");
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
-		fx.managers[0].settle();
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
 	});
 
-	it("a prompt refused mid-execution strands nothing: the running execution keeps the queue busy and its settle lands", async () => {
+	it("a refused admission restores the placement it replaced", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "one");
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
 
-		// A second prompt is refused at preflight while the first execution
-		// still runs: the abandon must restore that execution — not a busy row
-		// whose token no settle will ever carry (the fake refuses the way the
-		// real Manager does: the refused tag is never recorded).
 		fx.managers[0].refuseNextPrompt();
 		await expect(fx.worker.prompt(target, "two")).rejects.toThrow(/preflight refused/);
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
-
-		// The first execution settles under its own tag and the queue lands
-		// notified — not stuck busy until restart.
-		fx.managers[0].settle();
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+		// The promotion is rolled back: the user's Later placement stands.
+		expect(await queueOf(fx.worker)).toEqual([["later", "a"]]);
 	});
 
-	// Dormant rows read their own file for content; inactive history is
+	it("recoverTurn places the session in Inbox like any other submitted work", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.recoverTurn(target);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
+	});
+
+	// Dormant rows read their own file for content; archived history is
 	// never touched.
 	const userMessage = (text: string): string =>
 		JSON.stringify({
@@ -298,21 +277,21 @@ describe("session-state wiring: transitions", () => {
 
 	it("a dormant queued row carries its file's content; history stays out of the queue", async () => {
 		const fx = makeFixture();
-		// Many inactive sessions — none may cost the queue anything.
+		// Many archived sessions — none may cost the queue anything.
 		for (let i = 0; i < 50; i++) fx.addSession(`id-h${i}`, `history-${i}`);
 		// The queued dormant session has a name and a first message in its file.
 		writeFileSync(
 			join(fx.project.sessionDir, "queued.jsonl"),
 			`${[JSON.stringify({ type: "session", id: "id-queued" }), JSON.stringify({ type: "session_info", name: "The one that matters" }), userMessage("pick this up")].join("\n")}\n`,
 		);
-		await fx.worker.setSessionState({ projectId: "proj", stem: "queued" }, "notified");
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "queued" }, "later");
 
 		const rows = await fx.worker.listQueue();
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatchObject({
 			stem: "queued",
 			sessionId: "id-queued",
-			state: "notified",
+			location: "later",
 			name: "The one that matters",
 			firstMessageText: "pick this up",
 		});
@@ -323,26 +302,25 @@ describe("session-state wiring: transitions", () => {
 		expect(await fx.worker.listQueue()).toEqual([]);
 	});
 
-	it("the toggle is refused while busy and legal on a dormant session", async () => {
+	it("moves are legal while running and on a dormant session", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		await expect(fx.worker.setSessionState({ projectId: "proj", stem: "a" }, "deferred")).rejects.toThrow(/busy/);
-		fx.managers[0].settle();
+		// Running: the manager reports a tool, and the move still lands without
+		// pretending the execution ended.
+		fx.managers[0].setActivity("tool", "Bash");
+		expect(await runningOf(fx.worker, "a")).toBe(true);
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
+		expect(await queueOf(fx.worker)).toEqual([["later", "a"]]);
+		expect(await runningOf(fx.worker, "a")).toBe(true);
 
-		// Dormant: release the observation, let the activation stay — and also
-		// toggle a session that was never opened at all.
-		const observed = await fx.worker.observeSession({ projectId: "proj", stem: "a" }, { sink: () => {} });
-		await observed.observation.release();
-		await fx.worker.setSessionState({ projectId: "proj", stem: "a" }, "deferred");
-		expect(await queueOf(fx.worker)).toEqual([["deferred", "a"]]);
-
+		// Dormant: a session that was never opened at all.
 		fx.addSession("id-b", "b");
-		await fx.worker.setSessionState({ projectId: "proj", stem: "b" }, "notified");
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "b" }, "inbox");
 		expect(await queueOf(fx.worker)).toEqual([
-			["notified", "b"],
-			["deferred", "a"],
+			["inbox", "b"],
+			["later", "a"],
 		]);
 	});
 
@@ -352,7 +330,6 @@ describe("session-state wiring: transitions", () => {
 		fx.addSession("id-b", "b");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		fx.managers[0].settle();
 		const before = await fx.worker.listQueue();
 
 		const observed = await fx.worker.observeSession({ projectId: "proj", stem: "b" }, { sink: () => {} });
@@ -363,10 +340,10 @@ describe("session-state wiring: transitions", () => {
 		expect(await fx.worker.listQueue()).toEqual(before);
 	});
 
-	it("the queue is ordered notified → busy → deferred, then activity", async () => {
+	it("the queue is ordered Inbox → Later, then by activity", async () => {
 		const fx = makeFixture();
 		// Later mtimes sort later within a group (activity desc), so write the
-		// notified rows in reverse to prove the state rank dominates.
+		// Inbox rows in reverse to prove the location rank dominates.
 		fx.addSession("id-n1", "n1");
 		fx.addSession("id-n2", "n2");
 		// Distinct mtimes: n2 is the more recently active of the two.
@@ -378,122 +355,90 @@ describe("session-state wiring: transitions", () => {
 		for (const stem of ["n2", "n1"]) {
 			const target = await fx.open(stem);
 			await fx.worker.prompt(target, "hi");
-			fx.managers[fx.managers.length - 1].settle();
 		}
-		const busyTarget = await fx.open("b1");
-		await fx.worker.prompt(busyTarget, "running");
-		await fx.worker.setSessionState({ projectId: "proj", stem: "d1" }, "deferred");
+		// A running Inbox row ranks with the Inbox group, not above it.
+		const runningTarget = await fx.open("b1");
+		await fx.worker.prompt(runningTarget, "running");
+		fx.managers[fx.managers.length - 1].setActivity("tool", "Bash");
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "d1" }, "later");
 
 		expect(await queueOf(fx.worker)).toEqual([
-			["notified", "n2"],
-			["notified", "n1"],
-			["busy", "b1"],
-			["deferred", "d1"],
+			["inbox", "b1"],
+			["inbox", "n2"],
+			["inbox", "n1"],
+			["later", "d1"],
 		]);
 	});
 
-	it("a queued row whose file is unparseable still carries its durable state", async () => {
+	it("a queued row whose file is unparseable still carries its durable location", async () => {
 		const fx = makeFixture();
 		// Present and contained, but no session header: the catalog cannot parse
-		// it, so the row's metadata is empty while its queue state is not.
+		// it, so the row's metadata is empty while its location is not.
 		writeFileSync(join(fx.project.sessionDir, "broken.jsonl"), "not json\n");
-		await fx.worker.setSessionState({ projectId: "proj", stem: "broken" }, "deferred");
-		expect((await fx.worker.listQueue()).map((row) => [row.stem, row.state])).toEqual([["broken", "deferred"]]);
-	});
-
-	it("a refused admission restores the pre-admission state", async () => {
-		const fx = makeFixture();
-		fx.addSession("id-a", "a");
-		const target = await fx.open("a");
-		await fx.worker.prompt(target, "one");
-		fx.managers[0].settle();
-
-		// A dispatch that refuses preflight rejects the wrapper's promise.
-		const manager = fx.managers[0] as unknown as { promptAdmitted: (t: string) => Promise<void> };
-		const refuse = async () => {
-			throw new Error("no model");
-		};
-		const original = manager.promptAdmitted;
-		(manager as unknown as { promptAdmitted: typeof refuse }).promptAdmitted = refuse;
-		const target2 = await fx.open("a");
-		await expect(fx.worker.prompt(target2, "two")).rejects.toThrow(/no model/);
-		(manager as unknown as { promptAdmitted: typeof original }).promptAdmitted = original;
-
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
-	});
-
-	it("recoverTurn is an execution: busy at admission, notified at its settle", async () => {
-		const fx = makeFixture();
-		fx.addSession("id-a", "a");
-		const target = await fx.open("a");
-		await fx.worker.recoverTurn(target);
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
-		fx.managers[0].settle();
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "broken" }, "later");
+		expect((await fx.worker.listQueue()).map((row) => [row.stem, row.location])).toEqual([["broken", "later"]]);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// Close and archive
+// Archive, trash, and stop
 // ---------------------------------------------------------------------------
 
-describe("session-state wiring: close and archive", () => {
-	it("close of a busy session is the last write for that execution", async () => {
+describe("session-location wiring: archive, trash, and stop", () => {
+	it("archive ends the runtime and keeps the session browsable", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		expect(await queueOf(fx.worker)).toEqual([["busy", "a"]]);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
 
-		// Disposal finalizes the turn: the abort's settle fires during the
-		// collection the close awaits, so the close's inactive lands after it.
-		const manager = fx.managers[0];
-		const originalDispose = manager.dispose;
-		(manager as unknown as { dispose: () => Promise<void> }).dispose = async () => {
-			manager.settle();
-			await originalDispose.call(manager);
-		};
-
-		await fx.worker.closeSession({ projectId: "proj", stem: "a" });
-		expect(manager.disposeCalls()).toBe(1);
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "archive");
 		expect(await queueOf(fx.worker)).toEqual([]);
+		expect(fx.managers[0].disposeCalls()).toBe(1);
+		// The file is still discoverable: archived history is browsable.
+		expect(existsSync(join(fx.project.sessionDir, "a.jsonl"))).toBe(true);
+		const page = await fx.worker.listSessions("proj");
+		expect(page.sessions.map((row) => [row.stem, row.location])).toEqual([["a", "archive"]]);
 	});
 
-	it("close of a dormant session is legal and clears the queue", async () => {
+	it("a stop ends the runtime without moving the session", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		fx.managers[0].settle();
-		// The activation is still live here — close it so only the state write
-		// remains, then re-close dormant: idempotent, still legal.
 		await fx.worker.closeSession({ projectId: "proj", stem: "a" });
-		expect(await queueOf(fx.worker)).toEqual([]);
-		await expect(fx.worker.closeSession({ projectId: "proj", stem: "a" })).resolves.toBe(undefined);
+		expect(fx.managers[0].disposeCalls()).toBe(1);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
 	});
 
-	it("close of a stem with no session at all is an error", async () => {
+	it("a stop of a stem with no session at all is an error", async () => {
 		const fx = makeFixture();
 		await expect(fx.worker.closeSession({ projectId: "proj", stem: "ghost" })).rejects.toThrow(/No such session/);
 	});
 
-	it("archive prunes the queue record", async () => {
+	it("trash ends the runtime, moves the file, and drops the placement", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
-		fx.managers[0].settle();
-		expect(await queueOf(fx.worker)).toEqual([["notified", "a"]]);
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
 
-		await fx.worker.archiveSession({ projectId: "proj", stem: "a" });
+		await fx.worker.trashSession({ projectId: "proj", stem: "a" });
+		expect(fx.managers[0].disposeCalls()).toBe(1);
 		expect(await queueOf(fx.worker)).toEqual([]);
-		expect(existsSync(join(fx.project.sessionDir, ".archive", "a.jsonl"))).toBe(true);
+		expect(existsSync(join(fx.project.sessionDir, ".trash", "a.jsonl"))).toBe(true);
+		expect(existsSync(join(fx.project.sessionDir, "a.jsonl"))).toBe(false);
+		expect((await fx.worker.listSessions("proj")).sessions).toEqual([]);
+	});
+
+	it("trash of a dormant session moves the file without a runtime", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		await fx.worker.trashSession({ projectId: "proj", stem: "a" });
+		expect(fx.managers).toHaveLength(0);
+		expect(existsSync(join(fx.project.sessionDir, ".trash", "a.jsonl"))).toBe(true);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Persistence across a Worker restart
-// ---------------------------------------------------------------------------
 
 describe("session-state wiring: queue activity (ADR 23)", () => {
 	/** The queue rows with their activity words, as the wire carries them. */
@@ -587,17 +532,17 @@ describe("session-state wiring: queue activity (ADR 23)", () => {
 		fx.managers[0].setActivity("tool", "Read");
 		expect(pushes).toContain("tool");
 
-		// The row outlives its runtime: a collected session keeps its state
-		// (notified) and loses the activity line the runtime owned.
+		// The row outlives its runtime: a stopped session keeps its Inbox
+		// placement and loses the activity line the runtime owned.
 		fx.managers[0].setStreaming(false);
-		fx.managers[0].settle();
 		await fx.worker.closeSession({ projectId: "proj", stem: "a" });
 		expect(await activityOf(fx.worker, "a")).toBeUndefined();
+		expect(await queueOf(fx.worker)).toEqual([["inbox", "a"]]);
 	});
 });
 
-describe("session-state wiring: restart recovery", () => {
-	it("the queue survives a Worker rebuild; a persisted busy recovers to notified", async () => {
+describe("session-location wiring: restart recovery", () => {
+	it("the placements survive a Worker rebuild; nothing about execution is stored", async () => {
 		const root = join(tmpdir(), `pi-bridge-states-restart-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		roots.push(root);
 		const sessionDir = join(root, "sessions");
@@ -633,24 +578,24 @@ describe("session-state wiring: restart recovery", () => {
 		};
 
 		const first = build();
-		for (const stem of ["n", "d", "b"]) {
+		for (const stem of ["n", "b"]) {
 			const observed = await first.worker.observeSession({ projectId: "proj", stem }, { sink: () => {} });
 			await first.worker.prompt(observed.target, "hello");
-			first.managers[first.managers.length - 1].settle();
 		}
-		await first.worker.setSessionState({ projectId: "proj", stem: "d" }, "deferred");
-		// Leave "b" mid-execution: admitted, never settled.
-		const observed = await first.worker.observeSession({ projectId: "proj", stem: "b" }, { sink: () => {} });
-		await first.worker.prompt(observed.target, "still running");
+		await first.worker.setSessionLocation({ projectId: "proj", stem: "d" }, "later");
+		// Leave "b" running: the execution is a runtime fact, never persisted.
+		first.managers[first.managers.length - 1].setActivity("tool", "Bash");
 		await first.worker.dispose();
 
 		const second = build();
-		// "b" has the newest file mtime, so it leads the notified group.
+		// "b" has the newest file mtime, so it leads the Inbox group; no row
+		// reports running after the restart, because nothing was stored.
 		expect(await queueOf(second.worker)).toEqual([
-			["notified", "b"],
-			["notified", "n"],
-			["deferred", "d"],
+			["inbox", "b"],
+			["inbox", "n"],
+			["later", "d"],
 		]);
+		expect((await second.worker.listQueue()).every((row) => row.activity === undefined)).toBe(true);
 		await second.worker.dispose();
 	});
 });

@@ -57,24 +57,26 @@ describe("lifecycle trace", () => {
 
 		// Admission landed busy in the durable queue — the wire, the actor
 		// relay, and the store all agree while the turn still streams.
-		let sawBusy = false;
-		for (let i = 0; i < 200 && !sawBusy; i++) {
-			if ((await d.daemon.listQueue()).some((row) => row.state === "busy")) sawBusy = true;
+		let sawInbox = false;
+		for (let i = 0; i < 200 && !sawInbox; i++) {
+			if ((await d.daemon.listQueue()).some((row) => row.location === "inbox")) sawInbox = true;
 			else await new Promise((r) => setTimeout(r, 5));
 		}
-		expect(sawBusy).toBe(true);
+		expect(sawInbox).toBe(true);
 
 		await waitFor(() => !getStore().getState().document.status.isStreaming, "the turn to settle");
 		const settledQueue = await d.daemon.listQueue();
 		expect(settledQueue).toHaveLength(1);
-		expect(settledQueue[0].state).toBe("notified");
+		// A settlement is not a move: the Inbox placement stands, and the
+		// running fact is gone with the execution.
+		expect(settledQueue[0].location).toBe("inbox");
+		expect(settledQueue[0].activity).toBeUndefined();
 
-		// Defer through the wire verb: the queue is user-togglable once the
-		// execution settled.
-		const defer = await tc.client.setSessionState(d.projectId, "trace-queue", "deferred");
-		expect(defer.ok).toBe(true);
-		const deferred = await d.daemon.listQueue();
-		expect(deferred[0].state).toBe("deferred");
+		// Park it through the wire verb: placement is the user's, running or not.
+		const parked = await tc.client.setSessionLocation(d.projectId, "trace-queue", "later");
+		expect(parked.ok).toBe(true);
+		const laterQueue = await d.daemon.listQueue();
+		expect(laterQueue[0].location).toBe("later");
 	});
 
 	it("attach, stream, and seal converge: the mirror projects the canonical Document", async () => {
@@ -145,7 +147,7 @@ describe("lifecycle trace", () => {
 		const mirrorAtClose = tc.client.mirror.document;
 		const revisionAtClose = tc.client.mirror.revision;
 
-		const reply = await tc.client.closeSession(d.projectId, "trace-a");
+		const reply = await tc.client.setSessionLocation(d.projectId, "trace-a", "archive");
 		expect(reply.ok).toBe(true);
 		// The reply implies the terminal boundary completed: the runtime is
 		// disposed, exactly once (terminal joins).

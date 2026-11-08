@@ -2,14 +2,14 @@
 // ProjectFolder — one sidebar branch: a single fold button (chevron + name —
 // the name toggles, it does not navigate), one new-session button (opens the
 // Project home, the compose surface — there is no empty-session creation
-// path), and the children below: the Project's sessions in state order,
-// notified → busy → parked (deferred) → inactive, each group newest activity
-// first, all flush-left (no indent). The fold is state-scoped (ADR 23):
-// collapsed (name only) → working (notified + busy) → all.
+// path), and the children below: the Project's Sessions in queue order (Inbox
+// → Later) followed by the archived history, each group newest activity first,
+// all flush-left (no indent). The fold is location-scoped: collapsed (name
+// only) → inbox (the attention list) → all (Inbox + Later + archived).
 // ============================================================================
 
 import { memo, useEffect, useMemo } from "react";
-import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, ChevronDownIcon, PlusIcon } from "../../render/icons.tsx";
 import { SessionRow } from "./SessionRow.tsx";
@@ -31,9 +31,8 @@ export const ProjectFolder = memo(function ProjectFolder({
 	onToggle,
 	onOpenProject,
 	onOpen,
-	onMarkInactive,
-	onSetState,
-	onArchive,
+	onMove,
+	onTrash,
 	onLoad,
 	onLoadMore,
 }: {
@@ -41,42 +40,39 @@ export const ProjectFolder = memo(function ProjectFolder({
 	/** The attached (projectId, stem) pair — session-row selection input. */
 	currentProjectId: string | null;
 	currentStem: string | null;
-	/** State-scoped fold: collapsed (nothing) / working (notified + busy) /
-	 * all (working + parked + inactive). */
+	/** Location-scoped fold: collapsed (nothing) / inbox (the attention list) /
+	 * all (Inbox + Later + archived). */
 	fold: FolderFoldState;
-	/** The Project's queued sessions, in the daemon's queue order:
-	 * notified → busy → deferred, activity desc. */
+	/** The Project's queued Sessions, in the daemon's queue order:
+	 * Inbox → Later, activity desc. */
 	queueRows: SessionInfo[];
 	page: SessionFolderPage | undefined;
-	onToggle: (projectId: string, hasWorking: boolean) => void;
+	onToggle: (projectId: string, hasInbox: boolean) => void;
 	/** Open the Project's home (the compose surface) — the new-session
 	 * affordance; the first prompt there creates the session. */
 	onOpenProject: (projectId: string) => void;
 	onOpen: (session: SessionInfo) => void;
-	/** Clear a session's state (row menu Mark inactive) — on every row: a
-	 * working session can be closed without opening it, dormant or not. */
-	onMarkInactive: (session: SessionInfo) => void;
-	/** The quick state control on the row's indicator: inactive → notified,
-	 * notified ↔ deferred. Busy rows carry no control. */
-	onSetState: (session: SessionInfo, state: "notified" | "deferred") => void;
-	/** Close then archive a session (row menu Archive). Passed to every row
-	 * with a durable file: archiving is how history is thinned without
-	 * opening each session. */
-	onArchive: (session: SessionInfo) => void;
+	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
+	 * Unarchive as the resting place (archiving also stops a running agent).
+	 * Passed to every row — the menu is shaped by the row's own location. */
+	onMove: (session: SessionInfo, location: SessionLocation) => void;
+	/** The row menu's Trash: ends the runtime, then hides the file. Passed to
+	 * every row with a durable file. */
+	onTrash: (session: SessionInfo) => void;
 	onLoad: (projectId: string) => void;
 	onLoadMore: (projectId: string) => void;
 }) {
-	// The page is the inactive tail; the queue holds the state rows. Splitting
+	// The page is the archived tail; the queue holds the placed rows. Splitting
 	// both in one place keeps the folder's order and membership rules testable.
 	const historyRows = page?.kind === "ready" ? page.sessions : NO_ROWS;
 	const {
-		working: workingRows,
-		parked: parkedRows,
-		inactive,
+		inbox: inboxRows,
+		later: laterRows,
+		archived,
 	} = useMemo(() => splitProjectRows(queueRows, historyRows), [queueRows, historyRows]);
-	const hasWorking = workingRows.length > 0;
+	const hasInbox = inboxRows.length > 0;
 
-	const showChildren = fold === "all" || (fold === "working" && hasWorking);
+	const showChildren = fold === "all" || (fold === "inbox" && hasInbox);
 	const showAll = fold === "all";
 
 	// Lazy first page: fetch on unfold when no page is cached. Re-fires after
@@ -88,14 +84,14 @@ export const ProjectFolder = memo(function ProjectFolder({
 	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
 
 	// The caret mirrors the three fold states — right (collapsed), diagonal
-	// (working only), down (all) — as the glyph's own direction, never a CSS
+	// (inbox only), down (all) — as the glyph's own direction, never a CSS
 	// rotation.
-	const caretDirection = showAll ? "down" : fold === "working" && hasWorking ? "diagonal" : "right";
+	const caretDirection = showAll ? "down" : fold === "inbox" && hasInbox ? "diagonal" : "right";
 
-	// A collapsed folder still says how much it hides, so parked work is
+	// A collapsed folder still says how much it hides, so Later work is
 	// findable without unfolding every Project. Only rows already known count:
 	// the count never triggers a history fetch.
-	const hiddenCount = hiddenRowCount(fold, { working: workingRows, parked: parkedRows, inactive });
+	const hiddenCount = hiddenRowCount(fold, { inbox: inboxRows, later: laterRows, archived });
 
 	return (
 		<div>
@@ -106,7 +102,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 				<button
 					type="button"
 					className={styles.sidebarFolderRow}
-					onClick={() => onToggle(project.id, hasWorking)}
+					onClick={() => onToggle(project.id, hasInbox)}
 					aria-expanded={showChildren}
 					title={project.cwd}
 				>
@@ -130,29 +126,25 @@ export const ProjectFolder = memo(function ProjectFolder({
 			</div>
 			{showChildren && (
 				<div className={styles.sidebarFolderChildren}>
-					{workingRows.map((s) => (
+					{inboxRows.map((s) => (
 						<SessionRow
-							key={s.sessionId}
+							key={`${s.projectId}/${s.stem}`}
 							session={s}
-							mark={s.state === "busy" ? "busy" : "notified"}
 							selected={isSelected(s)}
 							onOpen={onOpen}
-							onMarkInactive={onMarkInactive}
-							onSetState={s.state === "busy" ? undefined : onSetState}
-							onArchive={onArchive}
+							onMove={onMove}
+							onTrash={onTrash}
 						/>
 					))}
 					{showAll &&
-						parkedRows.map((s) => (
+						laterRows.map((s) => (
 							<SessionRow
-								key={s.sessionId}
+								key={`${s.projectId}/${s.stem}`}
 								session={s}
-								mark="deferred"
 								selected={isSelected(s)}
 								onOpen={onOpen}
-								onMarkInactive={onMarkInactive}
-								onSetState={onSetState}
-								onArchive={onArchive}
+								onMove={onMove}
+								onTrash={onTrash}
 							/>
 						))}
 					{showAll && (page === undefined || page.kind === "loading") && (
@@ -163,20 +155,18 @@ export const ProjectFolder = memo(function ProjectFolder({
 							Load failed — retry
 						</button>
 					)}
-					{showAll && page?.kind === "ready" && inactive.length === 0 && queueRows.length === 0 && (
+					{showAll && page?.kind === "ready" && archived.length === 0 && queueRows.length === 0 && (
 						<div className={styles.sidebarFolderMsg}>No sessions yet</div>
 					)}
 					{showAll &&
-						inactive.map((s) => (
+						archived.map((s) => (
 							<SessionRow
 								key={`${s.projectId}/${s.stem}`}
 								session={s}
-								mark="idle"
 								selected={isSelected(s)}
 								onOpen={onOpen}
-								onMarkInactive={onMarkInactive}
-								onSetState={onSetState}
-								onArchive={onArchive}
+								onMove={onMove}
+								onTrash={onTrash}
 							/>
 						))}
 					{showAll && page?.kind === "ready" && page.hasMore && (

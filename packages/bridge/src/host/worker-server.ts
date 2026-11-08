@@ -241,8 +241,8 @@ export async function serveWorkerConnection(
 				await service.closeSession(request.address);
 				replyOk(request.id, null);
 				return;
-			case "archiveSession":
-				await service.archiveSession(request.address);
+			case "trashSession":
+				await service.trashSession(request.address);
 				replyOk(request.id, null);
 				return;
 			case "listSessions":
@@ -258,8 +258,8 @@ export async function serveWorkerConnection(
 			case "listQueue":
 				replyOk(request.id, (await service.listQueue()) as unknown as JsonValue);
 				return;
-			case "setSessionState":
-				await service.setSessionState(request.address, request.state);
+			case "setSessionLocation":
+				await service.setSessionLocation(request.address, request.location);
 				replyOk(request.id, null);
 				return;
 			case "info":

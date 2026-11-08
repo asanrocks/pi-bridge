@@ -12,6 +12,7 @@
 // ============================================================================
 
 import { useCallback, useRef, useState } from "react";
+import type { SessionLocation } from "../../../../src/core/index.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
@@ -62,9 +63,8 @@ export function useSidebarShell() {
 			sessionPages={sessionPages}
 			onOpenSession={rpc.openSession}
 			onOpenProject={rpc.openProject}
-			onMarkInactive={rpc.closeSession}
-			onSetSessionState={rpc.setSessionState}
-			onArchiveSession={rpc.archiveSession}
+			onMoveSession={rpc.setSessionLocation}
+			onTrashSession={rpc.trashSession}
 			onShowLauncher={showLauncher}
 			onLoadFolder={rpc.loadFolderSessions}
 			onLoadMoreFolder={rpc.loadMoreFolderSessions}
@@ -80,8 +80,8 @@ export function useSidebarShell() {
 	const newSession = useCallback(() => newSessionRef.current(), []);
 
 	// ── Compact switcher (narrow viewport) ──────────────────────────────
-	// The TopBar menu button anchors the panel and carries the waiting badge,
-	// so one owner (the shell) holds both.
+	// The TopBar menu button anchors the panel and carries the Inbox badge, so
+	// one owner (the shell) holds both.
 	const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [quickOpen, setQuickOpen] = useState(false);
 	const openQuick = useCallback(() => setQuickOpen(true), []);
@@ -103,9 +103,16 @@ export function useSidebarShell() {
 		[rpc],
 	);
 
-	const handleSetStateFromQuick = useCallback(
-		(session: { projectId: string; stem: string }, state: "notified" | "deferred") => {
-			rpc.setSessionState(session.projectId, session.stem, state);
+	const handleMoveFromQuick = useCallback(
+		(session: { projectId: string; stem: string }, location: SessionLocation) => {
+			rpc.setSessionLocation(session.projectId, session.stem, location);
+		},
+		[rpc],
+	);
+
+	const handleTrashFromQuick = useCallback(
+		(session: { projectId: string; stem: string }) => {
+			rpc.trashSession(session.projectId, session.stem);
 		},
 		[rpc],
 	);
@@ -122,7 +129,8 @@ export function useSidebarShell() {
 				currentProjectId={currentProjectId}
 				currentStem={currentStem}
 				onOpen={handleOpenFromQuick}
-				onSetState={handleSetStateFromQuick}
+				onMove={handleMoveFromQuick}
+				onTrash={handleTrashFromQuick}
 				onViewAll={viewAll}
 				onClose={closeQuick}
 			/>

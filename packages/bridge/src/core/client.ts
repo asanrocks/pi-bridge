@@ -22,6 +22,7 @@ import type {
 	RpcRequestBody,
 	ServerPushMessage,
 	SessionListCursor,
+	SessionLocation,
 	SnapshotState,
 } from "./types.ts";
 
@@ -335,17 +336,16 @@ export class BridgeClient {
 		return this.call(body as RpcRequestBody);
 	}
 
-	/** The work queue: the global non-inactive snapshot, ordered
-	 * notified → busy → deferred, then last activity descending. */
+	/** The queue: the global Inbox-and-Later snapshot, ordered Inbox → Later,
+	 * then last activity descending. */
 	listQueue(): Promise<RpcReply> {
 		return this.call({ verb: "listQueue" });
 	}
 
-	/** The user's defer/restore toggle. Refused while the session is
-	 * busy; legal on a dormant session. The result arrives as a `queue_changed`
-	 * push. */
-	setSessionState(projectId: string, stem: string, state: "notified" | "deferred"): Promise<RpcReply> {
-		return this.call({ verb: "setSessionState", projectId, stem, state });
+	/** Place a session: Inbox, Later, or Archive. Moving to Archive also ends
+	 * the runtime. The result arrives as a `queue_changed` push. */
+	setSessionLocation(projectId: string, stem: string, location: SessionLocation): Promise<RpcReply> {
+		return this.call({ verb: "setSessionLocation", projectId, stem, location });
 	}
 
 	getDaemonInfo(): Promise<RpcReply> {
@@ -375,15 +375,10 @@ export class BridgeClient {
 		return this.call({ verb: "detach" });
 	}
 
-	/** Terminate the live instance for a session address (closeSession verb). */
-	closeSession(projectId: string, stem: string): Promise<RpcReply> {
-		return this.call({ verb: "closeSession", projectId, stem });
-	}
-
-	/** Close a session and move its file under the archive prefix
-	 * (archiveSession verb). The file survives; it is no longer discovered. */
-	archiveSession(projectId: string, stem: string): Promise<RpcReply> {
-		return this.call({ verb: "archiveSession", projectId, stem });
+	/** End the session's runtime, then move its file under the trash prefix
+	 * (trashSession verb). The file survives; it is no longer discovered. */
+	trashSession(projectId: string, stem: string): Promise<RpcReply> {
+		return this.call({ verb: "trashSession", projectId, stem });
 	}
 
 	/** Path completion (ADR 12): `prefix` is resolved against the Project's

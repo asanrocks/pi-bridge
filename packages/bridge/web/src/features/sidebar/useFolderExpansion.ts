@@ -1,8 +1,8 @@
 // ============================================================================
 // useFolderExpansion — the Sidebar's fold state: React state plus the
 // `localStorage` record, over the pure algebra in foldState.ts. Defaults to
-// `working` (the work that may need the user, without history) and adds,
-// never removes — a manual fold stays respected.
+// `inbox` (the attention list, without Later or history) and adds, never
+// removes — a manual fold stays respected.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,9 +21,9 @@ export function useFolderExpansion(
 	currentStem: string | null,
 ): {
 	folds: Record<string, FolderFoldState>;
-	cycleFolder: (projectId: string, hasWorking: boolean) => void;
+	cycleFolder: (projectId: string, hasInbox: boolean) => void;
 	/** The Projects header: apply one uniform fold state to every folder. */
-	cycleAllFolders: (hasWorkingById: Record<string, boolean>) => void;
+	cycleAllFolders: (hasInboxById: Record<string, boolean>) => void;
 } {
 	const [folds, setFolds] = useState<Record<string, FolderFoldState>>(() => {
 		try {
@@ -39,7 +39,7 @@ export function useFolderExpansion(
 	// browse-this-project stance. The same holds at boot for a session URL: the
 	// first non-null current Project opens even when a stem is attached —
 	// first-paint context, unlike a live session switch, where unfolding is
-	// noise (a working row is already visible regardless of folding). Adds,
+	// noise (an Inbox row is already visible regardless of folding). Adds,
 	// never removes — a manual fold stays respected.
 	const didBootExpandRef = useRef(false);
 	useEffect(() => {
@@ -50,15 +50,15 @@ export function useFolderExpansion(
 		setFolds((s) => (s[currentProjectId] === "all" ? s : { ...s, [currentProjectId]: "all" }));
 	}, [currentProjectId, currentStem]);
 
-	const cycleFolder = useCallback((projectId: string, hasWorking: boolean) => {
-		setFolds((s) => ({ ...s, [projectId]: nextFoldState(s[projectId] ?? "working", hasWorking) }));
+	const cycleFolder = useCallback((projectId: string, hasInbox: boolean) => {
+		setFolds((s) => ({ ...s, [projectId]: nextFoldState(s[projectId] ?? "inbox", hasInbox) }));
 	}, []);
 
 	const cycleAllFolders = useCallback(
-		(hasWorkingById: Record<string, boolean>) => {
+		(hasInboxById: Record<string, boolean>) => {
 			setFolds((s) => {
 				if (projectIds.length === 0) return s;
-				const target = foldAllTarget(s, projectIds, hasWorkingById);
+				const target = foldAllTarget(s, projectIds, hasInboxById);
 				const next = { ...s };
 				for (const id of projectIds) next[id] = target;
 				return next;

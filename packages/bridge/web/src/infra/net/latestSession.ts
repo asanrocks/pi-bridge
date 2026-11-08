@@ -1,13 +1,13 @@
-// resolveLatestSession — the `@latest` alias target (ADR 13, revised by
-// the durable session states).
+// resolveLatestSession — the `@latest` alias target (ADR 13, revised by the
+// session locations).
 //
 // The scope comes from the alias's position in the URL: the root form spans
 // Projects, a Project's `@latest` resolves inside that Project. Within the
-// scope: the most recently active queued Session — a notified or busy row of
-// the work queue; deferred is excluded, because that state's own meaning is
-// "not next". With the queue holding no such row in scope, the most
-// recent durable Session applies (each in-scope Project's first `listSessions`
-// row, ordered by its durable sort time). The caller opens the result, which
+// scope: the most recently active Session in the Inbox. Later is excluded,
+// because its own meaning is "not next", and archived history is the fallback
+// rather than the alias's target. With no Inbox row in scope, the most recent
+// durable Session applies (each in-scope Project's first `listSessions` row,
+// ordered by its durable sort time). The caller opens the result, which
 // activates a durable Session. Returns null when nothing exists in scope.
 
 import type { BridgeClient, ListSessionsReply, ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
@@ -28,7 +28,7 @@ export async function resolveLatestSession(
 	projectId: string | null = null,
 ): Promise<SessionInfo | null> {
 	const inScope = projectId === null ? queue : queue.filter((row) => row.projectId === projectId);
-	const queued = sortByLastActivity(inScope.filter((row) => row.state === "notified" || row.state === "busy"));
+	const queued = sortByLastActivity(inScope.filter((row) => row.location === "inbox"));
 	if (queued.length > 0) return queued[0];
 
 	const ids = projectId === null ? projects.map((project) => project.id) : [projectId];

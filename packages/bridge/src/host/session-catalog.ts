@@ -16,8 +16,8 @@
 import { Buffer } from "node:buffer";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
-import type { SessionInfo, SessionListCursor, SessionRef, SessionState } from "../core/index.ts";
-import { containedSessionFile, isArchivedStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
+import type { SessionInfo, SessionListCursor, SessionLocation, SessionRef } from "../core/index.ts";
+import { containedSessionFile, isTrashedStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
 import { compareQueueRows } from "./queue-order.ts";
 import { type ActorMetadata, clampPreview } from "./session-actor.ts";
 
@@ -46,14 +46,14 @@ interface ScanEntry {
 	active?: CatalogLiveEntry;
 }
 
-/** The durable, user-visible session states the catalog overlays onto every
- * row: the Worker supplies its state store; the catalog owns only the
- * lookup. Keyed by stem — the state record's key is the row's address. */
-export interface CatalogStateOverlay {
-	stateOf(projectId: string, stem: string): SessionState;
-	/** The Project's recorded states, keyed by stem: the work queue's
-	 * membership, in memory. */
-	queued(projectId: string): ReadonlyMap<string, SessionState>;
+/** The durable locations the catalog overlays onto every row: the Worker
+ * supplies its location store; the catalog owns only the lookup. Keyed by
+ * stem — the record's key is the row's address. */
+export interface CatalogLocationOverlay {
+	locationOf(projectId: string, stem: string): SessionLocation;
+	/** The Project's recorded places, keyed by stem: the queue's membership,
+	 * in memory. */
+	placed(projectId: string): ReadonlyMap<string, SessionLocation>;
 }
 
 export interface SessionCatalog {
@@ -64,12 +64,11 @@ export interface SessionCatalog {
 		max: number | undefined,
 		cursor: SessionListCursor | null,
 		live: readonly CatalogLiveEntry[],
-		states: CatalogStateOverlay,
+		locations: CatalogLocationOverlay,
 	): SessionPage;
-	/** The global work queue: every non-inactive session across every
-	 * Project, ordered notified → busy → deferred, then by last activity
-	 * descending. */
-	listQueue(live: readonly CatalogLiveEntry[], states: CatalogStateOverlay): SessionInfo[];
+	/** The queue: every Inbox and Later session across every Project, ordered
+	 * Inbox → Later, then by last activity descending. */
+	listQueue(live: readonly CatalogLiveEntry[], locations: CatalogLocationOverlay): SessionInfo[];
 }
 
 /** Cap for the header-only scan. A pi session header is a single short line. */
@@ -107,9 +106,9 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		for (const rel of rels) {
 			if (!rel.endsWith(".jsonl")) continue;
 			const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-			// The archive prefix is a storage namespace, not discovery: an
-			// archived session is not listed and has no address.
-			if (isArchivedStem(stem)) continue;
+			// The trash prefix is a storage namespace, not discovery: a trashed
+			// session is not listed and has no address.
+			if (isTrashedStem(stem)) continue;
 			// Containment first: statSync follows symlinks, so a symlinked file
 			// pointing outside the namespace would otherwise expose foreign
 			// metadata (name, first message) in listSessions (ADR 11 boundary).
@@ -145,7 +144,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		return [...byStem.values()];
 	};
 
-	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry, states: CatalogStateOverlay): SessionInfo => {
+	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry, locations: CatalogLocationOverlay): SessionInfo => {
 		const active = entry.active;
 		// A durable file is the metadata source even while active; only an
 		// unflushed activation has no file to read, so its document is used.
@@ -153,13 +152,13 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		const meta = durable ? readFileMeta(entry.abs) : null;
 		if (!meta && !active) {
 			// Unreadable file: surface a minimal row rather than dropping it. The
-			// queue's state overlay still applies — an unparseable file says nothing
+			// location overlay still applies — an unparseable file says nothing
 			// about whether the user parked or awaits this session.
 			return {
 				projectId: project.id,
 				sessionId: entry.stem,
 				stem: entry.stem,
-				state: states.stateOf(project.id, entry.stem),
+				location: locations.locationOf(project.id, entry.stem),
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
@@ -169,12 +168,12 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			projectId: project.id,
 			sessionId,
 			stem: entry.stem,
-			state: states.stateOf(project.id, entry.stem),
+			location: locations.locationOf(project.id, entry.stem),
 			name: meta?.name ?? liveMeta?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? liveMeta?.firstMessageText,
 			// The live preview/activity win over the last flush for an active row;
-			// an inactive row has only the file scan.
+			// an archived row with no runtime has only the file scan.
 			lastMessageText: liveMeta?.lastMessageText ?? meta?.lastMessageText,
 			lastActivityAt: liveMeta?.lastActivityAt ?? meta?.lastActivityAt,
 			messageCount: meta?.messageCount ?? liveMeta?.messageCount,
@@ -196,7 +195,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		project: ProjectConfig,
 		stem: string,
 		active: CatalogLiveEntry | undefined,
-		states: CatalogStateOverlay,
+		locations: CatalogLocationOverlay,
 	): SessionInfo | null => {
 		if (active) {
 			let sortTimeMs = Date.parse(active.metadata.createdAt);
@@ -207,7 +206,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 					// fall back to the header creation time
 				}
 			}
-			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, states);
+			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, locations);
 		}
 		const real = containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
 		if (real === null) return null;
@@ -217,11 +216,11 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		} catch {
 			return null;
 		}
-		return toSessionInfo(project, { stem, abs: real, sortTimeMs }, states);
+		return toSessionInfo(project, { stem, abs: real, sortTimeMs }, locations);
 	};
 
 	return {
-		listSessions(projectId, max, cursor, live, states): SessionPage {
+		listSessions(projectId, max, cursor, live, locations): SessionPage {
 			const project = projects.get(projectId);
 			if (!project) throw new Error(`Unknown project: ${projectId}`);
 
@@ -242,7 +241,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			const limit = max !== undefined && max > 0 ? max : after.length;
 			const sliced = after.slice(0, limit);
 			const hasMore = after.length > sliced.length;
-			const sessions = sliced.map((e) => toSessionInfo(project, e, states));
+			const sessions = sliced.map((e) => toSessionInfo(project, e, locations));
 			const last = sliced[sliced.length - 1];
 			return {
 				sessions,
@@ -251,8 +250,8 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			};
 		},
 
-		listQueue(live, states): SessionInfo[] {
-			// Membership is the durable state, in memory: the store's keys are
+		listQueue(live, locations): SessionInfo[] {
+			// Membership is the stored locations, in memory: the store's keys are
 			// the queued stems, so the queue never walks the Project's history —
 			// each row costs at most one file (a live row reads only the
 			// registry's metadata; a dormant row the one file its stem names).
@@ -263,15 +262,14 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 					if (entry.ref.projectId !== project.id) continue;
 					liveByStem.set(entry.ref.stem, entry);
 				}
-				for (const stem of states.queued(project.id).keys()) {
-					const row = queueRow(project, stem, liveByStem.get(stem), states);
+				for (const stem of locations.placed(project.id).keys()) {
+					const row = queueRow(project, stem, liveByStem.get(stem), locations);
 					if (row !== null) out.push(row);
 				}
 			}
-			// The shared total order (queue-order.ts): notified first (the work
-			// waiting for the user), busy next (it demotes itself into notified
-			// when it lands), deferred last (parked by decision); each group by
-			// last activity descending.
+			// The shared total order (queue-order.ts): Inbox first (the attention
+			// list), Later second (parked by decision); each group by last
+			// activity descending.
 			out.sort(compareQueueRows);
 			return out;
 		},
@@ -298,7 +296,7 @@ export function assertNoSessionIdConflicts(projects: Map<string, ProjectConfig>)
 }
 
 /** The durable session ids a Project's storage holds, keyed by stem: the
- * discovery scan (recursive `*.jsonl`, archive prefix excluded, symlink
+ * discovery scan (recursive `*.jsonl`, trash prefix excluded, symlink
  * containment enforced) reduced to the header ids — the startup conflict
  * check's notion of "a session that exists". */
 export function scanDurableSessionIds(project: ProjectConfig): Map<string, string> {
@@ -312,9 +310,9 @@ export function scanDurableSessionIds(project: ProjectConfig): Map<string, strin
 	for (const rel of rels) {
 		if (!rel.endsWith(".jsonl")) continue;
 		const stem = rel.split(sep).join("/").slice(0, -".jsonl".length);
-		// The archive prefix is a storage namespace, not discovery: a manual
-		// copy into `.archive/` must not fail the uniqueness invariant.
-		if (isArchivedStem(stem)) continue;
+		// The trash prefix is a storage namespace, not discovery: a manual copy
+		// into `.trash/` must not fail the uniqueness invariant.
+		if (isTrashedStem(stem)) continue;
 		// statSync below follows symlinks, so a symlinked `.jsonl` pointing
 		// outside the namespace must not leak a foreign id (ADR 11 boundary).
 		const real = containedSessionFile(project.sessionDir, join(project.sessionDir, rel));

@@ -80,10 +80,10 @@ function AppInner() {
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
-	// Passive awareness (ADR 23): the count of Sessions awaiting the user,
-	// summed across Projects. A primitive selector, so the memoized TopBar does
-	// not re-render on every unrelated queue change.
-	const waitingCount = useStore((s) => s.queue.filter((row) => row.state === "notified").length);
+	// Passive awareness (ADR 23): the count of Sessions in the Inbox, summed
+	// across Projects. A primitive selector, so the memoized TopBar does not
+	// re-render on every unrelated queue change.
+	const inboxCount = useStore((s) => s.queue.filter((row) => row.location === "inbox").length);
 
 	// ── Status notification ──────────────────────────────────────────────
 	const activityPhase = isStreaming ? liveActivityPhase(vm) : null;
@@ -134,7 +134,7 @@ function AppInner() {
 				showSidebarToggle={sidebar.mode === "hidden"}
 				onSidebarToggle={sidebar.onMenuButton}
 				menuButtonRef={sidebar.menuButtonRef}
-				waitingCount={waitingCount}
+				inboxCount={inboxCount}
 				onSidebarHover={sidebar.setHamburgerHover}
 				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
 				onHistory={history.toggle}

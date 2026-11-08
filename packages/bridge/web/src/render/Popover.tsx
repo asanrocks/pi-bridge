@@ -14,9 +14,20 @@
 //
 // `className` carries what the shared chrome cannot know — item geometry,
 // padding via `--popover-pad`, or a card surface via `--popover-bg`.
+//
+// A `shell` panel mounts on the document body. A docked pane is itself a
+// stacking context at `--z-pane`, so a `position: fixed` panel rendered inside
+// the sidebar rail competes at the rail's tier, not at `--z-portal`: the rail's
+// own resize handle (`--z-dock`) drew over the row menu and stole the pointer
+// along its 12px strip, and the TopBar would have done the same. Leaving the
+// pane puts the panel where the shell ladder expects it. Anchor positioning is
+// unaffected — the name lives on the trigger and resolves document-wide. The
+// `local` layer keeps the old in-place mount on purpose: those panels are the
+// viewer's, and they must not lift above the surface that owns them.
 // ============================================================================
 
 import { type ReactNode, useEffect } from "react";
+import { createPortal } from "react-dom";
 import styles from "./Popover.module.css";
 import { useAnchorName } from "./useAnchorName.ts";
 
@@ -76,7 +87,7 @@ export function Popover({
 	// to a reader without the lint having to follow a role held in a variable.
 	const named = { role, "aria-label": label };
 
-	return (
+	const chrome = (
 		<>
 			<button type="button" aria-label="Close" className={styles.backdrop} data-layer={layer} onClick={onClose} />
 			<div
@@ -90,4 +101,8 @@ export function Popover({
 			</div>
 		</>
 	);
+	// The document is the boundary: the markup tests render this tree with the
+	// server renderer, which has no portals and no stacking to resolve.
+	if (layer === "local" || typeof document === "undefined") return chrome;
+	return createPortal(chrome, document.body);
 }

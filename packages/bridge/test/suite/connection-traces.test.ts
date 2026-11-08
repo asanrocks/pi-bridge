@@ -80,7 +80,6 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
-		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {
@@ -175,7 +174,17 @@ function makeBundle(): Bundle {
 	const verbs: DaemonVerbs = {
 		listSessions: async () => ({ sessions: [], hasMore: false }),
 		listQueue: async () => [],
-		setSessionState: async () => ({ ok: true }),
+		// Archive ends the runtime, so the shim stops it the way the Daemon's
+		// verb does; Inbox and Later are the Worker's storage write.
+		setSessionLocation: async (projectId, stem, location) => {
+			if (location !== "archive") return { ok: true };
+			try {
+				await worker.closeSession({ projectId, stem });
+				return { ok: true };
+			} catch (err) {
+				return { ok: false, error: (err as Error).message };
+			}
+		},
 		getDaemonInfo: async () => ({
 			projects: [],
 			models: [],
@@ -199,15 +208,7 @@ function makeBundle(): Bundle {
 			return { ok: true, session: ref };
 		},
 		detach: (conn) => conn.detach(),
-		closeSession: async (projectId, stem) => {
-			try {
-				await worker.closeSession({ projectId, stem });
-				return { ok: true };
-			} catch (err) {
-				return { ok: false, error: (err as Error).message };
-			}
-		},
-		archiveSession: async () => ({ ok: false, error: "unused" }),
+		trashSession: async () => ({ ok: false, error: "unused" }),
 		sessionsChanged: (projectId) => sessionsChanged.push(projectId),
 		listFiles: async () => [],
 		readFile: () => {
@@ -447,11 +448,13 @@ describe("Connection protocol traces", () => {
 		expect(sync2.operationId).toBeUndefined();
 	});
 
-	it("session_closed precedes the close reply on the closing Connection", async () => {
+	it("session_closed precedes the archive reply on the closing Connection", async () => {
 		const bundle = makeBundle();
 		const { clientWs, frames } = await connect(bundle, "s4");
 
-		clientWs.send(JSON.stringify({ id: "c1", verb: "closeSession", projectId: "proj", stem: "s4" }));
+		clientWs.send(
+			JSON.stringify({ id: "c1", verb: "setSessionLocation", projectId: "proj", stem: "s4", location: "archive" }),
+		);
 		await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "session_closed");
 		const closeReply = await replyFor(frames, "c1");
 		expect(closeReply.ok).toBe(true);
@@ -481,7 +484,7 @@ describe("Connection protocol traces", () => {
 		};
 		// The Daemon's attach shape, with the observation's sink captured so the
 		// test can deliver a terminal frame by hand — exactly as the Worker does
-		// when a closeSession of the switched-away session races the switch.
+		// when an archive move of the switched-away session races the switch.
 		const attach = async (stem: string, capture: { sink?: WorkerObservationSink }) => {
 			await conn.attach(async (sink) => {
 				capture.sink = sink;

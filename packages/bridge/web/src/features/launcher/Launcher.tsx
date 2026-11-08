@@ -39,16 +39,13 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
 	const now = useNow();
-	/** The daemon's queue order is the presentation order: notified →
-	 * busy → deferred, each group by last activity descending — the same
-	 * order the sidebar's pinned sections show. */
+	/** The daemon's queue order is the presentation order: Inbox → Later, each
+	 * group by last activity descending — the same order the sidebar's pinned
+	 * sections show. */
 	const queued = useMemo(() => [...queue], [queue]);
 	/** ADR 13 + 22: the launcher's discovery entry for the `@latest` alias —
-	 * the most recently active queued session that is not deferred. */
-	const latest = useMemo(
-		() => sortByLastActivity(queued.filter((s) => s.state === "notified" || s.state === "busy"))[0] ?? null,
-		[queued],
-	);
+	 * the most recently active queued Session in the Inbox. */
+	const latest = useMemo(() => sortByLastActivity(queued.filter((s) => s.location === "inbox"))[0] ?? null, [queued]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	// Wording and visible state come from the shared connectionStatus mapping
@@ -154,13 +151,13 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 			)}
 
 			<div className={styles.header}>
-				<span className={styles.headerTitle}>Work queue</span>
+				<span className={styles.headerTitle}>Queue</span>
 			</div>
 			{queued.length === 0 ? (
 				<div className={styles.empty}>
-					<div className={styles.emptyTitle}>Nothing waiting</div>
+					<div className={styles.emptyTitle}>Nothing queued</div>
 					<div className={styles.emptyHint}>
-						Sessions land here when they finish a turn — or when you park one for later.
+						A Session lands here when you send it a message — or when you move one back from Later.
 					</div>
 				</div>
 			) : (
@@ -170,17 +167,14 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 						// A running row says what it is doing; otherwise preview the latest
 						// message, falling back to the first when the copy only has one (or
 						// the file scan predates the field).
-						const activity = session.state === "busy" ? activityLabel(session.activity, now) : "";
+						const running = session.activity !== undefined;
+						const activity = activityLabel(session.activity, now);
 						const preview = activity || (session.lastMessageText ?? session.firstMessageText);
 						const when = session.lastActivityAt ?? session.timestamp;
-						// The mark derives from the durable state alone.
+						// Two independent facts: running overrides the location mark.
 						const dotCls = [
 							styles.dot,
-							session.state === "busy"
-								? styles.dotStreaming
-								: session.state === "deferred"
-									? styles.dotDeferred
-									: "",
+							running ? styles.dotStreaming : session.location === "later" ? styles.dotLater : "",
 						]
 							.filter(Boolean)
 							.join(" ");
@@ -200,8 +194,8 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 										<span className={styles.rowCwd} title={session.stem}>
 											<bdi>{session.projectId}</bdi>
 										</span>
-										{session.state === "busy" && <span className={styles.streaming}>running</span>}
-										{session.state === "deferred" && <span className={styles.deferred}>parked</span>}
+										{running && <span className={styles.streaming}>running</span>}
+										{session.location === "later" && <span className={styles.later}>later</span>}
 										<time className={styles.rowTime} dateTime={when} title={formatWhenFull(when)}>
 											{formatWhen(when, now)}
 										</time>

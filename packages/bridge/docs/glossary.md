@@ -90,34 +90,49 @@ What exists, how it is named, how long it lives. Owned by
    position in the URL is its scope: at the root (`/@latest`) it spans
    Projects, as a Project's last segment (`/<project>/@latest`) it is that
    Project's. Either form resolves to the most recently
-   active queued Session in scope — a notified or busy row of the work queue;
-   deferred is excluded, because that state's own meaning is "not next". With
-   no such row it falls back to the most recent durable Session in scope and
+   active Session in the Inbox within scope; Later is excluded, because its
+   own meaning is "not next", and Archive is history rather than a target.
+   With no such row it falls back to the most recent durable Session in scope and
    opens it (activating it), and only with no Session at all does it fall
    back to the scope's home — the Launcher, or the Project home. The URL keeps the alias form; the client state holds the resolved
    address until an explicit navigation commits a real one. A reload
    re-resolves, possibly onto a newer Session. The alias set is closed: new
    aliases are new claims in this document first.
 
-8. A Session carries a durable, user-visible **session state** *(composed)*
-   — one of `inactive` *(bound)* (the default: a history row; nothing is
-   owed), `busy` *(bound)* (an execution is in flight: a prompt was admitted
-   and the run has not fully settled), `notified` *(bound)* (the agent
-   finished its turn and awaits input), or `deferred` *(bound)* (the user
-   parked a non-busy Session: not finished, but not next). The states are
-   persisted by the Worker beside the sessions they describe and survive idle
-   collection, daemon restarts, and crashes; the set of non-inactive Sessions
-   is the **work queue** *(composed)*. Browsing never changes a state, and
-   reading a notified Session does not clear it — only defer or close does.
-   The state transitions (admission lands busy, full settlement lands
-   notified, the defer/restore toggle, close wins over its own completion)
-   are decided inside the state store, which every request addresses with its
-   evidence: an execution token minted at admission.
-9. A Session is **archived** *(bound)* when its file has been moved under the
-   reserved `.archive` prefix of its Project's session directory. An archived
+8. A Session carries a durable, user-visible **location** *(bound, "a place
+   in the switcher")* — where it belongs, never what it is doing. The names
+   the durable classification carried before this one — `inactive`,
+   `notified`, `busy`, `deferred`, and "work queue" — are superseded: they
+   merged a location with an execution fact, and may not be reintroduced.
+   The **Inbox** *(bound)* is the user's attention list: a submitted message
+   places a Session there, and nothing else does. **Later** *(bound)* is
+   parked by decision: still open, not next. **Archive** *(bound)* is the
+   default resting place — browsable history that nothing is expected of,
+   which is why a Session nobody has placed needs no record to be archived.
+   The row menu's gestures are named after those places: **Park** and
+   **Unpark** *(bound)* walk between Inbox and Later, **Unarchive** returns a
+   Session to Later — reviving stale work is a decision, where sending a
+   message is what returns a Session to Inbox.
+   Locations are persisted by the Worker beside the Sessions they describe;
+   the Inbox and Later Sessions are the **queue** *(composed)*. Browsing
+   never moves a Session, and reading an Inbox row does not clear it — only a
+   move does. Moves are decided inside the location store, which is also the
+   one place an admission's promotion (and its rollback on a refused
+   preflight) is recorded. Moving to Archive and moving to Trash both end the
+   runtime: a place the user put a Session in is not one an execution keeps
+   running in.
+9. A Session is **running** *(bound, common word)* while its Activation is
+   executing — streaming, running a tool, or compacting. Running is a runtime
+   attribute, not a location: it is reported by live listings and never
+   stored, so a restart has no execution state to recover and an idle
+   Session's location is the only durable claim. A Session with no live
+   Activation is dormant (A.6).
+10. A Session is **trashed** *(bound)* when its file has been moved under the
+   reserved `.trash` prefix of its Project's session directory. A trashed
    Session is not discovered and its stem is not addressable, so restoring it
-   takes a manual filesystem move. Archiving closes the Session first:
-   disposal finalizes an in-flight turn, so the move follows it.
+   takes a manual filesystem move; its location record is dropped. Trashing
+   ends the runtime first: disposal finalizes an in-flight turn, so the move
+   follows it.
 
 ADR 12 proposes further lifetime vocabulary (admitted prompt, reservation,
 in-flight window). It is ADR-local until that ADR is accepted; this document

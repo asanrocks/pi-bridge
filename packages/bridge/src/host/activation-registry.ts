@@ -86,11 +86,6 @@ export interface ActivationRegistryOptions {
 	unflushedIdleGcMs: number;
 	/** A session settled (its file may have just been written). */
 	onSettled: (ref: SessionRef) => void;
-	/** An execution fully settled: the run reached pi's full-idle
-	 * predicate, an admitted dispatch completed without a run of its own, or
-	 * a recovery continuation compensated. `execution` is the tag the Worker
-	 * admitted the settling execution under. */
-	onFullySettled?: (ref: SessionRef, execution: string | undefined) => void;
 	/** A live Activation's streaming flag changed. */
 	onStreamingChange: () => void;
 	/** A live Activation's activity phase changed (the process title's source). */
@@ -290,7 +285,6 @@ export class ActivationRegistry {
 				if (record !== undefined) void this.collect(record);
 			},
 			onSettled: () => this.options.onSettled(ref),
-			onFullySettled: (execution) => this.options.onFullySettled?.(ref, execution),
 			onStreamingChange: () => this.options.onStreamingChange(),
 			onActivityChange: () => this.options.onActivityChange?.(),
 		});
@@ -341,7 +335,7 @@ export class ActivationRegistry {
 	/**
 	 * Dispose `record` under its `collecting` reservation. Reached from the
 	 * actor's idle decision (onIdle, after its eligibility checks) and the
-	 * explicit closeSession verb (no eligibility checks — a close is a
+	 * explicit kill (no eligibility checks — a close is a
 	 * user-initiated kill, so streaming state and attachments do not defer
 	 * it).
 	 */
@@ -349,7 +343,7 @@ export class ActivationRegistry {
 		// A disposal already in flight is joined, not re-entered: `collecting`
 		// is cleared only when the disposal completed, so awaiting it is
 		// exactly "wait until this record finished dying". Callers gate
-		// follow-up work on this (archiveSession moves the session file only
+		// follow-up work on this (trashSession moves the session file only
 		// after the Manager finished flushing), so an early return here would
 		// let them act on a runtime that is still tearing down.
 		if (record.collecting !== null) {

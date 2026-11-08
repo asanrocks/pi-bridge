@@ -412,12 +412,11 @@ export interface SessionsChangedMessage {
 	nextCursor?: SessionListCursor;
 }
 
-/** The work queue changed: the complete global snapshot of
- * non-inactive sessions — notified, busy, and deferred — ordered notified →
- * busy → deferred, each group by last activity descending. Replaces the
- * activation report as the launcher/sidebar's queue source: a row is here
- * because the user or an execution put it here, not because a runtime is
- * retained. */
+/** The queue changed: the complete global snapshot of Sessions placed in the
+ * Inbox or Later, ordered Inbox → Later, each group by last activity
+ * descending. Replaces the activation report as the launcher/sidebar's queue
+ * source: a row is here because the user put it here (directly, or by sending
+ * it a message), not because a runtime is retained. */
 export interface QueueChangedMessage {
 	kind: "queue_changed";
 	sessions: SessionInfo[];
@@ -431,8 +430,9 @@ export interface PinnedModelsChangedMessage {
 	pinnedModels: PinnedModelInfo[];
 }
 
-/** The live runtime behind an attached Session ended (closeSession or
- * archiveSession). Every Connection attached to that address is detached
+/** The live runtime behind an attached Session ended (the Session was moved
+ * to Archive or Trash, or a stop ended it). Every Connection attached to that
+ * address is detached
  * before the frame is sent, so a session command that arrives afterwards
  * fails with "no session attached" instead of reaching a disposed runtime.
  * A client viewing the closed Session lands on its Project home. */
@@ -859,33 +859,30 @@ export interface SessionListCursor {
 	stem: string;
 }
 
-/** The toggle's two targets: the only user-settable non-inactive
- * states. */
-export type SessionToggleState = "notified" | "deferred";
+/** Where a Session belongs in the sidebar — durable, user-visible, and
+ * independent of whether anything is executing. `inbox` is the user's
+ * attention list (a submitted message puts a Session here); `later` is parked
+ * by decision; `archive` is the default resting place: browsable history that
+ * nothing is expected of. The first two are the queue. */
+export type SessionLocation = "inbox" | "later" | "archive";
 
-/** The durable, user-visible session lifecycle state: `inactive` —
- * the default, a history row; `busy` — an execution is in flight; `notified`
- * — the agent finished its turn and awaits input; `deferred` — the user
- * parked a non-busy session. The set of non-inactive sessions is the work
- * queue. */
-export type SessionState = "inactive" | "notified" | "busy" | "deferred";
-
-/** The work-queue query: the global non-inactive snapshot, ordered
- * notified → busy → deferred, each group by last activity descending. Not
- * project-scoped, not paginated. */
+/** The queue query: the global snapshot of Inbox and Later Sessions, ordered
+ * Inbox → Later, each group by last activity descending. Not project-scoped,
+ * not paginated. */
 export interface ListQueueRequest {
 	verb: "listQueue";
 }
 
-/** The user's defer/restore toggle: moves a non-busy session between
- * `notified` and `deferred`. Refused while the session is busy — the state
- * machine owns the precondition, not the client. Legal on a dormant session
- * (it is a storage write; no runtime is needed). */
-export interface SetSessionStateRequest {
-	verb: "setSessionState";
+/** Place a Session: moves it between Inbox, Later, and Archive. Legal on a
+ * dormant Session (a storage write needs no runtime), and it never changes
+ * whether the Session is running — except that moving to Archive also ends
+ * the runtime, because archived history is not being worked on. The queue
+ * change arrives as a `queue_changed` push. */
+export interface SetSessionLocationRequest {
+	verb: "setSessionLocation";
 	projectId: string;
 	stem: string;
-	state: SessionToggleState;
+	location: SessionLocation;
 }
 
 /** Detach the Connection from its activation (ADR 11). Connection-local:
@@ -894,25 +891,17 @@ export interface DetachRequest {
 	verb: "detach";
 }
 
-/** Terminate the live instance for a session address. Disposes the
- * daemon-side activation immediately — aborting and flushing any in-flight
- * turn — regardless of idle GC policy or attached Connections; the session
- * file survives and re-opening resumes it. Destructive and unconfirmed by
- * design: the client sends it only on explicit user action. */
-export interface CloseSessionRequest {
-	verb: "closeSession";
-	projectId: string;
-	stem: string;
-}
-
-/** Close a session, then move its file into the reserved archive prefix of the
- * Project's session directory. The close is unconditional (a dormant session
- * has no live instance, so only the move happens). Archived sessions are not
- * discovered by `listSessions` and their stems cannot be addressed, so an
- * archive leaves the client surface entirely; `ok: false` when there is no
- * durable file to move (a fresh session whose first turn never flushed). */
-export interface ArchiveSessionRequest {
-	verb: "archiveSession";
+/** Terminate the live instance for a session address, then move its file under
+ * the reserved trash prefix of the Project's session directory. The stop is
+ * unconditional (a dormant session has no live instance, so only the move
+ * happens); it aborts and flushes any in-flight turn and disregards idle
+ * policy and attached Connections. Trashed sessions are not discovered by
+ * `listSessions` and their stems cannot be addressed, so a trash leaves the
+ * client surface entirely; `ok: false` when there is no durable file to move
+ * (a fresh session whose first turn never flushed). Unconfirmed by design: the
+ * client sends it only on explicit user action. */
+export interface TrashSessionRequest {
+	verb: "trashSession";
 	projectId: string;
 	stem: string;
 }
@@ -931,7 +920,7 @@ export type RpcRequestBody =
 	| NewSessionRequest
 	| ListSessionsRequest
 	| ListQueueRequest
-	| SetSessionStateRequest
+	| SetSessionLocationRequest
 	| GetDaemonInfoRequest
 	| AsrCredentialsRequest
 	| TextPolishRequest
@@ -944,8 +933,7 @@ export type RpcRequestBody =
 	| GitDiffRequest
 	| ConsoleRequest
 	| DetachRequest
-	| CloseSessionRequest
-	| ArchiveSessionRequest;
+	| TrashSessionRequest;
 
 // ── Verb-specific reply shapes ───────────────────────────────────────────
 
@@ -953,10 +941,10 @@ export type RpcRequestBody =
  * unflushed session; `sessionId` is durable and is the cache/activation key.
  * `timestamp` is an ISO rendering of the ordering value: filesystem mtime for
  * a durable session, the in-memory header creation time before flush. */
-/** What a busy Session's execution is doing right now (ADR 23): the
+/** What a running Session's execution is doing right now (ADR 23): the
  * switcher's preview line, derived host-side from the live Document and the
- * runtime's own phase word. Absent on a non-busy row — an inactive, notified,
- * or parked Session has nothing executing.
+ * runtime's own phase word. Its presence *is* the row's `running` fact — a row
+ * with no activity has nothing executing — so there is no second flag.
  *
  * `startedAt` is the moment the current phase began, computed at emission, so
  * the client rebases it onto its own clock (the same rule `status.
@@ -972,10 +960,11 @@ export interface SessionInfo {
 	sessionId: string;
 	/** Relative session path minus the `.jsonl` extension. */
 	stem: string;
-	/** The durable, user-visible state. `inactive` is the default —
-	 * a history row; whether a runtime is retained is execution detail that
-	 * stays in the Document, never in a listing row. */
-	state: SessionState;
+	/** The durable, user-visible location (see `SessionLocation`); `archive`
+	 * when the Session has no stored record. Whether the Session is *running*
+	 * is a runtime attribute, not this field: it is reported by `activity`.
+	 */
+	location: SessionLocation;
 	name?: string;
 	timestamp: string;
 	firstMessageText?: string;
@@ -988,7 +977,7 @@ export interface SessionInfo {
 	 * sort key (mtime / header creation). */
 	lastActivityAt?: string;
 	messageCount?: number;
-	/** What the execution is doing, on a busy row only (ADR 23). */
+	/** What the execution is doing, on a running row only (ADR 23). */
 	activity?: SessionActivityInfo;
 }
 

@@ -68,7 +68,7 @@ describe("worker contract values", () => {
 							projectId: "proj",
 							sessionId: "sess-1",
 							stem: "work/review",
-							state: "busy",
+							location: "inbox",
 							timestamp: "2024-01-01T00:00:00Z",
 						},
 					],

@@ -17,11 +17,9 @@
 // ============================================================================
 
 import type {
-	ArchiveSessionRequest,
 	AsrCredential,
 	AsrCredentialsReply,
 	ClientMessage,
-	CloseSessionRequest,
 	DirectoryListing,
 	GetDaemonInfoReply,
 	GitBaseRequest,
@@ -45,13 +43,15 @@ import type {
 	RenameSessionRequest,
 	SessionInfo,
 	SessionListCursor,
+	SessionLocation,
 	SessionRef,
 	SetLabelRequest,
 	SetPinnedModelsRequest,
-	SetSessionStateRequest,
+	SetSessionLocationRequest,
 	SnapshotFile,
 	TextPolishReply,
 	TextPolishRequest,
+	TrashSessionRequest,
 } from "../core/index.ts";
 import {
 	MAX_IMAGE_BASE64_LENGTH,
@@ -103,16 +103,16 @@ export interface DaemonVerbs {
 		max?: number,
 		cursor?: SessionListCursor | null,
 	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
-	/** The global work queue: the non-inactive snapshot, ordered
-	 * notified → busy → deferred, then last activity descending. */
+	/** The queue: the Inbox-and-Later snapshot, ordered Inbox → Later, then
+	 * last activity descending. */
 	listQueue: () => Promise<SessionInfo[]>;
-	/** The user's defer/restore toggle. Refused while the session is
-	 * busy; legal on a dormant session. The queue change arrives as a
+	/** Place a session: Inbox, Later, or Archive. Legal on a dormant session;
+	 * Archive also ends the runtime. The queue change arrives as a
 	 * `queue_changed` push. */
-	setSessionState: (
+	setSessionLocation: (
 		projectId: string,
 		stem: string,
-		state: "notified" | "deferred",
+		location: SessionLocation,
 	) => Promise<{ ok: boolean; error?: string }>;
 	/** Resolve-or-activate `(projectId, stem)` and attach this Connection. */
 	openSession: (
@@ -135,13 +135,10 @@ export interface DaemonVerbs {
 	) => Promise<{ ok: boolean; error?: string; session?: SessionRef }>;
 	/** Release this Connection's attachment (activation stays alive for GC). */
 	detach: (conn: Connection) => void;
-	/** Terminate the live instance for `(projectId, stem)` — a kill, not a
-	 * GC: disposes the activation now, ignoring idle policy, streaming state,
-	 * and attached Connections. */
-	closeSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
-	/** Close a session, then move its file into the reserved archive prefix.
-	 * The close is unconditional; the move requires a durable file. */
-	archiveSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
+	/** End the session's runtime, then move its file into the reserved trash
+	 * prefix. The stop is unconditional (ignoring idle policy, streaming state,
+	 * and attached Connections); the move requires a durable file. */
+	trashSession: (projectId: string, stem: string) => Promise<{ ok: boolean; error?: string }>;
 	/** Broadcast a Project's refreshed first page (rename, settle). */
 	sessionsChanged: (projectId: string) => void;
 	/** Path completion (ADR 12): resolved against `projectId`'s cwd, so it does
@@ -331,18 +328,11 @@ const sessionVerbs: Record<string, VerbHandler> = {
 // ── Daemon-routed verbs (queries, terminal session operations, dev) ────────
 
 const daemonVerbs: Record<string, VerbHandler> = {
-	closeSession: async (ctx, msg) => {
-		const m = msg as unknown as CloseSessionRequest;
+	trashSession: async (ctx, msg) => {
+		const m = msg as unknown as TrashSessionRequest;
 		if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
 		if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-		const result = await ctx.daemonVerbs.closeSession(m.projectId, m.stem);
-		ctx.reply(msg.id, result.ok, result.error);
-	},
-	archiveSession: async (ctx, msg) => {
-		const m = msg as unknown as ArchiveSessionRequest;
-		if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
-		if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-		const result = await ctx.daemonVerbs.archiveSession(m.projectId, m.stem);
+		const result = await ctx.daemonVerbs.trashSession(m.projectId, m.stem);
 		ctx.reply(msg.id, result.ok, result.error);
 	},
 	listSessions: async (ctx, msg) => {
@@ -361,12 +351,14 @@ const daemonVerbs: Record<string, VerbHandler> = {
 	listQueue: async (ctx, msg) => {
 		ctx.send({ id: msg.id, ok: true, sessions: await ctx.daemonVerbs.listQueue() });
 	},
-	setSessionState: async (ctx, msg) => {
-		const m = msg as unknown as SetSessionStateRequest;
+	setSessionLocation: async (ctx, msg) => {
+		const m = msg as unknown as SetSessionLocationRequest;
 		if (typeof m.projectId !== "string" || m.projectId === "") throw new Error("Missing `projectId`");
 		if (typeof m.stem !== "string" || m.stem === "") throw new Error("Missing `stem`");
-		if (m.state !== "notified" && m.state !== "deferred") throw new Error("Invalid `state`");
-		const result = await ctx.daemonVerbs.setSessionState(m.projectId, m.stem, m.state);
+		if (m.location !== "inbox" && m.location !== "later" && m.location !== "archive") {
+			throw new Error("Invalid `location`");
+		}
+		const result = await ctx.daemonVerbs.setSessionLocation(m.projectId, m.stem, m.location);
 		ctx.reply(msg.id, result.ok, result.error);
 	},
 	getDaemonInfo: async (ctx, msg) => {

@@ -1,18 +1,20 @@
 // ============================================================================
-// queueAttention — completion detection over the work queue (ADR 23).
+// queueAttention — completion detection over the queue (ADR 23).
 //
-// The queue is the only global view of every Session's durable state, so a
-// busy → notified transition seen there is a turn that finished somewhere —
-// possibly in a Session this tab is not attached to, which is exactly what a
-// notification must cover. The tracker therefore compares consecutive
-// snapshots instead of watching the attached Document.
+// The queue is the only global view of every Inbox and Later Session, so a
+// running → not-running transition seen there is a turn that finished
+// somewhere — possibly in a Session this tab is not attached to, which is
+// exactly what a notification must cover. The tracker therefore compares
+// consecutive snapshots instead of watching the attached Document. Running is
+// the row's live activity (`SessionInfo.activity`); location is not involved,
+// because finishing a turn never moves a Session.
 //
 // Three transitions must not be announced, and each has one rule rather than a
 // heuristic:
 //   - the first snapshot of a connection (a reconnect re-fetches the queue;
 //     every row it reports is news the client has not seen, not a completion),
-//   - a Session that was already notified (a state the client saw, or one it
-//     set itself — promotion and restore are not completions by construction),
+//   - a Session that was already idle (a row the client saw, or one it moved
+//     itself — a move is not a completion by construction),
 //   - the Session this tab is reading, whose completion the tab title and unread
 //     count already carry (`useStatusNotifications`).
 // ============================================================================
@@ -25,7 +27,8 @@ export function sessionKey(row: Pick<SessionInfo, "projectId" | "stem">): string
 }
 
 export class QueueAttention {
-	private readonly states = new Map<string, SessionInfo["state"]>();
+	/** Whether each queued row was running, as of the last snapshot. */
+	private readonly running = new Map<string, boolean>();
 	/** The addressed Session this tab is reading, if any: its completions take
 	 * the attached-view path instead of a notification. */
 	private attached: string | null = null;
@@ -33,8 +36,8 @@ export class QueueAttention {
 
 	/** The first snapshot of a connection: nothing in it is a completion. */
 	seed(queue: readonly SessionInfo[]): void {
-		this.states.clear();
-		for (const row of queue) this.states.set(sessionKey(row), row.state);
+		this.running.clear();
+		for (const row of queue) this.running.set(sessionKey(row), row.activity !== undefined);
 		this.primed = true;
 	}
 
@@ -60,18 +63,18 @@ export class QueueAttention {
 			return [];
 		}
 		const completed: SessionInfo[] = [];
-		const next = new Map<string, SessionInfo["state"]>();
+		const next = new Map<string, boolean>();
 		for (const row of queue) {
 			const key = sessionKey(row);
-			next.set(key, row.state);
-			// Busy → notified is the one completion edge. A row that vanished
-			// (closed, archived) has no state to compare; it is dropped below.
-			if (row.state === "notified" && this.states.get(key) === "busy" && key !== this.attached) {
-				completed.push(row);
-			}
+			const running = row.activity !== undefined;
+			next.set(key, running);
+			// Running → idle is the one completion edge. A row that vanished
+			// (moved to Archive, trashed) has nothing to compare; the map drops it
+			// below, so its return is a new row rather than a completion.
+			if (!running && this.running.get(key) === true && key !== this.attached) completed.push(row);
 		}
-		this.states.clear();
-		for (const [key, state] of next) this.states.set(key, state);
+		this.running.clear();
+		for (const [key, running] of next) this.running.set(key, running);
 		return completed;
 	}
 }

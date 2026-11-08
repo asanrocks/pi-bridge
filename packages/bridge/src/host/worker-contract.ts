@@ -45,8 +45,8 @@ import type {
 	PullRequestItem,
 	SessionInfo,
 	SessionListCursor,
+	SessionLocation,
 	SessionRef,
-	SessionToggleState,
 	SnapshotFile,
 } from "../core/index.ts";
 
@@ -217,7 +217,8 @@ export interface WorkerEnvironment {
  * Daemon's job: a Worker never encodes browser frames. */
 export type WorkerEvent =
 	| { readonly kind: "sessions_changed"; readonly projectId: string; readonly page: SessionPage }
-	/** The work queue changed: the complete non-inactive snapshot. */
+	/** The queue changed: the complete snapshot of Sessions placed in Inbox or
+	 * Later. */
 	| { readonly kind: "queue_changed"; readonly sessions: SessionInfo[] }
 	/** The global pinned list changed (a `setPinnedModels` mutation). */
 	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
@@ -255,10 +256,11 @@ export interface WorkerService extends WorkerEnvironment {
 
 	/** Terminate the live Activation for the address: a kill, not an idle
 	 * collection. Every observation's terminal frame is delivered before this
-	 * resolves. */
+	 * resolves. The Session's location is untouched: a stop is not a move. */
 	closeSession(address: SessionAddress): Promise<void>;
-	/** Close the Session, then move its file into the reserved archive prefix. */
-	archiveSession(address: SessionAddress): Promise<void>;
+	/** Kill the live Activation, then move the Session's file into the reserved
+	 * trash prefix and drop its location record. */
+	trashSession(address: SessionAddress): Promise<void>;
 
 	// ── Session commands (target-addressed) ─────────────────────────────
 	/** A turn: immediate admitted work, so a Stop never queues behind it, and
@@ -283,13 +285,12 @@ export interface WorkerService extends WorkerEnvironment {
 
 	// ── Project and Session queries ─────────────────────────────────────
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage>;
-	/** The work queue ( the global non-inactive snapshot, ordered
-	 * notified → busy → deferred, then last activity descending. */
+	/** The queue: every Inbox and Later Session, ordered Inbox → Later, then
+	 * last activity descending. */
 	listQueue(): Promise<SessionInfo[]>;
-	/** The user's defer/restore toggle: refused while the session is
-	 * busy; legal on a dormant session (the Worker resolves the stem's durable
-	 * id — no runtime is needed). The Daemon broadcasts the resulting queue. */
-	setSessionState(address: SessionAddress, state: SessionToggleState): Promise<void>;
+	/** Place a Session in Inbox, Later, or Archive. Legal on a dormant Session
+	 * (a storage write needs no runtime); Archive also ends the runtime. */
+	setSessionLocation(address: SessionAddress, location: SessionLocation): Promise<void>;
 
 	/** Served-state changes. Returns an unsubscribe. */
 	onEvent(listener: (event: WorkerEvent) => void): () => void;

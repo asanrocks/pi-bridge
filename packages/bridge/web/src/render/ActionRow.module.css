@@ -1,0 +1,39 @@
+/* ============================================================================
+   Action row — the one visual spec for a row inside an anchored panel: a
+   labelled, full-width target with a hover fill and no boundary of its own,
+   because the panel already owns the edge.
+
+   Shared rather than restated: `render/AnchoredMenu.module.css` uses it for
+   menu items, and the compact session switcher for its handoff row, so a row
+   in one panel and a row in the other cannot drift. Semantics are the host's
+   (a `menuitem` in a menu, a plain button in a dialog); this file owns only
+   the box, the ink, and the fill.
+   ========================================================================== */
+
+.row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 8px;
+	background: none;
+	border: none;
+	border-radius: var(--radius-sm);
+	text-align: left;
+	cursor: pointer;
+	color: var(--color-foreground);
+	font-size: var(--fs-sm);
+	font-family: inherit;
+}
+
+/* Scoped to hover-capable inputs so a tap never leaves the fill behind, the
+   same rule the shared control tiers follow. */
+@media (hover: hover) {
+	.row:hover {
+		background: var(--color-muted);
+	}
+}
+
+.row:focus-visible {
+	background: var(--color-muted);
+}

@@ -115,7 +115,7 @@ function fakeWorker(): FakeWorker {
 		},
 		createSession: notImplemented,
 		closeSession: notImplemented,
-		archiveSession: notImplemented,
+		trashSession: notImplemented,
 		prompt: notImplemented,
 		abort: notImplemented,
 		discardSteer: notImplemented,
@@ -130,7 +130,7 @@ function fakeWorker(): FakeWorker {
 			return { sessions: [], hasMore: false };
 		},
 		listQueue: async () => [],
-		setSessionState: async () => {},
+		setSessionLocation: async () => {},
 		setPinnedModels: notImplemented,
 		listFiles: notImplemented,
 		readFile: notImplemented,

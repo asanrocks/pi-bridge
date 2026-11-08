@@ -1,32 +1,23 @@
 /* Chrome, placement, layering, and surface are render/Popover.module.css; a menu
-   only adds its own width — wide enough that a label and its detail share one
-   line, which is the row's whole anatomy (see AnchoredMenu.tsx). */
+   only adds its own width. The width is the items' (`max-content`), so a menu
+   of two short verbs is two short rows instead of a panel padded out to a
+   guess, and the 360px cap is what keeps a label and its detail on one line —
+   the row's whole anatomy (see AnchoredMenu.tsx). Past the cap the label
+   ellipsizes, which is the intended yield order. */
 .menu {
-	width: min(360px, calc(100vw - 16px));
+	width: max-content;
+	max-width: min(360px, calc(100vw - 16px));
 }
 
 /* One line per row, because the item count is the line count: a second line
    reads as a second item, which is how a four-item menu was read as six. The
-   label yields first (ellipsis) since the detail is the disambiguating value —
+   box, ink, and hover fill are `render/ActionRow.module.css` — the same row the
+   compact switcher's handoff row takes. The label yields first (ellipsis) since
+   the detail is the disambiguating value —
    an oid pair, a count, the reason a command is unavailable — and a truncated
    reason explains nothing. */
 .item {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	width: 100%;
-	padding: 5px 8px;
-	background: none;
-	border: none;
-	border-radius: var(--radius-sm);
-	text-align: left;
-	cursor: pointer;
-	color: var(--color-foreground);
-}
-
-.item:hover,
-.item:focus-visible {
-	background: var(--color-muted);
+	composes: row from "./ActionRow.module.css";
 }
 
 .itemLabel {
@@ -36,6 +27,23 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	font-size: var(--fs-sm);
+}
+
+/* A group boundary: the hairline spans the panel's inner width, and the row
+   keeps its own padding so the two groups still read as one list. */
+.itemSeparated {
+	margin-top: 4px;
+	padding-top: 8px;
+	border-top: 1px solid var(--color-border);
+}
+
+/* An item that ends something (a run, an address) wears the error hue. The
+   hover fill stays the shared row's: only the ink changes, so a destructive row
+   is not also the loudest box in the panel. Two classes deep on purpose: the
+   composed row rule sets `color` at one class, and the bundled stylesheet can
+   repeat it after this file, so source order is not a guarantee. */
+.item.itemDanger {
+	color: var(--color-error);
 }
 
 .item[aria-disabled="true"] {

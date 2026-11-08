@@ -5,12 +5,16 @@ manual narrow-viewport pass verifies the compact switcher on a real device,
 after which its current-truth content is folded into the permanent docs and
 this file is deleted (the Code Quality rules' ADR progression).
 
-Builds on the durable session-state model (four states:
-`inactive | notified | busy | deferred`, persisted by the Worker at
-`<sessionDir>/.pi-bridge/states.json` — see [host runtime](../host/runtime.md)
-"Session states" and `src/host/session-state.ts`). No host state-machine
-change is proposed here: every commit is presentation, listing metadata, and
-notification wiring over the states that already exist.
+Builds on the durable session model this record shipped with — four states
+(`inactive | notified | busy | deferred`) in
+`<sessionDir>/.pi-bridge/states.json`. That model has since been replaced by
+Session locations (Inbox / Later / Archive) plus a runtime `running` attribute
+— see [host runtime](../host/runtime.md) "Session locations" and
+`src/host/session-locations.ts`. Read `inactive` as Archive, `notified` as
+Inbox, `deferred` as Later, and `busy` as Inbox + running; the affordances this
+record decided (queue-ordered folders, the fold ladder, passive awareness, the
+compact switcher) are unchanged apart from the row menu replacing the state
+toggle. Current truth for all of it is [web design](../web/design.md).
 
 ## Context
 

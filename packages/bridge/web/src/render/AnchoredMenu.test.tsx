@@ -45,4 +45,17 @@ describe("AnchoredMenu", () => {
 		expect(html).toContain('aria-disabled="true"');
 		expect(html).toContain("A turn is running");
 	});
+
+	test("a danger row is told apart by its ink, not by a glyph", () => {
+		const html = render([
+			{ key: "trash", label: "Trash", danger: true, onSelect: () => {} },
+			{ key: "park", label: "Park", onSelect: () => {} },
+		]);
+		const rows = (html.match(/<button[^>]*role="menuitem"[^>]*>/g) ?? []).map((row) =>
+			(row.match(/class="([^"]*)"/)?.[1] ?? "").split(" "),
+		);
+		const extra = rows[0]?.filter((name) => !rows[1]?.includes(name)) ?? [];
+		expect(extra).toHaveLength(1);
+		expect(extra).toContainEqual(expect.stringContaining("itemDanger"));
+	});
 });

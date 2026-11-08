@@ -7,7 +7,7 @@ function row(stem: string, lastActivityAt?: string): SessionInfo {
 		projectId: "p",
 		sessionId: stem,
 		stem,
-		state: "notified" as const,
+		location: "inbox" as const,
 		timestamp: "2026-01-01T00:00:00Z",
 		lastActivityAt,
 	};

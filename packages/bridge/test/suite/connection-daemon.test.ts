@@ -45,7 +45,6 @@ function fakeManager(overrides: Partial<Manager> = {}): Manager {
 		addConnection: () => {},
 		removeConnection: () => {},
 		onSettled: () => () => {},
-		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},

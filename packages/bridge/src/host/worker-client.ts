@@ -392,7 +392,7 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 			},
 
 			closeSession: (address) => request<void>({ kind: "closeSession", address }),
-			archiveSession: (address) => request<void>({ kind: "archiveSession", address }),
+			trashSession: (address) => request<void>({ kind: "trashSession", address }),
 
 			prompt: (target, text, images, model, thinkingLevel) =>
 				request<void>({
@@ -413,7 +413,7 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 			listSessions: (projectId, max, cursor) =>
 				request<SessionPage>({ kind: "listSessions", projectId, max, cursor: cursor ?? null }),
 			listQueue: () => request<SessionInfo[]>({ kind: "listQueue" }),
-			setSessionState: (address, state) => request<void>({ kind: "setSessionState", address, state }),
+			setSessionLocation: (address, location) => request<void>({ kind: "setSessionLocation", address, location }),
 
 			info: () => request<WorkerInfo>({ kind: "info" }),
 			setPinnedModels: (models) => request<void>({ kind: "setPinnedModels", models }),

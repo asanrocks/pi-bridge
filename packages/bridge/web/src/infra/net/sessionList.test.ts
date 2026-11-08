@@ -11,7 +11,7 @@ function row(stem: string): SessionInfo {
 		projectId: "proj",
 		sessionId: `sess-${stem}`,
 		stem,
-		state: "inactive" as const,
+		location: "archive" as const,
 		timestamp: new Date(0).toISOString(),
 	};
 }

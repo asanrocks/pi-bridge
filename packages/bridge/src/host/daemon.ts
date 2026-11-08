@@ -491,8 +491,8 @@ export class Daemon {
 	}
 
 	/** Seed one registration's queue slice from the live Worker instead of an
-	 * empty default: a registration can carry persisted queue state (notified
-	 * or deferred rows, a turn left running). The placeholder identity closes
+	 * empty default: a registration can carry persisted queue state (Inbox or
+	 * Later rows). The placeholder identity closes
 	 * the race with a `queue_changed` arriving while the query is in flight —
 	 * the event installed a fresher full slice, and the snapshot must not
 	 * overwrite it; a removal (`dispose`, `onWorkerUnavailable`) drops the
@@ -510,7 +510,7 @@ export class Daemon {
 		if (this.queueByHost.get(host) === placeholder) this.queueByHost.set(host, seed);
 	}
 
-	/** The global work queue: the Workers own the durable states those rows
+	/** The global queue: the Workers own the stored locations those rows
 	 * describe, so each reports its own slice — each already in queue order.
 	 * The aggregate re-sorts with the shared comparator, so a multi-Worker
 	 * queue interleaves by the same rule instead of concatenating
@@ -553,7 +553,7 @@ export class Daemon {
 			});
 	}
 
-	/** Push the aggregate work queue: one push carries the join of every
+	/** Push the aggregate queue: one push carries the join of every
 	 * registration's last report, never one Worker's slice — re-sorted with
 	 * the shared comparator so the aggregate keeps the queue's global order
 	 * (each slice is already ordered, but a concatenation would interleave
@@ -605,11 +605,11 @@ export class Daemon {
 
 		listQueue: () => this.listQueue(),
 
-		setSessionState: async (projectId, stem, state) => {
+		setSessionLocation: async (projectId, stem, location) => {
 			try {
 				const host = this.route(projectId);
 				if (host === undefined) throw new Error(`Unknown project: ${projectId}`);
-				await host.service.setSessionState({ projectId, stem }, state);
+				await host.service.setSessionLocation({ projectId, stem }, location);
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
 			}
@@ -646,28 +646,13 @@ export class Daemon {
 			conn.detach();
 		},
 
-		closeSession: async (projectId, stem) => {
+		trashSession: async (projectId, stem) => {
 			try {
 				const host = this.route(projectId);
 				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
-				await host.service.closeSession({ projectId, stem });
-				// Refresh the Project's first page everywhere: the kill's flush
-				// (and an unflushed session's disappearance) reorders history. The
-				// queue change rides the Worker's own queue_changed event.
-				this.broadcastSessionsChanged(projectId);
-				return { ok: true };
-			} catch (err) {
-				return { ok: false, error: (err as Error).message };
-			}
-		},
-
-		archiveSession: async (projectId, stem) => {
-			try {
-				const host = this.route(projectId);
-				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
-				await host.service.archiveSession({ projectId, stem });
+				await host.service.trashSession({ projectId, stem });
 				// The row leaves the history pages. A live session's row already left
-				// the active snapshot via the collection broadcast.
+				// the queue via the collection broadcast.
 				this.broadcastSessionsChanged(projectId);
 				return { ok: true };
 			} catch (err) {

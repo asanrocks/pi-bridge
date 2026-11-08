@@ -47,20 +47,22 @@ Connections and is not streaming or compacting, subject to the host's idle
 collection policy.
 
 Separately from runtime retention, every Session carries a durable,
-user-visible state: `inactive` (the default), `busy` (an execution is
-in flight), `notified` (the agent finished and awaits input), or `deferred`
-(parked by the user). The state is persisted by the Worker at
-`<sessionDir>/.pi-bridge/states.json`, keyed by the session's stem — its
-address, so the queue's membership is the store's key set — and is
-decided inside the state store: admission lands busy under a minted execution
-token, full settlement (the Manager's `agent_settled`-keyed signal) lands
-notified when the token is still current, the defer/restore toggle is refused
-while busy, and a close wins over its own completion but not over a newer
-admission. The set of non-inactive Sessions is the work queue: it survives
-idle collection and daemon restarts (a persisted busy recovers to notified at
-load), and browsing a Session never changes its state. Runtime retention —
-whether an Activation exists, whether it is streaming — is execution detail
-that stays in the Document and never appears in a listing row.
+user-visible **location**: Inbox (the attention list), Later (parked by
+decision), or Archive (the default — browsable history). The first two are
+persisted by the Worker at `<sessionDir>/.pi-bridge/locations.json`, keyed by
+the session's stem — its address, so the queue's membership is the store's key
+set — while Archive is the absence of a record. Sending a message places a
+Session in Inbox (and a refused preflight restores the placement it replaced);
+a user move decides the rest. The Inbox and Later Sessions are the queue: it
+survives idle collection and daemon restarts, and browsing a Session never
+changes its location.
+
+*Running* is a runtime attribute, not a location: it is reported when an
+Activation is streaming, running a tool, or compacting, and it is never stored
+— so a restart has no execution state to recover, and a settlement writes
+nothing. Runtime retention — whether an Activation exists, whether it is
+streaming — is execution detail that stays in the Document and never appears
+in a listing row as durable state.
 
 The daemon enforces the important ownership rules at its boundaries:
 
@@ -74,7 +76,7 @@ The daemon enforces the important ownership rules at its boundaries:
 The browser navigates by URL:
 
 ```text
-/                              launcher and the global work queue
+/                              launcher and the global queue
 /<projectId>                   Project home and floating compose draft
 /<projectId>/<relative-stem>   one Session
 ```
@@ -151,7 +153,7 @@ directory refuses to serve rather than writing JSONL unsynchronized.
 **Web.** `BridgeClient` is the only browser-side wire envelope owner. Its
 DocumentMirror applies `replace` and `patch` pushes with immutable structural
 sharing. The web store holds the current Document root, the current
-Project/stem address, Project metadata, the work queue, draft and
+Project/stem address, Project metadata, the queue, draft and
 UI state. The route-driven connection layer seeds an optional cache mirror,
 opens the URL address, promotes the target after an address-bearing initial
 sync, and reissues visible lazy pulls.
@@ -222,11 +224,10 @@ The push contract is:
   generation, and a live frame from an older attachment is dropped before
   the mirror — same address or not.
 - `sessions_changed` carries the refreshed first page for one Project.
-- `queue_changed` carries the global work queue: every non-inactive
-  Session, ordered notified → busy → deferred, each group by last activity
-  descending. Membership is the durable session state, never runtime
-  retention — a browsed Session never appears, and idle collection never
-  removes a row.
+- `queue_changed` carries the global queue: every Inbox and Later Session,
+  ordered Inbox → Later, each group by last activity descending. Membership is
+  the stored location, never runtime retention — an archived Session never
+  appears, and idle collection never removes a row.
 
 The host sends exactly one initial-sync frame when a Connection attaches. The
 frame is sent before later live patches and before the successful navigation
@@ -306,7 +307,7 @@ Attachment: detached --openSession/newSession--> attached(Project, stem)
             attached --detach--> detached
 ```
 
-Connection recovery refreshes daemon metadata and the work queue, reads the
+Connection recovery refreshes daemon metadata and the queue, reads the
 current URL, optionally seeds the address from IndexedDB, and resolves the
 address again. An Activation may continue a turn after its last Connection
 detaches. Collection happens only after the host's attachment, streaming, and
@@ -455,7 +456,7 @@ there is no corresponding Node-only import gate.
 Session changes are broadcast across tabs through `queue_changed` and
 Project-scoped `sessions_changed`; static Project configuration has no
 project-list push. When a live runtime is closed out from under attached
-clients (`closeSession`, `archiveSession`), they are detached and receive a
+clients (a move to Archive or Trash), they are detached and receive a
 `session_closed` push naming the address, so a view never stalls waiting for
 a runtime that no longer exists; idle collection has no attached Connection
 to notify.

@@ -94,14 +94,14 @@
 	background: var(--color-streaming);
 }
 
-/* Parked by decision: the accent tint, distinct from notified's
-   green — still open, but not next. */
-.dotDeferred {
+/* Later: the accent tint, distinct from the Inbox green — still open, but not
+   next. */
+.dotLater {
 	background: var(--color-accent);
 }
 
-/* The parked chip: same treatment as .streaming, muted. */
-.deferred {
+/* The Later chip: same treatment as .streaming, muted. */
+.later {
 	font-size: var(--fs-xs);
 	color: var(--color-accent);
 	font-weight: 500;

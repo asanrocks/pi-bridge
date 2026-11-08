@@ -86,7 +86,7 @@ browse branches in History. A steerer can do the following:
   at its nearest edge), and it commits once on release; membership is frozen
   while the picker is open, order is not. Reordering is pointer-only: the grip
   drag is the one gesture that moves a row, because the app's global
-  Alt+Up/Down chord already cycles the work queue. A refused replacement
+  Alt+Up/Down chord already cycles the queue. A refused replacement
   (connection lost, verb rejected) rolls the rows back to the last accepted
   order. The head of the list
   carries a `default` label: it is the model a fresh Session starts on, which is
@@ -182,11 +182,14 @@ browse branches in History. A steerer can do the following:
   attached. Branch navigation through a pager, History, or `h`/`l` is a real
   branch switch only when idle and following the live leaf; otherwise it
   degrades to a peek. The daemon additionally rejects `navigate` while a
-  turn is in flight; a rejected selection drops its pending scroll anchor. Marking a Session inactive (the row menu) clears its
-  work-queue state without confirmation; a live runtime is stopped and
-  flushed first, and the history file survives. State changes themselves are
-  the row indicator's toggle (ADR 23).
-  Marking the currently viewed Session inactive lands on that Project home.
+  turn is in flight; a rejected selection drops its pending scroll anchor.
+  Browsing a Session moves nothing, and every move needs no confirmation: a
+  live runtime is stopped and flushed only when the move is to Archive (or to
+  Trash), and the history file survives every move. Moving the currently
+  viewed Session to Archive keeps the view: the page re-attaches to the
+  archived Session, which stays addressable — the move is a classification,
+  not a deletion. Moving it to Trash lands on that Project home, because the
+  address is gone.
 - Peek a branch without moving the effective leaf. The rendering leaf
   (`renderLeafId` in the UI slice) can pin any committed entry's root-to-leaf
   path while `leafId` stays authoritative; the daemon never learns about a
@@ -232,21 +235,20 @@ browser zoom menu remain the desktop paths.
 ### Launcher and Project home
 
 The global launcher at `/` lists configured Projects with their working
-directories and, below them, the work queue: every queued Session —
-notified (awaits input), busy (an execution in flight), deferred (parked) —
-in the daemon's queue order (notified → busy → deferred, each group newest
-activity first). Above the Project list, a plain Latest button (ADR 13) reads
-"Latest session" plus the owning Project's id — selecting it navigates to
-`/@latest`, which resolves to the most recently active queued Session that is
-not deferred, without redirecting. The same alias is available
+directories and, below them, the queue: every Inbox and Later Session, in the
+daemon's queue order (Inbox → Later, each group newest activity first). Above
+the Project list, a plain Latest button (ADR 13) reads "Latest session" plus
+the owning Project's id — selecting it navigates to `/@latest`, which resolves
+to the most recently active Session in the Inbox, without redirecting. The same alias is available
 scoped to a Project (`/<projectId>/@latest`): deep links and the CLI banner
 use that form, which resolves inside the Project and falls back to its home.
-The Latest button is deliberately not a queue-row duplicate: no state mark,
+The Latest button is deliberately not a queue-row duplicate: no location mark,
 preview, or time. It exists only while something is queued. Queue rows show a
-state mark — notified keeps the success-green dot, busy uses the streaming
-color and pulse with a "running" chip, deferred uses the accent tint with a
-"parked" chip — name or first-message fallback, Project, the shared time label
-tracked to the Session's last activity, and a latest-message preview.
+mark — Inbox keeps the success-green dot, Later uses the accent tint with a
+"later" chip, and a running Session overwrites either with the streaming color
+and pulse plus a "running" chip — name or first-message fallback, Project, the
+shared time label tracked to the Session's last activity, and a latest-message
+preview.
 Selecting a Project opens its Project home at `/<projectId>`.
 
 Project home is an unattached, compose-first surface. It shows the expanded
@@ -284,25 +286,25 @@ no Session is attached.
 ### Sidebar
 
 The Sidebar is the Session switcher (ADR 23): a Project tree whose rows are
-ordered by the durable Session state, so finding work needs no second surface.
+ordered by the durable Session location, so finding work needs no second
+surface.
 
-Each folder is a state-scoped tri-state fold — collapsed (nothing below the
-row), working (the Project's notified and busy rows), all (working rows plus
-the parked and inactive ones) — cycled by clicking the folder row (chevron +
-name are one target; the name does not navigate). The chevron mirrors the
-state: right (collapsed), diagonal (working only), down (all). Missing fold
-state defaults to `working`, so a Project you have not visited shows the work
-that may need the user without its history; the Project you land on is opened
-to `all` at first paint (the browse-this-project stance), and a later session
-switch inside it never unfolds it. A folder with no working rows has only two
-states: the working step is skipped in the cycle and a stale persisted
-`working` renders collapsed, since "working only" is indistinguishable from
-collapsed there. A collapsed folder states the number of rows it hides
+Each folder is a location-scoped tri-state fold — collapsed (nothing below the
+row), inbox (the Project's Inbox rows), all (Inbox rows plus the Later and
+archived ones) — cycled by clicking the folder row (chevron + name are one
+target; the name does not navigate). The chevron mirrors the state: right
+(collapsed), diagonal (inbox only), down (all). Missing fold state defaults to
+`inbox`, so a Project you have not visited shows what may need the user without
+its Later work or its history; the Project you land on is opened to `all` at
+first paint (the browse-this-project stance), and a later session switch inside
+it never unfolds it. A folder with no Inbox rows has only two states: the inbox
+step is skipped in the cycle and a stale persisted `inbox` renders collapsed,
+since "inbox only" is indistinguishable from collapsed there. A collapsed folder states the number of rows it hides
 (`+N`), counting only rows already known — the count never triggers a history
 fetch. The `Projects` header label is the fold-all toggle: it applies one
 uniform state to every folder — the smallest step strictly above every
-folder's current effective state, up the ladder `collapsed` → `working` →
-`all` (the `working` step exists only when some folder has working rows),
+folder's current effective state, up the ladder `collapsed` → `inbox` →
+`all` (the `inbox` step exists only when some folder has Inbox rows),
 wrapping to `collapsed` at the top. A click therefore always changes every
 folder — no dead clicks — and fold/unfold mixing never survives a click. Each
 folder also has exactly one navigation affordance, the `+` button, which opens
@@ -316,63 +318,80 @@ control (see [Iconography and control surfaces](#iconography-and-control-surface
 A folder row's hover is not a row state: it is a fold control, and the fill
 channel belongs to rows that carry identity or position.
 
-Folder children render in state order — notified → busy → parked (deferred) →
-inactive, each group newest activity first — with no time-bucket headings:
-the state is the grouping, and the time label on every row carries recency.
+Folder children render in queue order — Inbox → Later — then the archived
+history, each group newest activity first, with no time-bucket headings: the
+location is the grouping, and the time label on every row carries recency.
 
-- The `working` step shows the Project's notified and busy rows. The state
-  mark derives from the durable state alone — a green dot means notified
-  (awaits input), an orange pulsing dot means busy (an execution in flight).
-  A working row carries a second line, clamped to one line so a live name
-  never grows the rail: a notified row previews its latest assistant reply, a
-  busy row names what it is doing (`Bash · 15m`, `Responding…`,
+- The `inbox` step shows the Project's Inbox rows. Two independent facts draw
+  the mark: the location (green for Inbox, the accent tint for Later, the muted
+  tint for Archive) and running (orange, pulsing), which overwrites the
+  location because an execution is the more urgent fact. An Inbox or running
+  row carries a second line, clamped to one line so a live name never grows the
+  rail: a running row names what it is doing (`Bash · 15m`, `Responding…`,
   `Compacting…`) from the row's `activity` field — the tool name and the
   phase's start instant, rebased onto the reader's clock by the shared label
-  clock. Parked and inactive rows stay one line. The attached `(Project, stem)` row is the only selected row: the
-  accent tint plus weight `500` on its name, per Row states below. A folder
-  row never carries identity — it is a fold control, not a target.
-- The `all` step adds the parked rows (the accent dot; "still open, not next")
-  and the inactive ones, fetched lazily on unfold. Each row carries the shared
+  clock — and an idle Inbox row previews its latest assistant reply. Later and
+  archived rows stay one line. The attached `(Project, stem)` row is the only
+  selected row: the accent tint plus weight `500` on its name, per Row states
+  below. A folder row never carries identity — it is a fold control, not a
+  target.
+- The `all` step adds the Later rows (the accent dot; "still open, not next")
+  and the archived ones, fetched lazily on unfold. Each row carries the shared
   time label (relative while fresh, then a clock, a weekday, or a date). A
   chevron at the list's end requests the next page: the continuation is the
   one sidebar control drawn as a glyph rather than words, because "more below"
   is the meaning a chevron already carries, and this one sits below the content
   it extends while the pane's fold carets sit on the row above theirs.
 
-The indicator is the quick state control. Clicking it promotes an inactive
-Session to `notified` (bringing old work back by decision, with no message
-sent) and toggles a non-busy queued Session between `notified` and
-`deferred`; a busy row's indicator is a read-only mark, because the execution
-owns that state. The hit area is a 24px box around the 6px mark, and every
-control is labelled by its action, not its state.
+The mark is not a control. Placement is a decision with four outcomes, two of
+which also stop the agent, and a 6px dot cannot say that; the row menu owns it.
+The dot therefore only reports, and every control is labelled by its action,
+not its state.
 
-The menu button carries the waiting count: one badge, equal to the number of
-`notified` Sessions across every Project — including the ones in collapsed
-folders — so work that needs a person is visible while the pane is closed. The
-count crosses tabs through `queue_changed`. Reading a Session does not clear
-it (the state means "needs my input", not "unread"); replying, parking, or
-marking inactive does. A completion is announced without polling: while the
+The menu button carries the Inbox count: one badge, equal to the number of Inbox
+Sessions across every Project — including the ones in collapsed folders — so
+what is waiting to be read is visible while the pane is closed. The count
+crosses tabs through `queue_changed`. Reading a Session does not clear it (the
+count means "yours to read", not "unread"); replying, moving it to Later, or
+moving it to Archive does. A completion is announced without polling: while the
 page is visible the finished Session raises one quiet toast; while it is
 hidden, one OS notification per finished Session names it, and a click lands on
 that Session — the open tab is handed the address and navigates through the
 usual open intent, or a new tab opens the address directly. Each notice
 carries its own Session's tag, so two Sessions finishing together stay two
-clickable notices rather than the later one replacing the earlier. A
-reconnect's re-fetched queue is not a
+clickable notices rather than the later one replacing the earlier. The
+completion edge is `running` → not running on a queued row; a location move is
+not a completion. A reconnect's re-fetched queue is not a
 burst of completions (a snapshot published before the connection is confirmed
-is a baseline, never a comparison), manual promotion and restore are not
-completions, and
-the attached Session's own completion keeps the tab title and unread count it
-already had.
+is a baseline, never a comparison), and the attached Session's own completion
+keeps the tab title and unread count it already had.
 
-The rows open Sessions. A row menu exposes `Mark inactive` without
-confirmation — leaving the work queue, terminating a runtime first when one
-exists — and `Archive` on any durable row — archive closes the session then
-moves its file out of discovery, so it is how history is thinned without
-opening each session. Archive is history management, not a Session state, and
-keeps a separate place from the indicator for that reason. The grid action beside the `Projects`
-header returns to the global launcher. Empty, loading, failed-with-retry, and
-no-session states occupy the same quiet message position in the folder.
+The rows open Sessions. The row menu is shaped by the row's location instead of
+being one uniform destination picker: a `Move to …` list repeated everywhere
+was longer than the few directions a location actually opens. **Inbox** offers
+`Park` then `Archive`; **Later** offers `Unpark` then `Archive`; **Archive**
+offers `Unarchive`, which returns the Session to Later — reviving stale work is
+a deliberate act, and a submitted message is what returns a Session to Inbox.
+The reversible reclassification comes first because it is the frequent, cheap
+one; the resting place follows. Park and Unpark only reclassify, so their
+wording never changes. `Archive` and, below the divider, `Trash` say `Stop and
+archive` / `Stop and trash` while an
+agent is running, and keep the plain verb when it is not: the stop is real in
+the first case and absent in the second, so the consequence belongs in the
+label rather than in a detail line that would be wrong half the time. Those
+stop-labelled entries and `Trash` wear the error hue, the menu's one use of it:
+the stop and the loss of the address have to read before the press, and no box,
+glyph, or confirmation dialog says it louder. No entry carries a `title`:
+a tooltip is a hover-only second explanation of a label that has to stand on its
+own (a touch reader and a keyboard reader never see it), so a row that needs
+explaining earns a `detail` line instead. Trash is
+below the divider because it also takes the Session out of discovery — the file
+survives on disk, but the row, its history-page entry, and its address are gone
+— while Archive is browsable history. Neither asks for confirmation: the file
+survives both, and the menu names what it does. The grid action beside the
+`Projects` header returns to the global launcher. Empty, loading,
+failed-with-retry, and no-session states occupy the same quiet message position
+in the folder.
 
 On desktop the Sidebar has three modes: hidden, a docked resizable rail, and
 full-screen overlay — the shared side-pane model (below; the History pane
@@ -417,11 +436,13 @@ and the peek's action is the one that pins the rail rather than a second close.
 The TopBar is fixed between the Sidebar and History gutters. Its left control
 is the Sidebar hamburger when the Sidebar is hidden or on mobile. On a narrow
 viewport it opens the compact switcher instead of the full-screen pane (ADR
-23): an anchored panel off the same button listing the working rows — notified
-and busy — grouped by Project, in the switcher's order, with the same preview
-line and state control, and a `View all sessions` row handing off to the full
-switcher (present even when the compact list is empty, which reads "Nothing is
-waiting."). Picking a row opens that Session and dismisses the panel, so a skim
+23): an anchored panel off the same button listing the Inbox rows, grouped by
+Project, in the queue's order, with the same preview line and row menu, and a
+final `View all sessions` action row handing off to the full switcher (present
+even when the compact list is empty, which reads "Your inbox is empty."). The handoff row takes the panel's own row anatomy —
+hover fill, no boundary — because the panel already owns the edge; a boxed
+control inside it would read as a nested surface. Picking a row opens that
+Session and dismisses the panel, so a skim
 is one move out and one back rather than two full-screen round trips. On a wide
 viewport the button keeps its pane behavior — toggle or hover-peek. The
 keyboard shortcut still opens the full switcher, which contains everything the
@@ -1498,7 +1519,13 @@ header is the registry (role, glyph, one sentence each), exports are named
   a fixed `--shadow-2` panel declared outside the named exceptions, for the same
   reason. Escape belongs to the innermost panel (`dismissOnEscape={false}` stands
   an outer one down), because two capture-phase document listeners cannot be
-  ordered by nesting. Two surfaces still take rects: `PathCompletion` anchors to
+  ordered by nesting. A panel with the `shell` layer mounts on the document
+  body; only the viewer's `local` panels stay in place. A docked pane is a
+  stacking context at `--z-pane`, so a fixed panel rendered inside the sidebar
+  rail competed at the rail's tier: the rail's resize handle (`--z-dock`) drew
+  over the row menu and took the pointer along its 12px strip. The name lives on
+  the trigger and resolves document-wide, so leaving the pane costs the anchor
+  nothing. Two surfaces still take rects: `PathCompletion` anchors to
   a textarea caret (not an element, so it needs a zero-width anchor element
   rather than a token) and the model picker receives one from its host.
 - **An anchored panel is one surface with two content anatomies.** The panel's
@@ -1876,7 +1903,7 @@ grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
 | Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn header draws `Edit` as a pencil. |
 | Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
 | Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
-| Sidebar row menu | `Mark inactive`, `Archive` | One glyph on one item and none on its sibling is worse than no glyphs; menu rows are a text surface. |
+| Sidebar row menu | `Park`/`Unpark`, `Archive`, `Unarchive`, `Trash` (with `Stop and …` while running) | One glyph on one item and none on its siblings is worse than no glyphs; menu rows are a text surface. |
 
 Four rules keep the glyph rows honest. **One kind per surface**: a tool surface
 (the composer card, a card toolbar, the file browser header) is all glyphs, and a
@@ -2011,7 +2038,7 @@ Modifier commands remain global where they represent shell intent.
 - Ctrl/Cmd+B toggles the Sidebar and Ctrl/Cmd+H toggles History, including
   while typing. Ctrl/Cmd+P cycles models in the composer; the textarea owns
   that shortcut to avoid a duplicate cycle.
-- Alt+Up and Alt+Down cycle the work queue (queue order). Alt+N opens the only Project's
+- Alt+Up and Alt+Down cycle the queue (queue order). Alt+N opens the only Project's
   home, or opens the Sidebar when a Project choice is needed.
 
 The focused-turn frame and visible keyboard focus ring use the accent token.

@@ -152,7 +152,7 @@ export class Connection {
 	 * produced it. A terminal frame always crosses the wire — the client's
 	 * generation rule drops a stale one — but only the current attachment's
 	 * terminal frame may end the attachment: a close of the observation a
-	 * switch just left (its release can race a concurrent closeSession) must
+	 * switch just left (its release can race a concurrent archive move) must
 	 * not detach the successor server-side. */
 	private deliverObservation(frame: WorkerObservationFrame, generation: number): void {
 		if (frame.kind === "replace") {

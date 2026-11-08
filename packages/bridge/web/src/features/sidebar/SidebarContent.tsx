@@ -12,7 +12,7 @@
 // ============================================================================
 
 import { memo, useMemo } from "react";
-import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, GridIcon } from "../../render/icons.tsx";
 import { ProjectFolder } from "./ProjectFolder.tsx";
@@ -33,9 +33,8 @@ export const SidebarContent = memo(function SidebarContent({
 	onToggleFolder,
 	onOpenSession,
 	onOpenProject,
-	onMarkInactive,
-	onSetSessionState,
-	onArchiveSession,
+	onMoveSession,
+	onTrashSession,
 	onShowLauncher,
 	onLoadFolder,
 	onLoadMoreFolder,
@@ -44,23 +43,23 @@ export const SidebarContent = memo(function SidebarContent({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** The global work queue — the authority for each folder's working and
-	 * parked rows, sliced per Project in queue order. */
+	/** The global queue — the authority for each folder's Inbox and Later
+	 * rows, sliced per Project in queue order. */
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
-	/** Per-Project fold states; missing entries default to "working". */
+	/** Per-Project fold states; missing entries default to "inbox". */
 	folds: Record<string, FolderFoldState>;
 	/** Projects header: apply one uniform fold state to every folder. */
-	onToggleAllFolders: (hasWorkingById: Record<string, boolean>) => void;
-	onToggleFolder: (projectId: string, hasWorking: boolean) => void;
+	onToggleAllFolders: (hasInboxById: Record<string, boolean>) => void;
+	onToggleFolder: (projectId: string, hasInbox: boolean) => void;
 	onOpenSession: (session: SessionInfo) => void;
 	onOpenProject: (projectId: string) => void;
-	onMarkInactive: (session: SessionInfo) => void;
-	/** The indicator's quick state toggle — every row but a busy one. */
-	onSetSessionState: (session: SessionInfo, state: "notified" | "deferred") => void;
-	/** Close then archive a session (row menu Archive) — live and dormant rows. */
-	onArchiveSession: (session: SessionInfo) => void;
+	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
+	 * Unarchive as the resting place (archiving also stops a running agent). */
+	onMoveSession: (session: SessionInfo, location: SessionLocation) => void;
+	/** The row menu's Trash: ends the runtime, then hides the file. */
+	onTrashSession: (session: SessionInfo) => void;
 	/** Detach and return to the Launcher (global project picker); overlay
 	 * dismissal is already folded in by the owner. */
 	onShowLauncher: () => void;
@@ -77,13 +76,13 @@ export const SidebarContent = memo(function SidebarContent({
 		return map;
 	}, [queue]);
 
-	// Per-folder "has working rows" — the cycle input that decides whether a
-	// folder has the working step at all. Also feeds the header chevron's
+	// Per-folder "has Inbox rows" — the cycle input that decides whether a
+	// folder has the inbox step at all. Also feeds the header chevron's
 	// effective-collapsed test.
-	const hasWorkingById = useMemo(() => {
+	const hasInboxById = useMemo(() => {
 		const out: Record<string, boolean> = {};
 		for (const p of projects) {
-			out[p.id] = (queueByProject.get(p.id) ?? []).some((s) => s.state === "notified" || s.state === "busy");
+			out[p.id] = (queueByProject.get(p.id) ?? []).some((s) => s.location === "inbox");
 		}
 		return out;
 	}, [projects, queueByProject]);
@@ -91,8 +90,8 @@ export const SidebarContent = memo(function SidebarContent({
 	// Header chevron mirrors the folders: down while every folder is open,
 	// right while every folder is effectively folded, diagonal in between.
 	const effectiveFold = (id: string): FolderFoldState => {
-		const f = folds[id] ?? "working";
-		return f === "working" && !hasWorkingById[id] ? "collapsed" : f;
+		const f = folds[id] ?? "inbox";
+		return f === "inbox" && !hasInboxById[id] ? "collapsed" : f;
 	};
 	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "all");
 	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "collapsed");
@@ -106,8 +105,8 @@ export const SidebarContent = memo(function SidebarContent({
 				<button
 					type="button"
 					className={styles.sidebarSectionToggle}
-					onClick={() => onToggleAllFolders(hasWorkingById)}
-					title="Collapse / working / all"
+					onClick={() => onToggleAllFolders(hasInboxById)}
+					title="Collapse / inbox / all"
 				>
 					<CaretIcon size={12} direction={headerCaret} className={styles.sidebarChevron} />
 					<span>Projects</span>
@@ -141,15 +140,14 @@ export const SidebarContent = memo(function SidebarContent({
 						project={project}
 						currentProjectId={currentProjectId}
 						currentStem={currentStem}
-						fold={folds[project.id] ?? "working"}
+						fold={folds[project.id] ?? "inbox"}
 						queueRows={queueByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
 						onToggle={onToggleFolder}
 						onOpenProject={onOpenProject}
 						onOpen={onOpenSession}
-						onMarkInactive={onMarkInactive}
-						onSetState={onSetSessionState}
-						onArchive={onArchiveSession}
+						onMove={onMoveSession}
+						onTrash={onTrashSession}
 						onLoad={onLoadFolder}
 						onLoadMore={onLoadMoreFolder}
 					/>

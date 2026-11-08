@@ -121,30 +121,6 @@
 	color: var(--color-muted-foreground);
 }
 
-/* Indicator hit area on a session row: the mark itself is 6px, so the button
-   is a transparent 24px box centred on it (the coarse-pointer minimum), in the
-   row's leading column. Sits above the row button, whose click opens the
-   session — the two actions never mean the same thing. */
-.sidebarStateBtn {
-	position: absolute;
-	left: calc(var(--action-col) - 9px);
-	top: 50%;
-	transform: translateY(-50%);
-	width: var(--control-box-xs);
-	height: var(--control-box-xs);
-	padding: 0;
-	border: none;
-	background: none;
-	cursor: pointer;
-	border-radius: var(--radius-sm);
-	z-index: 1;
-}
-
-.sidebarStateBtn:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: -2px;
-}
-
 /* Quiet in-folder status line (loading / empty folder). */
 .sidebarFolderMsg {
 	padding: 6px 10px;
@@ -261,30 +237,6 @@
 }
 
 .sidebarMenuBtn:hover {
-	color: var(--color-foreground);
-}
-
-/* Row-menu item: one geometry spec for both items — pigment is the only
-difference between them. */
-.sidebarMenuItem {
-	padding: 6px 10px;
-	font-size: var(--fs-sm);
-	font-family: inherit;
-	background: none;
-	border: none;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-	text-align: left;
-	user-select: none;
-}
-
-.sidebarMenuItem:hover {
-	background: var(--color-muted);
-}
-
-/* Archive closes the session then moves its file out of discovery; the file
-   survives, so the item keeps the neutral pigment. */
-.sidebarMenuArchive {
 	color: var(--color-foreground);
 }
 
@@ -446,10 +398,10 @@ difference between them. */
 	height: var(--control-box-sm);
 }
 
-/* Queue-state indicator on a session row: notified = green
-   (awaits input), busy = orange + pulse (execution in flight), deferred =
-   the parked tint, idle = muted history. The mark derives from the durable
-   state alone — never from runtime retention. */
+/* Location mark on a session row: Inbox = green (yours to read), Later = the
+   parked tint, Archive = muted history, and running overwrites all three with
+   orange + pulse. Location is durable; running is the runtime's own fact, which
+   is why they are one mark and two independent inputs. */
 .sidebarLiveDot {
 	display: inline-block;
 	width: 6px;
@@ -459,14 +411,14 @@ difference between them. */
 	flex-shrink: 0;
 }
 
-/* Dormant session: same slot, muted — no liveness claim. */
-.sidebarDotIdle {
+/* Archived: same slot, muted — no liveness claim. */
+.sidebarDotArchived {
 	background: var(--color-border);
 }
 
-/* Parked by decision: the accent tint says "still open, not
-   next" — distinct from dormant history, which makes no claim. */
-.sidebarDotDeferred {
+/* Later: the accent tint says "still open, not next" — distinct from archived
+   history, which makes no claim. */
+.sidebarDotLater {
 	background: var(--color-accent);
 }
 
@@ -480,24 +432,14 @@ difference between them. */
 	}
 }
 
-/* Row menu: chrome and placement are render/Popover.module.css; the panel only
-   sizes itself to its verbs (Close, Defer/Restore, Archive). */
-.rowMenu {
-	display: flex;
-	flex-direction: column;
-	min-width: 130px;
-}
-
 /* ── Compact switcher (narrow viewport, ADR 23) ───────────────────────────────
-   An anchored panel off the TopBar menu button: the working rows, grouped by
-   Project, plus the handoff to the full switcher. It is a reading surface, so
-   it sizes to the viewport and scrolls rather than growing past it. */
+   An anchored panel off the TopBar menu button: the Inbox rows, grouped by
+   Project, plus the handoff to the full switcher. The panel's box — tone,
+   hairline, 4px pad, height cap, scroll — is `render/Popover.module.css`'s, so
+   this module adds content only: a width that keeps a row readable at phone
+   width. */
 .quickSwitcher {
-	--popover-pad: 6px;
 	width: min(320px, calc(100vw - 24px));
-	max-height: min(60vh, 420px);
-	overflow-y: auto;
-	padding: var(--popover-pad);
 }
 
 .quickGroupLabel {
@@ -515,13 +457,11 @@ difference between them. */
 	color: var(--color-muted-foreground);
 }
 
-/* The handoff to the full switcher: a word, so it carries a boundary; it spans
-   the panel's width because it is a destination for the whole surface, not an
-   action on a row. */
+/* The handoff to the full switcher: one more row of the panel, in the action
+   row's own anatomy (`render/ActionRow.module.css`) rather than a boxed control
+   — the panel owns the edge, so a second boundary inside it would read as a
+   nested surface. It is a row of the list, not an item of a menu: the panel is
+   a dialog and this row navigates out of it. */
 .quickViewAll {
-	composes: outlined from "../../render/buttons.module.css";
-	width: 100%;
-	margin-top: 4px;
-	font-size: var(--fs-sm);
-	font-family: inherit;
+	composes: row from "../../render/ActionRow.module.css";
 }

@@ -72,7 +72,6 @@ function stubManager(sessionPath: string | undefined): StubManager {
 			handles.delete(handle);
 		},
 		onSettled: () => () => {},
-		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async (text: string) => {
@@ -279,13 +278,13 @@ describe("daemon routing through several workers", () => {
 		}
 	});
 
-	it("aggregates the work queue in one global order, seeded from persisted state", async () => {
+	it("aggregates the queue in one global order, seeded from persisted state", async () => {
 		const first = await serveWorker("alpha");
 		const second = await serveWorker("beta");
 		// alpha arrives holding persisted queue state: s1 parked before the
 		// Daemon ever connected — a dial-in Worker whose storage outlived the
 		// previous Daemon.
-		await first.worker.setSessionState({ projectId: "alpha", stem: "s1" }, "deferred");
+		await first.worker.setSessionLocation({ projectId: "alpha", stem: "s1" }, "later");
 		const { port } = await startDaemon(first.endpoint, second.endpoint);
 		const ws = await openClient(port);
 		cleanups.push(() => ws.close());
@@ -293,10 +292,10 @@ describe("daemon routing through several workers", () => {
 
 		// A transition on beta pushes the aggregate: alpha's seeded slice must
 		// ride along (an empty default would drop the persisted row until
-		// alpha's next transition), and the order is global — the notified row
-		// leads the deferred one across the registration boundary instead of
+		// alpha's next transition), and the order is global — the Inbox row
+		// leads the Later one across the registration boundary instead of
 		// concatenating per-Worker blocks.
-		const toggle = send(ws, { verb: "setSessionState", projectId: "beta", stem: "s1", state: "notified" });
+		const toggle = send(ws, { verb: "setSessionLocation", projectId: "beta", stem: "s1", location: "inbox" });
 		await waitFor(frames, (frame) => frame.id === toggle && frame.ok === true);
 		const push = await waitFor(
 			frames,
@@ -305,15 +304,15 @@ describe("daemon routing through several workers", () => {
 				(frame.sessions as Array<{ projectId: string }>).some((s) => s.projectId === "beta"),
 		);
 		expect(
-			(push.sessions as Array<{ projectId: string; state: string }>).map((r) => `${r.projectId}:${r.state}`),
-		).toEqual(["beta:notified", "alpha:deferred"]);
+			(push.sessions as Array<{ projectId: string; location: string }>).map((r) => `${r.projectId}:${r.location}`),
+		).toEqual(["beta:inbox", "alpha:later"]);
 
 		// The RPC aggregate carries the same global order.
 		send(ws, { verb: "listQueue" });
 		const list = await waitFor(frames, (frame) => frame.ok === true && Array.isArray(frame.sessions));
 		expect(
-			(list.sessions as Array<{ projectId: string; state: string }>).map((r) => `${r.projectId}:${r.state}`),
-		).toEqual(["beta:notified", "alpha:deferred"]);
+			(list.sessions as Array<{ projectId: string; location: string }>).map((r) => `${r.projectId}:${r.location}`),
+		).toEqual(["beta:inbox", "alpha:later"]);
 	});
 
 	it("withdraws only the failed Worker's Projects", async () => {

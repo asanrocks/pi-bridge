@@ -107,7 +107,7 @@ describe("createClientStore", () => {
 				projectId: "a",
 				sessionId: "s1",
 				stem: "2024-01-01_s1",
-				state: "notified" as const,
+				location: "inbox" as const,
 				timestamp: new Date(0).toISOString(),
 			},
 		];

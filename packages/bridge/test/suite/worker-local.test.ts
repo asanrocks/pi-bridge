@@ -79,7 +79,6 @@ function stubManager(sessionPath: string | undefined): StubManager {
 			connectionHandles.delete(handle);
 		},
 		onSettled: () => () => {},
-		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},
@@ -140,11 +139,11 @@ function makeWorker(): StubBundle {
 }
 
 /** Minimal verb surface: the Connection exists to be attached, detached, and
- * notified — no verb is exercised through it here. */
+ * — no verb is exercised through it here. */
 const stubVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [], hasMore: false }),
 	listQueue: async () => [],
-	setSessionState: async () => ({ ok: true }),
+	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		projects: [],
 		models: [],
@@ -159,8 +158,7 @@ const stubVerbs: DaemonVerbs = {
 	openSession: async () => ({ ok: false, error: "unused" }),
 	newSession: async () => ({ ok: false, error: "unused" }),
 	detach: () => {},
-	closeSession: async () => ({ ok: false, error: "unused" }),
-	archiveSession: async () => ({ ok: false, error: "unused" }),
+	trashSession: async () => ({ ok: false, error: "unused" }),
 	sessionsChanged: () => {},
 	listFiles: async () => [],
 	readFile: () => {

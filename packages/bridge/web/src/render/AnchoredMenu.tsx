@@ -38,6 +38,14 @@ export interface MenuItem {
 	 * `detail` can name the reason, which is the only explanation touch users
 	 * get. */
 	disabled?: boolean;
+	/** Draw a hairline above this item: its effect differs in kind from the
+	 * items before it (a Session's row menu separates leaving discovery from
+	 * the moves that stay inside it). */
+	separator?: boolean;
+	/** The item ends something — a run, or the address it is reached by — and
+	 * wears the surface's error hue, because the ending is what the press buys
+	 * and must be readable before the press, not after. */
+	danger?: boolean;
 	onSelect: () => void;
 }
 
@@ -104,7 +112,13 @@ export function AnchoredMenu({
 						type="button"
 						role="menuitem"
 						aria-disabled={item.disabled === true ? true : undefined}
-						className={styles.item}
+						className={[
+							styles.item,
+							item.separator === true ? styles.itemSeparated : "",
+							item.danger === true ? styles.itemDanger : "",
+						]
+							.filter(Boolean)
+							.join(" ")}
 						onClick={() => {
 							if (item.disabled === true) return;
 							onClose();

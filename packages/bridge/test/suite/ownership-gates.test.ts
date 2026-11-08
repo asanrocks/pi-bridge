@@ -2,7 +2,7 @@
 // second caller waits for the disposal already in flight instead of returning
 // as if it had finished. `collect` joins `record.collecting` before the
 // terminal `ended` check, and `dispose` returns the memoized drain, so
-// `archiveSession` can move a Session file only after its disposal completed
+// `trashSession` can move a Session file only after its disposal completed
 // and every shutdown caller observes the same completion.
 
 import { describe, expect, it } from "vitest";
@@ -42,7 +42,6 @@ function gatedManager(onDispose: () => Promise<void>): Manager {
 		},
 		removeConnection: () => {},
 		onSettled: () => () => {},
-		onFullySettled: () => () => {},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		prompt: async () => {},
@@ -67,7 +66,6 @@ function makeRegistry(manager: Manager): ActivationRegistry {
 		idleGcMs: 60_000,
 		unflushedIdleGcMs: 60_000,
 		onSettled: () => {},
-		onFullySettled: () => {},
 		onStreamingChange: () => {},
 		onRegistryChange: () => {},
 	});
@@ -102,7 +100,7 @@ describe("terminal joins", () => {
 		});
 		try {
 			await delay(5);
-			// archiveSession relies on this join before moving the file.
+			// trashSession relies on this join before moving the file.
 			expect(secondDone).toBe(false);
 		} finally {
 			finish();

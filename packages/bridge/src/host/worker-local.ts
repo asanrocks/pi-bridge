@@ -44,6 +44,7 @@ import {
 	type PullRequestItem,
 	type SessionInfo,
 	type SessionListCursor,
+	type SessionLocation,
 	THINKING_LEVEL_NAMES,
 } from "../core/index.ts";
 import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
@@ -52,12 +53,13 @@ import type { ConnectionHandle, createManager, Manager } from "./manager.ts";
 import { resolveVisibleModelKeys } from "./model-visibility.ts";
 import { setWorkerTitle } from "./process-title.ts";
 import {
-	archiveStemFile,
 	containedSessionFile,
+	migrateLegacyTrashDir,
 	normalizeStem,
 	type ProjectConfig,
 	resolveStemPath,
 	stemFromSessionPath,
+	trashStemFile,
 } from "./projects.ts";
 import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
 import {
@@ -68,7 +70,7 @@ import {
 	type SessionCapability,
 } from "./session-actor.ts";
 import { assertNoSessionIdConflicts, type CatalogLiveEntry, createSessionCatalog } from "./session-catalog.ts";
-import { createSessionStates, type SessionStates, type SessionToggleState } from "./session-state.ts";
+import { createSessionLocations, type SessionLocations } from "./session-locations.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.ts";
 import type {
@@ -173,12 +175,15 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	const liveEntries = (): CatalogLiveEntry[] =>
 		registry.live().map((record) => ({ ref: record.ref, metadata: record.actor.metadata() }));
 
+	// A pre-rename `.archive/` namespace becomes `.trash/` before anything reads
+	// storage: "archive" now names a location, and the directory that held
+	// files moved away is what "trash" means.
+	for (const project of projects.values()) migrateLegacyTrashDir(project.sessionDir, console.error);
 	const catalog = createSessionCatalog(projects);
-	// The durable, user-visible session lifecycle: Worker-owned
-	// storage beside the sessions it describes, loaded and recovered once at
-	// construction — a persisted busy is rewritten to notified here, because
-	// this process died with the runtimes that were executing.
-	const states: SessionStates = createSessionStates(projects);
+	// The durable, user-visible placements: Worker-owned storage beside the
+	// sessions they describe, loaded once at construction. Running is a runtime
+	// attribute and has no stored form, so a restart has nothing to recover.
+	const locations: SessionLocations = createSessionLocations(projects);
 
 	// ── Environment: settings, catalogue, repository ───────────────────
 	//
@@ -258,12 +263,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		};
 	};
 
-	/** The work-queue snapshot: membership is the durable state, so
-	 * browsing a session never reaches this list and idle collection never
-	 * removes a row from it. */
+	/** The queue snapshot: membership is the stored locations, so browsing a
+	 * session never reaches this list and idle collection never removes a row
+	 * from it. */
 	const emitQueue = (): void => {
 		if (disposed) return;
-		emit({ kind: "queue_changed", sessions: catalog.listQueue(liveEntries(), states) });
+		emit({ kind: "queue_changed", sessions: catalog.listQueue(liveEntries(), locations) });
 	};
 
 	const emitSessionsChanged = (projectId: string): void => {
@@ -272,7 +277,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			emit({
 				kind: "sessions_changed",
 				projectId,
-				page: catalog.listSessions(projectId, SESSION_PAGE_SIZE, null, liveEntries(), states),
+				page: catalog.listSessions(projectId, SESSION_PAGE_SIZE, null, liveEntries(), locations),
 			});
 		} catch {
 			// An unknown project or an unreadable directory is not a reason to
@@ -297,13 +302,6 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			emitSessionsChanged(ref.projectId);
 			emitQueue();
 			refreshTitle();
-		},
-		onFullySettled: (ref, execution) => {
-			// Full settlement of an admitted execution: busy becomes
-			// notified when the token is still current — the settle of an
-			// execution a newer admission superseded changes nothing.
-			if (typeof execution === "string") states.settle(ref.projectId, ref.stem, execution);
-			emitQueue();
 		},
 		onStreamingChange: () => {
 			emitQueue();
@@ -539,14 +537,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 						}
 					}
 					if (thinkingLevel) await manager.setThinkingLevel(thinkingLevel);
-					// The first prompt is an execution like any other:
-					// admitted under a store token, so its full settlement lands
-					// notified and a refused preflight restores the empty state.
-					const execution = states.admit(project.id, record.ref.stem);
+					// The first prompt places the Session like any other message —
+					// in Inbox — and a refused preflight restores the placement it
+					// replaced.
+					const admission = locations.promote(project.id, record.ref.stem);
 					try {
-						await manager.promptAdmitted(text, images, undefined, undefined, execution);
+						await manager.promptAdmitted(text, images);
 					} catch (err) {
-						states.abandon(project.id, record.ref.stem, execution);
+						locations.restore(project.id, record.ref.stem, admission);
 						throw err;
 					}
 				} catch (err) {
@@ -563,49 +561,31 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			const project = requireProject(address.projectId);
 			const stem = normalizeStem(address.stem);
 			const record = await registry.awaitSettled(project.id, stem);
-			if (record && record.actor.phase !== "live") {
-				// A collecting activation is mid-disposal: today's window where
-				// the close is refused rather than joined.
-				throw new Error(`Session is not active: ${stem}`);
-			}
-			if (record && record.collecting === null) {
-				// Live runtime: the close captures the current execution token,
-				// then collects — disposal aborts and finalizes the in-flight
-				// turn, whose settle lands notified first — and finally writes
-				// inactive, so the close is the last write for that execution.
-				// An admission that began after the capture is a newer user
-				// intent: the write is skipped, the session stays busy.
-				const since = states.tokenOf(project.id, record.ref.stem);
+			if (record) {
+				// Disposal aborts and finalizes the in-flight turn; the placement is
+				// untouched, because a stop says nothing about where a Session
+				// belongs.
 				await registry.collect(record);
-				states.markInactive(project.id, record.ref.stem, since);
-				emitQueue();
-				return;
+			} else if (!(await sessionExistsAt(project, stem))) {
+				throw new Error(`No such session: ${stem}`);
 			}
-			// Dormant close: legal without a runtime — the state write
-			// is the whole operation, and the stem is the record's key. The token is
-			// captured before the existence probe's await: an admission landing in
-			// between is a newer intent, and the write must then be skipped rather
-			// than consume that execution's token as its own precondition.
-			const since = states.tokenOf(project.id, stem);
-			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
-			states.markInactive(project.id, stem, since);
 			emitQueue();
 		},
 
-		archiveSession: async (address) => {
+		trashSession: async (address) => {
 			const project = requireProject(address.projectId);
-			// Rejects the archive prefix itself, so an archived stem can never be
+			// Rejects the trash prefix itself, so a trashed stem can never be
 			// re-addressed.
 			const stem = normalizeStem(address.stem);
-			const record = await registry.awaitSettled(project.id, stem);
-			// Close first, unconditionally: disposal finalizes an in-flight turn,
+			// Stop first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
+			const record = await registry.awaitSettled(project.id, stem);
 			if (record) await registry.collect(record);
-			// The archived session leaves discovery and the queue together: the
+			// The trashed session leaves discovery and the queue together: the
 			// move takes the file out of the Project's namespace and the prune
-			// drops the state record keyed by the stem it was addressed at.
-			archiveStemFile(project.sessionDir, stem);
-			states.prune(project.id, stem);
+			// drops the placement record keyed by the stem it was addressed at.
+			trashStemFile(project.sessionDir, stem);
+			locations.prune(project.id, stem);
 			emitSessionsChanged(project.id);
 			emitQueue();
 		},
@@ -613,16 +593,15 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		// ── Session commands (target-addressed) ─────────────────────────
 		prompt: async (target, text, images, model, thinkingLevel) => {
 			const admission = admissionFor(target);
-			// Admission is an execution: the store lands busy under a
-			// fresh token before the turn starts, so any transition racing the
-			// admission — a defer from another tab — evaluates against busy,
-			// and a refused preflight restores the pre-admission state.
-			const execution = states.admit(target.projectId, target.stem);
+			// A submitted message places the Session in Inbox before the turn
+			// starts, so the queue shows what the user is waiting on immediately;
+			// a refused preflight restores the placement it replaced.
+			const token = locations.promote(target.projectId, target.stem);
 			emitQueue();
 			try {
-				await admission.prompt(text, images, model, thinkingLevel, execution);
+				await admission.prompt(text, images, model, thinkingLevel);
 			} catch (err) {
-				states.abandon(target.projectId, target.stem, execution);
+				locations.restore(target.projectId, target.stem, token);
 				emitQueue();
 				throw err;
 			}
@@ -637,15 +616,15 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		navigate: async (target, entryId) => admissionFor(target).navigate(entryId),
 		recoverTurn: async (target) => {
 			const admission = admissionFor(target);
-			// Recovery is an execution on both of its paths: the relay
-			// prompt and the silent continuation report admission and completion
-			// through the same seams as any other turn.
-			const execution = states.admit(target.projectId, target.stem);
+			// Recovery starts a turn on both of its paths, so it places the
+			// Session in Inbox like any other submitted work — and a refusal
+			// restores the placement it replaced.
+			const token = locations.promote(target.projectId, target.stem);
 			emitQueue();
 			try {
-				return await admission.recoverTurn(execution);
+				return await admission.recoverTurn();
 			} catch (err) {
-				states.abandon(target.projectId, target.stem, execution);
+				locations.restore(target.projectId, target.stem, token);
 				emitQueue();
 				throw err;
 			}
@@ -653,16 +632,27 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 
 		// ── Queries ─────────────────────────────────────────────────────
 		listSessions: async (projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage> =>
-			catalog.listSessions(projectId, max, cursor ?? null, liveEntries(), states),
-		listQueue: async (): Promise<SessionInfo[]> => catalog.listQueue(liveEntries(), states),
+			catalog.listSessions(projectId, max, cursor ?? null, liveEntries(), locations),
+		listQueue: async (): Promise<SessionInfo[]> => catalog.listQueue(liveEntries(), locations),
 
-		setSessionState: async (address: SessionAddress, state: SessionToggleState): Promise<void> => {
+		setSessionLocation: async (address: SessionAddress, location: SessionLocation): Promise<void> => {
 			const project = requireProject(address.projectId);
 			const stem = normalizeStem(address.stem);
+			// Archived history is not being worked on, so the move ends the
+			// runtime first — disposal flushes the turn, which is also what makes
+			// the existence probe below see an unflushed Session's file.
+			if (location === "archive") {
+				const record = await registry.awaitSettled(project.id, stem);
+				if (record) await registry.collect(record);
+			}
 			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
-			// The store owns the precondition: a defer racing an admission is
-			// refused here, not by a caller that may have raced it.
-			states.toggle(project.id, stem, state);
+			// Durable-or-fail: a failed write leaves the store untouched, so a retry
+			// re-attempts it instead of reporting a move that never landed.
+			locations.place(project.id, stem, location);
+			// The placement is a listing field, so the Project's open page must
+			// rescan: the row moves between the folder's groups without leaving
+			// discovery. The queue push covers the Inbox/Later membership.
+			emitSessionsChanged(project.id);
 			emitQueue();
 		},
 

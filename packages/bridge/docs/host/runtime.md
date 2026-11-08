@@ -53,8 +53,8 @@ attach and stamps the frames it forwards, which is the rule in
 owns the Activation registry, the per-session choreography (Manager creation,
 registration, the pre-attach model/thinking choices, first-prompt admission),
 the Session catalog (`src/host/session-catalog.ts`: directory scan, durable
-metadata parse, live overlay), the session-state store
-(`src/host/session-state.ts`: the durable user-visible session lifecycle),
+metadata parse, live overlay), the session-location store
+(`src/host/session-locations.ts`: the durable user-visible placement),
 and the observation table. The Daemon holds no
 Activation state and never sees a Manager: it resolves a Project, asks the
 Worker for an observation, and stamps the frames the observation delivers.
@@ -198,7 +198,7 @@ startup — every Worker created so far is disposed, including the one whose
 claim failed, so a spawned Worker cannot leak past a failed startup holding
 its socket and its storage claims — and a Worker that becomes
 unavailable withdraws only its own Projects; the others keep serving, and the
-browser's work queue is republished as the aggregate of the survivors.
+browser's queue is republished as the aggregate of the survivors.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity.
 
@@ -478,17 +478,12 @@ installed by the next refresh, which reads it from pi's list in file order. A
 listener that appends while another entry is being published therefore cannot
 produce a child whose parent the Document has not installed.
 
-The Manager exposes two settlement signals. `onSettled` fires on `turn_end`
-and `agent_settled` (the rescan trigger for the session list). `onFullySettled`
-is the full-execution signal: it fires on `agent_settled` alone —
-`turn_end` lands between model/tool cycles inside one execution — on the
-completion of an admitted dispatch that started no run of its own (a handled
-extension command, a queued steer after the run it joined), and on a recovery
-continuation's compensated end. Every fire carries the execution tag the
-settling dispatch was admitted with (`prompt`/`promptAdmitted`/`recoverTurn`
-accept one), so the owner of a work queue can ignore the settle of an
-execution a newer admission already superseded; a dispatch completing while a
-run is still in flight does not fire at all.
+The Manager exposes one settlement signal. `onSettled` fires on `turn_end` and
+`agent_settled` (the rescan trigger for the session list). It carries no
+execution identity: a Session's place in the queue is not a settlement, so
+nothing downstream needs to tell one execution's settle from another's. The
+only execution-level bookkeeping is the location store's own admission token
+(see "Session locations"), which never leaves the Worker.
 
 The Manager API has these Session operations:
 
@@ -665,9 +660,9 @@ executes against, and reports on, the session attached when the request
 arrived. The host validates prompt image envelopes and enforces the shared
 image-count and image-size limits.
 
-Navigation verbs are `openSession`, `newSession`, `detach`, `closeSession`,
-and `archiveSession`. They route to the Daemon because they change attachment
-or Activation state. The three that change this Connection's attachment —
+Navigation verbs are `openSession`, `newSession`, `detach`, `trashSession`,
+and `setSessionLocation`. They route to the Daemon because they change
+attachment, Activation, or listing state. The three that change this Connection's attachment —
 `openSession`, `newSession`, and `detach` — are serialized: each runs to
 completion before the next begins, in arrival order, so concurrent
 transitions cannot each decide which Manager ends up attached, and the reply
@@ -682,8 +677,8 @@ before the Connection is gone. `dispose()` is that drain (idempotent, awaited
 by the daemon's teardown), so the sentence is enforced, not aspirational: the
 daemon snapshots the Connections, stops the server, and awaits each drain
 before it disposes Session execution.
-`closeSession` and `archiveSession` change Activation state, not this
-Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listQueue`,
+`trashSession` and `setSessionLocation` change Activation or listing state, not
+this Connection's attachment, and are not serialized against it. Query verbs are `listSessions`, `listQueue`,
 `getDaemonInfo`, `listFiles`, `readFile`, `listDirectory`, `gitShow`,
 `gitBase`, and `gitDiff`. `listFiles` is Project-addressed; `readFile`,
 `listDirectory`, `gitBase`, and `gitDiff` are absolutely addressed (ADR 14),
@@ -736,7 +731,7 @@ record identity, not address fields, so only the registration that still
 holds a claim can drop it. Termination is also joinable: a `collect` call
 that finds a disposal already in flight awaits it (`collecting` — the
 actor's close plus the registry's index cleanup — is cleared only when both
-completed), so every caller observes the same completion — `archiveSession`
+completed), so every caller observes the same completion — `trashSession`
 relies on this to move a session file only after its Manager finished
 dying, not merely after its death began.
 
@@ -772,12 +767,12 @@ of attaching a collected record, and the registry refuses to attach a
 collecting record outright. The Connection is then attached to that Manager
 with its optional cursor.
 
-`closeSession` and `archiveSession` see the same address state an open does:
-both first wait out a creation in flight for the address
-(`awaitSettled`), because acting on the registered state alone could report
-"not active" — or move the session file — while a Manager for that address is
-still being constructed, and the completing creation would then register
-against an address whose lifetime had already been decided.
+`trashSession` and an Archive move see the same address state an open does:
+both first wait out a creation in flight for the address (`awaitSettled`),
+because acting on the registered state alone could report "not active" — or
+move the session file — while a Manager for that address is still being
+constructed, and the completing creation would then register against an
+address whose lifetime had already been decided.
 
 An Activation never serves another Session. Several Connections may share one
 Activation, while each Connection has at most one attachment. Attaching a
@@ -803,24 +798,18 @@ under the same `collecting` reservation `openSession` uses: the actor's
 close, the address held reserved through the async disposal, the Activation
 and Session ownership index removal, the detach-and-notify loop over every
 attached Connection (the terminal ownership boundary below), and the
-resulting queue broadcast (a queued row's preview fields refresh; its
-membership is the durable state and never changes). Collection never deletes a
+resulting queue broadcast (a queued row's preview fields and `running` fact
+refresh; its membership is the stored locations and never changes). Collection never deletes a
 Session file.
 
 `closeSession(projectId, stem)` is an explicit kill, not idle collection. It
 normalizes and resolves the Project address and waits out a creation in flight
 for it. With a live non-collecting Activation it immediately uses the same
 collect/dispose path regardless of attached Connections, streaming state, or
-idle policy, then writes the session inactive through the state store (ADR
-22): the close captures the current execution token before collecting, so
-disposal's abort — whose settle lands notified first — is followed by the
-close's write as the last one for that execution; an admission that began
-after the capture is a newer user intent, and the close's write is skipped so
-the session stays busy while the close still reports the disposal it
-performed. A dormant Session (no Activation) closes legally too: the state
-write is the whole operation, keyed by the stem, and
-a stem with no session at all is an error. The verb then refreshes the
-Project's first session page. Collection is also the terminal ownership
+idle policy. A dormant Session has no runtime to end, so the call is legal and
+does nothing there; a stem with no session at all is an error. The placement is
+untouched — a stop is not a move — and the verb is Worker-internal: the browser
+reaches it through a location move. Collection is the terminal ownership
 boundary: every Connection
 attached to the address is detached — its Manager handle and attachment
 fields are severed — and each receives a `session_closed` push
@@ -831,88 +820,83 @@ closed Session lands on its Project home. Idle collection never has an
 attached Connection to notify, and daemon shutdown skips the frame (the
 sockets are closing with the process).
 
-`archiveSession(projectId, stem)` closes a Session, then moves its file under
-the reserved `.archive` prefix of the Project's session directory. It first
-waits out a creation in flight for the address, then closes — unconditionally,
-using the same collect/dispose path as `closeSession` when an Activation
-exists; a dormant Session has none, so only the move happens. The move follows
-disposal because disposal finalizes an in-flight turn, which can create or
-advance the file. An archived Session is neither
-discovered nor addressable: the scanner and the startup `sessionId` conflict
-scan skip the prefix, and `normalizeStem` rejects it. The verb refreshes the
-Project's first page; when it had an Activation, the active-session snapshot
-broadcast from collection covers that side, and its attached Connections are
-detached and notified exactly as `closeSession` does. A missing durable file (a fresh
-Session whose first turn never flushed) is an error reply — the close still
-happened, but nothing was archived.
+`trashSession(projectId, stem)` ends a Session's runtime, then moves its file
+under the reserved `.trash` prefix of the Project's session directory. It first
+waits out a creation in flight for the address, then stops — using the same
+collect/dispose path as `closeSession` when an Activation exists; a dormant
+Session has none, so only the move happens. The move follows disposal because
+disposal finalizes an in-flight turn, which can create or advance the file. A
+trashed Session is neither discovered nor addressable: the scanner and the
+startup `sessionId` conflict scan skip the prefix, and `normalizeStem` rejects
+it. Its location record is dropped, so a session that is later moved back by
+hand starts archived, as any unplaced Session does. The verb refreshes the
+Project's first page; when it had an Activation, the terminal ownership
+boundary detaches and notifies its Connections exactly as `closeSession` does.
+A missing durable file (a fresh Session whose first turn never flushed) is an
+error reply — the stop still happened, but nothing was moved.
 
 The timer model and its reservation invariant govern this runtime.
 
-## Session states
+## Session locations
 
-`src/host/session-state.ts` is the durable, user-visible session lifecycle:
-every session carries one of `inactive | notified | busy |
-deferred`, persisted by the Worker at `<sessionDir>/.pi-bridge/states.json`
-(one file per Project, keyed by the session's stem — its address, so the
-record names the queue row it needs with no index and no directory scan; the
-stem is stable for every session the system serves, and the one case the
-durable session id would have covered — a manual move to a different stem —
-loses the state, by decision). The store owns the transitions, not just the
-writes: an admission
-(`admit`) mints an execution token and lands `busy`; a full settlement
-(`settle`, carrying the token the Manager reports) lands `notified` only when
-the token is still the current execution; a failed admission (`abandon`)
-restores the record as it stood at admission — an in-flight execution's token
-included, so a superseding prompt refused at preflight hands the session back
-to the execution still running (whose settle then lands) instead of stranding
-it busy under a token no settle will carry; a late `abandon` whose token
-already settled is a no-op; a settle that names the execution the snapshot
-restores — the run ended between a newer admission's write and its dispatch
-recording the new tag — is remembered, so the refusal lands `notified`
-instead of restoring a busy record nothing will settle; the defer/restore
-`toggle` is refused while busy; `markInactive` (close) is skipped when an
-admission newer than the one the close began under has landed (both branches
-capture that token before their first await, so an admission landing mid-close
-is the newer intent); `prune` drops an archived session's record.
-The Manager holds the other half of the rule: a dispatch refused before
-admission never keeps the execution tag, so the run still in flight settles
-under its own tag.
+`src/host/session-locations.ts` is the durable, user-visible placement of every
+Session: **Inbox** (the attention list), **Later** (parked by decision), or
+**Archive** (the default resting place — browsable history). Only the first two
+are stored, at `<sessionDir>/.pi-bridge/locations.json` (one file per Project,
+keyed by the session's stem — its address, so the record names the queue row it
+needs with no index and no directory scan; the stem is stable for every
+session the system serves, and the one case the durable session id would have
+covered — a manual move to a different stem — loses the placement, by
+decision). Archive is the absence of a record, which is why a Session nobody
+placed costs no write.
 
-Transitions key on executions the bridge admits, which is the boundary this
-store can see: a run an extension starts on its own (`context.prompt`,
-fire-and-forget) streams while the row's state is unchanged — a `notified`
-session running by extension command stays `notified`. That is the same
+Placement is independent of execution. Running is the runtime's own fact
+(A.9), derived for a listing row from the live Document (§ Session listing), so
+the store holds no execution state at all: a daemon restart has nothing to
+recover, and the settle of an execution never writes a placement.
+
+The store owns two transitions. A submitted message (`promote`) places the
+Session in Inbox under a fresh admission token, remembering the placement it
+replaced; a refused preflight (`restore`) puts that placement back. The token
+makes both sides safe against ordering: any later write — a newer admission or a
+user move — replaces the record wholesale and drops the token, so a stale
+restore is a no-op rather than an overwrite, and a move the user made mid-send
+survives the refusal. A user move (`place`) is Inbox, Later, or Archive; a trash
+(`prune`) drops the record. Moving to Archive is the store's write plus a
+runtime stop (the verb collects first); moving to Trash is the stop plus the
+file move.
+
+A run an extension starts on its own (`context.prompt`, fire-and-forget) shows
+`running` on the row like any other, because running is read from the live
+Document rather than from an admission the bridge recorded. That is the same
 declared gap as extension-initiated compaction in ADR 12: the bridge adds no
-turn lifecycle of its own and cannot tag a run it did not admit.
+turn lifecycle of its own.
 
 Writes are whole-file, atomic (temp + rename), and synchronous, so arrival
 order is the serialization and no transition's decision can interleave with
-another's — and a graceful shutdown needs no suppression machinery: disposal
-of a busy session finalizes the turn, the settle write lands before Worker
-disposal resolves, and the next boot's recovery would rewrite the same
-thing anyway. A missing file is the normal first state. A present but
-unreadable or corrupt file is quarantined (renamed to a `.corrupt` sibling,
-never overwritten) and surfaced on the console — the store restarts empty
-rather than silently dropping unfinished work; only `ENOENT` counts as
-missing, so a permissions failure or a directory in the file's place is
-quarantined like corrupt content instead of silently serving an empty store
-that the next write would persist. Turn-boundary write failures (admission,
-settlement, abandonment) degrade to in-memory state and retry on the next
-transition; user-action writes (toggle, close, prune) decide against a
-candidate copy, persist it, and commit only on success — a failed verb
-leaves the store exactly as it was, so a retry re-attempts the write instead
-of reporting success against state that was never durable.
+another's. A missing file is the normal first state. A present but unreadable or
+corrupt file is quarantined (renamed to a `.corrupt` sibling, never overwritten)
+and surfaced on the console — the store restarts empty rather than silently
+dropping queued work; only `ENOENT` counts as missing, so a permissions failure
+or a directory in the file's place is quarantined like corrupt content instead
+of silently serving an empty store that the next write would persist.
+Admission writes (promote, restore) degrade to in-memory state and retry on the
+next transition; user moves decide against a candidate copy, persist it, and
+commit only on success — a failed move leaves the store exactly as it was, so a
+retry re-attempts the write instead of reporting success against a placement
+that was never durable.
 
-Startup recovery runs in the store's constructor: every persisted `busy`
-becomes `notified` (the Worker's process died with the runtimes, so nothing
-is executing), and a record whose session file does not exist is dropped
-(ADR 12's accepted loss, made visible: a first turn that never flushed has no
-durable conversation to be notified about, and a stem moved or deleted on
-disk after the last write names no session this Worker serves). The check is
-one containment-checked existence probe per record — the queue's size, not
-the history's — and a store-file key that is not a canonical stem is a bad
-record, quarantined with the rest: the file is disk input, and no key may
-name a path the queue could resolve outside the Project's session directory.
+A pre-locations file (`states.json`, version 1, four states) is migrated on
+load and removed: `notified` and `busy` become Inbox, `deferred` becomes Later,
+`inactive` becomes absent (Archive). Startup then drops every record whose
+session file does not exist (ADR 12's accepted loss, made visible: a first turn
+that never flushed has no durable conversation, and a stem moved or deleted on
+disk after the last write names no Session this Worker serves). The check is one
+containment-checked existence probe per record — the queue's size, not the
+history's — and a store-file key that is not a canonical stem, or a value that is
+not a stored place, is a bad record, quarantined with the rest: the file is disk
+input, and no key may name a path the queue could resolve outside the Project's
+session directory.
 
 ## Session Operations
 
@@ -954,17 +938,31 @@ and attaches the Connection to the resulting Manager. It is not a
 transactional switch: the Connection releases its existing attachment before
 the new attach is completed. A failed open returns an error from the Daemon.
 
-### `archiveSession`
+### `trashSession`
 
-`archiveSession` takes a Project id and a normalized stem. It looks up the
-address's Activation and collects it when one exists — a close, not a GC, so
-streaming state and attached Connections do not defer it. It then moves
-`<sessionDir>/<stem>.jsonl` to `<sessionDir>/.archive/<stem>.jsonl`, creating
-the archive directory tree. Both the source and the destination directory are
-containment-checked, so a symlinked `.archive` cannot redirect the move
-outside the Project namespace. The move refuses to overwrite an existing
-archived file. The Session file survives; it merely leaves discovery, and
-moving it back is a manual filesystem operation.
+`trashSession` takes a Project id and a normalized stem. It looks up the
+address's Activation and collects it when one exists — a stop, not a GC, so
+streaming state and attached Connections do not defer it, and disposal
+finalizes the turn so the file cannot advance after the move. It then moves
+`<sessionDir>/<stem>.jsonl` to `<sessionDir>/.trash/<stem>.jsonl`, creating the
+trash directory tree. Both the source and the destination directory are
+containment-checked, so a symlinked `.trash` cannot redirect the move outside
+the Project namespace. The move refuses to overwrite an existing trashed file.
+The Session file survives; it merely leaves discovery, and moving it back is a
+manual filesystem operation. A `.archive/` directory left by the pre-rename
+layout is folded into `.trash/` at Worker start (reported and left alone when
+both exist, so no tree is merged blindly).
+
+### `setSessionLocation`
+
+`setSessionLocation` takes a Project id, a normalized stem, and `inbox`,
+`later`, or `archive`. Inbox and Later are storage writes: legal on a dormant
+Session (no runtime is needed) and on a running one (a move never pretends the
+execution ended). Archive collects the address's Activation first when one
+exists — archived history is not being worked on — and then writes the
+placement; its attached Connections are detached and notified exactly as
+`trashSession` does. A stem with no Session at all is an error. The result
+reaches every browser as a `queue_changed` push.
 
 ### `detach`
 
@@ -984,9 +982,9 @@ canonical stem. The cursor is exclusive and compound: `{ sortTimeMs, stem }`.
 The reply reports `sessions`, `hasMore`, and the last row as `nextCursor`.
 
 `SessionInfo` carries `projectId`, durable `sessionId` when known, stem,
-`timestamp`, the durable user-visible `state` ( `inactive` by default,
-and the only lifecycle fact a row carries — runtime retention is execution
-detail that stays in the Document), and available name, first-message text,
+`timestamp`, the durable user-visible `location` (`archive` by default — the
+only classification a row carries; runtime retention is execution detail that
+stays in the Document), and available name, first-message text,
 latest-message preview, message count, and last-activity time. A durable file
 supplies metadata; an unflushed active Session supplies the actor's
 `metadata()` — the typed read surface over the canonical Document. For
@@ -994,11 +992,11 @@ an active row the live latest-message preview and last-activity time win over
 the file scan; `timestamp` remains the durable sort key (mtime / header
 creation).
 
-A queue row for a busy Session also carries the execution's `activity` (ADR
-23): the actor's `metadata()` derives it from the reconciled phase word — a
-running tool with the instant its phase began, `responding` for a streaming
-run without a tool, `compacting` for compaction — and omits it when the
-runtime is idle. Parallel tool calls share the phase, so the name is the most
+A row for a running Session carries the execution's `activity` (ADR 23), and
+its presence *is* the row's running fact — there is no second flag. The actor's
+`metadata()` derives it from the reconciled phase word — a running tool with
+the instant its phase began, `responding` for a streaming run without a tool,
+`compacting` for compaction — and omits it when the runtime is idle. Parallel tool calls share the phase, so the name is the most
 recently started tool still running: one sibling ending does not erase the
 other's name or restart the phase clock. The actor records the phase-change
 instant from the Manager's deduped `onActivityChange` — deduped *and*
@@ -1006,22 +1004,19 @@ phase-scoped, so a text delta does not change the phase, a name change inside
 one phase does not restart the clock, and a phase change emits one
 `queue_changed`.
 
-`listQueue` is the global work queue: every non-inactive session
-across every Project — membership is the state store's key set, in memory,
-not the registry and not a directory scan, so a dormant notified session is
-a queue row with no runtime and a browsed inactive session is not a row at
-all, and the query costs at most one file per row (a live row reads only the
-registry's metadata; a dormant row the one file its stem names,
-mtime-cached). A queued record whose stem resolves to no file and no
-Activation — moved or deleted on disk after the record was written —
-renders no row, and the next boot's recovery prunes it. It is ordered
-notified → busy → deferred, each group by last activity descending.
-`setSessionState(projectId,
-stem, state)` is the user's defer/restore toggle: refused while the session is
-busy (the state store owns the precondition), legal on a dormant session
-(the stem is the record's key; a stem with no session at all
-is an error). Both report through the `queue_changed` Worker event, which the
-Daemon aggregates and pushes to every browser. The queue's total order lives
+`listQueue` is the global queue: every Inbox and Later Session across every
+Project — membership is the location store's key set, in memory, not the
+registry and not a directory scan, so a dormant Inbox Session is a queue row
+with no runtime and a browsed archived Session is not a row at all, and the
+query costs at most one file per row (a live row reads only the registry's
+metadata; a dormant row the one file its stem names, mtime-cached). A stored
+record whose stem resolves to no file and no Activation — moved or deleted on
+disk after the record was written — renders no row, and the next boot's
+recovery prunes it. It is ordered Inbox → Later, each group by last activity
+descending. Its rows report `location` and, when running, `activity`; the
+Worker emits `queue_changed` on every placement write, on registration and
+streaming changes, and on each activity-phase change (those refresh the rows'
+preview fields and running fact, never their membership). The queue's total order lives
 in one comparator (`src/host/queue-order.ts`) shared by the Worker that
 orders its slice and the Daemon that aggregates the slices, so a
 multi-Worker queue interleaves by the same rule instead of concatenating
@@ -1186,9 +1181,9 @@ accepted (a placeholder identity closes the race with a `queue_changed`
 arriving during the seed query, which is fresher than the snapshot), so a
 Worker that arrives holding persisted queue state is visible in the
 aggregate immediately rather than after its next transition. The Daemon
-sends the push when a session's durable state changes (an admitted
-execution, a full settlement, a toggle, a close, an archive) and when a live
-Activation's registration or streaming state changes (those refresh the
+sends the push when a Session's location changes (a submission's promotion or
+its rollback, a move, a trash) and when a live Activation's registration,
+streaming state, or activity phase changes (those refresh the
 queued rows' preview fields, never their membership). Connections receive
 these pushes regardless of which Project they currently have attached.
 

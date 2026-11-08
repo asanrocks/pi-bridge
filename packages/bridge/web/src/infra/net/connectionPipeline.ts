@@ -199,10 +199,10 @@ export function createConnectionPipeline(client: BridgeClient, scheduler: FlushS
 			return;
 		}
 
-		// Terminal ownership (host): the live runtime behind an address ended
-		// (closeSession/archiveSession) and the server has already severed this
-		// connection's attachment, so the document on screen can never progress
-		// again. When it names the rendered Session, land on the Project home
+		// Terminal ownership (host): the live runtime behind an address ended (a
+		// Session was moved to Archive or Trash) and the server has already
+		// severed this connection's attachment, so the document on screen can
+		// never progress again. When it names the rendered Session, land on the Project home
 		// like a failed open — the route, the address, and the session identity
 		// all go, and a later command cannot reach a disposed runtime. A close of
 		// some other Session changes nothing here: the list pushes cover it.

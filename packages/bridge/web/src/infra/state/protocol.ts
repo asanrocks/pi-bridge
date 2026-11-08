@@ -93,8 +93,8 @@ export interface ProtocolSlice {
 	sessionPages: Record<string, SessionFolderPage>;
 	/** Static Project configuration (ADR 11). */
 	projects: ProjectInfo[];
-	/** The global work queue: every non-inactive session, ordered
-	 * notified → busy → deferred, then last activity descending. */
+	/** The global queue: every Inbox and Later Session, ordered Inbox →
+	 * Later, then last activity descending. */
 	queue: SessionInfo[];
 	models: ModelInfo[];
 	/** The daemon-global pinned list (ADR 15), resolved from pi's global
@@ -125,7 +125,7 @@ export interface ProtocolSlice {
 	setProjects: (projects: ProjectInfo[]) => void;
 	/** Enter/leave the alias-addressed view (ADR 13). */
 	setAddressViaAlias: (viaAlias: boolean) => void;
-	/** Replace the global work-queue snapshot (a `queue_changed` push). */
+	/** Replace the global queue snapshot (a `queue_changed` push). */
 	setQueue: (sessions: SessionInfo[]) => void;
 	/** Replace the daemon-global pinned list (from a `pinned_models_changed` push). */
 	setPinnedModels: (pinnedModels: PinnedModelInfo[]) => void;

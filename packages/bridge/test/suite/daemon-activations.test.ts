@@ -109,10 +109,8 @@ function makeStubManager(opts: {
 	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	const setThinkingLevelCalls: string[] = [];
 	const settledListeners = new Set<() => void>();
-	const fullySettledListeners = new Set<(execution: string | undefined) => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
-	let lastExecution: string | undefined;
 
 	const manager: Manager = {
 		get document() {
@@ -130,10 +128,6 @@ function makeStubManager(opts: {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
-		onFullySettled(listener: (execution: string | undefined) => void) {
-			fullySettledListeners.add(listener);
-			return () => fullySettledListeners.delete(listener);
-		},
 		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 		onActivityChange: () => () => {},
 		addConnection(handle, session: SessionRef) {
@@ -144,13 +138,10 @@ function makeStubManager(opts: {
 		removeConnection(handle) {
 			connectionHandles.delete(handle);
 		},
-		async prompt(_text: string, _images?: unknown[], _model?: unknown, _level?: unknown, execution?: string) {
-			lastExecution = execution;
-		},
-		async promptAdmitted(text: string, images?: unknown[], _model?: unknown, _level?: unknown, execution?: string) {
+		async prompt(_text: string, _images?: unknown[], _model?: unknown, _level?: unknown) {},
+		async promptAdmitted(text: string, images?: unknown[], _model?: unknown, _level?: unknown) {
 			events.push("admit");
 			if (opts.admitError) throw opts.admitError;
-			lastExecution = execution;
 			admittedTexts.push(text);
 			admittedCalls.push({ text, images });
 		},
@@ -169,8 +160,7 @@ function makeStubManager(opts: {
 		async renameSession() {},
 		async setLabel() {},
 		async navigate() {},
-		async recoverTurn(execution?: string): Promise<"retry" | "continue"> {
-			lastExecution = execution;
+		async recoverTurn(): Promise<"retry" | "continue"> {
 			return "retry";
 		},
 		async dispose() {
@@ -194,10 +184,11 @@ function makeStubManager(opts: {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
 		},
-		/** The current execution fully settled: fires the Manager's
-		 * signal with the token its admission carried. */
+		/** The turn settled: fires the Manager's rescan signal, as a real
+		 * `turn_end` does. Placements are untouched — a settlement is not a
+		 * move. */
 		settle: () => {
-			for (const listener of fullySettledListeners) listener(lastExecution);
+			for (const listener of settledListeners) listener();
 		},
 		patchListenerCount: () => patchListenerCount(patchListeners, connectionHandles),
 		disposed: () => wasDisposed,
@@ -871,12 +862,12 @@ describe("daemon: session activation", () => {
 
 		const listId = send(ws, { verb: "listQueue" });
 		const list = (await waitForReply(frames, listId)) as unknown as {
-			sessions: Array<{ sessionId: string; stem: string; state: string }>;
+			sessions: Array<{ sessionId: string; stem: string; location: string }>;
 		};
 		expect(list.sessions).toHaveLength(1);
 		expect(list.sessions[0].sessionId).toBe(reply.session.sessionId);
-		// The first prompt's admission landed busy.
-		expect(list.sessions[0].state).toBe("busy");
+		// The first prompt placed the Session in Inbox.
+		expect(list.sessions[0].location).toBe("inbox");
 
 		ws.close();
 	});
@@ -1640,7 +1631,8 @@ describe("daemon: idle GC", () => {
 
 		const stub = stubRef.current;
 		if (!stub) throw new Error("stub not created");
-		// Admit work so the queue holds the row: busy through the run.
+		// Admit work so the queue holds the row: Inbox, and running while the
+		// runtime streams.
 		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
 		stub.handles.setStreaming(true);
 		expect((await waitForReply(frames, send(ws, { verb: "detach" }))).ok).toBe(true);
@@ -1648,24 +1640,25 @@ describe("daemon: idle GC", () => {
 		// The idle timer fires but re-arms while the session is streaming.
 		await settle(150);
 		const list = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
-			sessions: Array<{ stem: string; state: string }>;
+			sessions: Array<{ stem: string; location: string; activity?: unknown }>;
 		};
 		expect(list.sessions).toHaveLength(1);
-		expect(list.sessions[0].state).toBe("busy");
+		expect(list.sessions[0].location).toBe("inbox");
+		expect(list.sessions[0].activity).toEqual({ kind: "responding" });
 		expect(stub.handles.disposed()).toBe(false);
 
 		// Settling releases the re-armed timer — and the queue row survives the
-		// collection: idle collection removes the runtime, never the
-		// durable state.
+		// collection: idle collection removes the runtime, never the placement.
 		stub.handles.setStreaming(false);
 		stub.handles.settle();
 		await settle(150);
 		const settled = (await waitForReply(frames, send(ws, { verb: "listQueue" }))) as unknown as {
-			sessions: Array<{ stem: string; state: string }>;
+			sessions: Array<{ stem: string; location: string; activity?: unknown }>;
 		};
 		expect(stub.handles.disposed()).toBe(true);
 		expect(settled.sessions).toHaveLength(1);
-		expect(settled.sessions[0].state).toBe("notified");
+		expect(settled.sessions[0].location).toBe("inbox");
+		expect(settled.sessions[0].activity).toBeUndefined();
 
 		ws.close();
 	});
@@ -1719,7 +1712,7 @@ describe("daemon: idle GC", () => {
 	});
 });
 
-describe("daemon: closeSession", () => {
+describe("daemon: setSessionLocation(archive)", () => {
 	it("terminates the activation (even mid-stream), drops it from the active snapshot, and allows a fresh open", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		let factoryCalls = 0;
@@ -1744,21 +1737,24 @@ describe("daemon: closeSession", () => {
 
 		// A close is a kill, not a GC: mid-stream must not defer it.
 		stub!.handles.setStreaming(true);
-		const closeId = send(ws, { verb: "closeSession", projectId, stem });
+		const closeId = send(ws, { verb: "setSessionLocation", projectId, stem, location: "archive" });
 		expect((await waitForReply(frames, closeId)).ok).toBe(true);
 		expect(stub!.handles.disposed()).toBe(true);
 
-		// The queue drops the row (the close wrote inactive); the history file
-		// survives.
+		// The queue drops the row (the move archived it); the history file
+		// survives, because archived history stays browsable.
 		await waitFor(
 			frames,
 			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
 		);
 		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
 
-		// Closing again is legal ( a dormant close is a state write)
-		// and re-opening resumes fresh.
-		expect((await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem }))).ok).toBe(true);
+		// Archiving again is legal (a dormant move is a storage write) and
+		// re-opening resumes fresh.
+		expect(
+			(await waitForReply(frames, send(ws, { verb: "setSessionLocation", projectId, stem, location: "archive" })))
+				.ok,
+		).toBe(true);
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
 		await waitForPush(frames, "replace");
 		expect(factoryCalls).toBe(2);
@@ -1776,20 +1772,23 @@ describe("daemon: closeSession", () => {
 		const frames = collectFrames(ws);
 		const unknownProject = (await waitForReply(
 			frames,
-			send(ws, { verb: "closeSession", projectId: "nope", stem: "anything" }),
+			send(ws, { verb: "setSessionLocation", projectId: "nope", stem: "anything", location: "archive" }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(unknownProject.ok).toBe(false);
 		expect(unknownProject.error).toContain("Unknown project");
 
-		// A dormant session (a file, never activated) closes legally now: the
-		// state write is the whole operation.
-		const dormant = await waitForReply(frames, send(ws, { verb: "closeSession", projectId, stem: dormantStem }));
+		// A dormant session (a file, never activated) archives legally: the
+		// storage write is the whole operation.
+		const dormant = await waitForReply(
+			frames,
+			send(ws, { verb: "setSessionLocation", projectId, stem: dormantStem, location: "archive" }),
+		);
 		expect(dormant.ok).toBe(true);
 
 		// A stem with no session at all is still an error.
 		const ghost = (await waitForReply(
 			frames,
-			send(ws, { verb: "closeSession", projectId, stem: "ghost" }),
+			send(ws, { verb: "setSessionLocation", projectId, stem: "ghost", location: "archive" }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(ghost.ok).toBe(false);
 		expect(ghost.error).toContain("No such session");
@@ -1817,7 +1816,12 @@ describe("daemon: closeSession", () => {
 		);
 
 		expect(
-			(await waitForReply(killerFrames, send(killer, { verb: "closeSession", projectId, stem: stem1 }))).ok,
+			(
+				await waitForReply(
+					killerFrames,
+					send(killer, { verb: "setSessionLocation", projectId, stem: stem1, location: "archive" }),
+				)
+			).ok,
 		).toBe(true);
 
 		// The still-"attached" victim can navigate away and detach afterwards:
@@ -1833,7 +1837,7 @@ describe("daemon: closeSession", () => {
 		victim.close();
 	});
 
-	it("detaches attached connections and pushes session_closed before the close reply", async () => {
+	it("detaches attached connections and pushes session_closed before the archive reply", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -1846,7 +1850,7 @@ describe("daemon: closeSession", () => {
 		const victimFrames = collectFrames(victim);
 		expect((await waitForReply(victimFrames, send(victim, { verb: "openSession", projectId, stem }))).ok).toBe(true);
 
-		const closeId = send(killer, { verb: "closeSession", projectId, stem });
+		const closeId = send(killer, { verb: "setSessionLocation", projectId, stem, location: "archive" });
 		const closed = (await waitForPush(victimFrames, "session_closed")) as {
 			projectId?: string;
 			stem?: string;
@@ -1904,13 +1908,13 @@ describe("daemon: closeSession", () => {
 		const openerFrames = collectFrames(opener);
 		const openId = send(opener, { verb: "openSession", projectId, stem });
 		await settle();
-		// The creation is in flight (the factory is gated); the close arrives
+		// The creation is in flight (the factory is gated); the archive arrives
 		// now. Before the fix it saw no registered activation and answered
 		// "not active" immediately, leaving the address live right after a
 		// successful close.
 		const closer = await openClient(port);
 		const closerFrames = collectFrames(closer);
-		const closeId = send(closer, { verb: "closeSession", projectId, stem });
+		const closeId = send(closer, { verb: "setSessionLocation", projectId, stem, location: "archive" });
 		await settle(100);
 		expect(closerFrames.find((f) => (f as Record<string, unknown>).id === closeId)).toBeUndefined();
 
@@ -1966,9 +1970,9 @@ describe("daemon: closeSession", () => {
 		const openId = send(ws, { verb: "openSession", projectId, stem });
 		expect((await waitForReply(frames, openId)).ok).toBe(true);
 
-		// The close collects the live activation; its disposal is gated, so the
-		// close parks mid-collection with the address still reserved.
-		const closeId = send(ws, { verb: "closeSession", projectId, stem });
+		// The move collects the live activation; its disposal is gated, so the
+		// move parks mid-collection with the address still reserved.
+		const closeId = send(ws, { verb: "setSessionLocation", projectId, stem, location: "archive" });
 		await settle();
 		// The open arrives while the collection holds the address: it must not
 		// attach the collecting record — it waits the collection out.
@@ -1990,8 +1994,8 @@ describe("daemon: closeSession", () => {
 	}, 10000);
 });
 
-describe("daemon: archiveSession", () => {
-	it("archives a dormant session: the file moves under the reserved prefix and leaves discovery", async () => {
+describe("daemon: trashSession", () => {
+	it("trashes a dormant session: the file moves under the reserved prefix and leaves discovery", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2005,10 +2009,10 @@ describe("daemon: archiveSession", () => {
 		};
 		expect(before.sessions.map((s) => s.stem)).toContain(stem);
 
-		// No activation: the close is a no-op and only the move happens.
-		expect((await waitForReply(frames, send(ws, { verb: "archiveSession", projectId, stem }))).ok).toBe(true);
+		// No activation: the stop is a no-op and only the move happens.
+		expect((await waitForReply(frames, send(ws, { verb: "trashSession", projectId, stem }))).ok).toBe(true);
 		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(false);
-		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+		expect(existsSync(join(dir, ".trash", `${stem}.jsonl`))).toBe(true);
 
 		// The Project push refreshes the page the row just left.
 		await waitForPush(frames, "sessions_changed");
@@ -2017,13 +2021,13 @@ describe("daemon: archiveSession", () => {
 		};
 		expect(after.sessions.map((s) => s.stem)).not.toContain(stem);
 
-		// Nothing is left to archive for that address.
+		// Nothing is left to trash for that address.
 		const again = (await waitForReply(
 			frames,
-			send(ws, { verb: "archiveSession", projectId, stem }),
+			send(ws, { verb: "trashSession", projectId, stem }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(again.ok).toBe(false);
-		expect(again.error).toContain("no file to archive");
+		expect(again.error).toContain("no file to trash");
 
 		ws.close();
 	});
@@ -2042,9 +2046,9 @@ describe("daemon: archiveSession", () => {
 		expect(stub).toBeDefined();
 		stub!.handles.setStreaming(true);
 
-		expect((await waitForReply(frames, send(ws, { verb: "archiveSession", projectId, stem }))).ok).toBe(true);
+		expect((await waitForReply(frames, send(ws, { verb: "trashSession", projectId, stem }))).ok).toBe(true);
 		expect(stub!.handles.disposed()).toBe(true);
-		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+		expect(existsSync(join(dir, ".trash", `${stem}.jsonl`))).toBe(true);
 		await waitFor(
 			frames,
 			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
@@ -2053,7 +2057,7 @@ describe("daemon: archiveSession", () => {
 		ws.close();
 	});
 
-	it("pushes session_closed to a connection attached to the archived session", async () => {
+	it("pushes session_closed to a connection attached to the trashed session", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2063,11 +2067,11 @@ describe("daemon: archiveSession", () => {
 		const viewerFrames = collectFrames(viewer);
 		expect((await waitForReply(viewerFrames, send(viewer, { verb: "openSession", projectId, stem }))).ok).toBe(true);
 
-		// The archive comes from another socket; the attached viewer must learn
+		// The trash comes from another socket; the attached viewer must learn
 		// the runtime ended, not discover it on its next command.
 		const archiver = await openClient(port);
 		const archiverFrames = collectFrames(archiver);
-		expect((await waitForReply(archiverFrames, send(archiver, { verb: "archiveSession", projectId, stem }))).ok).toBe(
+		expect((await waitForReply(archiverFrames, send(archiver, { verb: "trashSession", projectId, stem }))).ok).toBe(
 			true,
 		);
 
@@ -2088,7 +2092,7 @@ describe("daemon: archiveSession", () => {
 		archiver.close();
 	});
 
-	it("closes an unflushed session and reports that there was no file to archive", async () => {
+	it("stops an unflushed session and reports that there was no file to trash", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2103,12 +2107,12 @@ describe("daemon: archiveSession", () => {
 		};
 		const reply = (await waitForReply(
 			frames,
-			send(ws, { verb: "archiveSession", projectId, stem: created.session.stem }),
+			send(ws, { verb: "trashSession", projectId, stem: created.session.stem }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("no file to archive");
+		expect(reply.error).toContain("no file to trash");
 
-		// The close is unconditional: the failed move does not skip it.
+		// The stop is unconditional: the failed move does not skip it.
 		const stub = [...stubs.values()][stubs.size - 1];
 		expect(stub!.handles.disposed()).toBe(true);
 		await waitFor(
@@ -2146,12 +2150,12 @@ describe("daemon: archiveSession", () => {
 		const openerFrames = collectFrames(opener);
 		const openId = send(opener, { verb: "openSession", projectId, stem });
 		await settle();
-		// The creation is in flight; the archive arrives now. Before the fix it
+		// The creation is in flight; the trash arrives now. Before the fix it
 		// saw no registered activation, moved the file immediately, and the
-		// completing creation registered a Manager for an archived address.
+		// completing creation registered a Manager for a trashed address.
 		const archiver = await openClient(port);
 		const archiverFrames = collectFrames(archiver);
-		const archiveId = send(archiver, { verb: "archiveSession", projectId, stem });
+		const archiveId = send(archiver, { verb: "trashSession", projectId, stem });
 		await settle(100);
 		expect(archiverFrames.find((f) => (f as Record<string, unknown>).id === archiveId)).toBeUndefined();
 		// The move waits with the verb: the file is still at its address.
@@ -2163,20 +2167,20 @@ describe("daemon: archiveSession", () => {
 		// The creation's activation was disposed and the file moved after it.
 		expect(created[0].handles.disposed()).toBe(true);
 		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(false);
-		expect(existsSync(join(dir, ".archive", `${stem}.jsonl`))).toBe(true);
+		expect(existsSync(join(dir, ".trash", `${stem}.jsonl`))).toBe(true);
 
 		opener.close();
 		archiver.close();
 	}, 10000);
 
-	it("never discovers an archived file and excludes it from the startup id-conflict scan", async () => {
+	it("never discovers a trashed file and excludes it from the startup id-conflict scan", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const live = writeSessionFile(a, agentDir, "arch-dup");
 		// A manual copy into the reserved prefix: same session id as the live
-		// file, so a scan that enumerated the archive would hard-fail startup.
+		// file, so a scan that enumerated the trash would hard-fail startup.
 		const dir = sessionDirFor(a, agentDir);
-		mkdirSync(join(dir, ".archive"), { recursive: true });
-		writeSessionAt(join(dir, ".archive", "2026-01-01T00-00-00-000Z_arch-copy.jsonl"), "arch-dup", a);
+		mkdirSync(join(dir, ".trash"), { recursive: true });
+		writeSessionAt(join(dir, ".trash", "2026-01-01T00-00-00-000Z_arch-copy.jsonl"), "arch-dup", a);
 
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2190,7 +2194,7 @@ describe("daemon: archiveSession", () => {
 		ws.close();
 	});
 
-	it("rejects the reserved archive stem and unknown projects", async () => {
+	it("rejects the reserved trash stem and unknown projects", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2200,14 +2204,14 @@ describe("daemon: archiveSession", () => {
 		const frames = collectFrames(ws);
 		const unknown = (await waitForReply(
 			frames,
-			send(ws, { verb: "archiveSession", projectId: "nope", stem }),
+			send(ws, { verb: "trashSession", projectId: "nope", stem }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(unknown.ok).toBe(false);
 		expect(unknown.error).toContain("Unknown project");
 
 		const reserved = (await waitForReply(
 			frames,
-			send(ws, { verb: "archiveSession", projectId, stem: `.archive/${stem}` }),
+			send(ws, { verb: "trashSession", projectId, stem: `.trash/${stem}` }),
 		)) as unknown as RpcReply & { error?: string };
 		expect(reserved.ok).toBe(false);
 		expect(reserved.error).toContain("reserved");
@@ -2255,11 +2259,11 @@ describe("daemon: session listing", () => {
 		const created = (await waitForReply(frames, newId)) as unknown as { session: SessionRef };
 		const allId = send(ws, { verb: "listSessions", projectId });
 		const all = (await waitForReply(frames, allId)) as unknown as {
-			sessions: Array<{ stem: string; state: string; sessionId: string }>;
+			sessions: Array<{ stem: string; location: string; running?: unknown; sessionId: string }>;
 		};
 		const createdRow = all.sessions.find((s) => s.stem === created.session.stem);
 		expect(createdRow).toBeDefined();
-		expect(createdRow?.state).toBe("busy");
+		expect(createdRow?.location).toBe("inbox");
 		expect(createdRow?.sessionId).toBe(created.session.sessionId);
 
 		ws.close();

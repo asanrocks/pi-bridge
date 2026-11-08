@@ -11,13 +11,17 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { getDefaultSessionDir } from "@earendil-works/pi-coding-agent";
 
 /**
- * Reserved first path component of a Project's session namespace: an archived
- * Session's file lives under `<sessionDir>/.archive/`. Neither pi's resume
+ * Reserved first path component of a Project's session namespace: a trashed
+ * Session's file lives under `<sessionDir>/.trash/`. Neither pi's resume
  * discovery (`listSessionsFromDir`) nor the daemon's scanner enumerates it,
- * and `normalizeStem` refuses to address it, so an archive is invisible until
- * a manual filesystem move puts the file back.
+ * and `normalizeStem` refuses to address it, so a trash is invisible until a
+ * manual filesystem move puts the file back.
  */
-export const ARCHIVE_DIR = ".archive";
+export const TRASH_DIR = ".trash";
+
+/** The namespace this one replaced, when "archive" still meant "move the file
+ * away". Read once, at Worker start, to fold old trashes in. */
+const LEGACY_TRASH_DIR = ".archive";
 
 export interface ProjectConfig {
 	id: string;
@@ -113,16 +117,16 @@ export function buildProjects(entries: string[], agentDir: string, reservedIds?:
 	return projects;
 }
 
-/** True for a canonical stem under the reserved archive prefix. */
-export function isArchivedStem(stem: string): boolean {
-	return stem === ARCHIVE_DIR || stem.startsWith(`${ARCHIVE_DIR}/`);
+/** True for a canonical stem under the reserved trash prefix. */
+export function isTrashedStem(stem: string): boolean {
+	return stem === TRASH_DIR || stem.startsWith(`${TRASH_DIR}/`);
 }
 
 /**
  * Normalize and validate a client-supplied stem. Returns the canonical form
  * (forward slashes, no empty/`.`/`..` components, no leading/trailing slash,
  * no `.jsonl` extension). Throws on anything that could escape the Project's
- * session directory, or that names the reserved archive namespace.
+ * session directory, or that names the reserved trash namespace.
  */
 export function normalizeStem(stem: string): string {
 	if (stem === "") throw new Error("Empty session stem");
@@ -136,7 +140,7 @@ export function normalizeStem(stem: string): string {
 		if (part === "" || part === "." || part === "..") throw new Error("Invalid session stem");
 	}
 	const canonical = parts.join("/");
-	if (isArchivedStem(canonical)) throw new Error("Session stem is reserved for the archive");
+	if (isTrashedStem(canonical)) throw new Error("Session stem is reserved for the trash");
 	if (parts[parts.length - 1].endsWith(".jsonl")) throw new Error("Session stem must not include .jsonl");
 	return canonical;
 }
@@ -217,40 +221,71 @@ export function resolveStemPath(sessionDir: string, stem: string): string {
 }
 
 /**
- * Archive a durable Session file: move `<sessionDir>/<stem>.jsonl` to the
- * reserved `<sessionDir>/.archive/` prefix, preserving the stem's relative
+ * Fold a pre-rename `.archive/` namespace into `.trash/`: the files were moved
+ * away when "archive" meant exactly what "trash" means now, so the word moved
+ * and the storage followed. Both directories existing at once is reported and
+ * left alone — merging two trees risks a clobber, and the old files stay
+ * recoverable by hand.
+ *
+ * Renaming the directory, never its contents: a symlinked legacy directory
+ * moves the link, not what it points at.
+ */
+export function migrateLegacyTrashDir(sessionDir: string, onWarning: (message: string) => void): void {
+	const legacy = join(sessionDir, LEGACY_TRASH_DIR);
+	if (!existsSync(legacy)) return;
+	const current = join(sessionDir, TRASH_DIR);
+	if (existsSync(current)) {
+		onWarning(
+			`Both ${LEGACY_TRASH_DIR} and ${TRASH_DIR} exist in ${sessionDir}; ` +
+				`leaving ${LEGACY_TRASH_DIR} untouched (merge it into ${TRASH_DIR} by hand).`,
+		);
+		return;
+	}
+	try {
+		renameSync(legacy, current);
+	} catch (error) {
+		onWarning(
+			`Could not rename ${legacy} to ${current} ` +
+				`(${error instanceof Error ? error.message : String(error)}); those trashed sessions stay undiscovered.`,
+		);
+	}
+}
+
+/**
+ * Trash a durable Session file: move `<sessionDir>/<stem>.jsonl` to the
+ * reserved `<sessionDir>/.trash/` prefix, preserving the stem's relative
  * structure. Returns the destination path.
  *
- * The caller must close the Session first (`Daemon.archiveSession`):
+ * The caller must end the Session's runtime first (`Daemon.trashSession`):
  * disposal finalizes the in-flight turn, which can create or advance the
  * file, so moving before disposal could leave a file at the old address.
  *
  * Both endpoints are containment-checked — the source through
  * `containedSessionFile`, the destination directory before and after
- * creation — so a symlinked `.archive` cannot redirect the move outside the
+ * creation — so a symlinked `.trash` cannot redirect the move outside the
  * Project's namespace. Throws when the source is missing, the stem is
- * already archived, or the destination exists (a rename would silently
+ * already trashed, or the destination exists (a rename would silently
  * clobber it).
  */
-export function archiveStemFile(sessionDir: string, stem: string): string {
-	if (isArchivedStem(stem)) throw new Error(`Session is already archived: ${stem}`);
+export function trashStemFile(sessionDir: string, stem: string): string {
+	if (isTrashedStem(stem)) throw new Error(`Session is already trashed: ${stem}`);
 	const real = containedSessionFile(sessionDir, resolveStemPath(sessionDir, stem));
-	if (real === null) throw new Error(`Session has no file to archive: ${stem}`);
+	if (real === null) throw new Error(`Session has no file to trash: ${stem}`);
 
 	const dirReal = realpathOrSelf(sessionDir);
-	const archiveRoot = join(sessionDir, ARCHIVE_DIR);
-	if (existsSync(archiveRoot) && !isContained(dirReal, realpathSync(archiveRoot))) {
-		throw new Error("Archive directory escapes the project directory");
+	const trashRoot = join(sessionDir, TRASH_DIR);
+	if (existsSync(trashRoot) && !isContained(dirReal, realpathSync(trashRoot))) {
+		throw new Error("Trash directory escapes the project directory");
 	}
 
 	const parts = stem.split("/");
-	const destDir = join(archiveRoot, ...parts.slice(0, -1));
+	const destDir = join(trashRoot, ...parts.slice(0, -1));
 	mkdirSync(destDir, { recursive: true });
 	const destDirReal = realpathSync(destDir);
-	if (!isContained(dirReal, destDirReal)) throw new Error("Archive directory escapes the project directory");
+	if (!isContained(dirReal, destDirReal)) throw new Error("Trash directory escapes the project directory");
 
 	const dest = join(destDirReal, `${parts[parts.length - 1]}.jsonl`);
-	if (existsSync(dest)) throw new Error(`Archived session already exists: ${stem}`);
+	if (existsSync(dest)) throw new Error(`Trashed session already exists: ${stem}`);
 	renameSync(real, dest);
 	return dest;
 }

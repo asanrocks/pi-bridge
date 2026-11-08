@@ -165,7 +165,7 @@ const stubSession: SessionInfo = {
 	projectId: "proj",
 	sessionId: "s1",
 	stem: "2024-01-01_s1",
-	state: "inactive",
+	location: "archive",
 	name: "Session 1",
 	timestamp: "2024-01-01T00:00:00Z",
 	messageCount: 5,
@@ -174,7 +174,7 @@ const stubSession: SessionInfo = {
 export const mockDaemonVerbs: DaemonVerbs = {
 	listSessions: async () => ({ sessions: [stubSession], hasMore: false }),
 	listQueue: async () => [],
-	setSessionState: async () => ({ ok: true }),
+	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
@@ -189,8 +189,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	openSession: async () => ({ ok: true, session: mockSessionRef }),
 	newSession: async () => ({ ok: true, session: mockSessionRef }),
 	detach: () => {},
-	closeSession: async () => ({ ok: true }),
-	archiveSession: async () => ({ ok: true }),
+	trashSession: async () => ({ ok: true }),
 	sessionsChanged: () => {},
 	listFiles: async () => [],
 	readFile: () => {

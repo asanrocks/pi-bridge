@@ -115,8 +115,8 @@ The protocol slice contains:
   both down-state surfaces (the TopBar chip and the Launcher full panel), so
   no other module phrases connection state;
 - `projects`, models, thinking levels, and `devMode` from daemon information;
-- `queue`, the global work queue: every non-inactive Session,
-  ordered notified → busy → deferred, then last activity descending; and
+- `queue`, the global queue: every Inbox and Later Session, ordered Inbox →
+  Later, then last activity descending; and
 - `sessionPages`, lazily fetched Project history pages. Each page is
   `loading`, `error`, or `ready` with `sessions`, `hasMore`, and the compound
   `SessionListCursor` in `nextCursor`.
@@ -324,7 +324,7 @@ connected connection drop -> reconnecting -> unreachable
 
 A socket being open is not enough to become connected. Initialization must
 complete `getDaemonInfo` and `listQueue` within 8 seconds, populate
-Projects, model metadata, development mode, and the work queue, then open the
+Projects, model metadata, development mode, and the queue, then open the
 route-driven address. Failure after the socket opens
 is `init_failed` and can be retried without replacing the socket.
 
@@ -375,10 +375,10 @@ cache updates:
 The pipeline handles registry pushes without touching the Document. A
 `sessions_changed` push refreshes an already loaded Project page and records
 address identities; it does not fetch a collapsed page. A `queue_changed`
-push replaces the work queue — membership is the durable session
-state, so the queue converges across tabs on every state transition.
+push replaces the queue — membership is the stored location, so the queue
+converges across tabs on every placement change.
 A `session_closed` push names an address whose live runtime ended on the
-host (`closeSession`/`archiveSession`); when it names the rendered Session,
+host (a move to Archive or Trash); when it names the rendered Session,
 the server has already severed the attachment, so navigation clears to the
 Project home through the same boundary a failed open uses — the document on
 screen can never progress again, and a later command cannot reach a disposed
@@ -531,8 +531,8 @@ connecting.
 `useAttentionNotifications.ts` (in `app/`) covers the other half of
 completion signaling: the attached conversation drives the tab title and the
 unread count, while a Session this tab is *not* reading is followed through the
-work queue. Its detector (`infra/lib/queueAttention.ts`) compares consecutive
-queue snapshots and reports only a `busy → notified` edge, seeding on every
+queue. Its detector (`infra/lib/queueAttention.ts`) compares consecutive
+snapshots and reports only a `running → idle` edge, seeding on every
 connect or reconnect (a re-fetched snapshot is not a completion — including the
 one the connect publishes before it confirms the connection, which is why the
 comparison is gated on `connection.kind === "connected"` rather than on the
@@ -566,7 +566,7 @@ the original methods when the connection closes or the app unmounts.
 the send's model selection; there is no separate model verb — `abort`,
 `discardSteer`, rename, and branch navigation),
 address operations (`openSession`, `openProject`, `newSession`, `detach`, and
-`closeSession`), Project/session listing, and Project file completion. It
+a move), Project/session listing, and Project file completion. It
 centralizes failure toasts. `useBranchSelect` is the branch-target selection
 matrix over `navigate`: a real branch switch when idle and following the live
 leaf, a read-only rendering-leaf re-target while busy or already peeking.
@@ -854,7 +854,7 @@ Other `infra/lib` modules have narrow boundaries:
 
 Reconnect is a new transport, not a continuation of the old WebSocket. The
 old pipeline is frozen before a new one is installed. Initialization refreshes
-Project metadata and the work queue (whose membership is daemon-persisted, so
+Project metadata and the queue (whose membership is daemon-persisted, so
 a daemon restart during the drop loses no queue entries), drops cached sidebar
 pages, and reopens the address currently in the URL.
 

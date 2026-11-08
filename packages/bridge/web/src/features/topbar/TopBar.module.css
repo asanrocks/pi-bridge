@@ -68,11 +68,11 @@
 	height: var(--control-box);
 }
 
-/* Waiting count on the menu button: the one number in the chrome that means
-   "someone needs you" (ADR 23). A count, so it is a value on the control that
-   opens the switcher — not a separate button. It takes the success hue the
-   notified mark already uses, which is what makes the badge and the row it
-   counts read as the same fact. */
+/* Inbox count on the menu button: the one number in the chrome that means
+   "there is something to read" (ADR 23). A count, so it is a value on the
+   control that opens the switcher — not a separate button. It takes the success
+   hue the Inbox mark already uses, which is what makes the badge and the rows
+   it counts read as the same fact. */
 .topBarBadge {
 	position: absolute;
 	top: 1px;

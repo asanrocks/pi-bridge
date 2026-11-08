@@ -21,6 +21,7 @@ import type {
 	PrefixCursor,
 	PullRequestItem,
 	SessionListCursor,
+	SessionLocation,
 } from "../core/index.ts";
 import type {
 	ObservationId,
@@ -136,7 +137,7 @@ export type WorkerRequest =
 	| { readonly id: string; readonly kind: "recoverTurn"; readonly target: SessionTarget }
 	// ── Lifecycle ───────────────────────────────────────────────────────
 	| { readonly id: string; readonly kind: "closeSession"; readonly address: SessionAddress }
-	| { readonly id: string; readonly kind: "archiveSession"; readonly address: SessionAddress }
+	| { readonly id: string; readonly kind: "trashSession"; readonly address: SessionAddress }
 	// ── Queries and environment ─────────────────────────────────────────
 	| {
 			readonly id: string;
@@ -148,9 +149,9 @@ export type WorkerRequest =
 	| { readonly id: string; readonly kind: "listQueue" }
 	| {
 			readonly id: string;
-			readonly kind: "setSessionState";
+			readonly kind: "setSessionLocation";
 			readonly address: SessionAddress;
-			readonly state: "notified" | "deferred";
+			readonly location: SessionLocation;
 	  }
 	| { readonly id: string; readonly kind: "info" }
 	| {

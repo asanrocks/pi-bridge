@@ -23,6 +23,7 @@ import type {
 	ReadFileReply,
 	RpcReply,
 	SessionInfo,
+	SessionLocation,
 	SnapshotFile,
 	SnapshotState,
 	TextPolishReply,
@@ -202,34 +203,14 @@ export function useRpc() {
 		if (!result.ok) rpcErrorToast(new Error(result.error ?? "detach failed"), "detach failed");
 	}, []);
 
-	/** Terminate a session's live instance (closeSession verb). Destructive
-	 * and unconfirmed by design — the daemon disposes the activation now
-	 * (aborting + flushing any in-flight turn); the history file survives, so
-	 * the row simply drops from the active snapshot. */
-	const closeSession = useCallback(
+	/** End a session's runtime, then move its file under the trash prefix
+	 * (trashSession verb). Unconfirmed by design; the row leaves the queue and
+	 * the history page, and the file is no longer discovered. When the trashed
+	 * address is the one on screen, land on the Project home — the server-side
+	 * binding is severed and the session is no longer addressable. */
+	const trashSession = useCallback(
 		async (projectId: string, stem: string) => {
-			const reply = await rpc(() => getGlobalClient()?.closeSession(projectId, stem), "close session failed");
-			if (!reply?.ok) return;
-			const store = getStore();
-			if (store.getState().currentProjectId === projectId && store.getState().currentStem === stem) {
-				// The viewed session died: the server-side attachment is severed, so
-				// detach the stale binding and land on the Project home with a fresh
-				// history page (openProject does both).
-				await openProject(projectId);
-			}
-		},
-		[openProject],
-	);
-
-	/** Close a session, then move its file under the archive prefix
-	 * (archiveSession verb). The close is unconditional and unconfirmed; the
-	 * row leaves the active snapshot and the history page, and the file is no
-	 * longer discovered. When the archived address is the one on screen, land
-	 * on the Project home like closeSession does — the server-side binding is
-	 * severed either way. */
-	const archiveSession = useCallback(
-		async (projectId: string, stem: string) => {
-			const reply = await rpc(() => getGlobalClient()?.archiveSession(projectId, stem), "archive session failed");
+			const reply = await rpc(() => getGlobalClient()?.trashSession(projectId, stem), "trash session failed");
 			if (!reply?.ok) return;
 			const store = getStore();
 			if (store.getState().currentProjectId === projectId && store.getState().currentStem === stem) {
@@ -239,7 +220,7 @@ export function useRpc() {
 		[openProject],
 	);
 
-	/** Refresh the global work queue without side effects. */
+	/** Refresh the global queue without side effects. */
 	const refreshQueue = useCallback(async () => {
 		const reply = await getGlobalClient()?.listQueue();
 		if (reply?.ok) {
@@ -251,12 +232,31 @@ export function useRpc() {
 		}
 	}, []);
 
-	/** The user's defer/restore toggle: moves a non-busy queued session
-	 * between `notified` and `deferred`. The refusal (busy) and the resulting
-	 * queue both arrive from the daemon — the push converges every tab. */
-	const setSessionState = useCallback(async (projectId: string, stem: string, state: "notified" | "deferred") => {
-		await rpc(() => getGlobalClient()?.setSessionState(projectId, stem, state), "update session state failed");
-	}, []);
+	/** Place a session: Inbox, Later, or Archive. The resulting queue arrives
+	 * from the daemon — the push converges every tab. Moving to Archive also
+	 * ends the runtime, so a Session on screen is re-attached: the reader moved
+	 * it to history, not away from the page. */
+	const setSessionLocation = useCallback(
+		async (projectId: string, stem: string, location: SessionLocation) => {
+			const sessionId = getStore()
+				.getState()
+				.queue.find((r) => r.projectId === projectId && r.stem === stem)?.sessionId;
+			const reply = await rpc(
+				() => getGlobalClient()?.setSessionLocation(projectId, stem, location),
+				"move session failed",
+			);
+			if (!reply?.ok) return;
+			const store = getStore();
+			if (location !== "archive" || store.getState().currentProjectId !== projectId) return;
+			if (store.getState().currentStem !== stem) return;
+			// The archive move disposed the runtime, so the binding this tab held is
+			// severed (the daemon answers with `session_closed`, which lands on the
+			// Project home). Re-open the address to keep reading it: an archived
+			// Session is browsable history, and a fresh Activation resumes it.
+			await openSession(projectId, stem, sessionId);
+		},
+		[openSession],
+	);
 
 	/** Fetch a sidebar folder's first session page (lazy, on expand). Also the
 	 * retry path: an existing error page is re-fetched, a ready/loading one is
@@ -315,10 +315,9 @@ export function useRpc() {
 			openLatest,
 			newSession,
 			detach,
-			closeSession,
-			archiveSession,
+			trashSession,
 			refreshQueue,
-			setSessionState,
+			setSessionLocation,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 		}),
@@ -336,10 +335,9 @@ export function useRpc() {
 			openLatest,
 			newSession,
 			detach,
-			closeSession,
-			archiveSession,
+			trashSession,
 			refreshQueue,
-			setSessionState,
+			setSessionLocation,
 			loadFolderSessions,
 			loadMoreFolderSessions,
 		],

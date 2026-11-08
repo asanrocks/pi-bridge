@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { memo, useCallback, useMemo } from "react";
-import type { ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CloseIcon, MenuIcon } from "../../render/icons.tsx";
 import { PaneShell, type PaneShellHeaderActions, type PaneVariant } from "../../render/PaneShell.tsx";
@@ -70,9 +70,8 @@ export const Sidebar = memo(function Sidebar({
 	sessionPages,
 	onOpenSession,
 	onOpenProject,
-	onMarkInactive,
-	onSetSessionState,
-	onArchiveSession,
+	onMoveSession,
+	onTrashSession,
 	onShowLauncher,
 	onLoadFolder,
 	onLoadMoreFolder,
@@ -86,7 +85,8 @@ export const Sidebar = memo(function Sidebar({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** The global work queue — the authority for each folder's state rows. */
+	/** The global queue — the authority for each folder's Inbox and Later
+	 * rows. */
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
@@ -94,14 +94,14 @@ export const Sidebar = memo(function Sidebar({
 	/** Navigate to a Project's home (the compose surface) — the sidebar's
 	 *  folder-name click. */
 	onOpenProject: (projectId: string) => void;
-	/** Clear a session's state (row menu Mark inactive, no confirmation). */
-	onMarkInactive: (projectId: string, stem: string) => void;
-	/** The indicator's quick state toggle: inactive → notified, notified ↔
-	 * deferred. Refused by the store while the session is busy. */
-	onSetSessionState: (projectId: string, stem: string, state: "notified" | "deferred") => void;
-	/** Close then archive a session (row menu Archive, no confirmation) —
-	 *  available on dormant rows too, where only the move happens. */
-	onArchiveSession: (projectId: string, stem: string) => void;
+	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
+	 * Unarchive as the resting place. Archiving a running Session stops it first
+	 * (the daemon owns that); no confirmation, because a move is a
+	 * classification. */
+	onMoveSession: (projectId: string, stem: string, location: SessionLocation) => void;
+	/** The row menu's Trash: ends the runtime, then hides the durable file. No
+	 * confirmation — the file survives. */
+	onTrashSession: (projectId: string, stem: string) => void;
 	/** Detach and return to the Launcher (global project picker). */
 	onShowLauncher: () => void;
 	onLoadFolder: (projectId: string) => void;
@@ -122,25 +122,18 @@ export const Sidebar = memo(function Sidebar({
 	const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
 	const { folds, cycleFolder, cycleAllFolders } = useFolderExpansion(projectIds, currentProjectId, currentStem);
 
-	const handleMarkInactive = useCallback(
-		(session: SessionInfo) => {
-			onMarkInactive(session.projectId, session.stem);
+	const handleMoveSession = useCallback(
+		(session: SessionInfo, location: SessionLocation) => {
+			onMoveSession(session.projectId, session.stem, location);
 		},
-		[onMarkInactive],
+		[onMoveSession],
 	);
 
-	const handleArchiveSession = useCallback(
+	const handleTrashSession = useCallback(
 		(session: SessionInfo) => {
-			onArchiveSession(session.projectId, session.stem);
+			onTrashSession(session.projectId, session.stem);
 		},
-		[onArchiveSession],
-	);
-
-	const handleSetSessionState = useCallback(
-		(session: SessionInfo, state: "notified" | "deferred") => {
-			onSetSessionState(session.projectId, session.stem, state);
-		},
-		[onSetSessionState],
+		[onTrashSession],
 	);
 
 	// All-projects leaves the current Project: detach, and the fullscreen
@@ -187,9 +180,8 @@ export const Sidebar = memo(function Sidebar({
 						onOpenProject(projectId);
 						api.dismissAfterPick();
 					}}
-					onMarkInactive={handleMarkInactive}
-					onSetSessionState={handleSetSessionState}
-					onArchiveSession={handleArchiveSession}
+					onMoveSession={handleMoveSession}
+					onTrashSession={handleTrashSession}
 					onShowLauncher={handleShowLauncher}
 					onLoadFolder={onLoadFolder}
 					onLoadMoreFolder={onLoadMoreFolder}
