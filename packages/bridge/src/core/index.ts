@@ -129,6 +129,7 @@ export type {
 	RpcRequestBody,
 	ServerMessage,
 	ServerPushMessage,
+	SessionActivityInfo,
 	SessionAddress,
 	SessionInfo,
 	SessionInfoEntry,

@@ -33,7 +33,7 @@ export const SidebarContent = memo(function SidebarContent({
 	onToggleFolder,
 	onOpenSession,
 	onOpenProject,
-	onCloseSession,
+	onMarkInactive,
 	onSetSessionState,
 	onArchiveSession,
 	onShowLauncher,
@@ -44,20 +44,20 @@ export const SidebarContent = memo(function SidebarContent({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** The global work queue — the authority for the pinned section
-	 * at the top of each folder, sliced per Project in queue order. */
+	/** The global work queue — the authority for each folder's working and
+	 * parked rows, sliced per Project in queue order. */
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
-	/** Per-Project fold states; missing entries default to "active". */
+	/** Per-Project fold states; missing entries default to "working". */
 	folds: Record<string, FolderFoldState>;
 	/** Projects header: apply one uniform fold state to every folder. */
-	onToggleAllFolders: (hasActiveById: Record<string, boolean>) => void;
-	onToggleFolder: (projectId: string, hasActive: boolean) => void;
+	onToggleAllFolders: (hasWorkingById: Record<string, boolean>) => void;
+	onToggleFolder: (projectId: string, hasWorking: boolean) => void;
 	onOpenSession: (session: SessionInfo) => void;
 	onOpenProject: (projectId: string) => void;
-	onCloseSession: (session: SessionInfo) => void;
-	/** The user's defer/restore toggle (row menu) — non-busy queued rows. */
+	onMarkInactive: (session: SessionInfo) => void;
+	/** The indicator's quick state toggle — every row but a busy one. */
 	onSetSessionState: (session: SessionInfo, state: "notified" | "deferred") => void;
 	/** Close then archive a session (row menu Archive) — live and dormant rows. */
 	onArchiveSession: (session: SessionInfo) => void;
@@ -77,23 +77,25 @@ export const SidebarContent = memo(function SidebarContent({
 		return map;
 	}, [queue]);
 
-	// Per-folder "has queued rows" — the cycle input that decides whether a
-	// folder has the active step at all. Also feeds the header chevron's
-	// effective-folded test.
-	const hasQueuedById = useMemo(() => {
+	// Per-folder "has working rows" — the cycle input that decides whether a
+	// folder has the working step at all. Also feeds the header chevron's
+	// effective-collapsed test.
+	const hasWorkingById = useMemo(() => {
 		const out: Record<string, boolean> = {};
-		for (const p of projects) out[p.id] = (queueByProject.get(p.id)?.length ?? 0) > 0;
+		for (const p of projects) {
+			out[p.id] = (queueByProject.get(p.id) ?? []).some((s) => s.state === "notified" || s.state === "busy");
+		}
 		return out;
 	}, [projects, queueByProject]);
 
 	// Header chevron mirrors the folders: down while every folder is open,
 	// right while every folder is effectively folded, diagonal in between.
 	const effectiveFold = (id: string): FolderFoldState => {
-		const f = folds[id] ?? "active";
-		return f === "active" && !hasQueuedById[id] ? "folded" : f;
+		const f = folds[id] ?? "working";
+		return f === "working" && !hasWorkingById[id] ? "collapsed" : f;
 	};
-	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "open");
-	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "folded");
+	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "all");
+	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "collapsed");
 	const headerCaret = allOpen ? "down" : allFolded ? "right" : "diagonal";
 
 	return (
@@ -104,8 +106,8 @@ export const SidebarContent = memo(function SidebarContent({
 				<button
 					type="button"
 					className={styles.sidebarSectionToggle}
-					onClick={() => onToggleAllFolders(hasQueuedById)}
-					title="Fold / active / unfold all"
+					onClick={() => onToggleAllFolders(hasWorkingById)}
+					title="Collapse / working / all"
 				>
 					<CaretIcon size={12} direction={headerCaret} className={styles.sidebarChevron} />
 					<span>Projects</span>
@@ -139,13 +141,13 @@ export const SidebarContent = memo(function SidebarContent({
 						project={project}
 						currentProjectId={currentProjectId}
 						currentStem={currentStem}
-						fold={folds[project.id] ?? "active"}
+						fold={folds[project.id] ?? "working"}
 						queueRows={queueByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
 						onToggle={onToggleFolder}
 						onOpenProject={onOpenProject}
 						onOpen={onOpenSession}
-						onClose={onCloseSession}
+						onMarkInactive={onMarkInactive}
 						onSetState={onSetSessionState}
 						onArchive={onArchiveSession}
 						onLoad={onLoadFolder}

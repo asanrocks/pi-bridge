@@ -75,7 +75,17 @@ A push is unsolicited. `sessions_changed`, `queue_changed`,
 mirror. Every listing row (`sessions_changed`, `queue_changed`,
 `listSessions`, `listQueue`) carries the Session's durable `state`
 (`inactive | notified | busy | deferred`) and never a runtime
-retention fact — streaming is Document state, not a listing field. The connection sends session-list pushes to every
+retention fact — streaming is Document state, not a listing field.
+
+A row also carries an optional `activity` — the execution's own report, on a
+busy row only: `{ kind: "tool", name, startedAt }`, `{ kind: "responding" }`,
+or `{ kind: "compacting" }`. `startedAt` is the instant the current phase
+began, computed at emission, so the client rebases the elapsed time onto its
+own clock exactly as it does for `status.inFlightTools`. The field is absent
+on a non-busy row and on a dormant row (no runtime, nothing executing), so
+absence is the truthful answer rather than stale state. It is the sidebar's
+preview line, not a liveness fact: the durable `state` remains the authority
+for what the Session awaits. The connection sends session-list pushes to every
 socket; the web client updates the relevant Project page or the work queue,
 and a `session_closed` for the rendered Session ends that view
 without touching the mirror.

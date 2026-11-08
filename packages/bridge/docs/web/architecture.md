@@ -28,7 +28,9 @@ The web source is divided by responsibility:
   identity lookup.
 - `infra/lib/` contains small browser or store-free utilities such as routes,
   unread counting, media queries, notification permission, clipboard writes,
-  secure-context guidance, and image preparation.
+  secure-context guidance, image preparation, the one OS-notification path
+  (`userNotification.ts`), and the queue-wide completion detector
+  (`queueAttention.ts`).
 - `render/` contains shared rendering primitives, Markdown, code highlighting,
   icons, the centered `Dialog` portal surface, the anchored `Popover` panel that
   every popover, picker, and menu composes, shared resize/result helpers, and the
@@ -525,6 +527,29 @@ the durable session id lands only with the initial sync. With no
 remembered id, no records, or a failed read there is no seed and the
 address stays unclaimed, so the Launcher's down states show while
 connecting.
+
+`useAttentionNotifications.ts` (in `app/`) covers the other half of
+completion signaling: the attached conversation drives the tab title and the
+unread count, while a Session this tab is *not* reading is followed through the
+work queue. Its detector (`infra/lib/queueAttention.ts`) compares consecutive
+queue snapshots and reports only a `busy → notified` edge, seeding on every
+connect or reconnect (a re-fetched snapshot is not a completion — including the
+one the connect publishes before it confirms the connection, which is why the
+comparison is gated on `connection.kind === "connected"` rather than on the
+state *changing*) and staying silent for the attached Session. Delivery follows
+what the reader can see: an
+in-app toast while the page is visible, one OS notification per finished
+Session while it is
+hidden, posted through `infra/lib/userNotification.ts` with the Session's
+address in `notification.data` and its own tag (`notificationTag`), so
+simultaneous completions remain separately clickable. A click returns through
+the service worker:
+`web/public/sw.js` focuses the open client and posts the address, and
+`infra/net/useServiceWorkerSessionOpen.ts` turns that message into the same
+`openSession` intent a click in the switcher sends — the worker never writes a
+route, and the navigation actor remains the single owner of browser Session
+selection. With no client open, the worker opens the address's own route
+directly.
 
 `devConsole.ts` hooks browser `console.log`, `console.warn`, and
 `console.error` only when daemon information reports development mode. The

@@ -280,6 +280,17 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// time. The client rebases it onto its own clock, so a skewed browser clock
 	// stays correct.
 	const inFlightStart = new Map<string, number>();
+	// The name of each in-flight tool, by call id and in start order. Parallel
+	// tool calls share one phase word, so an ending tool must not erase the name
+	// of the sibling that is still running.
+	const inFlightToolName = new Map<string, string>();
+	/** The most recently started tool still in flight, or null. Insertion order
+	 * is start order, so the last entry is the newest. */
+	const latestRunningTool = (): string | null => {
+		let name: string | null = null;
+		for (const tool of inFlightToolName.values()) name = tool;
+		return name;
+	};
 	const inFlightElapsed = (): Record<string, number> => {
 		const now = performance.now();
 		const out: Record<string, number> = {};
@@ -353,14 +364,19 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				break;
 			}
 			case "tool_execution_start":
+				inFlightToolName.set(event.toolCallId, event.toolName);
 				setPhase("tool", event.toolName);
 				break;
-			case "tool_execution_end":
-				// The tool's result goes back to the model: the run waits on the
-				// provider again, it is not idle.
-				activeTool = null;
-				setPhase("wait", null);
+			case "tool_execution_end": {
+				// With a sibling still running the phase stays `tool` under that
+				// tool's name; only the last tool ending returns the run to waiting
+				// on the provider (not idle).
+				inFlightToolName.delete(event.toolCallId);
+				const remaining = latestRunningTool();
+				activeTool = remaining;
+				setPhase(remaining === null ? "wait" : "tool", remaining);
 				break;
+			}
 			case "compaction_start":
 				setPhase("compact", null);
 				break;

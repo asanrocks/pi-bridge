@@ -63,8 +63,31 @@
 
 .topBarBtn {
 	composes: ghost from "../../render/buttons.module.css";
+	position: relative;
 	width: var(--control-box);
 	height: var(--control-box);
+}
+
+/* Waiting count on the menu button: the one number in the chrome that means
+   "someone needs you" (ADR 23). A count, so it is a value on the control that
+   opens the switcher — not a separate button. It takes the success hue the
+   notified mark already uses, which is what makes the badge and the row it
+   counts read as the same fact. */
+.topBarBadge {
+	position: absolute;
+	top: 1px;
+	right: 1px;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 3px;
+	border-radius: 7px;
+	background: var(--color-success);
+	color: var(--color-background);
+	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
+	line-height: 14px;
+	text-align: center;
+	pointer-events: none;
 }
 
 /* Dirty-now badge — the count of files differing from HEAD. A quiet chip on the

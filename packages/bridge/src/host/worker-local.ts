@@ -313,7 +313,13 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			emitQueue();
 			refreshTitle();
 		},
-		onActivityChange: () => refreshTitle(),
+		onActivityChange: () => {
+			// The runtime changed phase (a tool started, text began streaming):
+			// the queue's activity line moved. The Manager dedupes these to phase
+			// transitions, so this cannot fire per token.
+			emitQueue();
+			refreshTitle();
+		},
 		onCollected: (record) => endObservations(record),
 	});
 

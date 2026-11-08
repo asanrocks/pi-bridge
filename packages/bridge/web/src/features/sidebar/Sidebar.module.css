@@ -95,8 +95,8 @@
 	height: var(--control-box-xs);
 }
 
-/* Fold caret: right (folded), diagonal (active rows only — children exist but
-   the history stays hidden), down (open). The three states are the glyph's own
+/* Fold caret: right (collapsed), diagonal (working rows only — parked and
+   inactive rows stay hidden), down (all). The three states are the glyph's own
    directions (`CaretIcon`), so there is no rotation here to drift from the
    state. */
 .sidebarChevron {
@@ -109,6 +109,40 @@
    containers use this: the pinned rows and the history. */
 .sidebarFolderChildren {
 	width: 100%;
+}
+
+/* A collapsed folder's hidden-row count: quiet meta ink in the trailing slot,
+   so parked work is findable without unfolding every Project. Never a control
+   — the folder row itself is the target. */
+.sidebarFolderHidden {
+	margin-left: auto;
+	flex-shrink: 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* Indicator hit area on a session row: the mark itself is 6px, so the button
+   is a transparent 24px box centred on it (the coarse-pointer minimum), in the
+   row's leading column. Sits above the row button, whose click opens the
+   session — the two actions never mean the same thing. */
+.sidebarStateBtn {
+	position: absolute;
+	left: calc(var(--action-col) - 9px);
+	top: 50%;
+	transform: translateY(-50%);
+	width: var(--control-box-xs);
+	height: var(--control-box-xs);
+	padding: 0;
+	border: none;
+	background: none;
+	cursor: pointer;
+	border-radius: var(--radius-sm);
+	z-index: 1;
+}
+
+.sidebarStateBtn:focus-visible {
+	outline: 2px solid var(--color-accent);
+	outline-offset: -2px;
 }
 
 /* Quiet in-folder status line (loading / empty folder). */
@@ -248,33 +282,33 @@ difference between them. */
 	background: var(--color-muted);
 }
 
-/* Destructive item: red — Close terminates the live instance. */
-.sidebarMenuClose {
-	color: var(--color-error);
-}
-
-.sidebarMenuClose:hover {
-	color: var(--color-error-hover);
-}
-
 /* Archive closes the session then moves its file out of discovery; the file
    survives, so the item keeps the neutral pigment. */
 .sidebarMenuArchive {
 	color: var(--color-foreground);
 }
 
-/* Group label: a quiet sentence-case sub-label under its section,
-   aligned with the session *names* column — not the rows' left edge —
-   so it reads as belonging to the names it groups (row text starts at
-   6px list inset + 10px row padding + 6px dot + 6px gap = 28px from the
-   pane edge; minus the list inset, that's 22px here). No hairlines —
-   hierarchy is gap + weight only (bold uppercase section header above,
-   regular sentence-case label here). */
-.sidebarGroupHeader {
-	margin: 10px 10px 2px 22px;
+/* Row text: the name/time line, plus the working row's status line below it.
+   Column, so the two lines share one left edge and the time stays on the
+   first. */
+.sidebarItemText {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	flex: 1;
+	min-width: 0;
+}
+
+/* The status line: one line, quieter than the name, clamped rather than
+   wrapping — a busy row must not grow the rail by a live tool name. */
+.sidebarItemStatus {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: var(--fs-xs);
 	color: var(--color-muted-foreground);
-	letter-spacing: var(--tracking-caps);
+	/* A live line is not a click target of its own; the row is. */
+	pointer-events: none;
 }
 
 .sidebarItemRow {
@@ -452,4 +486,42 @@ difference between them. */
 	display: flex;
 	flex-direction: column;
 	min-width: 130px;
+}
+
+/* ── Compact switcher (narrow viewport, ADR 23) ───────────────────────────────
+   An anchored panel off the TopBar menu button: the working rows, grouped by
+   Project, plus the handoff to the full switcher. It is a reading surface, so
+   it sizes to the viewport and scrolls rather than growing past it. */
+.quickSwitcher {
+	--popover-pad: 6px;
+	width: min(320px, calc(100vw - 24px));
+	max-height: min(60vh, 420px);
+	overflow-y: auto;
+	padding: var(--popover-pad);
+}
+
+.quickGroupLabel {
+	padding: 6px 10px 2px;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	letter-spacing: var(--tracking-caps);
+	text-transform: uppercase;
+}
+
+/* Same quiet slot as an empty folder: one sentence, no chrome. */
+.quickEmpty {
+	padding: 6px 10px;
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+}
+
+/* The handoff to the full switcher: a word, so it carries a boundary; it spans
+   the panel's width because it is a destination for the whole surface, not an
+   action on a row. */
+.quickViewAll {
+	composes: outlined from "../../render/buttons.module.css";
+	width: 100%;
+	margin-top: 4px;
+	font-size: var(--fs-sm);
+	font-family: inherit;
 }

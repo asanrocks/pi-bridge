@@ -62,6 +62,7 @@ import type {
 	ModelRef,
 	PrefixCursor,
 	PullRequestItem,
+	SessionActivityInfo,
 	SessionRef,
 } from "../core/index.ts";
 import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
@@ -91,6 +92,8 @@ export interface ActorMetadata {
 	readonly firstMessageText?: string;
 	readonly lastMessageText?: string;
 	readonly lastActivityAt?: string;
+	/** The execution's current activity, on a busy Session (ADR 23). */
+	readonly activity?: SessionActivityInfo;
 }
 
 /** The phase of one Session actor's lifetime. The registry's address
@@ -253,7 +256,22 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	let lastStreaming = manager.document.status.isStreaming;
 	manager.onSettled(() => options.onSettled?.());
 	manager.onFullySettled((execution) => options.onFullySettled?.(execution));
-	manager.onActivityChange(() => options.onActivityChange?.());
+	// The phase clock the listing's `activity.startedAt` reports: the moment
+	// the runtime entered its current phase. Recorded here because the listing
+	// needs the start instant and the Manager's activity word is instantaneous.
+	// A phase that keeps its word while its tool changes (one parallel call
+	// ending, a sibling still running) continues the clock: the phase is what
+	// the field describes, so a sibling's end must not restart it.
+	let activityChangedAt = Date.now();
+	let activityPhase = manager.activity().phase;
+	manager.onActivityChange(() => {
+		const next = manager.activity().phase;
+		if (next !== activityPhase) {
+			activityPhase = next;
+			activityChangedAt = Date.now();
+		}
+		options.onActivityChange?.();
+	});
 	manager.onPatch(() => {
 		const streaming = manager.document.status.isStreaming;
 		if (streaming !== lastStreaming) {
@@ -426,6 +444,22 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 		};
 	};
 
+	/** The listing's activity word: the runtime's reconciled phase, reduced to
+	 * the three things a row can say. Idle and recovery-pending report nothing
+	 * — a row that is not busy has no activity line. */
+	const currentActivity = (): SessionActivityInfo | undefined => {
+		const activity = manager.activity();
+		if (activity.phase === "compact") return { kind: "compacting" };
+		if (activity.phase === "tool") {
+			return {
+				kind: "tool",
+				name: activity.tool ?? "tool",
+				startedAt: new Date(activityChangedAt).toISOString(),
+			};
+		}
+		return manager.document.status.isStreaming ? { kind: "responding" } : undefined;
+	};
+
 	return {
 		ref,
 		authorization,
@@ -443,6 +477,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				firstMessageText: summary.firstMessageText,
 				lastMessageText: summary.lastMessageText,
 				lastActivityAt: summary.lastActivityAt,
+				activity: currentActivity(),
 			};
 		},
 		activity(): SessionActivity {

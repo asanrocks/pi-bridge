@@ -236,6 +236,62 @@ describe("manager activity", () => {
 			harness.cleanup();
 		}
 	});
+
+	it("keeps the surviving sibling's name when one of two parallel tools ends", async () => {
+		// Two tools in one assistant message run in parallel: both starts are
+		// emitted first, then each end as its own execution finishes. The phase
+		// is one word for the batch, so the slower tool's end must not erase the
+		// name of the one still running — that is the switcher's preview line.
+		const releases = new Map<string, () => void>();
+		const blockingTool = (name: string): ToolDefinition => ({
+			name,
+			label: name,
+			description: "Waits until the test releases it.",
+			parameters: Type.Object({ id: Type.String() }),
+			async execute(_toolCallId, params) {
+				const id = (params as { id: string }).id;
+				await new Promise<void>((resolve) => {
+					releases.set(id, resolve);
+				});
+				return { content: [{ type: "text", text: id }], details: { id } };
+			},
+		});
+		const harness = await createBridgeHarness({
+			fixturePath: FIXTURE_URL.pathname,
+			responses: [
+				fauxAssistantMessage([fauxToolCall("slow", { id: "slow1" }), fauxToolCall("fast", { id: "fast1" })], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage("done"),
+			],
+			customTools: [blockingTool("slow"), blockingTool("fast")],
+		});
+		const waitFor = async (predicate: () => boolean): Promise<void> => {
+			for (let i = 0; i < 400 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+			if (!predicate()) throw new Error("timed out waiting for the parallel tools");
+		};
+		// pi re-keys the provider's tool-call ids, so the observation is the
+		// count of in-flight tools, not an id.
+		const inFlightCount = () => Object.keys(harness.manager.document.status.inFlightTools ?? {}).length;
+		try {
+			const turn = harness.manager.prompt("run both");
+			// Both started, the later one named.
+			await waitFor(() => releases.size === 2 && inFlightCount() === 2);
+			expect(harness.manager.activity()).toMatchObject({ phase: "tool", tool: "fast" });
+
+			// The second-started tool ends first: the phase continues under the
+			// first tool's name, never a generic word.
+			releases.get("fast1")?.();
+			await waitFor(() => inFlightCount() === 1);
+			expect(harness.manager.activity()).toMatchObject({ phase: "tool", tool: "slow" });
+
+			releases.get("slow1")?.();
+			await turn;
+			expect(harness.manager.activity()).toMatchObject({ phase: "idle", tool: null });
+		} finally {
+			harness.cleanup();
+		}
+	});
 });
 
 // The Document is the authority the browser renders, so the title may not

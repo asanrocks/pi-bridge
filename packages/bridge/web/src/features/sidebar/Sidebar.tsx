@@ -1,5 +1,6 @@
 // ============================================================================
-// Sidebar — tri-mode Project pane (ADR 11): hidden / rail / fullscreen, the
+// Sidebar — the session switcher (ADR 23), a tri-mode Project pane (ADR 11):
+// hidden / rail / fullscreen, the
 // shared PaneShell behavior for the left side. This module supplies only the
 // pane's policy and chrome: width bounds, the corner-toggle header (the
 // (12, 6) TopBar-hamburger box, so the same screen corner toggles the
@@ -69,7 +70,7 @@ export const Sidebar = memo(function Sidebar({
 	sessionPages,
 	onOpenSession,
 	onOpenProject,
-	onCloseSession,
+	onMarkInactive,
 	onSetSessionState,
 	onArchiveSession,
 	onShowLauncher,
@@ -85,8 +86,7 @@ export const Sidebar = memo(function Sidebar({
 	currentProjectId: string | null;
 	/** Open session's stem, or null on the Project home / launcher. */
 	currentStem: string | null;
-	/** The global work queue — the authority for the pinned section
-	 *  at the top of each folder. */
+	/** The global work queue — the authority for each folder's state rows. */
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
@@ -94,9 +94,10 @@ export const Sidebar = memo(function Sidebar({
 	/** Navigate to a Project's home (the compose surface) — the sidebar's
 	 *  folder-name click. */
 	onOpenProject: (projectId: string) => void;
-	/** Clear a session's queue membership (row menu Close, no confirmation). */
-	onCloseSession: (projectId: string, stem: string) => void;
-	/** The user's defer/restore toggle (row menu) — non-busy queued rows. */
+	/** Clear a session's state (row menu Mark inactive, no confirmation). */
+	onMarkInactive: (projectId: string, stem: string) => void;
+	/** The indicator's quick state toggle: inactive → notified, notified ↔
+	 * deferred. Refused by the store while the session is busy. */
 	onSetSessionState: (projectId: string, stem: string, state: "notified" | "deferred") => void;
 	/** Close then archive a session (row menu Archive, no confirmation) —
 	 *  available on dormant rows too, where only the move happens. */
@@ -116,16 +117,16 @@ export const Sidebar = memo(function Sidebar({
 	 *  the peek drawer this drives, including the grace-delayed hide. */
 	hamburgerHover: boolean;
 }) {
-	// The Projects header and the per-folder rows share the tri-state fold
-	// record (folded / active / open); the header fans out across all ids.
+	// The Projects header and the per-folder rows share the state-scoped fold
+	// record (collapsed / working / all); the header fans out across all ids.
 	const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
 	const { folds, cycleFolder, cycleAllFolders } = useFolderExpansion(projectIds, currentProjectId, currentStem);
 
-	const handleCloseSession = useCallback(
+	const handleMarkInactive = useCallback(
 		(session: SessionInfo) => {
-			onCloseSession(session.projectId, session.stem);
+			onMarkInactive(session.projectId, session.stem);
 		},
-		[onCloseSession],
+		[onMarkInactive],
 	);
 
 	const handleArchiveSession = useCallback(
@@ -186,7 +187,7 @@ export const Sidebar = memo(function Sidebar({
 						onOpenProject(projectId);
 						api.dismissAfterPick();
 					}}
-					onCloseSession={handleCloseSession}
+					onMarkInactive={handleMarkInactive}
 					onSetSessionState={handleSetSessionState}
 					onArchiveSession={handleArchiveSession}
 					onShowLauncher={handleShowLauncher}

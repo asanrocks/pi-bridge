@@ -38,14 +38,39 @@ self.addEventListener("activate", (event) => {
 	);
 });
 
+// A completion notification names the Session it is about (ADR 23). A click
+// therefore has to land on that Session, not merely on the app:
+//   - an open client is focused and told which address to open (the page owns
+//     navigation through its own open intent — the worker never writes a route);
+//   - with no client, the address is a plain route, so opening it directly is
+//     the same navigation the page would perform.
+// The address is encoded segment by segment: a stem is a relative path, and a
+// segment may contain characters that are not URL-safe.
+function sessionUrl(projectId, stem) {
+	if (typeof projectId !== "string" || typeof stem !== "string" || projectId === "" || stem === "") return null;
+	const path = stem.split("/").map(encodeURIComponent).join("/");
+	return `/${encodeURIComponent(projectId)}/${path}`;
+}
+
 self.addEventListener("notificationclick", (event) => {
 	event.notification.close();
+	const data = event.notification.data || {};
 	event.waitUntil(
-		self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-			for (const client of clients) {
-				if ("focus" in client) return client.focus();
+		(async () => {
+			const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+			const client = clients.find((c) => "focus" in c);
+			if (client) {
+				await client.focus();
+				client.postMessage({
+					type: "open-session",
+					projectId: data.projectId,
+					stem: data.stem,
+				});
+				return;
 			}
-		}),
+			const url = sessionUrl(data.projectId, data.stem);
+			if (url !== null) await self.clients.openWindow(url);
+		})(),
 	);
 });
 

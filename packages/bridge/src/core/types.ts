@@ -953,6 +953,20 @@ export type RpcRequestBody =
  * unflushed session; `sessionId` is durable and is the cache/activation key.
  * `timestamp` is an ISO rendering of the ordering value: filesystem mtime for
  * a durable session, the in-memory header creation time before flush. */
+/** What a busy Session's execution is doing right now (ADR 23): the
+ * switcher's preview line, derived host-side from the live Document and the
+ * runtime's own phase word. Absent on a non-busy row — an inactive, notified,
+ * or parked Session has nothing executing.
+ *
+ * `startedAt` is the moment the current phase began, computed at emission, so
+ * the client rebases it onto its own clock (the same rule `status.
+ * inFlightTools` follows) and a reconnecting browser still shows a correct
+ * elapsed time. */
+export type SessionActivityInfo =
+	| { kind: "tool"; name: string; startedAt: string }
+	| { kind: "responding" }
+	| { kind: "compacting" };
+
 export interface SessionInfo {
 	projectId: string;
 	sessionId: string;
@@ -974,6 +988,8 @@ export interface SessionInfo {
 	 * sort key (mtime / header creation). */
 	lastActivityAt?: string;
 	messageCount?: number;
+	/** What the execution is doing, on a busy row only (ADR 23). */
+	activity?: SessionActivityInfo;
 }
 
 export interface ListSessionsReply {

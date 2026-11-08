@@ -178,6 +178,9 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			lastMessageText: liveMeta?.lastMessageText ?? meta?.lastMessageText,
 			lastActivityAt: liveMeta?.lastActivityAt ?? meta?.lastActivityAt,
 			messageCount: meta?.messageCount ?? liveMeta?.messageCount,
+			// Only a live runtime knows what it is executing; a dormant row has
+			// nothing running, so the field is absent rather than stale.
+			activity: liveMeta?.activity,
 		};
 	};
 

@@ -21,13 +21,15 @@
 // time, when document.hidden is still trustworthy. The remaining race —
 // a completion frame arriving in the narrow resume window, before the
 // visibilitychange task — is covered by re-checking document.hidden inside
-// showNotification after its async registration hop; focus-close cleans
-// up any near-miss by tag.
+// `notifyTurnCompletion` after its async registration hop; focus-close cleans
+// up any near-miss by tag. The notification mechanics themselves live in
+// `infra/lib/userNotification.ts`, shared with the queue-wide attention
+// tracker (ADR 23): one path posts OS notices, so the two cannot drift.
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
-import { notificationPermissionGranted } from "../infra/lib/notificationPermission.ts";
 import { UnreadMessageCounter } from "../infra/lib/unreadCounter.ts";
+import { closeUserNotification, notifyTurnCompletion } from "../infra/lib/userNotification.ts";
 import { getStore } from "../infra/state/store.tsx";
 
 // ---------------------------------------------------------------------------
@@ -36,33 +38,6 @@ import { getStore } from "../infra/state/store.tsx";
 
 export interface ActivitySignal {
 	emoji: string; // 🔧 🧠 💬
-}
-
-// ---------------------------------------------------------------------------
-// Module-level state (one app, one notification)
-// ---------------------------------------------------------------------------
-
-const NOTIFICATION_TAG = "pi-bridge-turn-complete";
-
-let activeNotification: Notification | null = null;
-
-function closeNotification(): void {
-	if (activeNotification) {
-		activeNotification.close();
-		activeNotification = null;
-	}
-	// SW-displayed notifications have no JS-side handle; close them by tag.
-	if (typeof navigator !== "undefined" && navigator.serviceWorker) {
-		navigator.serviceWorker
-			.getRegistration()
-			.then((reg) => reg?.getNotifications({ tag: NOTIFICATION_TAG }))
-			.then((list) => {
-				list?.forEach((n) => {
-					n.close();
-				});
-			})
-			.catch(() => {});
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +84,11 @@ export function useStatusNotifications({
 				const now = s.document.status.isStreaming;
 				wasStreamingRef.current = now;
 				if (was && !now && document.hidden) {
-					fireNotification(s.document.status.name || "pi-bridge");
+					void notifyTurnCompletion({
+						label: s.document.status.name || "pi-bridge",
+						body: `${s.document.status.name || "pi-bridge"} · Completed`,
+						address: { projectId: s.currentProjectId ?? "", stem: s.currentStem ?? "" },
+					});
 				}
 			}
 		});
@@ -119,7 +98,7 @@ export function useStatusNotifications({
 	useEffect(() => {
 		const onFocus = () => {
 			setUnreadCount(0);
-			closeNotification();
+			closeUserNotification();
 		};
 		window.addEventListener("focus", onFocus);
 		return () => {
@@ -139,54 +118,4 @@ export function useStatusNotifications({
 			document.title = name;
 		}
 	}, [statusName, isStreaming, unreadCount, activity.emoji, countLabel]);
-}
-
-// ---------------------------------------------------------------------------
-// Fire browser notification
-// ---------------------------------------------------------------------------
-
-function fireNotification(sessionName: string): void {
-	if (!notificationPermissionGranted()) return;
-	if (typeof Notification === "undefined") return;
-
-	closeNotification();
-	void showNotification(`${sessionName} · Completed`);
-}
-
-/**
- * Post the notification. Prefers the service-worker path: SW-shown
- * notifications go through the OS channel and display while the browser
- * itself is backgrounded. The document constructor is only a fallback —
- * Firefox Android defers it to foreground and most other mobile browsers
- * throw TypeError on it.
- */
-async function showNotification(body: string): Promise<void> {
-	const options = { body, tag: NOTIFICATION_TAG };
-
-	// Only use the SW if one already controls the page — getRegistration()
-	// can wait on a registration that never finishes installing.
-	const swReg = navigator.serviceWorker?.controller ? await navigator.serviceWorker.getRegistration() : null;
-	// Re-check after the async hop: a completion frame that arrived in the
-	// resume window (before the visibilitychange task) saw a stale
-	// hidden=true. The user is back and looking at the completed turn; a
-	// notification now would be noise.
-	if (!document.hidden) return;
-	if (swReg) {
-		try {
-			await swReg.showNotification("pi-bridge", options);
-			return;
-		} catch {
-			// Fall through to the constructor
-		}
-	}
-
-	try {
-		const n = new Notification("pi-bridge", options);
-		activeNotification = n;
-		n.addEventListener("close", () => {
-			if (activeNotification === n) activeNotification = null;
-		});
-	} catch {
-		// Mobile browsers throw TypeError here; nothing to show.
-	}
 }

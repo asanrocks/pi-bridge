@@ -3,8 +3,10 @@
 // Sidebar (which stays props-only) with its store data and RPC actions, and
 // owns the shell chrome that used to live in App — the mode (owned here via
 // usePaneMode so it survives any future pane unmounts; reported to App for
-// TopBar hamburger visibility) and the imperative handles (hamburger toggle,
-// Alt+N new-session surface). App consumes { sidebar, mode, toggle,
+// TopBar hamburger visibility), the compact switcher a narrow viewport opens
+// instead of the fullscreen pane (ADR 23), and the imperative handles
+// (hamburger toggle, Alt+N new-session surface). App consumes
+// { sidebar, quickSwitcher, menuButtonRef, mode, toggle, onMenuButton,
 // newSession, setHamburgerHover }; new sidebar wiring grows here, not in the
 // shell.
 // ============================================================================
@@ -14,6 +16,7 @@ import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { usePaneMode } from "../../render/usePaneMode.ts";
+import { QuickSwitcher } from "./QuickSwitcher.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 
 const SIDEBAR_BREAKPOINT = "(min-width: 768px)";
@@ -59,7 +62,7 @@ export function useSidebarShell() {
 			sessionPages={sessionPages}
 			onOpenSession={rpc.openSession}
 			onOpenProject={rpc.openProject}
-			onCloseSession={rpc.closeSession}
+			onMarkInactive={rpc.closeSession}
 			onSetSessionState={rpc.setSessionState}
 			onArchiveSession={rpc.archiveSession}
 			onShowLauncher={showLauncher}
@@ -76,5 +79,54 @@ export function useSidebarShell() {
 	const toggle = useCallback(() => toggleRef.current(), []);
 	const newSession = useCallback(() => newSessionRef.current(), []);
 
-	return { sidebar, mode, toggle, newSession, setHamburgerHover };
+	// ── Compact switcher (narrow viewport) ──────────────────────────────
+	// The TopBar menu button anchors the panel and carries the waiting badge,
+	// so one owner (the shell) holds both.
+	const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+	const [quickOpen, setQuickOpen] = useState(false);
+	const openQuick = useCallback(() => setQuickOpen(true), []);
+	const closeQuick = useCallback(() => setQuickOpen(false), []);
+	// The one shortcut out of the compact list: the full surface, opened rather
+	// than toggled, so a stale mode cannot close it on the way in.
+	const viewAll = useCallback(() => {
+		setQuickOpen(false);
+		setMode("fullscreen");
+	}, [setMode]);
+
+	const handleOpenFromQuick = useCallback(
+		(session: { projectId: string; stem: string; sessionId?: string }) => {
+			// Passing the row's sessionId lets the client seed a cache cursor
+			// (ADR 09) instead of a full replace (the same rule the Sidebar applies).
+			rpc.openSession(session.projectId, session.stem, session.sessionId);
+			setQuickOpen(false);
+		},
+		[rpc],
+	);
+
+	const handleSetStateFromQuick = useCallback(
+		(session: { projectId: string; stem: string }, state: "notified" | "deferred") => {
+			rpc.setSessionState(session.projectId, session.stem, state);
+		},
+		[rpc],
+	);
+
+	/** The TopBar menu button: the full pane on a wide viewport, the compact
+	 * list on a narrow one (the fullscreen overlay is one row away). */
+	const onMenuButton = isWide ? toggle : openQuick;
+
+	const quickSwitcher =
+		quickOpen && !isWide ? (
+			<QuickSwitcher
+				anchor={menuButtonRef.current}
+				queue={queue}
+				currentProjectId={currentProjectId}
+				currentStem={currentStem}
+				onOpen={handleOpenFromQuick}
+				onSetState={handleSetStateFromQuick}
+				onViewAll={viewAll}
+				onClose={closeQuick}
+			/>
+		) : null;
+
+	return { sidebar, quickSwitcher, menuButtonRef, mode, isWide, toggle, onMenuButton, newSession, setHamburgerHover };
 }

@@ -22,6 +22,7 @@ import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
+import { activityLabel } from "../sidebar/activityLabel.ts";
 import styles from "./Launcher.module.css";
 
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
@@ -166,9 +167,11 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				<div className={styles.rows}>
 					{queued.map((session) => {
 						const label = session.name || session.firstMessageText || session.stem;
-						// Preview the latest message; fall back to the first when the copy
-						// only has one (or the file scan predates the field).
-						const preview = session.lastMessageText ?? session.firstMessageText;
+						// A running row says what it is doing; otherwise preview the latest
+						// message, falling back to the first when the copy only has one (or
+						// the file scan predates the field).
+						const activity = session.state === "busy" ? activityLabel(session.activity, now) : "";
+						const preview = activity || (session.lastMessageText ?? session.firstMessageText);
 						const when = session.lastActivityAt ?? session.timestamp;
 						// The mark derives from the durable state alone.
 						const dotCls = [

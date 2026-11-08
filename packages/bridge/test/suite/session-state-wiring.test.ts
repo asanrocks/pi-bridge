@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionRef } from "../../src/core/index.ts";
+import type { SessionInfo, SessionRef } from "../../src/core/index.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
@@ -43,6 +43,11 @@ interface FakeManager extends Manager {
 	settle: (execution?: string) => void;
 	/** Refuse the next admitted prompt before admission (one-shot). */
 	refuseNextPrompt: () => void;
+	/** Report a new runtime activity (fires the Manager's listener, as the
+	 * real runtime does on a phase transition). */
+	setActivity: (phase: "idle" | "wait" | "stream" | "tool" | "compact", tool?: string) => void;
+	/** Flip the Document's streaming flag (the fake never streams on its own). */
+	setStreaming: (streaming: boolean) => void;
 	disposeCalls: () => number;
 }
 
@@ -66,19 +71,26 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 	let execution: string | undefined;
 	let refuseNext = false;
 	let disposed = 0;
+	// Mutable liveness the actor reads: `activity()` reports the phase word and
+	// `document.status.isStreaming` the Document's own flag (ADR 23's listing
+	// facts). The tests move both.
+	let activityPhase: "idle" | "wait" | "stream" | "tool" | "compact" = "idle";
+	let activityTool: string | null = null;
+	const activityListeners = new Set<() => void>();
+	const status = {
+		leafId: null,
+		name: "",
+		model: { provider: "", modelId: "" },
+		thinkingLevel: "off",
+		isStreaming: false,
+		isCompacting: false,
+		stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
+		contextUsage: null,
+		pendingSteer: [] as string[],
+	};
 	const base = {
 		document: {
-			status: {
-				leafId: null,
-				name: "",
-				model: { provider: "", modelId: "" },
-				thinkingLevel: "off",
-				isStreaming: false,
-				isCompacting: false,
-				stats: { tokens: { input: 0, output: 0, total: 0 }, cost: { total: 0 }, messages: 0 },
-				contextUsage: null,
-				pendingSteer: [],
-			},
+			status,
 			entries: {},
 		},
 		liveSessionId: sessionId,
@@ -99,8 +111,11 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			fullySettled.add(listener);
 			return () => fullySettled.delete(listener);
 		},
-		activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
-		onActivityChange: () => () => {},
+		activity: () => ({ phase: activityPhase, tool: activityTool, recoverable: false }),
+		onActivityChange(listener: () => void) {
+			activityListeners.add(listener);
+			return () => activityListeners.delete(listener);
+		},
 		prompt: async () => {},
 		promptAdmitted: async (_text: string, _images?: unknown, _model?: unknown, _level?: unknown, exec?: string) => {
 			if (refuseNext) {
@@ -136,6 +151,14 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		},
 		refuseNextPrompt: () => {
 			refuseNext = true;
+		},
+		setActivity: (phase, tool) => {
+			activityPhase = phase;
+			activityTool = tool ?? null;
+			for (const listener of activityListeners) listener();
+		},
+		setStreaming: (streaming) => {
+			status.isStreaming = streaming;
 		},
 		disposeCalls: () => disposed,
 	} as FakeManager;
@@ -471,6 +494,107 @@ describe("session-state wiring: close and archive", () => {
 // ---------------------------------------------------------------------------
 // Persistence across a Worker restart
 // ---------------------------------------------------------------------------
+
+describe("session-state wiring: queue activity (ADR 23)", () => {
+	/** The queue rows with their activity words, as the wire carries them. */
+	async function activityOf(worker: LocalWorker, stem: string) {
+		const rows = (await worker.listQueue()) as SessionInfo[];
+		return rows.find((r) => r.stem === stem)?.activity;
+	}
+
+	it("a running tool reaches the queue with its name and start instant", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+		fx.managers[0].setActivity("tool", "Bash");
+
+		const activity = await activityOf(fx.worker, "a");
+		expect(activity?.kind).toBe("tool");
+		if (activity?.kind !== "tool") throw new Error("expected a tool activity");
+		expect(activity.name).toBe("Bash");
+		// The instant the phase began, not the elapsed: the client rebases it
+		// onto its own clock.
+		expect(Number.isNaN(Date.parse(activity.startedAt))).toBe(false);
+		expect(Date.now() - Date.parse(activity.startedAt)).toBeLessThan(60_000);
+	});
+
+	it("a streaming session without a tool reports responding, and idle reports nothing", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		fx.managers[0].setStreaming(true);
+		fx.managers[0].setActivity("stream");
+		expect(await activityOf(fx.worker, "a")).toEqual({ kind: "responding" });
+
+		fx.managers[0].setStreaming(false);
+		fx.managers[0].setActivity("idle");
+		expect(await activityOf(fx.worker, "a")).toBeUndefined();
+	});
+
+	it("compaction reports its own word", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+		fx.managers[0].setStreaming(true);
+		fx.managers[0].setActivity("compact");
+		expect(await activityOf(fx.worker, "a")).toEqual({ kind: "compacting" });
+	});
+
+	it("keeps the phase clock across a tool change, so a sibling's end is not a restart", async () => {
+		// Parallel tools share the `tool` phase: one ending while the other runs
+		// changes the name but not the phase, and the elapsed the row shows is
+		// the phase's — restarting it would read `0m` for a tool that has been
+		// running for minutes.
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+		fx.managers[0].setActivity("tool", "Bash");
+		const first = await activityOf(fx.worker, "a");
+		if (first?.kind !== "tool") throw new Error("expected a tool activity");
+
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		fx.managers[0].setActivity("tool", "Read");
+		const second = await activityOf(fx.worker, "a");
+		if (second?.kind !== "tool") throw new Error("expected a tool activity");
+		expect(second.name).toBe("Read");
+		expect(second.startedAt).toBe(first.startedAt);
+
+		// A real phase change does restart the clock (and drops the tool line).
+		fx.managers[0].setStreaming(true);
+		fx.managers[0].setActivity("stream");
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		const responding = await activityOf(fx.worker, "a");
+		expect(responding).toEqual({ kind: "responding" });
+	});
+
+	it("an activity change pushes the queue; a dormant row carries no activity", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const pushes: Array<string | null> = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind !== "queue_changed") return;
+			const row = (event.sessions as SessionInfo[]).find((r) => r.stem === "a");
+			pushes.push(row?.activity?.kind ?? null);
+		});
+		fx.managers[0].setActivity("tool", "Read");
+		expect(pushes).toContain("tool");
+
+		// The row outlives its runtime: a collected session keeps its state
+		// (notified) and loses the activity line the runtime owned.
+		fx.managers[0].setStreaming(false);
+		fx.managers[0].settle();
+		await fx.worker.closeSession({ projectId: "proj", stem: "a" });
+		expect(await activityOf(fx.worker, "a")).toBeUndefined();
+	});
+});
 
 describe("session-state wiring: restart recovery", () => {
 	it("the queue survives a Worker rebuild; a persisted busy recovers to notified", async () => {

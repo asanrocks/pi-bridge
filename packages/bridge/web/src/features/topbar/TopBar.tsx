@@ -30,6 +30,8 @@ export const TopBar = memo(function TopBar({
 	connection,
 	showSidebarToggle,
 	onSidebarToggle,
+	menuButtonRef,
+	waitingCount,
 	onSidebarHover,
 	showHistoryToggle,
 	onHistory,
@@ -44,6 +46,13 @@ export const TopBar = memo(function TopBar({
 	 *  desktop rail mode the rail's own edge is the close affordance. */
 	showSidebarToggle: boolean;
 	onSidebarToggle: () => void;
+	/** The menu button's element: the compact switcher's popover anchor.
+	 * Owned by the sidebar shell because both surfaces are its policy. */
+	menuButtonRef?: React.Ref<HTMLButtonElement>;
+	/** Sessions awaiting the user's input, across every Project (ADR 23). The
+	 * badge is the passive half of the switcher: work that needs a person is
+	 * visible while the pane is closed. */
+	waitingCount: number;
 	/** Hover signal for the peek drawer (desktop, sidebar hidden):
 	 *  true = pointer entered the hamburger, false = left it. Forwarded
 	 *  raw to the Sidebar, which owns the peek drawer and the grace timer
@@ -76,14 +85,20 @@ export const TopBar = memo(function TopBar({
 		<div className={styles.topBar}>
 			{showSidebarToggle && (
 				<button
+					ref={menuButtonRef}
 					type="button"
 					className={styles.topBarBtn}
 					onClick={onSidebarToggle}
 					onMouseEnter={() => onSidebarHover?.(true)}
 					onMouseLeave={() => onSidebarHover?.(false)}
-					aria-label="Toggle sidebar"
+					aria-label={waitingCount > 0 ? `Toggle sidebar — ${waitingCount} waiting for you` : "Toggle sidebar"}
 				>
 					<MenuIcon size={20} />
+					{waitingCount > 0 && (
+						<span className={styles.topBarBadge} aria-hidden="true">
+							{waitingCount > 99 ? "99+" : waitingCount}
+						</span>
+					)}
 				</button>
 			)}
 			{editing ? (

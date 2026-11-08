@@ -994,6 +994,18 @@ an active row the live latest-message preview and last-activity time win over
 the file scan; `timestamp` remains the durable sort key (mtime / header
 creation).
 
+A queue row for a busy Session also carries the execution's `activity` (ADR
+23): the actor's `metadata()` derives it from the reconciled phase word — a
+running tool with the instant its phase began, `responding` for a streaming
+run without a tool, `compacting` for compaction — and omits it when the
+runtime is idle. Parallel tool calls share the phase, so the name is the most
+recently started tool still running: one sibling ending does not erase the
+other's name or restart the phase clock. The actor records the phase-change
+instant from the Manager's deduped `onActivityChange` — deduped *and*
+phase-scoped, so a text delta does not change the phase, a name change inside
+one phase does not restart the clock, and a phase change emits one
+`queue_changed`.
+
 `listQueue` is the global work queue: every non-inactive session
 across every Project — membership is the state store's key set, in memory,
 not the registry and not a directory scan, so a dormant notified session is

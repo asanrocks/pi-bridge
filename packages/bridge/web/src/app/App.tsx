@@ -31,6 +31,7 @@ import { TopBar } from "../features/topbar/TopBar.tsx";
 import { FileBrowser } from "../features/viewer/FileBrowser.tsx";
 import { useConnection } from "../infra/net/useConnection.ts";
 import { useBranchSelect, useRpc } from "../infra/net/useRpc.ts";
+import { useServiceWorkerSessionOpen } from "../infra/net/useServiceWorkerSessionOpen.ts";
 import { useDraftGuard } from "../infra/persist/draftPersistence.ts";
 import { StoreProvider, useStore } from "../infra/state/store.tsx";
 import { useViewModel } from "../infra/state/useViewModel.ts";
@@ -38,6 +39,7 @@ import styles from "./App.module.css";
 import { useAppKeybindings } from "./keybindings.ts";
 import { SecureContextHint } from "./SecureContextHint.tsx";
 import { ToastBar } from "./ToastBar.tsx";
+import { useAttentionNotifications } from "./useAttentionNotifications.ts";
 import { useKeyboardRing } from "./useKeyboardRing.ts";
 import { useStatusNotifications } from "./useStatusNotifications.ts";
 
@@ -78,6 +80,10 @@ function AppInner() {
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
+	// Passive awareness (ADR 23): the count of Sessions awaiting the user,
+	// summed across Projects. A primitive selector, so the memoized TopBar does
+	// not re-render on every unrelated queue change.
+	const waitingCount = useStore((s) => s.queue.filter((row) => row.state === "notified").length);
 
 	// ── Status notification ──────────────────────────────────────────────
 	const activityPhase = isStreaming ? liveActivityPhase(vm) : null;
@@ -86,6 +92,10 @@ function AppInner() {
 		statusName,
 		activity: { emoji: activityPhase === "thinking" ? "🧠" : activityPhase === "tool" ? "🔧" : "💬" },
 	});
+	// The queue-wide half of the same story: a Session other than the one being
+	// read finishes, so the notice names it and a click opens it.
+	useAttentionNotifications();
+	useServiceWorkerSessionOpen(rpc.openSession);
 
 	// ── Keyboard ring (document-level, via useAppKeybindings) ────────────
 	useAppKeybindings(
@@ -122,7 +132,9 @@ function AppInner() {
 				name={statusName}
 				connection={connection}
 				showSidebarToggle={sidebar.mode === "hidden"}
-				onSidebarToggle={sidebar.toggle}
+				onSidebarToggle={sidebar.onMenuButton}
+				menuButtonRef={sidebar.menuButtonRef}
+				waitingCount={waitingCount}
 				onSidebarHover={sidebar.setHamburgerHover}
 				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
 				onHistory={history.toggle}
@@ -130,6 +142,10 @@ function AppInner() {
 				onRename={handleRename}
 				onRetry={retry}
 			/>
+
+			{/* Compact switcher (narrow viewport, ADR 23): the fullscreen pane is
+			    one row away, so skimming costs one move instead of two. */}
+			{sidebar.quickSwitcher}
 
 			<div className={styles.body}>
 				{/* Sidebar — Project folders with their sessions (ADR 11) */}
