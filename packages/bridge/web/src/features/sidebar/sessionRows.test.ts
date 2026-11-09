@@ -1,11 +1,11 @@
 // ============================================================================
-// sessionRows — a Project folder's queue order (Inbox → Later), the
-// queue/history split, and the collapsed folder's hidden count.
+// sessionRows — a Project folder's queue order (Inbox → Later) and the
+// queue/history split.
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
 import type { SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
-import { hiddenRowCount, splitProjectRows } from "./sessionRows.ts";
+import { splitProjectRows } from "./sessionRows.ts";
 
 function row(stem: string, location: SessionLocation, running = false): SessionInfo {
 	return {
@@ -39,25 +39,5 @@ describe("splitProjectRows", () => {
 		const rows = splitProjectRows([row("parked", "later", true)], []);
 		expect(rows.later.map((r) => r.stem)).toEqual(["parked"]);
 		expect(rows.inbox).toEqual([]);
-	});
-});
-
-describe("hiddenRowCount", () => {
-	const rows = {
-		inbox: [row("n1", "inbox"), row("n2", "inbox")],
-		later: [row("d1", "later")],
-		archived: [row("old", "archive")],
-	};
-
-	it("counts everything a collapsed folder hides", () => {
-		expect(hiddenRowCount("collapsed", rows)).toBe(4);
-	});
-
-	it("counts only Later and archived rows in the inbox step", () => {
-		expect(hiddenRowCount("inbox", rows)).toBe(2);
-	});
-
-	it("states nothing when the folder is fully open", () => {
-		expect(hiddenRowCount("all", rows)).toBe(0);
 	});
 });

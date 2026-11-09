@@ -4,20 +4,21 @@
 // the All-projects action) and the Project folder list. Presentational — the
 // mode machine and the overlay-dismissal wiring live in Sidebar.
 //
-// Selection model: the Projects header cycles every folder's fold state; the
-// folder row toggles its own fold and the + button opens the Project home.
-// Nothing on a folder row navigates by name. Selection lives only on session
-// rows: exactly one row (the attached (projectId, stem)) wears the accent
-// tint; a folder never does — it is a fold control, not a target.
+// Selection model: the Projects header folds or unfolds every folder at once;
+// the folder row toggles its own fold and the + button opens the Project home.
+// What an unfolded folder reveals is a ladder advanced at the list's end, not a
+// heading state. Nothing on a folder row navigates by name. Selection lives only
+// on session rows: exactly one row (the attached (projectId, stem)) wears the
+// accent tint; a folder never does — it is a fold control, not a target.
 // ============================================================================
 
 import { memo, useMemo } from "react";
 import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, GridIcon } from "../../render/icons.tsx";
+import { DEFAULT_FOLDER_STATE, type FolderState } from "./foldState.ts";
 import { ProjectFolder } from "./ProjectFolder.tsx";
 import styles from "./Sidebar.module.css";
-import type { FolderFoldState } from "./useFolderExpansion.ts";
 
 /** Stable empty array so memoized folders without active rows don't churn. */
 const NO_SESSIONS: SessionInfo[] = [];
@@ -28,9 +29,11 @@ export const SidebarContent = memo(function SidebarContent({
 	currentStem,
 	queue,
 	sessionPages,
-	folds,
+	folders,
 	onToggleAllFolders,
 	onToggleFolder,
+	onAdvanceFolder,
+	onRetreatFolder,
 	onOpenSession,
 	onOpenProject,
 	onMoveSession,
@@ -48,11 +51,16 @@ export const SidebarContent = memo(function SidebarContent({
 	queue: SessionInfo[];
 	/** Per-Project lazily fetched history pages, keyed by projectId. */
 	sessionPages: Record<string, SessionFolderPage>;
-	/** Per-Project fold states; missing entries default to "inbox". */
-	folds: Record<string, FolderFoldState>;
-	/** Projects header: apply one uniform fold state to every folder. */
-	onToggleAllFolders: (hasInboxById: Record<string, boolean>) => void;
-	onToggleFolder: (projectId: string, hasInbox: boolean) => void;
+	/** Per-Project folder state; missing entries default to an unfolded
+	 * attention list. */
+	folders: Record<string, FolderState>;
+	/** Projects header: fold everything, or unfold everything. */
+	onToggleAllFolders: () => void;
+	onToggleFolder: (projectId: string) => void;
+	/** A folder's Load more, below the archived cap: the next reveal step. */
+	onAdvanceFolder: (projectId: string, hasInbox: boolean, hasLater: boolean) => void;
+	/** A folder's Show less: the previous reveal step. */
+	onRetreatFolder: (projectId: string, hasInbox: boolean, hasLater: boolean) => void;
 	onOpenSession: (session: SessionInfo) => void;
 	onOpenProject: (projectId: string) => void;
 	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
@@ -76,39 +84,22 @@ export const SidebarContent = memo(function SidebarContent({
 		return map;
 	}, [queue]);
 
-	// Per-folder "has Inbox rows" — the cycle input that decides whether a
-	// folder has the inbox step at all. Also feeds the header chevron's
-	// effective-collapsed test.
-	const hasInboxById = useMemo(() => {
-		const out: Record<string, boolean> = {};
-		for (const p of projects) {
-			out[p.id] = (queueByProject.get(p.id) ?? []).some((s) => s.location === "inbox");
-		}
-		return out;
-	}, [projects, queueByProject]);
-
-	// Header chevron mirrors the folders: down while every folder is open,
-	// right while every folder is effectively folded, diagonal in between.
-	const effectiveFold = (id: string): FolderFoldState => {
-		const f = folds[id] ?? "inbox";
-		return f === "inbox" && !hasInboxById[id] ? "collapsed" : f;
-	};
-	const allOpen = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "all");
-	const allFolded = projects.length > 0 && projects.every((p) => effectiveFold(p.id) === "collapsed");
-	const headerCaret = allOpen ? "down" : allFolded ? "right" : "diagonal";
+	// Header chevron mirrors the folders: down while any folder is unfolded,
+	// right while every folder is folded.
+	const allFolded = projects.length > 0 && projects.every((p) => (folders[p.id] ?? DEFAULT_FOLDER_STATE).folded);
 
 	return (
 		<>
 			<div className={styles.sidebarSectionHeader}>
-				{/* The label itself is the fold-all toggle — same cycle the folder
-				    rows use, applied to every Project at once. */}
+				{/* The label itself is the fold-all toggle — the folder headings'
+				    gesture, applied to every Project at once. */}
 				<button
 					type="button"
 					className={styles.sidebarSectionToggle}
-					onClick={() => onToggleAllFolders(hasInboxById)}
-					title="Collapse / inbox / all"
+					onClick={() => onToggleAllFolders()}
+					title={allFolded ? "Unfold all projects" : "Fold all projects"}
 				>
-					<CaretIcon size={12} direction={headerCaret} className={styles.sidebarChevron} />
+					<CaretIcon size={12} direction={allFolded ? "right" : "down"} className={styles.sidebarChevron} />
 					<span>Projects</span>
 				</button>
 				<span className={styles.headerActions}>
@@ -140,7 +131,7 @@ export const SidebarContent = memo(function SidebarContent({
 						project={project}
 						currentProjectId={currentProjectId}
 						currentStem={currentStem}
-						fold={folds[project.id] ?? "inbox"}
+						folder={folders[project.id] ?? DEFAULT_FOLDER_STATE}
 						queueRows={queueByProject.get(project.id) ?? NO_SESSIONS}
 						page={sessionPages[project.id]}
 						onToggle={onToggleFolder}
@@ -148,6 +139,8 @@ export const SidebarContent = memo(function SidebarContent({
 						onOpen={onOpenSession}
 						onMove={onMoveSession}
 						onTrash={onTrashSession}
+						onAdvance={onAdvanceFolder}
+						onRetreat={onRetreatFolder}
 						onLoad={onLoadFolder}
 						onLoadMore={onLoadMoreFolder}
 					/>

@@ -291,33 +291,35 @@ The Sidebar is the Session switcher (ADR 23): a Project tree whose rows are
 ordered by the durable Session location, so finding work needs no second
 surface.
 
-Each folder is a location-scoped tri-state fold — collapsed (nothing below the
-row), inbox (the Project's Inbox rows), all (Inbox rows plus the Later and
-archived ones) — cycled by clicking the folder row (chevron + name are one
-target; the name does not navigate). The chevron mirrors the state: right
-(collapsed), diagonal (inbox only), down (all). Missing fold state defaults to
-`inbox`, so a Project you have not visited shows what may need the user without
-its Later work or its history; the Project you land on is opened to `all` at
-first paint (the browse-this-project stance), and a later session switch inside
-it never unfolds it. A folder with no Inbox rows has only two states: the inbox
-step is skipped in the cycle and a stale persisted `inbox` renders collapsed,
-since "inbox only" is indistinguishable from collapsed there. A collapsed folder states the number of rows it hides
-(`+N`), counting only rows already known — the count never triggers a history
-fetch. The `Projects` header label is the fold-all toggle: it applies one
-uniform state to every folder — the smallest step strictly above every
-folder's current effective state, up the ladder `collapsed` → `inbox` →
-`all` (the `inbox` step exists only when some folder has Inbox rows),
-wrapping to `collapsed` at the top. A click therefore always changes every
-folder — no dead clicks — and fold/unfold mixing never survives a click. Each
-folder also has exactly one navigation affordance, the `+` button, which opens
-the Project home — the compose surface where the first prompt creates the
-Session (there is no empty-Session creation path). Folder children sit
-flush-left with the folder row; hierarchy is carried by the chevron and row
-fills, not indentation. The three fold targets share one hover signature: the
-`Projects` label and a folder row both step the meta ink to the foreground and
-paint nothing, while the `+` beside them takes the fill because it is an icon
-control (see [Iconography and control surfaces](#iconography-and-control-surfaces)).
-A folder row's hover is not a row state: it is a fold control, and the fill
+Each folder has two modes — folded (the heading only) and unfolded (the rows
+and the list's end controls) — toggled by clicking the folder row (chevron +
+name are one target; the name does not navigate). The chevron mirrors the
+mode: right (folded), down (unfolded). What an unfolded folder shows is a
+reveal ladder advanced at the list's end, never a heading state: Inbox → Inbox
+plus Later → Inbox plus Later plus the archived history. Folding keeps the
+reveal, so unfolding resumes the list where the reader left it. The default is
+unfolded at the ladder's floor — Inbox, or Later for a folder without Inbox
+rows — and nothing else moves it: opening a Project, landing on a session URL,
+or switching sessions never touches a folder's reveal, and a manual fold
+survives a restart. Landing at the floor is also the cheap state: the archived
+page is requested only when Load more reaches the cap, so a Project you merely
+visit reads no history at all. A step that
+would add no rows is skipped: a folder with no Inbox rows starts at Later (and
+at the history with no Later rows either), because a step rendering what the
+step below it shows is a click that does nothing. The `Projects` header label
+is the fold-all toggle: fold everything while any folder is unfolded, unfold
+everything while all are folded, each folder resuming its own reveal — a click
+always changes something, and the header never rewrites what a folder click
+decided. Each folder also has exactly one navigation affordance, the `+`
+button, which opens the Project home — the compose surface where the first
+prompt creates the Session (there is no empty-Session creation path). Folder
+children sit flush-left with the folder row; hierarchy is carried by the
+chevron and row fills, not indentation. The three fold targets share one hover
+signature: the `Projects` label and a folder row both step the meta ink to the
+foreground and paint nothing, while the `+` beside them takes the fill because
+it is an icon control (see
+[Iconography and control surfaces](#iconography-and-control-surfaces)). A
+folder row's hover is not a row state: it is a fold control, and the fill
 channel belongs to rows that carry identity or position.
 
 Folder children render in queue order — Inbox → Later — then the archived
@@ -330,26 +332,32 @@ anything, so a streaming row never drags the list out from under the reader.
 Archived history has no placement, so it is newest-activity first; the time
 label on every row carries recency in both cases.
 
-- The `inbox` step shows the Project's Inbox rows. Two independent facts draw
-  the mark: the location (green for Inbox, the accent tint for Later, the muted
-  tint for Archive) and running (orange, pulsing), which overwrites the
-  location because an execution is the more urgent fact. An Inbox or running
-  row carries a second line, clamped to one line so a live name never grows the
-  rail: a running row names what it is doing (`Bash · 15m`, `Responding…`,
-  `Compacting…`) from the row's `activity` field — the tool name and the
-  phase's start instant, rebased onto the reader's clock by the shared label
-  clock — and an idle Inbox row previews its latest assistant reply. Later and
-  archived rows stay one line. The attached `(Project, stem)` row is the only
-  selected row: the accent tint plus weight `500` on its name, per Row states
-  below. A folder row never carries identity — it is a fold control, not a
-  target.
-- The `all` step adds the Later rows (the accent dot; "still open, not next")
-  and the archived ones, fetched lazily on unfold. Each row carries the shared
-  time label (relative while fresh, then a clock, a weekday, or a date). A
-  chevron at the list's end requests the next page: the continuation is the
-  one sidebar control drawn as a glyph rather than words, because "more below"
-  is the meaning a chevron already carries, and this one sits below the content
-  it extends while the pane's fold carets sit on the row above theirs.
+- The floor of the ladder shows the Project's Inbox rows. Two independent
+  facts draw the mark: the location (green for Inbox, the accent tint for
+  Later, the muted tint for Archive) and running (orange, pulsing), which
+  overwrites the location because an execution is the more urgent fact. An
+  Inbox or running row carries a second line, clamped to one line so a live
+  name never grows the rail: a running row names what it is doing
+  (`Bash · 15m`, `Responding…`, `Compacting…`) from the row's `activity` field
+  — the tool name and the phase's start instant, rebased onto the reader's
+  clock by the shared label clock — and an idle Inbox row previews its latest
+  assistant reply. Later and archived rows stay one line. The attached
+  `(Project, stem)` row is the only selected row: the accent tint plus weight
+  `500` on its name, per Row states below. A folder row never carries identity
+  — it is a fold control, not a target.
+- The ladder's next step adds the Later rows (the accent dot; "still open, not
+  next"), and its cap adds the archived ones, fetched lazily on arrival. Each
+  row carries the shared time label (relative while fresh, then a clock, a
+  weekday, or a date). The list's end carries the ladder's two controls as one
+  pair of glyphs: Load more (down) adds Later, then the history, then the next
+  server page of it — the continuation is the one sidebar control drawn as a
+  glyph rather than words, because "more below" is the meaning a chevron
+  already carries — and Show less (up) removes the history, then Later, and is
+  absent at the floor, where nothing is left below. A step that would add no
+  rows is skipped rather than offered, so neither glyph ever presses to no
+  effect; at the cap Load more keeps the meaning and becomes the page request.
+  A folded folder states no count: the chevron alone says there is content
+  below, and the reveal it will show is remembered rather than advertised.
 
 The mark is not a control. Placement is a decision with four outcomes, two of
 which also stop the agent, and a 6px dot cannot say that; the row menu owns it.
@@ -1486,8 +1494,9 @@ header is the registry (role, glyph, one sentence each), exports are named
   decision at the point the export is added.
 - **Directional marks split by what their rotation means.** Chevrons are
   outline and point at something. The fold caret is solid, and it is the only
-  solid directional mark: rotation *is* its state (right / diagonal / down for
-  collapsed / working / all), so it carries that state as three glyph directions
+  solid directional mark: rotation *is* its state (right / down for folded /
+  unfolded, with a diagonal the pre-ladder fold used and the dev glyph gallery
+  still renders), so it carries that state as glyph directions
   rather than a CSS transform a consumer can forget. A filled triangle used as
   a chevron would be a different symbol, not a weight choice. Because the
   directions are one path under rotation, the path is authored symmetric about

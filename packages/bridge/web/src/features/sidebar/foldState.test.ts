@@ -1,67 +1,126 @@
 // ============================================================================
-// foldState — the sidebar's fold cycle, its no-Inbox-rows rule, and the
-// migration of both earlier persisted records.
+// foldState — the reveal ladder's four rules (floor, clamp, advance, retreat),
+// the binary heading toggle, the fold-all target, and the migration of both
+// earlier persisted records.
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import { effectiveFold, foldAllTarget, migrateFoldRecord, nextFoldState } from "./foldState.ts";
+import {
+	advanceReveal,
+	effectiveReveal,
+	type FolderState,
+	floorReveal,
+	foldAllTarget,
+	migrateFoldRecord,
+	retreatReveal,
+	toggleFolded,
+} from "./foldState.ts";
 
-describe("nextFoldState", () => {
-	it("cycles collapsed → inbox → all → collapsed when the folder has Inbox rows", () => {
-		expect(nextFoldState("collapsed", true)).toBe("inbox");
-		expect(nextFoldState("inbox", true)).toBe("all");
-		expect(nextFoldState("all", true)).toBe("collapsed");
-	});
-
-	it("skips the inbox step when the folder has none", () => {
-		expect(nextFoldState("collapsed", false)).toBe("all");
-		expect(nextFoldState("all", false)).toBe("collapsed");
+describe("floorReveal", () => {
+	it("starts at Inbox, at Later without Inbox rows, and at the history with neither", () => {
+		expect(floorReveal(true, true)).toBe("inbox");
+		expect(floorReveal(true, false)).toBe("inbox");
+		expect(floorReveal(false, true)).toBe("later");
+		expect(floorReveal(false, false)).toBe("all");
 	});
 });
 
-describe("effectiveFold", () => {
-	it("renders an inbox step with no Inbox rows as collapsed", () => {
-		expect(effectiveFold("inbox", false)).toBe("collapsed");
-		expect(effectiveFold("inbox", true)).toBe("inbox");
-		expect(effectiveFold("all", false)).toBe("all");
+describe("effectiveReveal", () => {
+	it("raises a remembered step below the floor", () => {
+		expect(effectiveReveal("inbox", false, true)).toBe("later");
+		expect(effectiveReveal("later", false, false)).toBe("all");
+	});
+
+	it("leaves a reachable step alone", () => {
+		expect(effectiveReveal("later", true, true)).toBe("later");
+		expect(effectiveReveal("all", false, false)).toBe("all");
+	});
+});
+
+describe("advanceReveal", () => {
+	it("adds Later when there is Later work", () => {
+		expect(advanceReveal("inbox", true)).toBe("later");
+	});
+
+	it("skips to the history when nothing would be added", () => {
+		expect(advanceReveal("inbox", false)).toBe("all");
+	});
+
+	it("caps at the history, where the press becomes a server page", () => {
+		expect(advanceReveal("later", true)).toBe("all");
+		expect(advanceReveal("all", true)).toBe("all");
+	});
+});
+
+describe("retreatReveal", () => {
+	it("removes the history first, then Later", () => {
+		expect(retreatReveal("all", true, true)).toBe("later");
+		expect(retreatReveal("later", true, true)).toBe("inbox");
+	});
+
+	it("never goes below the floor", () => {
+		expect(retreatReveal("later", false, true)).toBe("later");
+		expect(retreatReveal("all", false, false)).toBe("all");
+	});
+});
+
+describe("toggleFolded", () => {
+	it("keeps the reveal across a fold", () => {
+		const folded = toggleFolded({ folded: false, reveal: "later" });
+		expect(folded).toEqual({ folded: true, reveal: "later" });
+		expect(toggleFolded(folded)).toEqual({ folded: false, reveal: "later" });
 	});
 });
 
 describe("foldAllTarget", () => {
-	const ids = ["a", "b"];
+	const states = (...folded: boolean[]): FolderState[] => folded.map((f) => ({ folded: f, reveal: "inbox" }));
 
-	it("moves every folder one step above the highest, wrapping at the top", () => {
-		expect(foldAllTarget({ a: "collapsed", b: "collapsed" }, ids, { a: true })).toBe("inbox");
-		expect(foldAllTarget({ a: "inbox", b: "collapsed" }, ids, { a: true })).toBe("all");
-		expect(foldAllTarget({ a: "all", b: "inbox" }, ids, { a: true, b: true })).toBe("collapsed");
+	it("folds everything when any folder is unfolded", () => {
+		expect(foldAllTarget(states(false, false))).toBe(true);
+		expect(foldAllTarget(states(true, false))).toBe(true);
 	});
 
-	it("skips inbox for a set with no Inbox rows", () => {
-		expect(foldAllTarget({ a: "collapsed", b: "collapsed" }, ids, {})).toBe("all");
-	});
-
-	it("treats a stale inbox fold without Inbox rows as collapsed", () => {
-		// Effective state is collapsed on both, so the one click goes to `all`.
-		expect(foldAllTarget({ a: "inbox", b: "collapsed" }, ids, {})).toBe("all");
+	it("unfolds everything when all are folded", () => {
+		expect(foldAllTarget(states(true, true))).toBe(false);
 	});
 });
 
 describe("migrateFoldRecord", () => {
-	it("translates the earlier names, including the pre-location working step", () => {
-		expect(migrateFoldRecord({ a: "folded", b: "active", c: "open", d: "working" })).toEqual({
-			a: "collapsed",
-			b: "inbox",
-			c: "all",
-			d: "inbox",
+	it("reads the tri-state cycle and the pre-location names", () => {
+		expect(
+			migrateFoldRecord({ a: "folded", b: "active", c: "open", d: "working", e: "all", f: "collapsed" }),
+		).toEqual({
+			a: { folded: true, reveal: "inbox" },
+			b: { folded: false, reveal: "inbox" },
+			c: { folded: false, reveal: "all" },
+			d: { folded: false, reveal: "inbox" },
+			e: { folded: false, reveal: "all" },
+			f: { folded: true, reveal: "inbox" },
 		});
 	});
 
 	it("reads the v1 array form as expanded folders", () => {
-		expect(migrateFoldRecord(["a", 7, "b"])).toEqual({ a: "all", b: "all" });
+		expect(migrateFoldRecord(["a", 7, "b"])).toEqual({
+			a: { folded: false, reveal: "all" },
+			b: { folded: false, reveal: "all" },
+		});
 	});
 
-	it("drops unknown states rather than trusting them", () => {
-		expect(migrateFoldRecord({ a: "sideways", b: "all" })).toEqual({ b: "all" });
+	it("round-trips the current shape", () => {
+		const stored = { a: { folded: true, reveal: "later" } };
+		expect(migrateFoldRecord(stored)).toEqual(stored);
+	});
+
+	it("drops unknown or malformed states rather than trusting them", () => {
+		expect(
+			migrateFoldRecord({
+				a: "sideways",
+				b: { folded: true, reveal: "later" },
+				c: { folded: "yes", reveal: "later" },
+				d: { folded: true, reveal: "top" },
+				e: { reveal: "all" },
+			}),
+		).toEqual({ b: { folded: true, reveal: "later" } });
 		expect(migrateFoldRecord(null)).toEqual({});
 		expect(migrateFoldRecord("nonsense")).toEqual({});
 	});

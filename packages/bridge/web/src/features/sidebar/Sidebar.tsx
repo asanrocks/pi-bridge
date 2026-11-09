@@ -9,7 +9,7 @@
 // live in render/PaneShell; the mode itself is owned by useSidebarShell.
 // Siblings:
 //   - useSidebarShell  — store data + RPC actions + mode ownership
-//   - useFolderExpansion — persisted folder fold state + auto-expand
+//   - useFolderExpansion — persisted folder fold + reveal state
 //   - SidebarContent   — the shared panel body (header + folder tree)
 //     ├─ ProjectFolder  — one foldable Project branch
 //     └─ SessionRow     — one session leaf (+ row menu)
@@ -117,10 +117,10 @@ export const Sidebar = memo(function Sidebar({
 	 *  the peek drawer this drives, including the grace-delayed hide. */
 	hamburgerHover: boolean;
 }) {
-	// The Projects header and the per-folder rows share the state-scoped fold
-	// record (collapsed / working / all); the header fans out across all ids.
+	// The Projects header and the per-folder rows share one folder record (folded
+	// plus the remembered reveal step); the header fans its toggle across all ids.
 	const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
-	const { folds, cycleFolder, cycleAllFolders } = useFolderExpansion(projectIds, currentProjectId, currentStem);
+	const { folders, toggleFolder, advanceFolder, retreatFolder, toggleAllFolders } = useFolderExpansion(projectIds);
 
 	const handleMoveSession = useCallback(
 		(session: SessionInfo, location: SessionLocation) => {
@@ -166,9 +166,11 @@ export const Sidebar = memo(function Sidebar({
 					currentStem={currentStem}
 					queue={queue}
 					sessionPages={sessionPages}
-					folds={folds}
-					onToggleAllFolders={cycleAllFolders}
-					onToggleFolder={cycleFolder}
+					folders={folders}
+					onToggleAllFolders={toggleAllFolders}
+					onToggleFolder={toggleFolder}
+					onAdvanceFolder={advanceFolder}
+					onRetreatFolder={retreatFolder}
 					onOpenSession={(session) => {
 						// Passing the id lets the client seed a cache cursor (ADR 09)
 						// instead of falling back to a full replace on every UI

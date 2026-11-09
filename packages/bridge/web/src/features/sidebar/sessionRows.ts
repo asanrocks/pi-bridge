@@ -31,12 +31,3 @@ export function splitProjectRows(queueRows: readonly SessionInfo[], historyRows:
 	const archived = historyRows.filter((row) => !queued.has(row.sessionId));
 	return { inbox, later, archived };
 }
-
-/** The count a collapsed folder states: every row it hides. Archived rows
- * count only once the history page has been fetched — the count never
- * triggers a fetch of its own. */
-export function hiddenRowCount(fold: "collapsed" | "inbox" | "all", rows: ProjectRows): number {
-	if (fold === "all") return 0;
-	const inbox = fold === "inbox" ? 0 : rows.inbox.length;
-	return inbox + rows.later.length + rows.archived.length;
-}

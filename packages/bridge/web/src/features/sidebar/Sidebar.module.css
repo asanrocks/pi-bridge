@@ -111,16 +111,6 @@
 	width: 100%;
 }
 
-/* A collapsed folder's hidden-row count: quiet meta ink in the trailing slot,
-   so parked work is findable without unfolding every Project. Never a control
-   — the folder row itself is the target. */
-.sidebarFolderHidden {
-	margin-left: auto;
-	flex-shrink: 0;
-	font-size: var(--fs-xs);
-	color: var(--color-muted-foreground);
-}
-
 /* Quiet in-folder status line (loading / empty folder). */
 .sidebarFolderMsg {
 	padding: 6px 10px;
@@ -310,31 +300,35 @@
 	}
 }
 
-/* Load-more control: a continuation rather than an action on an object, and
-   "there is more below" is a meaning a chevron already carries — so the glyph
-   rather than the word, and with it the chromeless `dim` tier instead of a
-   boundary, because a glyph marks itself as actionable. It spans the list so
-   the continuation reads as the list's own edge rather than as one more row,
-   and the mark centres in the row action's box. Coarse pointers get a taller
-   band: the mark is the whole target here, so a 24px strip is what a thumb
-   would be aiming at. */
-.sidebarLoadMore {
-	composes: dim from "../../render/buttons.module.css";
+/* The list's end: Load more and Show less, a continuation rather than an
+   action on an object, and "more below" / "less below" is a meaning a chevron
+   already carries — so the glyph rather than the word, and with it the
+   chromeless `dim` tier instead of a boundary, because a glyph marks itself as
+   actionable. The pair shares the row and centres each mark in the row action's
+   box: it reads as the list's own edge, not as one more row. Coarse pointers get
+   a taller band — the mark is the whole target here. */
+.sidebarListEnd {
 	display: flex;
-	width: 100%;
-	justify-content: center;
-	height: var(--control-box-xs);
+	gap: 2px;
 	margin-top: 2px;
 }
 
+.sidebarListEndBtn {
+	composes: dim from "../../render/buttons.module.css";
+	display: flex;
+	flex: 1;
+	justify-content: center;
+	height: var(--control-box-xs);
+}
+
 @media (pointer: coarse) {
-	.sidebarLoadMore {
+	.sidebarListEndBtn {
 		height: 40px;
 	}
 }
 
 /* Fold-all toggle: the section header's label doubles as the button that
-   cycles every folder's fold state. `quiet` keeps the header's meta ink and
+   folds or unfolds every folder. `quiet` keeps the header's meta ink and
    adds the ink step its folder rows already have; it must not declare `color`
    itself — an unlayered ink outranks the tier's hover rule and left this
    control painting a fill over unmoving caps. Typography still inherits. */
