@@ -35,6 +35,11 @@ Then read the docs for the area being changed:
   `check:bridge-web`, included in root `npm run check`, checks it separately.
 - Always pass `streamingBehavior: "steer"` to `AgentSession.prompt()` so a
   prompt can be admitted while a turn is in flight.
+- Store selectors return a primitive or an object the store already holds. Never
+  build an object inside a selector: `useSyncExternalStore` compares the result
+  by `Object.is`, so a fresh object fails its snapshot-cache check and loops.
+  Build arguments inside the selector body and return a number/string/boolean,
+  or select each primitive separately.
 - Read the web design rules before adding buttons, chips, or Markdown hosts.
   Use the shared styling tokens and rendering primitives; the root
   `scripts/check-bridge-styling-tokens.mjs` enforces the token boundary.

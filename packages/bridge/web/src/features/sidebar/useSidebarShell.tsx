@@ -80,7 +80,7 @@ export function useSidebarShell() {
 	const newSession = useCallback(() => newSessionRef.current(), []);
 
 	// ── Compact switcher (narrow viewport) ──────────────────────────────
-	// The TopBar menu button anchors the panel and carries the Inbox badge, so
+	// The TopBar menu button anchors the panel and carries the waiting badge, so
 	// one owner (the shell) holds both.
 	const menuButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [quickOpen, setQuickOpen] = useState(false);

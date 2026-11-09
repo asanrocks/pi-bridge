@@ -42,15 +42,44 @@ function projectWith(sessions: Record<string, string> = {}): ProjectConfig {
 /** A session file's header line, as the catalog scanner reads it. */
 const header = (sessionId: string): string => JSON.stringify({ type: "session", id: sessionId });
 
-function storeFor(project: ProjectConfig): SessionLocations {
-	return createSessionLocations(new Map([[project.id, project]]), { onWarning: () => {} });
+function storeFor(project: ProjectConfig, now?: () => Date): SessionLocations {
+	return createSessionLocations(new Map([[project.id, project]]), { onWarning: () => {}, now });
 }
 
 const storeFile = (project: ProjectConfig): string => join(project.sessionDir, ".pi-bridge", "locations.json");
 const legacyStoreFile = (project: ProjectConfig): string => join(project.sessionDir, ".pi-bridge", "states.json");
 
-const readStore = (project: ProjectConfig): Record<string, unknown> =>
-	JSON.parse(readFileSync(storeFile(project), "utf8")) as Record<string, unknown>;
+const readStore = (
+	project: ProjectConfig,
+): { version: number; sessions: Record<string, { place: string; placedAt: string }> } =>
+	JSON.parse(readFileSync(storeFile(project), "utf8")) as {
+		version: number;
+		sessions: Record<string, { place: string; placedAt: string }>;
+	};
+
+/** The stored file reduced to its places: a shape assertion is about what the
+ * store decided, not about the instant it recorded. */
+const storedPlaces = (project: ProjectConfig): { version: number; sessions: Record<string, unknown> } => {
+	const raw = readStore(project);
+	return {
+		version: raw.version,
+		sessions: Object.fromEntries(Object.entries(raw.sessions).map(([stem, record]) => [stem, record.place])),
+	};
+};
+
+/** A clock the test drives: a placement stamp is the queue's order, so a test
+ * that places two Sessions names their instants instead of racing the
+ * millisecond. */
+function clock(start = "2026-01-01T00:00:00.000Z"): { now: () => Date; advance: (ms?: number) => string } {
+	let at = Date.parse(start);
+	return {
+		now: () => new Date(at),
+		advance: (ms = 1000) => {
+			at += ms;
+			return new Date(at).toISOString();
+		},
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Transitions
@@ -69,7 +98,7 @@ describe("session locations: transitions", () => {
 		const store = storeFor(project);
 		store.promote("proj", "s1");
 		expect(store.locationOf("proj", "s1")).toBe("inbox");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "inbox" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox" } });
 	});
 
 	it("a refused admission restores the placement it replaced", () => {
@@ -87,7 +116,7 @@ describe("session locations: transitions", () => {
 		const token = store.promote("proj", "s1");
 		store.restore("proj", "s1", token);
 		expect(store.locationOf("proj", "s1")).toBe("archive");
-		expect(readStore(project)).toEqual({ version: 2, sessions: {} });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: {} });
 	});
 
 	it("a stale rollback changes nothing, and a chain of refusals unwinds one link at a time", () => {
@@ -123,12 +152,12 @@ describe("session locations: transitions", () => {
 		const project = projectWith({ s1: header("s1") });
 		const store = storeFor(project);
 		store.place("proj", "s1", "inbox");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "inbox" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox" } });
 		store.place("proj", "s1", "later");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "later" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "later" } });
 		store.place("proj", "s1", "archive");
 		expect(store.locationOf("proj", "s1")).toBe("archive");
-		expect(readStore(project)).toEqual({ version: 2, sessions: {} });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: {} });
 	});
 
 	it("a move never looks at execution: a running Session stays where the user put it", () => {
@@ -139,7 +168,7 @@ describe("session locations: transitions", () => {
 		// a run would be in flight.
 		store.place("proj", "s1", "later");
 		expect(store.locationOf("proj", "s1")).toBe("later");
-		expect(store.placed("proj").get("s1")).toBe("later");
+		expect(store.placed("proj").get("s1")?.location).toBe("later");
 	});
 
 	it("prune drops the record (trash)", () => {
@@ -174,8 +203,8 @@ describe("session locations: persistence and recovery", () => {
 		// Membership is the key set: the queue's rows come from the store, and
 		// each key names the file it needs.
 		expect([...reopened.placed("proj")].sort()).toEqual([
-			["s1", "inbox"],
-			["s2", "later"],
+			["s1", { location: "inbox", placedAt: expect.any(String) }],
+			["s2", { location: "later", placedAt: expect.any(String) }],
 		]);
 	});
 
@@ -207,10 +236,10 @@ describe("session locations: persistence and recovery", () => {
 			JSON.stringify({
 				version: 1,
 				sessions: {
-					s1: { state: "notified", updatedAt: "2026-01-01T00:00:00Z" },
-					s2: { state: "deferred", updatedAt: "2026-01-01T00:00:00Z" },
-					s3: { state: "busy", updatedAt: "2026-01-01T00:00:00Z" },
-					s4: { state: "inactive", updatedAt: "2026-01-01T00:00:00Z" },
+					s1: { state: "notified", updatedAt: "2026-01-01T00:00:01Z" },
+					s2: { state: "deferred", updatedAt: "2026-01-01T00:00:02Z" },
+					s3: { state: "busy", updatedAt: "2026-01-01T00:00:03Z" },
+					s4: { state: "inactive", updatedAt: "2026-01-01T00:00:04Z" },
 				},
 			}),
 		);
@@ -220,7 +249,14 @@ describe("session locations: persistence and recovery", () => {
 		expect(store.locationOf("proj", "s2")).toBe("later");
 		expect(store.locationOf("proj", "s3")).toBe("inbox");
 		expect(store.locationOf("proj", "s4")).toBe("archive");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "inbox", s2: "later", s3: "inbox" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox", s2: "later", s3: "inbox" } });
+		// That format recorded when each decision was written, so its instant is
+		// the stamp: the upgrade carries the order it had instead of a baseline.
+		expect([...store.placed("proj").values()].map((placement) => placement.placedAt)).toEqual([
+			"2026-01-01T00:00:01Z",
+			"2026-01-01T00:00:02Z",
+			"2026-01-01T00:00:03Z",
+		]);
 		// The old file is retired only once the new one landed.
 		expect(existsSync(legacyStoreFile(project))).toBe(false);
 	});
@@ -265,7 +301,7 @@ describe("session locations: persistence and recovery", () => {
 
 		// The fresh store works: a move writes a valid file.
 		reopened.place("proj", "s1", "inbox");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "inbox" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox" } });
 	});
 
 	it("a bad record value is treated as corruption, not silently skipped", () => {
@@ -323,6 +359,118 @@ describe("session locations: persistence and recovery", () => {
 		expect(store.locationOf("proj", "s1")).toBe("archive");
 		expect(existsSync(`${storeFile(project)}.corrupt`)).toBe(true);
 		store.place("proj", "s1", "inbox");
-		expect(readStore(project)).toEqual({ version: 2, sessions: { s1: "inbox" } });
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox" } });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Placement stamps — the queue's order
+// ---------------------------------------------------------------------------
+
+describe("session locations: placement stamps", () => {
+	it("a placement records the instant of the decision", () => {
+		const project = projectWith({ s1: header("s1") });
+		const time = clock();
+		const store = storeFor(project, time.now);
+		store.place("proj", "s1", "inbox");
+		expect(readStore(project)).toEqual({
+			version: 3,
+			sessions: { s1: { place: "inbox", placedAt: "2026-01-01T00:00:00.000Z" } },
+		});
+	});
+
+	it("a redundant move keeps the stamp, a submission takes a fresh one", () => {
+		const project = projectWith({ s1: header("s1") });
+		const time = clock();
+		const store = storeFor(project, time.now);
+		store.place("proj", "s1", "inbox");
+		// The row is already Inbox: the click decides nothing, so it must not jump
+		// to the top of the queue.
+		time.advance();
+		store.place("proj", "s1", "inbox");
+		expect(store.placed("proj").get("s1")?.placedAt).toBe("2026-01-01T00:00:00.000Z");
+		// Submitted work is a decision: the row goes to the head of Inbox, and the
+		// turn that follows streams without touching this value again.
+		const submitted = time.advance();
+		store.promote("proj", "s1");
+		expect(store.placed("proj").get("s1")?.placedAt).toBe(submitted);
+	});
+
+	it("a redundant move reorders nothing but still supersedes a pending admission", () => {
+		const project = projectWith({ s1: header("s1") });
+		const time = clock();
+		const store = storeFor(project, time.now);
+		store.place("proj", "s1", "later");
+		time.advance();
+		const token = store.promote("proj", "s1");
+		const placed = store.placed("proj").get("s1");
+		time.advance();
+		store.place("proj", "s1", "inbox");
+		// The row was already Inbox, so it keeps its place in the queue...
+		expect(store.placed("proj").get("s1")).toEqual(placed);
+		// ...but the refusal must not undo a placement the user made by hand.
+		store.restore("proj", "s1", token);
+		expect(store.locationOf("proj", "s1")).toBe("inbox");
+	});
+
+	it("a refused admission restores the stamp it replaced", () => {
+		const project = projectWith({ s1: header("s1") });
+		const time = clock();
+		const store = storeFor(project, time.now);
+		store.place("proj", "s1", "later");
+		const parked = store.placed("proj").get("s1");
+		time.advance();
+		const token = store.promote("proj", "s1");
+		time.advance();
+		store.restore("proj", "s1", token);
+		expect(store.placed("proj").get("s1")).toEqual(parked);
+	});
+
+	it("a version 2 file is upgraded in place, sharing one baseline stamp", () => {
+		const project = projectWith({ s1: header("s1"), s2: header("s2") });
+		mkdirSync(join(project.sessionDir, ".pi-bridge"), { recursive: true });
+		writeFileSync(storeFile(project), JSON.stringify({ version: 2, sessions: { s1: "inbox", s2: "later" } }));
+
+		const store = storeFor(project);
+		// No instant was ever recorded, so the upgrade invents none: both records
+		// take the empty baseline, which sorts after every stamped placement.
+		expect(store.placed("proj").get("s1")).toEqual({ location: "inbox", placedAt: "" });
+		expect(store.placed("proj").get("s2")).toEqual({ location: "later", placedAt: "" });
+		// Rewritten in place rather than quarantined: the content is intact, only
+		// older, so the queue does not start empty for a format change.
+		expect(storedPlaces(project)).toEqual({ version: 3, sessions: { s1: "inbox", s2: "later" } });
+		expect(existsSync(`${storeFile(project)}.corrupt`)).toBe(false);
+	});
+
+	it("an upgraded record keeps its baseline until the next move re-stamps it", () => {
+		const project = projectWith({ s1: header("s1") });
+		mkdirSync(join(project.sessionDir, ".pi-bridge"), { recursive: true });
+		writeFileSync(storeFile(project), JSON.stringify({ version: 2, sessions: { s1: "later" } }));
+		const time = clock();
+		const store = storeFor(project, time.now);
+		expect(store.placed("proj").get("s1")?.placedAt).toBe("");
+		const moved = time.advance();
+		store.place("proj", "s1", "inbox");
+		expect(store.placed("proj").get("s1")).toEqual({ location: "inbox", placedAt: moved });
+	});
+
+	it("a stamped record's stamp survives a restart", () => {
+		const project = projectWith({ s1: header("s1") });
+		const time = clock();
+		storeFor(project, time.now).place("proj", "s1", "inbox");
+		const reopened = storeFor(project);
+		expect(reopened.placed("proj").get("s1")?.placedAt).toBe("2026-01-01T00:00:00.000Z");
+	});
+
+	it("a malformed stamp is a corrupt record, not an order to infer", () => {
+		const project = projectWith({ s1: header("s1") });
+		mkdirSync(join(project.sessionDir, ".pi-bridge"), { recursive: true });
+		writeFileSync(
+			storeFile(project),
+			JSON.stringify({ version: 3, sessions: { s1: { place: "inbox", placedAt: 17 } } }),
+		);
+		const reopened = storeFor(project);
+		expect(reopened.locationOf("proj", "s1")).toBe("archive");
+		expect(existsSync(`${storeFile(project)}.corrupt`)).toBe(true);
 	});
 });

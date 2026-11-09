@@ -86,7 +86,7 @@ browse branches in History. A steerer can do the following:
   at its nearest edge), and it commits once on release; membership is frozen
   while the picker is open, order is not. Reordering is pointer-only: the grip
   drag is the one gesture that moves a row, because the app's global
-  Alt+Up/Down chord already cycles the queue. A refused replacement
+  Alt+Up/Down chord already cycles the Inbox queue. A refused replacement
   (connection lost, verb rejected) rolls the rows back to the last accepted
   order. The head of the list
   carries a `default` label: it is the model a fresh Session starts on, which is
@@ -236,8 +236,10 @@ browser zoom menu remain the desktop paths.
 
 The global launcher at `/` lists configured Projects with their working
 directories and, below them, the queue: every Inbox and Later Session, in the
-daemon's queue order (Inbox → Later, each group newest activity first). Above
-the Project list, a plain Latest button (ADR 13) reads "Latest session" plus
+daemon's queue order (Inbox → Later, each group most recently placed first).
+Order is a placement decision, never activity: a row that starts streaming does
+not move. Above the Project list, a plain Latest button (ADR 13) reads "Latest
+session" plus
 the owning Project's id — selecting it navigates to `/@latest`, which resolves
 to the most recently active Session in the Inbox, without redirecting. The same alias is available
 scoped to a Project (`/<projectId>/@latest`): deep links and the CLI banner
@@ -319,8 +321,14 @@ A folder row's hover is not a row state: it is a fold control, and the fill
 channel belongs to rows that carry identity or position.
 
 Folder children render in queue order — Inbox → Later — then the archived
-history, each group newest activity first, with no time-bucket headings: the
-location is the grouping, and the time label on every row carries recency.
+history, with no time-bucket headings: the location is the grouping.
+
+Queue order is a placement decision, not a recency measure: a Session sits
+where its last transition put it — a submitted message or a user move to the
+head of its group, most recently placed first — and running never reorders
+anything, so a streaming row never drags the list out from under the reader.
+Archived history has no placement, so it is newest-activity first; the time
+label on every row carries recency in both cases.
 
 - The `inbox` step shows the Project's Inbox rows. Two independent facts draw
   the mark: the location (green for Inbox, the accent tint for Later, the muted
@@ -348,17 +356,33 @@ which also stop the agent, and a 6px dot cannot say that; the row menu owns it.
 The dot therefore only reports, and every control is labelled by its action,
 not its state.
 
-The menu button carries the Inbox count: one badge, equal to the number of Inbox
-Sessions across every Project — including the ones in collapsed folders — so
-what is waiting to be read is visible while the pane is closed. The count
-crosses tabs through the queue delta (published at most once every five
-seconds, so a count can trail a placement by that interval). Reading a Session does not clear it (the
-count means "yours to read", not "unread"); replying, moving it to Later, or
-moving it to Archive does. A completion is announced without polling: while the
-page is visible the finished Session raises one quiet toast; while it is
-hidden, one OS notification per finished Session names it, and a click lands on
-that Session — the open tab is handed the address and navigates through the
-usual open intent, or a new tab opens the address directly. Each notice
+The menu button carries the waiting count: one badge reading `+N`, where N is
+the number of Inbox Sessions with nothing running across every Project —
+including the ones in collapsed folders — minus the attached Session when it is
+itself waiting. It answers "how many more need me", so the Session in front of
+the user is never part of the number, and it survives reading a Session (the
+count means "an answer is owed", not "unread"); replying, moving a Session to
+Later, or moving it to Archive clears its share, and a running Session does not
+count until its turn ends. The count crosses tabs through the queue delta
+(published at most once every five seconds, so a count can trail a placement by
+that interval). Novelty rides the same badge as a second channel: a Session that
+finishes while this page is not reading it puts a 5px dot just outside the
+badge's top-right corner and beats the badge briefly, once per arrival. The dot
+is state and clears when this page attaches that Session — attaching is what
+reading means — while the green fill keeps saying "an answer is owed" whether or
+not the answer is new. The dot is a shape rather than a tint: an unread chip and
+a seen one differ in what is attached to them, so the signal survives a dim
+display where a glow does not, and the arrival itself is three beats that decay
+to rest instead of a loop that keeps asking. Both facts
+are per page and in memory: neither is synced across tabs nor survives a reload,
+because novelty answers "what arrived while I watched", not "what exists", and a
+row that leaves the waiting set loses its ring with its count.
+
+A visible page therefore raises nothing per completion; the badge is the whole
+announcement. A hidden page, where no badge is on screen, gets one OS
+notification per finished Session instead, naming it, and a click lands on that
+Session — the open tab is handed the address and navigates through the usual
+open intent, or a new tab opens the address directly. Each notice
 carries its own Session's tag, so two Sessions finishing together stay two
 clickable notices rather than the later one replacing the earlier. The
 completion edge is `running` → not running on a queued row; a location move is
@@ -2039,7 +2063,8 @@ Modifier commands remain global where they represent shell intent.
 - Ctrl/Cmd+B toggles the Sidebar and Ctrl/Cmd+H toggles History, including
   while typing. Ctrl/Cmd+P cycles models in the composer; the textarea owns
   that shortcut to avoid a duplicate cycle.
-- Alt+Up and Alt+Down cycle the queue (queue order). Alt+N opens the only Project's
+- Alt+Up and Alt+Down cycle the Inbox Sessions in queue order (most recently
+  placed first), skipping the parked Later group. Alt+N opens the only Project's
   home, or opens the Sidebar when a Project choice is needed.
 
 The focused-turn frame and visible keyboard focus ring use the accent token.

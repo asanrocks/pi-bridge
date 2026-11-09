@@ -104,7 +104,7 @@ export interface DaemonVerbs {
 		cursor?: SessionListCursor | null,
 	) => Promise<{ sessions: SessionInfo[]; hasMore: boolean; nextCursor?: SessionListCursor }>;
 	/** The queue: the Inbox-and-Later snapshot, ordered Inbox → Later, then
-	 * last activity descending. */
+	 * placement stamp descending. */
 	listQueue: () => Promise<SessionInfo[]>;
 	/** Place a session: Inbox, Later, or Archive. Legal on a dormant session;
 	 * Archive also ends the runtime. The queue change arrives as a

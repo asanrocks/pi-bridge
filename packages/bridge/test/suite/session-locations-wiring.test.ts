@@ -7,13 +7,13 @@
 // Trash stopping the runtime, browsing invariance, and restart recovery.
 // ============================================================================
 
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionRef } from "../../src/core/index.ts";
-import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
+import type { ConnectionHandle, Manager, SettlementBoundary } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
 
@@ -42,8 +42,12 @@ interface FakeManager extends Manager {
 	setActivity: (phase: "idle" | "wait" | "stream" | "tool" | "compact", tool?: string) => void;
 	/** Flip the Document's streaming flag (the fake never streams on its own). */
 	setStreaming: (streaming: boolean) => void;
-	/** The current turn settled (the Manager's rescan signal). */
+	/** The whole execution settled (pi's `agent_settled`): the Manager's
+	 * completion signal. */
 	settle: () => void;
+	/** One pi turn ended mid-execution (i.e. an assistant step with its tool
+	 * results, before the loop continues): the metadata rescan signal only. */
+	turnEnd: () => void;
 	disposeCalls: () => number;
 }
 
@@ -71,7 +75,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 	let activityPhase: "idle" | "wait" | "stream" | "tool" | "compact" = "idle";
 	let activityTool: string | null = null;
 	const activityListeners = new Set<() => void>();
-	const settledListeners = new Set<() => void>();
+	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
 	const status = {
 		leafId: null,
 		name: "",
@@ -101,7 +105,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			});
 		},
 		removeConnection: () => {},
-		onSettled(listener: () => void) {
+		onSettled(listener: (boundary: SettlementBoundary) => void) {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
@@ -118,7 +122,11 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			}
 		},
 		executeBash: async () => {},
-		abort: async () => {},
+		abort: async () => {
+			// The real runtime's abort settles the execution (pi emits
+			// `agent_settled` before the abort's idle wait resolves).
+			for (const listener of settledListeners) listener("execution");
+		},
 		discardSteer: async () => {},
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
@@ -128,9 +136,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		recoverTurn: async () => "retry" as const,
 		dispose: async () => {
 			disposed += 1;
-			// Disposal finalizes the in-flight turn, which is exactly the settle
-			// a disposal-induced completion would be derived from.
-			for (const listener of settledListeners) listener();
+			// Disposal aborts the in-flight turn, which settles the execution —
+			// the boundary a disposal-induced completion would be derived from.
+			for (const listener of settledListeners) listener("execution");
 		},
 	};
 	return {
@@ -147,7 +155,10 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			status.isStreaming = streaming;
 		},
 		settle: () => {
-			for (const listener of settledListeners) listener();
+			for (const listener of settledListeners) listener("execution");
+		},
+		turnEnd: () => {
+			for (const listener of settledListeners) listener("turn");
 		},
 		disposeCalls: () => disposed,
 	} as FakeManager;
@@ -353,23 +364,23 @@ describe("session-location wiring: transitions", () => {
 		expect(await fx.worker.listQueue()).toEqual(before);
 	});
 
-	it("the queue is ordered Inbox → Later, then by activity", async () => {
+	it("the queue is ordered Inbox → Later, newest placement first", async () => {
 		const fx = makeFixture();
-		// Later mtimes sort later within a group (activity desc), so write the
-		// Inbox rows in reverse to prove the location rank dominates.
 		fx.addSession("id-n1", "n1");
 		fx.addSession("id-n2", "n2");
-		// Distinct mtimes: n2 is the more recently active of the two.
-		const t0 = Date.now() / 1000;
-		utimesSync(join(fx.project.sessionDir, "n1.jsonl"), t0 - 60, t0 - 60);
-		utimesSync(join(fx.project.sessionDir, "n2.jsonl"), t0, t0);
 		fx.addSession("id-b1", "b1");
 		fx.addSession("id-d1", "d1");
-		for (const stem of ["n2", "n1"]) {
+		// n1 is submitted first and n2 second, so the newer placement leads: the
+		// pair comes out in the reverse of the activity order a recency sort gave.
+		// The stamps are wall clock, so the submissions are spaced by a millisecond
+		// they can differ by.
+		for (const stem of ["n1", "n2"]) {
 			const target = await fx.open(stem);
 			await fx.worker.prompt(target, "hi");
+			await new Promise((resolve) => setTimeout(resolve, 5));
 		}
-		// A running Inbox row ranks with the Inbox group, not above it.
+		// A running Inbox row ranks with the Inbox group, not above it: b1 leads
+		// because its placement is the newest, not because it is executing.
 		const runningTarget = await fx.open("b1");
 		await fx.worker.prompt(runningTarget, "running");
 		fx.managers[fx.managers.length - 1].setActivity("tool", "Bash");
@@ -381,6 +392,23 @@ describe("session-location wiring: transitions", () => {
 			["inbox", "n1"],
 			["later", "d1"],
 		]);
+	});
+
+	it("a running turn does not reorder the queue", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-first", "first");
+		fx.addSession("id-second", "second");
+		const first = await fx.open("first");
+		await fx.worker.prompt(first, "hi");
+		const second = await fx.open("second");
+		await fx.worker.prompt(second, "hi");
+		const placed = await queueOf(fx.worker);
+
+		// The older placement streams and reports a phase: activity is temporal, so
+		// the order stays exactly what the two submissions decided.
+		fx.managers[0].setActivity("tool", "Bash");
+		fx.managers[0].setStreaming(true);
+		expect(await queueOf(fx.worker)).toEqual(placed);
 	});
 
 	it("a queued row whose file is unparseable still carries its durable location", async () => {
@@ -645,6 +673,36 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		expect(deltas[deltas.length - 1]).toEqual({ upsert: ["a:later:tool"], remove: [] });
 	});
 
+	it("a queue delta says whether a person's gesture or execution state caused it", async () => {
+		// The Daemon publishes a gesture at a short floor and execution state at
+		// the interval, so the origin is the urgency it needs.
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const origins: Array<[string, string]> = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind !== "queue_changed") return;
+			origins.push([event.upsert.map((row) => `${row.stem}:${row.location}`).join(","), event.origin]);
+		});
+
+		// An activity phase is execution state: the row's running line moved.
+		fx.managers[0].setActivity("tool", "Bash");
+		expect(origins).toEqual([["a:inbox", "runtime"]]);
+
+		// A settle is execution state too.
+		fx.managers[0].turnEnd();
+		origins.length = 0;
+		fx.managers[0].settle();
+		expect(origins.every(([, origin]) => origin === "runtime")).toBe(true);
+
+		// A placement is the user's own gesture, even though it shares the frame.
+		origins.length = 0;
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
+		expect(origins).toContainEqual(["a:later", "user"]);
+	});
+
 	it("a settle in a queued Session announces one completion, carrying the row's label", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
@@ -663,6 +721,48 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		// notification never waits for the next queue delta.
 		const row = (await fx.worker.listQueue()).sessions.find((entry) => entry.stem === "a");
 		expect(completions[0]).toEqual({ stem: "a", name: row?.name, text: row?.lastMessageText });
+	});
+
+	it("a mid-execution turn boundary announces no completion", async () => {
+		// pi emits `turn_end` after every assistant step, so a tool-using turn has
+		// one per batch. Only the execution boundary is a completion: deriving it
+		// from the turn boundary announced "ready for your input" while the agent
+		// was still streaming.
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const completions: string[] = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_completed") completions.push(event.session.stem);
+		});
+
+		fx.managers[0].turnEnd();
+		fx.managers[0].turnEnd();
+		expect(completions).toEqual([]);
+
+		// The execution's own end still announces exactly one.
+		fx.managers[0].settle();
+		expect(completions).toEqual(["a"]);
+	});
+
+	it("a user stop announces no completion", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const completions: string[] = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_completed") completions.push(event.session.stem);
+		});
+
+		// Stop aborts the run, and pi's abort settles the execution while the verb
+		// is still running; the user asked for it, so it is not news that the
+		// Session is ready for input.
+		await fx.worker.abort(target);
+		expect(completions).toEqual([]);
 	});
 
 	it("a Session outside the queue settles without a completion notice", async () => {

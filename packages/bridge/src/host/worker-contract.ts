@@ -227,10 +227,18 @@ export interface WorkerEnvironment {
 export type WorkerEvent =
 	/** The Worker's queue slice moved: complete changed rows plus removed
 	 * addresses, never a snapshot (`listQueue` seeds that). `version` is
-	 * registration-local and monotone. */
+	 * registration-local and monotone.
+	 *
+	 * `origin` is the urgency the Daemon publishes at. `user` is a gesture a
+	 * person made — a placement, a Trash, an admitted message — and is published
+	 * as soon as a short floor allows, because the row that person just moved
+	 * must move on screen. `runtime` is execution state (settle, streaming,
+	 * activity, registration) and waits for the publication interval, which is
+	 * what bounds the traffic (ADR 24). */
 	| {
 			readonly kind: "queue_changed";
 			readonly version: number;
+			readonly origin: "user" | "runtime";
 			readonly upsert: SessionInfo[];
 			readonly remove: SessionAddress[];
 	  }
@@ -313,7 +321,7 @@ export interface WorkerService extends WorkerEnvironment {
 	// ── Project and Session queries ─────────────────────────────────────
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage>;
 	/** The materialized queue slice: every Inbox and Later Session, ordered
-	 * Inbox → Later, then last activity descending. Read from materialized
+	 * Inbox → Later, then placement stamp descending. Read from materialized
 	 * state, so it is a snapshot of the same slice its deltas advance. */
 	listQueue(): Promise<QueueSnapshot>;
 	/** Place a Session in Inbox, Later, or Archive. Legal on a dormant Session

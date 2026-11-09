@@ -31,7 +31,8 @@ export const TopBar = memo(function TopBar({
 	showSidebarToggle,
 	onSidebarToggle,
 	menuButtonRef,
-	inboxCount,
+	waitingCount,
+	waitingNewCount,
 	onSidebarHover,
 	showHistoryToggle,
 	onHistory,
@@ -49,10 +50,15 @@ export const TopBar = memo(function TopBar({
 	/** The menu button's element: the compact switcher's popover anchor.
 	 * Owned by the sidebar shell because both surfaces are its policy. */
 	menuButtonRef?: React.Ref<HTMLButtonElement>;
-	/** Sessions in the Inbox, across every Project (ADR 23). The badge is the
-	 * passive half of the switcher: what the user has not read yet is visible
-	 * while the pane is closed. */
-	inboxCount: number;
+	/** Sessions other than this one waiting for a reply — Inbox rows with
+	 * nothing running, minus the attached Session when it is itself waiting
+	 * (see `./waitingBadge`). The badge is the passive half of the switcher:
+	 * what still needs an answer is visible while the pane is closed. */
+	waitingCount: number;
+	/** Of those, how many finished since this page last read them: the badge's
+	 *  novelty dot. A second channel, never a second count — the number keeps
+	 *  meaning "an answer is owed" whether or not the answer is new. */
+	waitingNewCount: number;
 	/** Hover signal for the peek drawer (desktop, sidebar hidden):
 	 *  true = pointer entered the hamburger, false = left it. Forwarded
 	 *  raw to the Sidebar, which owns the peek drawer and the grace timer
@@ -73,6 +79,18 @@ export const TopBar = memo(function TopBar({
 	const [editName, setEditName] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
 
+	// The dot is state (something is unread); the pulse is the arrival, so it
+	// replays once per new completion and stops on its own — a loop would be an
+	// alarm that keeps spending attention.
+	const [pulsing, setPulsing] = useState(false);
+	const seenNewCount = useRef(waitingNewCount);
+	useEffect(() => {
+		const arrived = waitingNewCount > seenNewCount.current;
+		seenNewCount.current = waitingNewCount;
+		if (arrived) setPulsing(true);
+		else if (waitingNewCount === 0) setPulsing(false);
+	}, [waitingNewCount]);
+
 	useEffect(() => {
 		if (editing) {
 			inputRef.current?.focus();
@@ -91,12 +109,26 @@ export const TopBar = memo(function TopBar({
 					onClick={onSidebarToggle}
 					onMouseEnter={() => onSidebarHover?.(true)}
 					onMouseLeave={() => onSidebarHover?.(false)}
-					aria-label={inboxCount > 0 ? `Toggle sidebar — ${inboxCount} in your inbox` : "Toggle sidebar"}
+					aria-label={
+						waitingCount > 0
+							? `Toggle sidebar — ${waitingCount} waiting elsewhere${waitingNewCount > 0 ? `, ${waitingNewCount} new` : ""}`
+							: "Toggle sidebar"
+					}
 				>
 					<MenuIcon size={20} />
-					{inboxCount > 0 && (
-						<span className={styles.topBarBadge} aria-hidden="true">
-							{inboxCount > 99 ? "99+" : inboxCount}
+					{waitingCount > 0 && (
+						<span
+							className={[
+								styles.topBarBadge,
+								waitingNewCount > 0 ? styles.topBarBadgeNew : "",
+								pulsing ? styles.topBarBadgeArrival : "",
+							]
+								.filter(Boolean)
+								.join(" ")}
+							aria-hidden="true"
+							onAnimationEnd={() => setPulsing(false)}
+						>
+							{waitingCount > 99 ? "+99" : `+${waitingCount}`}
 						</span>
 					)}
 				</button>

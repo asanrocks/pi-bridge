@@ -9,12 +9,14 @@
 // The signal is an occurrence, not a sampled state: a five-second queue
 // publication interval would hide a whole short turn, so the daemon forwards
 // `session_completed` immediately and this hook drains the store's notice log
-// by sequence. Delivery is chosen by what the user can see:
-//   - page hidden  → one OS notification naming the Session, whose click opens
-//     it (`infra/lib/userNotification.ts` plus the service worker's
-//     `notificationclick` handler);
-//   - page visible → one quiet in-app toast, keyed by Session so two
-//     completions do not overwrite each other.
+// by sequence.
+//
+// A visible page is announced by nothing: the TopBar badge already carries both
+// facts (how many answers are owed, and which of them arrived since this page
+// read them), so a per-completion toast would restate an indicator the user can
+// already see — and its click had nowhere to go. Only a hidden page, where that
+// badge is not on screen, gets an OS notification, and that notice navigates on
+// click because it is the only affordance the user has left.
 //
 // The decision is made in the store subscription, not in a render effect: a
 // backgrounded tab suspends timers, so anything deferred to an effect could
@@ -42,16 +44,14 @@ export function useAttentionNotifications(): void {
 				// The Session this tab reads carries its own completion in the tab
 				// title and unread count (`useStatusNotifications`).
 				if (key === attached) continue;
+				// Only the case the badge cannot cover: no badge is on screen.
+				if (!document.hidden) continue;
 				const label = notice.name || notice.lastMessageText || notice.session.stem;
-				if (document.hidden) {
-					void notifyTurnCompletion({
-						label,
-						body: `${label} · Ready for your input`,
-						address: { projectId: notice.session.projectId, stem: notice.session.stem },
-					});
-				} else {
-					store.getState().pushToast(`attention:${key}`, `${label} · Ready for your input`);
-				}
+				void notifyTurnCompletion({
+					label,
+					body: `${label} · Ready for your input`,
+					address: { projectId: notice.session.projectId, stem: notice.session.stem },
+				});
 			}
 		});
 	}, []);

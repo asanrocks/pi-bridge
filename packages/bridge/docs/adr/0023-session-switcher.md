@@ -14,7 +14,14 @@ Session locations (Inbox / Later / Archive) plus a runtime `running` attribute
 Inbox, `deferred` as Later, and `busy` as Inbox + running; the affordances this
 record decided (queue-ordered folders, the fold ladder, passive awareness, the
 compact switcher) are unchanged apart from the row menu replacing the state
-toggle. Current truth for all of it is [web design](../web/design.md).
+toggle. Its within-group ordering rule (`last activity descending`) is
+superseded too: the queue is ordered by placement stamp, most recently placed
+first, so a running turn cannot reorder the list. So is its visible-page
+delivery (a per-completion toast): a visible page is announced by the badge
+alone, whose ring marks the completions this page has not read, and only a
+hidden page raises an OS notification. Current truth for all of it is
+[web design](../web/design.md), with the order itself defined by the shared
+comparator in `src/core/queue-order.ts`.
 
 ## Context
 
@@ -46,7 +53,9 @@ re-ordered around the durable states:
 
 1. **Rows are state-ordered.** Within each project folder, sessions render in
    the order `notified → busy → deferred → inactive`, each group by last
-   activity descending. Queue rows (notified/busy/deferred) come from the
+   activity descending (superseded: within a group the queue now orders by
+   placement stamp, most recently placed first — see the status note). Queue
+   rows (notified/busy/deferred) come from the
    `queue` store slice; inactive rows come from the lazily fetched history
    page, filtered by queue membership as today.
 2. **Folder folds are state-scoped.** The tri-state fold becomes
@@ -147,7 +156,8 @@ Host: none. `setSessionState` already accepts dormant sessions.
 **Acceptance criteria.**
 
 - Each project folder orders sessions notified → busy → deferred →
-  inactive, newest activity first within each state.
+  inactive, newest activity first within each state (the ordering half is
+  superseded; see the status note).
 - Folder cycles collapsed → working → all, defaults to working, and a
   collapsed folder with hidden rows states the count.
 - The indicator applies inactive → notified and notified ↔ deferred; busy is
@@ -277,7 +287,8 @@ Web:
 - **Delivery.** Page hidden → browser notification (permission-gated,
   service-worker path, as today) carrying the session address in
   `notification.data`; page visible and not the attached session → one
-  quiet in-app toast; attached-session completions keep the existing
+  quiet in-app toast (superseded: the badge's novelty ring carries that case,
+  see the status note); attached-session completions keep the existing
   title/unread flow in `useStatusNotifications` (which continues to own the
   attached document's streaming transition — the queue fold covers the
   rest).
@@ -295,9 +306,9 @@ Web:
   collapsed folders — and converges across tabs.
 - Reading a session does not clear the badge; replying, deferring, or
   marking inactive updates it.
-- A session completing while another is open produces one in-app toast;
-  while the page is hidden, one browser notification whose click opens that
-  session.
+- A session completing while another is open produces one in-app toast
+  (superseded by the badge's novelty ring; see the status note); while the
+  page is hidden, one browser notification whose click opens that session.
 - The initial queue snapshot after load or reconnect produces no
   notifications; manual promotion and restore produce none; a completion
   caused by the local client's own action (Stop → notified) is not

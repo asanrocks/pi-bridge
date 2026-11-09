@@ -28,7 +28,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { SessionRef } from "../core/index.ts";
-import type { Manager } from "./manager.ts";
+import type { Manager, SettlementBoundary } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
 import { createSessionActor, type SessionActor, type SessionAdmission } from "./session-actor.ts";
 
@@ -84,8 +84,9 @@ export interface ActivationRegistryOptions {
 	/** Idle GC delay for an entry-bearing unflushed session, whose disposal
 	 * can drop entries that never reached disk. */
 	unflushedIdleGcMs: number;
-	/** A session settled (its file may have just been written). */
-	onSettled: (ref: SessionRef) => void;
+	/** A session settled (its file may have just been written), and which
+	 * boundary it was: one pi turn or the whole execution. */
+	onSettled: (ref: SessionRef, boundary: SettlementBoundary) => void;
 	/** A live Activation's streaming flag changed. */
 	onStreamingChange: () => void;
 	/** A live Activation's activity phase changed (the process title's source). */
@@ -284,7 +285,7 @@ export class ActivationRegistry {
 			onIdle: () => {
 				if (record !== undefined) void this.collect(record);
 			},
-			onSettled: () => this.options.onSettled(ref),
+			onSettled: (boundary) => this.options.onSettled(ref, boundary),
 			onStreamingChange: () => this.options.onStreamingChange(),
 			onActivityChange: () => this.options.onActivityChange?.(),
 		});

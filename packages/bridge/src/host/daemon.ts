@@ -46,8 +46,12 @@ const MIME_TYPES: Record<string, string> = {
 
 const DEFAULT_PORT_RANGE = { start: 33334, end: 33340 }; // [33334, 33340)
 /** The default queue publication interval (ADR 24): one delta at most per
- * five seconds, however dense the triggers. */
+ * five seconds for execution state, however dense the triggers. */
 const DEFAULT_QUEUE_PUBLISH_INTERVAL_MS = 5_000;
+/** The floor between two publications a person's own gesture asks for. A
+ * placement must move its row on screen without waiting out the interval, but
+ * a repeated click still coalesces into one frame rather than a storm. */
+const QUEUE_PUBLISH_USER_FLOOR_MS = 150;
 
 export interface DaemonOptions {
 	agentDir?: string;
@@ -107,9 +111,12 @@ export class Daemon {
 	private queueRevision = 0;
 	/** Projects whose cached history a pending publication must invalidate. */
 	private pendingHistory = new Set<string>();
-	/** The single publication timer: one broadcast at most per interval, no
-	 * matter how many Workers or Sessions changed (ADR 24). */
+	/** The single publication timer: one broadcast per interval for execution
+	 * state, however many Workers or Sessions changed (ADR 24). */
 	private queuePublishTimer: ReturnType<typeof setTimeout> | null = null;
+	/** When the pending timer fires. A user gesture pulls it earlier without
+	 * pushing a sooner one later. */
+	private queuePublishDueAt: number | null = null;
 	private lastQueuePublishAt = 0;
 	private queuePublishIntervalMs: number = DEFAULT_QUEUE_PUBLISH_INTERVAL_MS;
 	private wss: WebSocketServer | null = null;
@@ -455,6 +462,7 @@ export class Daemon {
 		if (this.queuePublishTimer !== null) {
 			clearTimeout(this.queuePublishTimer);
 			this.queuePublishTimer = null;
+			this.queuePublishDueAt = null;
 		}
 		// Stop accepting registrations first: a Worker that joined during teardown
 		// would be routed to a Daemon that is already draining. Closing the
@@ -490,7 +498,7 @@ export class Daemon {
 			for (const row of event.upsert) rows.set(queueKey(row), row);
 			for (const address of event.remove) rows.delete(queueKey(address));
 			this.queueByHost.set(host, [...rows.values()]);
-			this.scheduleQueuePublish();
+			this.scheduleQueuePublish(event.origin === "user");
 			return;
 		}
 		if (event.kind === "history_changed") {
@@ -578,15 +586,29 @@ export class Daemon {
 		return this.workers.flatMap((host) => this.queueByHost.get(host) ?? []).sort(compareQueueRows);
 	}
 
-	/** Ask for a publication once the interval allows one. One timer for the
-	 * whole Daemon: several Workers changing cannot multiply broadcasts, and a
-	 * change during the cooldown never extends the deadline. */
-	private scheduleQueuePublish(): void {
-		if (this.disposing || this.queuePublishTimer !== null) return;
-		const due = this.lastQueuePublishAt + this.queuePublishIntervalMs;
+	/** Ask for a publication.
+	 *
+	 * Execution state waits the full interval, which is the rate bound. A user
+	 * gesture (a placement, a Trash, an admitted message) publishes at the short
+	 * floor instead: the row that person just moved must move on screen, and a
+	 * human action is a one-off rather than the per-tool stream the interval
+	 * exists to contain.
+	 *
+	 * One timer serves both. A request never pushes a pending publication later
+	 * (`due` only moves earlier), so a runtime change cannot delay a gesture and
+	 * a gesture cannot stretch the interval for execution state.
+	 */
+	private scheduleQueuePublish(urgent = false): void {
+		if (this.disposing) return;
+		const floor = urgent ? QUEUE_PUBLISH_USER_FLOOR_MS : this.queuePublishIntervalMs;
+		const due = this.lastQueuePublishAt + floor;
+		if (this.queuePublishDueAt !== null && this.queuePublishDueAt <= due) return;
+		if (this.queuePublishTimer !== null) clearTimeout(this.queuePublishTimer);
+		this.queuePublishDueAt = due;
 		this.queuePublishTimer = setTimeout(
 			() => {
 				this.queuePublishTimer = null;
+				this.queuePublishDueAt = null;
 				this.publishQueue();
 			},
 			Math.max(0, due - Date.now()),

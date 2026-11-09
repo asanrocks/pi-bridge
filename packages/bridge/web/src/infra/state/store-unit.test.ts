@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { Entry, SessionInfo } from "../../../../src/core/index.ts";
+import { addressKeyOf } from "./protocol.ts";
 import { createClientStore } from "./store.ts";
 import { resolveRenderLeafTarget } from "./ui.ts";
 
@@ -467,14 +468,14 @@ describe("adoptBrowserPath", () => {
 });
 
 describe("queue deltas (ADR 24)", () => {
-	function row(stem: string, location: SessionInfo["location"], lastActivityAt?: string): SessionInfo {
+	function row(stem: string, location: SessionInfo["location"], placedAt?: string): SessionInfo {
 		return {
 			projectId: "proj",
 			sessionId: `sess-${stem}`,
 			stem,
 			location,
 			timestamp: new Date(0).toISOString(),
-			...(lastActivityAt !== undefined ? { lastActivityAt } : {}),
+			...(placedAt !== undefined ? { placedAt } : {}),
 		};
 	}
 
@@ -505,8 +506,32 @@ describe("queue deltas (ADR 24)", () => {
 				2,
 			);
 
-		// Inbox leads Later, and within a group the newest activity leads.
+		// Inbox leads Later, and within a group the most recent placement leads.
 		expect(store.getState().queue.map((entry) => entry.stem)).toEqual(["inbox-new", "inbox-old"]);
+	});
+
+	it("a row that only ran keeps its position: activity is not an ordering input", () => {
+		const store = createClientStore();
+		store
+			.getState()
+			.applyQueueSnapshot(
+				[row("first", "inbox", "2024-01-01T00:00:00Z"), row("second", "inbox", "2024-02-01T00:00:00Z")],
+				1,
+			);
+
+		// The older placement streams a turn: its activity is now the newest of the
+		// two, and a complete row arrives through the delta. The order must not
+		// move, because the user placed neither row again.
+		store
+			.getState()
+			.applyQueueDelta(
+				[{ ...row("first", "inbox", "2024-01-01T00:00:00Z"), lastActivityAt: "2024-03-01T00:00:00Z" }],
+				[],
+				[],
+				2,
+			);
+
+		expect(store.getState().queue.map((entry) => entry.stem)).toEqual(["second", "first"]);
 	});
 
 	it("invalidation drops the cached history pages it names", () => {
@@ -533,5 +558,62 @@ describe("queue deltas (ADR 24)", () => {
 
 		expect(store.getState().completions.map((notice) => notice.seq)).toEqual([1, 2]);
 		expect(store.getState().completionsSeq).toBe(2);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Unread completions — the badge's novelty channel (per page, in memory)
+// ---------------------------------------------------------------------------
+
+describe("unread completions", () => {
+	const notice = (stem: string) => ({ session: { projectId: "proj", stem, sessionId: `sess-${stem}` } });
+
+	it("a completion this page is not reading becomes unread", () => {
+		const store = createClientStore();
+		store.getState().noteCompletion(notice("a"));
+		store.getState().noteCompletion(notice("b"));
+		expect(store.getState().unreadCompletions).toEqual([
+			addressKeyOf({ projectId: "proj", stem: "a" }),
+			addressKeyOf({ projectId: "proj", stem: "b" }),
+		]);
+	});
+
+	it("the attached Session's own completion is not news", () => {
+		const store = createClientStore();
+		store.getState().commitAddress("proj", "a", "sess-a");
+		store.getState().noteCompletion(notice("a"));
+		expect(store.getState().unreadCompletions).toEqual([]);
+	});
+
+	it("one address is unread once, however many turns it finishes", () => {
+		const store = createClientStore();
+		store.getState().noteCompletion(notice("a"));
+		store.getState().noteCompletion(notice("a"));
+		expect(store.getState().unreadCompletions).toHaveLength(1);
+	});
+
+	it("attaching the Session reads it: the optimistic commit clears it, not the sync", () => {
+		const store = createClientStore();
+		store.getState().noteCompletion(notice("a"));
+		store.getState().setCurrentSession("proj", "a");
+		expect(store.getState().unreadCompletions).toEqual([]);
+	});
+
+	it("a confirmed attach clears it too, and reading one leaves the other", () => {
+		const store = createClientStore();
+		store.getState().noteCompletion(notice("a"));
+		store.getState().noteCompletion(notice("b"));
+		store
+			.getState()
+			.commitObservation({ projectId: "proj", stem: "b", sessionId: "sess-b" }, store.getState().document);
+		expect(store.getState().unreadCompletions).toEqual([addressKeyOf({ projectId: "proj", stem: "a" })]);
+	});
+
+	it("an attach with nothing to clear keeps the same array", () => {
+		const store = createClientStore();
+		store.getState().commitAddress("proj", "a", "sess-a");
+		const before = store.getState().unreadCompletions;
+		store.getState().commitAddress("proj", "a", "sess-a");
+		expect(store.getState().unreadCompletions).toBe(before);
 	});
 });

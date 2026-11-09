@@ -25,6 +25,7 @@ import {
 } from "../core/index.ts";
 import { containedSessionFile, isTrashedStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
 import { type ActorMetadata, clampPreview } from "./session-actor.ts";
+import type { Placement } from "./session-locations.ts";
 
 import type { SessionPage } from "./worker-contract.ts";
 
@@ -57,8 +58,8 @@ interface ScanEntry {
 export interface CatalogLocationOverlay {
 	locationOf(projectId: string, stem: string): SessionLocation;
 	/** The Project's recorded places, keyed by stem: the queue's membership,
-	 * in memory. */
-	placed(projectId: string): ReadonlyMap<string, SessionLocation>;
+	 * in memory, each with the stamp its placement transition wrote. */
+	placed(projectId: string): ReadonlyMap<string, Placement>;
 }
 
 export interface SessionCatalog {
@@ -72,7 +73,7 @@ export interface SessionCatalog {
 		locations: CatalogLocationOverlay,
 	): SessionPage;
 	/** The queue: every Inbox and Later session across every Project, ordered
-	 * Inbox → Later, then by last activity descending. `reuse` supplies rows a
+	 * Inbox → Later, then by placement stamp descending. `reuse` supplies rows a
 	 * caller already holds for dormant Sessions, so a metadata-only refresh
 	 * reads no files (ADR 24). */
 	listQueue(
@@ -155,12 +156,15 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		return [...byStem.values()];
 	};
 
-	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry, locations: CatalogLocationOverlay): SessionInfo => {
+	const toSessionInfo = (project: ProjectConfig, entry: ScanEntry, placement: Placement): SessionInfo => {
 		const active = entry.active;
 		// A durable file is the metadata source even while active; only an
 		// unflushed activation has no file to read, so its document is used.
 		const durable = existsSync(entry.abs);
 		const meta = durable ? readFileMeta(entry.abs) : null;
+		// `""` is a baseline, not an instant: only a queued row has a placement
+		// stamp, and an absent field is the archived row's honest shape.
+		const placedAt = placement.placedAt === "" ? undefined : placement.placedAt;
 		if (!meta && !active) {
 			// Unreadable file: surface a minimal row rather than dropping it. The
 			// location overlay still applies — an unparseable file says nothing
@@ -169,7 +173,8 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 				projectId: project.id,
 				sessionId: entry.stem,
 				stem: entry.stem,
-				location: locations.locationOf(project.id, entry.stem),
+				location: placement.location,
+				placedAt,
 				timestamp: new Date(entry.sortTimeMs).toISOString(),
 			};
 		}
@@ -179,7 +184,8 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			projectId: project.id,
 			sessionId,
 			stem: entry.stem,
-			location: locations.locationOf(project.id, entry.stem),
+			location: placement.location,
+			placedAt,
 			name: meta?.name ?? liveMeta?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? liveMeta?.firstMessageText,
@@ -206,7 +212,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		project: ProjectConfig,
 		stem: string,
 		active: CatalogLiveEntry | undefined,
-		locations: CatalogLocationOverlay,
+		placement: Placement,
 		reuse: ReadonlyMap<string, SessionInfo> | undefined,
 	): SessionInfo | null => {
 		if (active) {
@@ -218,7 +224,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 					// fall back to the header creation time
 				}
 			}
-			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, locations);
+			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, placement);
 		}
 		// A dormant row is reused when the caller supplies a previous slice: its
 		// file can only have changed through a trigger that rebuilds in full, so
@@ -234,7 +240,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		} catch {
 			return null;
 		}
-		return toSessionInfo(project, { stem, abs: real, sortTimeMs }, locations);
+		return toSessionInfo(project, { stem, abs: real, sortTimeMs }, placement);
 	};
 
 	return {
@@ -259,7 +265,9 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			const limit = max !== undefined && max > 0 ? max : after.length;
 			const sliced = after.slice(0, limit);
 			const hasMore = after.length > sliced.length;
-			const sessions = sliced.map((e) => toSessionInfo(project, e, locations));
+			const sessions = sliced.map((e) =>
+				toSessionInfo(project, e, { location: locations.locationOf(project.id, e.stem), placedAt: "" }),
+			);
 			const last = sliced[sliced.length - 1];
 			return {
 				sessions,
@@ -280,14 +288,15 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 					if (entry.ref.projectId !== project.id) continue;
 					liveByStem.set(entry.ref.stem, entry);
 				}
-				for (const stem of locations.placed(project.id).keys()) {
-					const row = queueRow(project, stem, liveByStem.get(stem), locations, reuse);
+				for (const [stem, placement] of locations.placed(project.id)) {
+					const row = queueRow(project, stem, liveByStem.get(stem), placement, reuse);
 					if (row !== null) out.push(row);
 				}
 			}
 			// The shared total order (core/queue-order.ts): Inbox first (the attention
-			// list), Later second (parked by decision); each group by last
-			// activity descending.
+			// list), Later second (parked by decision); each group by placement stamp
+			// descending. A move between the groups is a full rebuild, so a reused
+			// dormant row never carries a stale placement.
 			out.sort(compareQueueRows);
 			return out;
 		},

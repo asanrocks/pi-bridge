@@ -14,7 +14,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import type { Document, Patch, RpcReply, SessionRef } from "../../src/core/index.ts";
 import { MAX_PINNED_MODELS } from "../../src/core/index.ts";
-import { type ConnectionHandle, Daemon, type DaemonOptions, type Manager } from "../../src/host/index.ts";
+import {
+	type ConnectionHandle,
+	Daemon,
+	type DaemonOptions,
+	type Manager,
+	type SettlementBoundary,
+} from "../../src/host/index.ts";
 
 // ---------------------------------------------------------------------------
 // Stub Manager
@@ -108,7 +114,7 @@ function makeStubManager(opts: {
 	const admittedCalls: Array<{ text: string; images?: unknown[] }> = [];
 	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	const setThinkingLevelCalls: string[] = [];
-	const settledListeners = new Set<() => void>();
+	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
 
@@ -184,11 +190,11 @@ function makeStubManager(opts: {
 			document.status.isStreaming = streaming;
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
 		},
-		/** The turn settled: fires the Manager's rescan signal, as a real
-		 * `turn_end` does. Placements are untouched — a settlement is not a
-		 * move. */
+		/** The execution settled (pi's `agent_settled`), the Manager's completion
+		 * signal: fires the rescan listeners with the execution boundary.
+		 * Placements are untouched — a settlement is not a move. */
 		settle: () => {
-			for (const listener of settledListeners) listener();
+			for (const listener of settledListeners) listener("execution");
 		},
 		patchListenerCount: () => patchListenerCount(patchListeners, connectionHandles),
 		disposed: () => wasDisposed,
@@ -2500,6 +2506,50 @@ describe("daemon: queue publication (ADR 24)", () => {
 		]);
 		expect(delta.remove).toEqual([]);
 		expect(deltas()).toHaveLength(2);
+
+		ws.close();
+	});
+
+	it("publishes a user's placement without waiting out the interval", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: stubMediator(),
+			// A minute of cooldown: only the user-gesture floor can publish here.
+			queuePublishIntervalMs: 60_000,
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "q-user");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const deltas = () => frames.filter((f) => (f as { mode?: string }).mode === "delta");
+		await waitFor(frames, (f) => f.kind === "queue_changed" && f.mode === "snapshot");
+
+		// The first placement is eligible immediately and closes the interval.
+		expect(
+			(await waitForReply(frames, send(ws, { verb: "setSessionLocation", projectId, stem, location: "inbox" }))).ok,
+		).toBe(true);
+		await waitFor(frames, () => deltas().length === 1);
+
+		// Parking is the user's own gesture: its row must move now, not at the
+		// next five-second boundary.
+		const parkedAt = Date.now();
+		expect(
+			(await waitForReply(frames, send(ws, { verb: "setSessionLocation", projectId, stem, location: "later" }))).ok,
+		).toBe(true);
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "queue_changed" &&
+				f.mode === "delta" &&
+				(f.upsert as Array<{ stem: string; location: string }>).some(
+					(row) => row.stem === stem && row.location === "later",
+				),
+			2_000,
+		);
+		expect(Date.now() - parkedAt).toBeLessThan(2_000);
 
 		ws.close();
 	});

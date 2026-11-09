@@ -288,9 +288,11 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	 * `live` rebuilds live rows from registry metadata and reuses dormant rows,
 	 * so streaming, activity, and settle triggers read no Session files. `full`
 	 * re-reads dormant rows; only registration, placement, Trash, close, and
-	 * rename triggers need it.
+	 * rename triggers need it. `origin` is the publication urgency the Daemon
+	 * applies: `user` for a gesture a person made (its row must move on screen
+	 * now), `runtime` for execution state.
 	 */
-	const refreshQueue = (mode: "live" | "full"): void => {
+	const refreshQueue = (mode: "live" | "full", origin: "user" | "runtime"): void => {
 		if (disposed) return;
 		const rows = catalog.listQueue(liveEntries(), locations, mode === "live" ? reusedQueueRows() : undefined);
 		const next = new Map<string, SessionInfo>();
@@ -308,7 +310,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			.map((row) => ({ projectId: row.projectId, stem: row.stem }));
 		publishedQueue = next;
 		if (upsert.length > 0 || remove.length > 0) {
-			emit({ kind: "queue_changed", version: ++queueVersion, upsert, remove });
+			emit({ kind: "queue_changed", version: ++queueVersion, origin, upsert, remove });
 		}
 	};
 
@@ -350,31 +352,33 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			}),
 		idleGcMs,
 		unflushedIdleGcMs,
-		onSettled: (ref) => {
+		onSettled: (ref, boundary) => {
 			// The runtime's metadata advanced (a flush): the live row is rebuilt
-			// from memory, the Project's cached history is now stale, and a
-			// completion — an occurrence, not a sampled state — is announced for
-			// a queued Session.
-			refreshQueue("live");
+			// from memory, the Project's cached history is now stale, and the
+			// execution's own end is announced as a completion. pi emits a turn
+			// boundary after every assistant step, so only the execution boundary
+			// qualifies — otherwise a tool-using turn would announce itself once per
+			// tool batch (ADR 24).
+			refreshQueue("live", "runtime");
 			emitHistoryChanged(ref.projectId);
-			emitCompleted(ref);
+			if (boundary === "execution") emitCompleted(ref);
 			refreshTitle();
 		},
 		onStreamingChange: () => {
-			refreshQueue("live");
+			refreshQueue("live", "runtime");
 			refreshTitle();
 		},
 		onRegistryChange: () => {
 			// Registration and collection move the address between live and
 			// dormant, which changes what a row can be read from.
-			refreshQueue("full");
+			refreshQueue("full", "runtime");
 			refreshTitle();
 		},
 		onActivityChange: () => {
 			// The runtime changed phase (a tool started, text began streaming):
 			// the queue's activity line moved. The Manager dedupes these to phase
 			// transitions, so this cannot fire per token.
-			refreshQueue("live");
+			refreshQueue("live", "runtime");
 			refreshTitle();
 		},
 		onCollected: (record) => endObservations(record),
@@ -607,12 +611,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 					// in Inbox — and a refused preflight restores the placement it
 					// replaced.
 					const admission = locations.promote(project.id, record.ref.stem);
-					refreshQueue("full");
+					refreshQueue("full", "user");
 					try {
 						await manager.promptAdmitted(text, images);
 					} catch (err) {
 						locations.restore(project.id, record.ref.stem, admission);
-						refreshQueue("full");
+						refreshQueue("full", "user");
 						throw err;
 					}
 					emitHistoryChanged(project.id);
@@ -639,7 +643,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			} else if (!(await sessionExistsAt(project, stem))) {
 				throw new Error(`No such session: ${stem}`);
 			}
-			refreshQueue("full");
+			refreshQueue("full", "user");
 		},
 
 		trashSession: async (address) => {
@@ -657,7 +661,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			trashStemFile(project.sessionDir, stem);
 			locations.prune(project.id, stem);
 			emitHistoryChanged(project.id);
-			refreshQueue("full");
+			refreshQueue("full", "user");
 		},
 
 		// ── Session commands (target-addressed) ─────────────────────────
@@ -667,21 +671,24 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// starts, so the queue shows what the user is waiting on; a refused
 			// preflight restores the placement it replaced.
 			const token = locations.promote(target.projectId, target.stem);
-			refreshQueue("full");
+			refreshQueue("full", "user");
 			try {
 				await admission.prompt(text, images, model, thinkingLevel);
 			} catch (err) {
 				locations.restore(target.projectId, target.stem, token);
-				refreshQueue("full");
+				refreshQueue("full", "user");
 				throw err;
 			}
 		},
-		abort: async (target) => admissionFor(target).abort(),
+		abort: async (target) =>
+			// A Stop finalizes the in-flight turn; the user asked for it, so it is
+			// not a completion to announce.
+			withoutCompletion(target.projectId, target.stem, () => admissionFor(target).abort()),
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
 		renameSession: async (target, name) => {
 			await admissionFor(target).renameSession(name);
 			// The name is row content and history content alike.
-			refreshQueue("full");
+			refreshQueue("full", "user");
 			emitHistoryChanged(target.projectId);
 		},
 		setLabel: async (target, entryId, label) => admissionFor(target).setLabel(entryId, label),
@@ -692,12 +699,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Session in Inbox like any other submitted work — and a refusal
 			// restores the placement it replaced.
 			const token = locations.promote(target.projectId, target.stem);
-			refreshQueue("full");
+			refreshQueue("full", "user");
 			try {
 				return await admission.recoverTurn();
 			} catch (err) {
 				locations.restore(target.projectId, target.stem, token);
-				refreshQueue("full");
+				refreshQueue("full", "user");
 				throw err;
 			}
 		},
@@ -710,7 +717,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		// full rebuild, which is also where external filesystem edits are
 		// discovered — they publish as an ordinary delta (ADR 24).
 		listQueue: async () => {
-			refreshQueue("full");
+			refreshQueue("full", "runtime");
 			return { sessions: [...publishedQueue.values()].sort(compareQueueRows), version: queueVersion };
 		},
 
@@ -730,7 +737,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			locations.place(project.id, stem, location);
 			// The row changes place, and the Project's cached history groups it
 			// differently.
-			refreshQueue("full");
+			refreshQueue("full", "user");
 			emitHistoryChanged(project.id);
 		},
 

@@ -11,7 +11,7 @@
 //
 //   - Modifier combos (Ctrl/Cmd+P, Alt+Arrow, Alt+N) are global intents,
 //     NOT text input. They bypass the text-input bail so model-cycling and
-//     active-session cycling work while the composer textarea is focused. The
+//     Inbox-session cycling work while the composer textarea is focused. The
 //     one carve-out is Ctrl/Cmd+P: it bails in a text input because the
 //     Composer's textarea handler already owns it there (avoids double-
 //     firing — the document listener fires after React's root-delegated

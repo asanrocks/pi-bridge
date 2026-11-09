@@ -404,7 +404,7 @@ export interface PatchMessage {
 }
 
 /** The queue's first frame on a Connection: every Session placed in the Inbox
- * or Later, ordered Inbox → Later, each group by last activity descending.
+ * or Later, ordered Inbox → Later, each group by placement stamp descending.
  * A row is here because the user put it here (directly, or by sending it a
  * message), not because a runtime is retained. */
 export interface QueueSnapshotMessage {
@@ -889,7 +889,7 @@ export interface SessionListCursor {
 export type SessionLocation = "inbox" | "later" | "archive";
 
 /** The queue query: the global snapshot of Inbox and Later Sessions, ordered
- * Inbox → Later, each group by last activity descending. Not project-scoped,
+ * Inbox → Later, each group by placement stamp descending. Not project-scoped,
  * not paginated. */
 export interface ListQueueRequest {
 	verb: "listQueue";
@@ -995,9 +995,18 @@ export interface SessionInfo {
 	 * fresher than the last flush; inactive rows use the file scan. */
 	lastMessageText?: string;
 	/** Latest entry timestamp of the Session. The active-session list uses it
-	 * for the row's activity time and ordering; `timestamp` stays the durable
-	 * sort key (mtime / header creation). */
+	 * for the row's activity time; `timestamp` stays the durable sort key (mtime
+	 * / header creation). It never decides the queue's order: a streaming turn
+	 * advances it on every delta, so ordering by it moved every other row under
+	 * the reader (see `placedAt`). */
 	lastActivityAt?: string;
+	/** The instant the placement transition that put this Session in Inbox or
+	 * Later was written — the queue's ordering value, so only a decision (a
+	 * submission, a user move, a restored refusal) reorders the list. `""` is
+	 * the baseline shared by records written before the store stamped them: it
+	 * sorts after every stamped placement. Absent on an archived row, which the
+	 * queue does not contain. */
+	placedAt?: string;
 	messageCount?: number;
 	/** What the execution is doing, on a running row only (ADR 23). */
 	activity?: SessionActivityInfo;

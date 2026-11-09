@@ -68,11 +68,18 @@
 	height: var(--control-box);
 }
 
-/* Inbox count on the menu button: the one number in the chrome that means
-   "there is something to read" (ADR 23). A count, so it is a value on the
-   control that opens the switcher — not a separate button. It takes the success
-   hue the Inbox mark already uses, which is what makes the badge and the rows
-   it counts read as the same fact. */
+/* Waiting count on the menu button: the one number in the chrome that means
+   "an answer is owed somewhere else" (ADR 23) — Inbox Sessions with nothing
+   running, minus the one being read when it is itself waiting, so the badge is
+   always "+N more". A count, so it is a value on the control that opens the
+   switcher — not a separate button. It takes the success hue the Inbox mark
+   already uses, which is what makes the badge and the rows it counts read as
+   the same fact.
+
+   Novelty is a second channel, not a second hue: the green keeps meaning "owed"
+   and a separate mark means "and something unread arrived", so neither statement
+   has to be inferred from the other. The mark is state and persists; the arrival
+   is a short pulse that ends by itself. */
 .topBarBadge {
 	position: absolute;
 	top: 1px;
@@ -88,6 +95,53 @@
 	line-height: 14px;
 	text-align: center;
 	pointer-events: none;
+}
+
+.topBarBadgeNew::after {
+	content: "";
+	position: absolute;
+	/* Clear of the chip's own corner rather than on it: a dot sitting inside a
+	   14px chip is read as one of the digits, and one clipped to the edge reads
+	   as a rendering artifact. */
+	top: -3px;
+	right: -3px;
+	width: 5px;
+	height: 5px;
+	border-radius: 50%;
+	background: var(--color-success);
+	/* The chip sits on the chrome bar: a ring in that tone detaches the dot from
+	   the chip without needing a border of its own. */
+	box-shadow: 0 0 0 2px var(--color-sidebar);
+}
+
+/* The arrival: three beats, each weaker than the last, ending at rest — a
+   countdown rather than a loop, so nothing keeps asking for attention once the
+   user has been told. Amplitude, not duration, is what decays. */
+@media (prefers-reduced-motion: no-preference) {
+	.topBarBadgeArrival {
+		animation: badge-arrival 3.6s cubic-bezier(0.2, 0.7, 0.3, 1);
+	}
+}
+
+@keyframes badge-arrival {
+	0% {
+		transform: scale(1.35);
+	}
+	12% {
+		transform: scale(0.98);
+	}
+	22% {
+		transform: scale(1.16);
+	}
+	32% {
+		transform: scale(1);
+	}
+	44% {
+		transform: scale(1.06);
+	}
+	54% {
+		transform: scale(1);
+	}
 }
 
 /* Dirty-now badge — the count of files differing from HEAD. A quiet chip on the

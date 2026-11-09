@@ -40,8 +40,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const rpc = useRpc();
 	const now = useNow();
 	/** The daemon's queue order is the presentation order: Inbox → Later, each
-	 * group by last activity descending — the same order the sidebar's pinned
-	 * sections show. */
+	 * group by placement stamp descending — the same order the sidebar's pinned
+	 * sections show. The `Latest` row is the exception: "latest" asks about
+	 * activity, so it sorts the Inbox by that instead. */
 	const queued = useMemo(() => [...queue], [queue]);
 	/** ADR 13 + 22: the launcher's discovery entry for the `@latest` alias —
 	 * the most recently active queued Session in the Inbox. */

@@ -11,7 +11,7 @@ export {
 } from "./daemon-socket.ts";
 export type { DiscoverySteps, ProbeResult, StartupRole } from "./discovery.ts";
 export { isSocketTaken, resolveStartupRole } from "./discovery.ts";
-export type { ConnectionHandle, CreateManagerOptions, Manager } from "./manager.ts";
+export type { ConnectionHandle, CreateManagerOptions, Manager, SettlementBoundary } from "./manager.ts";
 export { createManager } from "./manager.ts";
 export type {
 	DaemonTitleState,
@@ -36,7 +36,7 @@ export type { CatalogLiveEntry, SessionCatalog } from "./session-catalog.ts";
 export { assertNoSessionIdConflicts, createSessionCatalog } from "./session-catalog.ts";
 export type { SessionCommandSurface, SessionCommands } from "./session-commands.ts";
 export { bindSessionCommands, bindWorkerCommands } from "./session-commands.ts";
-export type { AdmissionToken, SessionLocations } from "./session-locations.ts";
+export type { AdmissionToken, Placement, SessionLocations } from "./session-locations.ts";
 export { createSessionLocations } from "./session-locations.ts";
 export type {
 	AcquireStorageLockOptions,

@@ -337,7 +337,7 @@ export class BridgeClient {
 	}
 
 	/** The queue: the global Inbox-and-Later listing, ordered Inbox → Later,
-	 * then last activity descending. A query: the browser's live queue comes
+	 * then placement stamp descending. A query: the browser's live queue comes
 	 * from pushes (ADR 24). */
 	listQueue(): Promise<RpcReply> {
 		return this.call({ verb: "listQueue" });

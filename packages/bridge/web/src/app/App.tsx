@@ -19,6 +19,7 @@
 // ============================================================================
 
 import { useCallback } from "react";
+import type { SessionAddress } from "../../../src/core/index.ts";
 import { liveActivityPhase } from "../../../src/viewmodel/index.ts";
 import { ComposeDock } from "../features/composer/ComposeDock.tsx";
 import { useComposerCommit } from "../features/composer/useComposerCommit.ts";
@@ -28,6 +29,7 @@ import { useHistoryPaneShell } from "../features/history/useHistoryPaneShell.tsx
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { useSidebarShell } from "../features/sidebar/useSidebarShell.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
+import { waitingBadgeCount, waitingNewCount as waitingNewCountOf } from "../features/topbar/waitingBadge.ts";
 import { FileBrowser } from "../features/viewer/FileBrowser.tsx";
 import { useConnection } from "../infra/net/useConnection.ts";
 import { useBranchSelect, useRpc } from "../infra/net/useRpc.ts";
@@ -80,10 +82,14 @@ function AppInner() {
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
-	// Passive awareness (ADR 23): the count of Sessions in the Inbox, summed
-	// across Projects. A primitive selector, so the memoized TopBar does not
-	// re-render on every unrelated queue change.
-	const inboxCount = useStore((s) => s.queue.filter((row) => row.location === "inbox").length);
+	// Passive awareness (ADR 23): how many Sessions other than this one are
+	// waiting for a reply, and how many of those finished since this page last
+	// read them (per page, in memory — see `unreadCompletions`). Both selectors
+	// return a number: the address is built inside them, so it is an argument and
+	// never the snapshot — a selector returning a fresh object would make
+	// `getSnapshot` incomparable and loop.
+	const waitingCount = useStore((s) => waitingBadgeCount(s.queue, attachedAddress(s)));
+	const waitingNewCount = useStore((s) => waitingNewCountOf(s.queue, s.unreadCompletions, attachedAddress(s)));
 
 	// ── Status notification ──────────────────────────────────────────────
 	const activityPhase = isStreaming ? liveActivityPhase(vm) : null;
@@ -134,7 +140,8 @@ function AppInner() {
 				showSidebarToggle={sidebar.mode === "hidden"}
 				onSidebarToggle={sidebar.onMenuButton}
 				menuButtonRef={sidebar.menuButtonRef}
-				inboxCount={inboxCount}
+				waitingCount={waitingCount}
+				waitingNewCount={waitingNewCount}
 				onSidebarHover={sidebar.setHamburgerHover}
 				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
 				onHistory={history.toggle}
@@ -178,4 +185,11 @@ function AppInner() {
 			<FileBrowser />
 		</div>
 	);
+}
+
+/** The address this tab is reading, in the shape the badge helpers take it. */
+function attachedAddress(s: { currentProjectId: string | null; currentStem: string | null }): SessionAddress | null {
+	return s.currentProjectId !== null && s.currentStem !== null
+		? { projectId: s.currentProjectId, stem: s.currentStem }
+		: null;
 }

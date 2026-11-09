@@ -72,6 +72,20 @@ export interface CompletionNotice {
  * write, so this only bounds memory while nothing is subscribed. */
 const COMPLETION_LOG_LIMIT = 32;
 
+/** One address's identity in the unread list. */
+export function addressKeyOf(address: { projectId: string; stem: string }): string {
+	return `${address.projectId}\u0000${address.stem}`;
+}
+
+/** The unread list after this page read `address`: attaching a Session clears its
+ * novelty. Returns the same array when there is nothing to drop, so a no-op
+ * attach cannot re-render its subscribers. */
+function readUnread(list: string[], address: SessionAddress | null): string[] {
+	if (address === null) return list;
+	const key = addressKeyOf(address);
+	return list.includes(key) ? list.filter((entry) => entry !== key) : list;
+}
+
 // ---------------------------------------------------------------------------
 // Slice shape
 // ---------------------------------------------------------------------------
@@ -124,6 +138,12 @@ export interface ProtocolSlice {
 	/** Queued completions not yet drained by the notification hook. */
 	completions: CompletionNotice[];
 	completionsSeq: number;
+	/** Addresses (`addressKeyOf`) whose completion this page has not read yet:
+	 * the badge's novelty ring. Membership is an occurrence this page witnessed,
+	 * so it is deliberately neither synced across tabs nor persisted — a reload
+	 * means "nothing new since this page loaded". A local overlay on the synced
+	 * count, never a second authority on what it counts. */
+	unreadCompletions: string[];
 	models: ModelInfo[];
 	/** The daemon-global pinned list (ADR 15), resolved from pi's global
 	 * `enabledModels`. One concept for the whole daemon: both the Project home
@@ -154,7 +174,7 @@ export interface ProtocolSlice {
 	/** Enter/leave the alias-addressed view (ADR 13). */
 	setAddressViaAlias: (viaAlias: boolean) => void;
 	/** The global queue: every Inbox and Later Session, ordered Inbox →
-	 * Later, then last activity descending. Derived from the applied frames. */
+	 * Later, then placement stamp descending. Derived from the applied frames. */
 	queue: SessionInfo[];
 	/** Replace the daemon-global pinned list (from a `pinned_models_changed` push). */
 	setPinnedModels: (pinnedModels: PinnedModelInfo[]) => void;
@@ -343,6 +363,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	queueRevision: 0,
 	completions: [],
 	completionsSeq: 0,
+	unreadCompletions: [],
 	addressViaAlias: false,
 	models: [],
 	pinnedModels: [],
@@ -376,10 +397,22 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 		})),
 
 	noteCompletion: (notice) =>
-		set((s) => ({
-			completions: [...s.completions, { ...notice, seq: s.completionsSeq + 1 }].slice(-COMPLETION_LOG_LIMIT),
-			completionsSeq: s.completionsSeq + 1,
-		})),
+		set((s) => {
+			const attached = s.currentProjectId === notice.session.projectId && s.currentStem === notice.session.stem;
+			const key = addressKeyOf(notice.session);
+			// The Session this tab is reading carries its own completion in the tab
+			// title and unread count (`useStatusNotifications`), so it is never news
+			// here; everything else is unread until this page attaches it.
+			const unread =
+				attached || s.unreadCompletions.includes(key)
+					? s.unreadCompletions
+					: [...s.unreadCompletions, key].slice(-COMPLETION_LOG_LIMIT);
+			return {
+				completions: [...s.completions, { ...notice, seq: s.completionsSeq + 1 }].slice(-COMPLETION_LOG_LIMIT),
+				completionsSeq: s.completionsSeq + 1,
+				unreadCompletions: unread,
+			};
+		}),
 
 	setPinnedModels: (pinnedModels) => set({ pinnedModels }),
 
@@ -406,6 +439,14 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 						// The selection pick is session-scoped: it must not ride into
 						// another session's sends.
 						selectionPick: null,
+						// Reading an address is what clears its novelty, and this is the
+						// optimistic half of a navigation (the sync confirms it later).
+						unreadCompletions: readUnread(
+							s.unreadCompletions,
+							currentProjectId !== null && currentStem !== null
+								? { projectId: currentProjectId, stem: currentStem }
+								: null,
+						),
 					},
 		),
 
@@ -482,6 +523,10 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 				browser: addressChanged ? null : s.browser,
 				renderLeafId: idChanged ? null : s.renderLeafId,
 				selectionPick: addressChanged || idChanged ? null : s.selectionPick,
+				unreadCompletions: readUnread(
+					s.unreadCompletions,
+					projectId !== null && stem !== null ? { projectId, stem } : null,
+				),
 			};
 		}),
 
@@ -500,6 +545,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 				browser: addressChanged ? null : s.browser,
 				renderLeafId: idChanged ? null : s.renderLeafId,
 				selectionPick: addressChanged || idChanged ? null : s.selectionPick,
+				unreadCompletions: readUnread(s.unreadCompletions, { projectId: ref.projectId, stem: ref.stem }),
 			};
 		}),
 });

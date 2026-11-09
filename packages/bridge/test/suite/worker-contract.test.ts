@@ -62,6 +62,7 @@ describe("worker contract values", () => {
 			{
 				kind: "queue_changed",
 				version: 4,
+				origin: "runtime",
 				upsert: [
 					{
 						projectId: "proj",

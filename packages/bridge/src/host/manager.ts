@@ -107,6 +107,11 @@ export interface ConnectionHandle {
 	onInitialSync(frame: InitialSyncFrame): void;
 }
 
+/** Which settle a Manager reports: the end of one pi turn (an assistant step,
+ * with the tool results it produced) or of the whole execution. One tagged
+ * value rather than a boolean, because each listener acts on one of the two. */
+export type SettlementBoundary = "turn" | "execution";
+
 export interface Manager {
 	/** The canonical Document — mutated by the Manager, read by Connections. */
 	document: Document;
@@ -136,12 +141,17 @@ export interface Manager {
 	/** Detach a Connection. Removes its handle. */
 	removeConnection(handle: ConnectionHandle): void;
 	/**
-	 * Register a listener for session-settled events (agent_settled / turn_end).
-	 * The first such event on a new session triggers the deferred file write,
-	 * so listeners can rescan sessions to pick up the now-on-disk metadata.
-	 * Returns unsubscribe function.
+	 * Register a listener for session-settled events. The first such event on a
+	 * new session triggers the deferred file write, so listeners can rescan
+	 * sessions to pick up the now-on-disk metadata.
+	 *
+	 * The boundary is the tag the listener needs to tell the two apart: pi emits
+	 * `turn_end` after every assistant step — a tool-using turn has one per tool
+	 * batch — and `agent_settled` once, when the whole run is over. Metadata
+	 * refreshes want both; a completion notification wants only the execution
+	 * (ADR 24). Returns unsubscribe function.
 	 */
-	onSettled(listener: () => void): () => void;
+	onSettled(listener: (boundary: SettlementBoundary) => void): () => void;
 	/**
 	 * What this Session is doing right now, as pi's event stream reports it.
 	 * Derived from the events themselves rather than from the projection: the
@@ -230,7 +240,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	}
 
 	const patchListeners = new Set<(patch: Patch) => void>();
-	const settledListeners = new Set<() => void>();
+	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
 	const activityListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
@@ -383,12 +393,13 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		refresh();
 
 		if (event.type === "turn_end" || event.type === "agent_settled") {
-			const recPatch = boundaryReconcile(event.type === "agent_settled");
+			const execution = event.type === "agent_settled";
+			const recPatch = boundaryReconcile(execution);
 			if (recPatch) emitPatch(recPatch);
 			// Notify connections that the session has settled — the first turn
 			// after newSession writes the session file, and listeners can rescan
 			// to pick up the now-on-disk metadata (name, message count, etc.).
-			for (const l of settledListeners) l();
+			for (const l of settledListeners) l(execution ? "execution" : "turn");
 		}
 
 		// ADR 10 v2: a persisted user bash entry (a `!`/`!!` command) is a Git
@@ -873,7 +884,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				if (ops.length > 0) emitPatch({ ops });
 				const recPatch = boundaryReconcile(true);
 				if (recPatch) emitPatch(recPatch);
-				for (const l of settledListeners) l();
+				// The recovery run's own end is the execution boundary: its
+				// continuation runs outside pi's turn loop (ADR 16).
+				for (const l of settledListeners) l("execution");
 			}
 			return "retry";
 		},

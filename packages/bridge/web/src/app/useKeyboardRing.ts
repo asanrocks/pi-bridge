@@ -153,15 +153,17 @@ export function useKeyboardRing(deps: KeyboardRingDeps): AppKeyHandlers {
 		[vm, navigate],
 	);
 
-	// Alt+↑/↓ — cycle the queue (queue order: Inbox → Later, activity desc —
-	// the sidebar's pinned order). Cyclic; from the
-	// launcher (nothing attached) both directions open the first. Live
-	// mid-stream: switching is an attach (ADR 11), not a retarget of the
-	// streaming instance.
+	// Alt+↑/↓ — cycle the Inbox Sessions in queue order (placement desc, the
+	// sidebar's own order minus the parked group). Later is parked by decision
+	// ("still open, not next"), so the ring never walks into work the user set
+	// aside; the parked group stays reachable from the sidebar. Cyclic; from the
+	// launcher (nothing attached) and from a parked Session both directions open
+	// the first. Live mid-stream: switching is an attach (ADR 11), not a
+	// retarget of the streaming instance.
 	const onCycleActiveSession = useCallback(
 		(direction: "prev" | "next") => {
 			const s = getStore().getState();
-			const list = s.queue;
+			const list = s.queue.filter((row) => row.location === "inbox");
 			if (list.length === 0) return;
 			const idx = list.findIndex(
 				(r) =>

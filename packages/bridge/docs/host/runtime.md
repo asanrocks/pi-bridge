@@ -855,6 +855,17 @@ Placement is independent of execution. Running is the runtime's own fact
 the store holds no execution state at all: a daemon restart has nothing to
 recover, and the settle of an execution never writes a placement.
 
+Each record also carries the instant of the transition that wrote it
+(`placedAt`), because the queue's order is the placement's: a Session sits
+where the last decision put it — a submission promoting it into Inbox, a user
+move, a restored refusal — and the most recent placement leads its group.
+Activity is deliberately not an input. A streaming turn advances the row's
+`lastActivityAt` on every delta, so ordering by it would re-sort the queue while
+the reader was reading it, and a row that merely ran would move above work the
+user had queued ahead of it; busy is a temporal state. A move that lands where
+the Session already was is not a transition and keeps its stamp, so a redundant
+click cannot jump a row to the top.
+
 The store owns two transitions. A submitted message (`promote`) places the
 Session in Inbox under a fresh admission token, remembering the placement it
 replaced; a refused preflight (`restore`) puts that placement back. The token
@@ -885,6 +896,15 @@ next transition; user moves decide against a candidate copy, persist it, and
 commit only on success — a failed move leaves the store exactly as it was, so a
 retry re-attempts the write instead of reporting success against a placement
 that was never durable.
+
+The file is versioned. Version 3 is the stamped format; a version 2 file (the
+place alone) is a known format rather than corruption, so it is upgraded in
+place at load — its records share one empty stamp instead of a time invented
+for them, which sorts them after every stamped placement until the user next
+moves them, and a failed rewrite degrades to the upgraded store in memory
+rather than quarantining a file whose content is intact. The pre-locations
+format below recorded an instant of its own, so that one migrates into a real
+stamp.
 
 A pre-locations file (`states.json`, version 1, four states) is migrated on
 load and removed: `notified` and `busy` become Inbox, `deferred` becomes Later,
@@ -1016,12 +1036,12 @@ placement, Trash, close, rename, and the `listQueue` query itself rebuild in
 full, which is also how an external filesystem edit is discovered. A stored
 record whose stem resolves to no file and no Activation — moved or deleted on
 disk after the record was written — renders no row, and the next boot's
-recovery prunes it. The slice is ordered Inbox → Later, each group by last
-activity descending, and its total order lives in one browser-safe comparator
-(`src/core/queue-order.ts`) shared by the Worker that orders its slice, the
-Daemon that aggregates the slices, and the browser that orders the rows it
-receives, so a multi-Worker queue interleaves by the same rule instead of
-concatenating per-registration blocks.
+recovery prunes it. The slice is ordered Inbox → Later, each group by placement
+stamp descending (most recently placed first), and its total order lives in one
+browser-safe comparator (`src/core/queue-order.ts`) shared by the Worker that
+orders its slice, the Daemon that aggregates the slices, and the browser that
+orders the rows it receives, so a multi-Worker queue interleaves by the same
+rule instead of concatenating per-registration blocks.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
 model and thinking defaults, available model metadata, the daemon-global
@@ -1172,12 +1192,19 @@ file; the preference is hand-edited until an editing verb exists.
 
 The queue is the one synchronized listing (ADR 24). The Worker reports
 *changes*: a `queue_changed` event carries the registration-local `version` its
-slice moved to, the complete changed rows, and the addresses that left. Rows
+slice moved to, the complete changed rows, the addresses that left, and the
+`origin` the Daemon publishes at (`user` for a gesture a person made, `runtime`
+for execution state). Rows
 are diffed against the slice the Worker keeps materialized, so several
 callbacks observing one transition — and repeated callbacks observing none —
 emit nothing. `history_changed` names a Project whose cached history a trigger
 touched (settlement, rename, creation, Trash, placement); it carries no rows.
-`session_completed` reports one settled execution in a queued Session.
+`session_completed` reports one settled execution in a queued Session. The
+Manager reports both settle boundaries it observes — pi's `turn_end`, which
+falls after every assistant step, and `agent_settled`, which ends the run —
+because metadata refreshes need both; the completion rides only the execution
+boundary. A user-requested end (Stop, Archive, Trash, explicit close)
+finalizes a turn without announcing a completion.
 
 The Daemon owns aggregation and the rate:
 
@@ -1187,11 +1214,15 @@ The Daemon owns aggregation and the rate:
 - The Daemon merges the slices with the shared comparator, diffs the aggregate
   against the **published** queue, and broadcasts one `queue_changed` delta at
   most once per `QUEUE_PUBLISH_INTERVAL_MS` (five seconds; a test seam on
-  `DaemonOptions`). One timer for the whole Daemon bounds the rate no matter
-  how many Workers or Sessions changed, and a change during the cooldown never
-  extends the deadline. An empty diff with no pending history invalidation
-  publishes nothing. The revision increments exactly once per nonempty
-  publication.
+  `DaemonOptions`) for **execution state**. One timer for the whole Daemon
+  bounds the rate no matter how many Workers or Sessions changed, and a change
+  during the cooldown never extends the deadline. A change the Worker tags
+  `origin: "user"` — a placement, a Trash, an admitted message — publishes at
+  a 150 ms floor instead, because the row that person just moved must move on
+  screen; `due` only ever moves earlier, so a runtime change cannot delay a
+  gesture and a gesture cannot stretch the interval for execution state. An
+  empty diff with no pending history invalidation publishes nothing. The
+  revision increments exactly once per nonempty publication.
 - Each Connection's first queue frame is a `snapshot` of the last published
   queue, pushed synchronously when the socket is accepted. Capturing it,
   enqueueing it, and adding the Connection to the broadcast set are one step,
@@ -1199,12 +1230,13 @@ The Daemon owns aggregation and the rate:
   changes arrive at the next deadline. Replacing a Connection starts a new
   revision domain.
 - `session_completed` is forwarded immediately, bypassing the interval: a
-  sample would hide a turn shorter than five seconds. `archive`, `trash`, and
-  explicit close dispose a runtime, and disposal finalizes the in-flight turn;
-  that settlement is suppressed for the address being disposed, because the
-  user asked for the move and is not waiting for a completion. Suppression is
-  released whether the operation succeeds or fails. Worker withdrawal removes
-  its rows at the next publication and announces no completions.
+  sample would hide a turn shorter than five seconds. `archive`, `trash`,
+  explicit close, and Stop dispose or abort a runtime, and that finalizes the
+  in-flight turn; the resulting settlement is suppressed for the address being
+  ended, because the user asked for it and is not waiting for a completion.
+  Suppression is released whether the operation succeeds or fails. Worker
+  withdrawal removes its rows at the next publication and announces no
+  completions.
 
 Connections receive these frames regardless of which Project they currently
 have attached. The worker side of the same triggers is described under

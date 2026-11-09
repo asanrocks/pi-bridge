@@ -224,14 +224,16 @@ The push contract is:
   generation, and a live frame from an older attachment is dropped before
   the mirror — same address or not.
 - `queue_changed` carries the queue: a `snapshot` first (every Inbox and Later
-  Session, ordered Inbox → Later, each group by last activity descending), then
+  Session, ordered Inbox → Later, each group by placement stamp descending), then
   `delta` frames of complete changed rows, removed addresses, and the Projects
   whose cached history a publication invalidated. Membership is the stored
   location, never runtime retention — an archived Session never appears, and
   idle collection never removes a row.
-- `session_completed` names one execution that finished in a queued Session.
-  It is an occurrence, delivered immediately, because the queue itself is
-  published at most once every five seconds (ADR 24).
+- `session_completed` names one execution that finished in a queued Session
+  (the execution, never a pi turn boundary), and is silent for a
+  user-requested end. It is an occurrence, delivered immediately, because the
+  queue itself is published at most once every five seconds for execution
+  state — a user's own placement publishes at a short floor instead (ADR 24).
 
 The host sends exactly one initial-sync frame when a Connection attaches. The
 frame is sent before later live patches and before the successful navigation

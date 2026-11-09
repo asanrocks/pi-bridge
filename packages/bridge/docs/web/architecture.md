@@ -115,8 +115,11 @@ The protocol slice contains:
   no other module phrases connection state;
 - `projects`, models, thinking levels, and `devMode` from daemon information;
 - `queue`, the global queue: every Inbox and Later Session, ordered Inbox →
-  Later, then last activity descending, plus the `queueRevision` its applied
-  frame carried and the `completions` log the notification hook drains; and
+  Later, then placement stamp descending, plus the `queueRevision` its applied
+  frame carried, the `completions` log the notification hook drains, and
+  `unreadCompletions` — the addresses whose completion this page has not read,
+  per page and in memory, which the TopBar badge turns into its novelty dot;
+  and
 - `sessionPages`, lazily fetched Project history pages. Each page is
   `loading`, `error`, or `ready` with `sessions`, `hasMore`, and the compound
   `SessionListCursor` in `nextCursor`.
@@ -539,14 +542,20 @@ completion signaling: the attached conversation drives the tab title and the
 unread count, while a Session this tab is *not* reading is announced from the
 `session_completed` pushes the pipeline files in the store's `completions` log.
 The signal is an occurrence, not a comparison of queue snapshots: the queue is
-published at most once per five seconds (ADR 24), so a short turn may never
-appear as running, and completion therefore arrives as its own frame. The hook
+published at most once per five seconds for execution state (ADR 24), so a
+short turn may never
+appear as running, and completion therefore arrives as its own frame — sent at
+the execution's end, not at a pi turn boundary (which falls after every
+assistant step) and not for a user-requested Stop. The hook
 drains the log by sequence, so a notice is announced exactly once, and it stays
-silent for the attached Session. Delivery follows
-what the reader can see: an
-in-app toast while the page is visible, one OS notification per finished
-Session while it is
-hidden, posted through `infra/lib/userNotification.ts` with the Session's
+silent for the attached Session. Delivery follows what the reader can see. A
+visible page raises no per-completion surface: the store files the address in
+`unreadCompletions` — per page, in memory, cleared when the page attaches that
+Session — and the TopBar badge derives its count and its novelty dot from the
+queue and that list, so the announcement is the indicator the user can already
+see. A hidden page, where the badge is not on screen, gets one OS notification
+per finished Session, posted through `infra/lib/userNotification.ts` with the
+Session's
 address in `notification.data` and its own tag (`notificationTag`), so
 simultaneous completions remain separately clickable. A click returns through
 the service worker:

@@ -3,8 +3,8 @@
 // the name toggles, it does not navigate), one new-session button (opens the
 // Project home, the compose surface — there is no empty-session creation
 // path), and the children below: the Project's Sessions in queue order (Inbox
-// → Later) followed by the archived history, each group newest activity first,
-// all flush-left (no indent). The fold is location-scoped: collapsed (name
+// → Later, most recently placed first) followed by the archived history (newest
+// activity first — it has no placement), all flush-left (no indent). The fold is location-scoped: collapsed (name
 // only) → inbox (the attention list) → all (Inbox + Later + archived).
 // ============================================================================
 
@@ -44,7 +44,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 	 * all (Inbox + Later + archived). */
 	fold: FolderFoldState;
 	/** The Project's queued Sessions, in the daemon's queue order:
-	 * Inbox → Later, activity desc. */
+	 * Inbox → Later, placement desc. */
 	queueRows: SessionInfo[];
 	page: SessionFolderPage | undefined;
 	onToggle: (projectId: string, hasInbox: boolean) => void;
