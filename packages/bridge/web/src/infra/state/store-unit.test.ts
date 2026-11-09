@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { Entry, SessionInfo } from "../../../../src/core/index.ts";
 import { addressKeyOf } from "./protocol.ts";
 import { createClientStore } from "./store.ts";
-import { resolveRenderLeafTarget } from "./ui.ts";
+import { type BrowserTarget, lastBrowsedFile, resolveRenderLeafTarget } from "./ui.ts";
 
 function session(stem: string): SessionInfo {
 	return {
@@ -615,5 +615,52 @@ describe("unread completions", () => {
 		const before = store.getState().unreadCompletions;
 		store.getState().commitAddress("proj", "a", "sess-a");
 		expect(store.getState().unreadCompletions).toBe(before);
+	});
+});
+
+describe("the browser's last file", () => {
+	function seeded() {
+		const store = createClientStore();
+		store.getState().setProjects([
+			{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null },
+			{ id: "other", cwd: "/other", defaultModel: null, defaultThinkingLevel: null },
+		]);
+		store.getState().setCurrentSession("proj", "a");
+		return store;
+	}
+
+	function browse(store: ReturnType<typeof createClientStore>, target: Partial<BrowserTarget> & { root: string }) {
+		store.getState().openBrowser({ state: "worktree", tree: "all", presentation: "file", ...target });
+	}
+
+	it("a file read is remembered under the Project, root included", () => {
+		const store = seeded();
+		// A file outside the Project keeps its own directory as the root.
+		browse(store, { root: "/elsewhere", path: "/elsewhere/x.ts" });
+		expect(lastBrowsedFile(store.getState())).toEqual({ root: "/elsewhere", path: "/elsewhere/x.ts" });
+	});
+
+	it("a target with no file keeps the memory instead of erasing it", () => {
+		const store = seeded();
+		browse(store, { root: "/repo", path: "/repo/src/a.ts" });
+		browse(store, { root: "/repo" });
+		expect(lastBrowsedFile(store.getState())).toEqual({ root: "/repo", path: "/repo/src/a.ts" });
+	});
+
+	it("each Project resumes its own file", () => {
+		const store = seeded();
+		browse(store, { root: "/repo", path: "/repo/src/a.ts" });
+		store.getState().setCurrentSession("other", "b");
+		expect(lastBrowsedFile(store.getState())).toBeNull();
+		browse(store, { root: "/other", path: "/other/y.ts" });
+		store.getState().setCurrentSession("proj", "a");
+		expect(lastBrowsedFile(store.getState())).toEqual({ root: "/repo", path: "/repo/src/a.ts" });
+	});
+
+	it("the Launcher has no Project to resume in", () => {
+		const store = seeded();
+		browse(store, { root: "/repo", path: "/repo/src/a.ts" });
+		store.getState().clearCurrentSession();
+		expect(lastBrowsedFile(store.getState())).toBeNull();
 	});
 });

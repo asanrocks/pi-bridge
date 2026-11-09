@@ -480,9 +480,17 @@ is one move out and one back rather than two full-screen round trips. On a wide
 viewport the button keeps its pane behavior — toggle or hover-peek. The
 keyboard shortcut still opens the full switcher, which contains everything the
 compact list does. Its center
-is the editable Session name, falling back to `pi-bridge`: the name is a
-value the surface shows, so it takes no control box — a hover fill would
-paint the flex-wide strip rather than the name — and answers the pointer with
+names the object the surface renders, and never an object that is not on
+screen: an open Session's name, editable in place; the Project id on its home,
+as text, because the Session it would rename does not exist yet; and the app
+name on the Launcher. The rule exists because the published document is
+`staged` while detached — it belongs to the Session being left, so a home that
+read the document's name would show the Session you just left, in the bar and
+in the tab title (both read the same value). Only the Session form is a
+control: the name is
+a value the surface shows, so it takes no control box — a hover fill would
+paint the flex-wide strip rather than the name — and the editable form answers
+the pointer with
 an underline on the name itself, the same signal an inline link carries. Its right control
 is the History clock, symmetric with the hamburger: shown when a session is
 open and the History pane is hidden, hidden when the pane has a surface of
@@ -716,7 +724,8 @@ off to the rail so the picked conversation surface is visible.
 
 The header is a quiet uppercase `History` label. The pane renders the
 conversation's branch graph; the repository's evolution lives in the
-transcript's git affordances and the TopBar badge (see Git affordances).
+transcript's git affordances and the TopBar repository menu (see Git
+   affordances).
 
 The graph renders a git-log-style graph of user-message branches. SVG
 vertical lineage and cubic fork curves sit beneath fixed-height DOM rows
@@ -778,12 +787,20 @@ endpoint pair; none infers a turn-scoped window git cannot know.
   resolved host-side. It is the card's only review meaning; the turn's
   transition windows belong to the turn menu, so there is no second `diff`
   affordance to disambiguate.
-- **The TopBar changes badge** is the one turn-agnostic surface: the count of
-  files differing from `HEAD` in the attached session's Project worktree,
-  sampled when a turn settles (never per streamed entry) and hidden while
-  clean. Its menu reviews `head → worktree`. Because dirt from several
+- **The TopBar repository menu** is the one turn-agnostic surface, and the only
+  entry to the browser that does not come from content: a tool card, a link, or
+  a commit stamp can be absent (a fresh Session, prose-only work, a clean tree,
+  a Project that is not a git repository), and then nothing else in chrome
+  reaches the files. So the control is present whenever a Project is rendered —
+  attached Session or Project home — and its menu always offers `Browse files`
+  on that Project's worktree. Only the review row and the count chip are
+  git-dependent: the count of files differing from `HEAD`, sampled on address
+  change and when a turn settles (never per streamed entry), shown only while
+  non-zero, and absent when the worktree cannot be read — a `0` is never
+  displayed, so the chip is state rather than the control's identity. Its menu
+  reviews `head → worktree`. Because dirt from several
   trailing turns is indistinguishable now, attributing it to any one turn
-  would be a lie — which is why it lives in session chrome, not on a turn.
+  would be a lie — which is why it lives in chrome, not on a turn.
 
 Every menu opens the same repository browser (see below) with the pair as its
 target. Historical uncommitted state is still not recoverable: only the live
@@ -797,10 +814,17 @@ the left, file content on the right, in the portal role (Escape, the close
 control, and the backdrop close it; read-only). Every entry point opens this same surface with a
 different target — a Markdown link or a tool card opens one file with the full
 tree, a turn menu or a git card's `Review` control opens a changed-files
-review, the TopBar badge's menu opens the live uncommitted review, and the
-Project home browses the worktree from the Project cwd with
+review, and the two chrome entries (the TopBar repository menu and the Project
+home's `Browse files` link) resume the file the Project last read, else open
+its worktree with
 nothing selected. The browser is not a Session-scoped route: it is ephemeral
-chrome, closed by an address change like the panes.
+chrome, closed by an address change like the panes — which is why that
+remembered file lives in the store, keyed by Project cwd: it is chrome state,
+and a Project switch and back resumes its own file instead of the last one read
+anywhere. A resume is a suggestion, not a promise: a path that no longer exists
+renders the absent pane. Selecting the tree's root row clears the selection
+(back to "Select a file to read it."), because a directory row only folds and
+the remembered file would otherwise be the only state the tree can show.
 
 The header names the task, not the endpoint pair. Four surfaces fall out of
 the target: **Files** (no baseline — one state read in the full tree, with the
@@ -1471,9 +1495,9 @@ header is the registry (role, glyph, one sentence each), exports are named
   full-size icon controls (composer row, dialog and portal actions, the
   fullscreen viewer's close), 20 for chrome (TopBar and pane-header toggles).
   "The row" outranks "the label": a mark that leads words takes its row's slot,
-  not the words' step — the changes badge's branch is a 20px mark in a pill of
-  `--fs-xs` words, because the pill is a TopBar sibling and a meta-sized mark
-  beside 20px neighbours reads as a clipped glyph. A
+  not the words' step — the repository menu's folder mark is a 20px mark in a
+  pill of `--fs-xs` words, because the pill is a TopBar sibling and a meta-sized
+  mark beside 20px neighbours reads as a clipped glyph. A
   feature picks a slot, never a number; 11, 13, and 18 are drift, and so is a
   per-call-site size.
 - **Two ink modes, assigned by family.** Outline is the default. Solid is a
@@ -1739,7 +1763,7 @@ states:
 | Tier | Shape | When |
 | --- | --- | --- |
 | ghost | no box, ink `secondary` → `foreground`, `--state-fill-alpha` fill | a glyph-only control's default — card toolbars, the composer's attach, the turn header's Copy |
-| `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's fold carets, the topbar's changes badge |
+| `dim` | ghost at meta ink (`--color-muted-foreground` → `foreground`), fill kept | a glyph-only control that should read dimmer than the tier's rest ink in a dense row — card toolbars, the header's fold carets, the topbar's repository menu |
 | `quiet` | `dim` without the hover fill | the one text control that is a label rather than a verb — the `Projects` fold-all toggle |
 | outlined | 1px `--color-border-control`, surface's radius | every control that carries words — `Review`, `File`, `Load failed — retry`, `.recoveryBtn`'s `Retry`/`Edit`, a dialog's cancel |
 | filled | accent fill, `--color-on-accent` | the primary command *of the surface* — Send, Stop, `Retry now`, a dialog's confirm, the compare menu's `Apply` |

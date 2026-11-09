@@ -2,7 +2,7 @@
 // functions, hand-built inputs.
 
 import { describe, expect, it } from "vitest";
-import { isAbsolutePath, isHomePath, isUnder, parentDirectory, resolveAgainst } from "./paths.ts";
+import { baseName, isAbsolutePath, isHomePath, isUnder, parentDirectory, resolveAgainst } from "./paths.ts";
 
 describe("isAbsolutePath", () => {
 	it("recognizes POSIX and Windows absolutes", () => {
@@ -71,5 +71,19 @@ describe("isUnder", () => {
 		expect(isUnder("/a/b/", "/a/b/c.ts")).toBe(true);
 		expect(isUnder("/a/b", "/a/bc.ts")).toBe(false);
 		expect(isUnder("/a/b", "/a")).toBe(false);
+	});
+});
+
+describe("baseName", () => {
+	it("returns the last segment of either separator", () => {
+		expect(baseName("/repo/src/a.ts")).toBe("a.ts");
+		expect(baseName("C:\\repo\\src\\a.ts")).toBe("a.ts");
+		expect(baseName("/repo/src/")).toBe("src");
+	});
+
+	it("keeps a root path as itself, without a trailing separator", () => {
+		expect(baseName("/")).toBe("/");
+		expect(baseName("C:\\")).toBe("C:");
+		expect(baseName("~")).toBe("~");
 	});
 });

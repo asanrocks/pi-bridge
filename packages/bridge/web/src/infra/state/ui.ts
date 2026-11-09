@@ -18,6 +18,20 @@ export function projectCwdOf(s: ClientStore): string | null {
 	return s.projects.find((p) => p.id === s.currentProjectId)?.cwd ?? null;
 }
 
+/** A file the browser read, with the root it was browsed from (a file outside
+ * the Project keeps its own directory as the root). */
+export interface BrowsedFile {
+	root: string;
+	path: string;
+}
+
+/** The file this Project last read, or null. A resume is a suggestion, never a
+ * promise: a path that no longer exists renders the browser's absent pane. */
+export function lastBrowsedFile(s: ClientStore): BrowsedFile | null {
+	const cwd = projectCwdOf(s);
+	return cwd === null ? null : (s.lastFile[cwd] ?? null);
+}
+
 // ---------------------------------------------------------------------------
 // Toast notification
 // ---------------------------------------------------------------------------
@@ -252,6 +266,11 @@ export interface UiSlice {
 	 * browser refetches on every open and on every state/selection change — a
 	 * target is a selector, not a snapshot. */
 	browser: BrowserTarget | null;
+	/** The file each Project last read, keyed by that Project's cwd: the browser
+	 * is chrome rather than a route, so reopening it from chrome (the TopBar
+	 * repository menu, the Project home's link) resumes where the Project left
+	 * off. Project-scoped, so a switch back resumes its own file. */
+	lastFile: Record<string, BrowsedFile>;
 	openBrowser: (target: BrowserTarget) => void;
 	closeBrowser: () => void;
 	/** Adopt the host-resolved absolute path of a `~`-rooted target. Only the
@@ -324,6 +343,7 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 	renderLeafId: null,
 
 	browser: null,
+	lastFile: {},
 
 	notifications: [],
 
@@ -366,7 +386,21 @@ export const createUiSlice: StateCreator<ClientStore, [], [], UiSlice> = (set, g
 			return target === undefined ? s : { renderLeafId: target };
 		}),
 
-	openBrowser: (browser) => set({ browser }),
+	openBrowser: (browser) =>
+		set((s) => ({
+			browser,
+			// Recorded here because every target passes through this one writer — a
+			// close handler would miss the backdrop, Escape, and the teardown in
+			// `protocol.ts`. Only a read with a file in it is worth resuming; a
+			// directory-only target has nothing to remember.
+			lastFile:
+				browser.path === undefined
+					? s.lastFile
+					: {
+							...s.lastFile,
+							[projectCwdOf(s) ?? browser.root]: { root: browser.root, path: browser.path },
+						},
+		})),
 	closeBrowser: () => set({ browser: null }),
 
 	adoptBrowserPath: (requested, resolved) =>

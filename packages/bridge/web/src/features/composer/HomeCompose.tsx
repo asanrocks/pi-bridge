@@ -28,6 +28,7 @@ import type {
 } from "../../../../src/core/index.ts";
 import { findNextModel } from "../../../../src/viewmodel/index.ts";
 import { getStore, useStore } from "../../infra/state/store.tsx";
+import { lastBrowsedFile } from "../../infra/state/ui.ts";
 import { ComposeCard } from "./ComposeCard.tsx";
 import { DictationToggle } from "./DictationToggle.tsx";
 import { DictationToolbar } from "./DictationToolbar.tsx";
@@ -173,9 +174,11 @@ export const HomeCompose = memo(function HomeCompose({
 	const effectiveLevel = choice?.thinkingLevel ?? fallbackLevel;
 
 	const thinkingLevels = useStore((s) => s.thinkingLevels);
-	// ADR 14 entry point: the Project home browses the worktree from the
-	// Project cwd, with no file selected and no baseline.
+	// ADR 14 entry point: the Project home browses the worktree from the Project
+	// cwd, resuming the file this Project last read (the browser is chrome, not a
+	// route, so this link is the only way back into it from the home).
 	const projectCwd = useStore((s) => s.projects.find((p) => p.id === s.currentProjectId)?.cwd ?? null);
+	const remembered = useStore(lastBrowsedFile);
 	const openBrowser = useStore((s) => s.openBrowser);
 
 	const handleSetModel = useCallback(
@@ -326,7 +329,8 @@ export const HomeCompose = memo(function HomeCompose({
 							className={styles.browse}
 							onClick={() =>
 								openBrowser({
-									root: projectCwd,
+									root: remembered?.root ?? projectCwd,
+									path: remembered?.path,
 									state: "worktree",
 									tree: "all",
 									presentation: "file",

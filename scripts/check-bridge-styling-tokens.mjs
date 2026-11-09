@@ -405,7 +405,7 @@ const COORDINATES = [
 	["features/topbar/TopBar.module.css", ".topBar", "padding", ["--topbar-pad-y", "--topbar-pad-x"]],
 	["features/topbar/TopBar.module.css", ".topBarBtn", "width", ["--control-box"]],
 	["features/topbar/TopBar.module.css", ".topBarBtn", "height", ["--control-box"]],
-	["features/topbar/TopBar.module.css", ".changesBadge", "height", ["--topbar-row"]],
+	["features/topbar/TopBar.module.css", ".repositoryMenu", "height", ["--topbar-row"]],
 	["features/history/HistoryPane.module.css", ".header", "padding", ["--action-col"]],
 	["features/history/HistoryPane.module.css", ".headerPeek", "padding", ["--topbar-pad-y", "--topbar-pad-x"]],
 	["features/history/HistoryPane.module.css", ".headerPeek .closeBtn", "width", ["--control-box"]],

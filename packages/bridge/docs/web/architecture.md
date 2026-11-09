@@ -137,10 +137,10 @@ address actually changes — it held a path or a commit pair read from the
 session being left. A same-address re-assert (the initial-sync push after an
 optimistic open, a reconnect replace) keeps it open. The browser drops any
 reply whose fetch started under a different address, so a slow RPC cannot land
-under the new session's header. The TopBar changes badge carries the same
-guard in its own state: a sample read for a different stem is hidden until the
-new session's fetch lands, so a switch cannot show the previous worktree's
-dirt.
+under the new session's header. The TopBar repository menu carries the same
+guard in its own state: a sample read for a different Project cwd is ignored
+until the new Project's read lands, so a switch cannot show the previous
+worktree's dirt.
 
 The composer slice contains `draft`, a discriminated union:
 
@@ -160,7 +160,9 @@ streaming and pending-steer state, which is the deliberate cross-slice seam.
 The UI slice contains ephemeral view state: `focusedTurnId`, action and detail
 expansion sets, `cardWrap` and `cardMarkdown`, frozen action-group and action
 sets, `loadingPaths`, `pullTick`, the rendered-leaf override, history, the
-browser target, and toast notifications. Expansion keys use
+browser target and the last file each Project browsed (`lastFile`, keyed by
+Project cwd — the browser is chrome, so the two chrome entry points resume it),
+and toast notifications. Expansion keys use
 the first action's entry and block index; action keys use the entry and block
 index. Manual toggles add keys to the corresponding frozen set, preventing
 streaming auto-expansion from overriding user intent. Sealing keeps an entry's

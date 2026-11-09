@@ -7,7 +7,8 @@
 // hamburger so each side pane has its toggle on its own side, including the
 // hover peek and the hide-when-open rule (each pane's own surface carries
 // its close affordance). Hidden on the launcher, where there is no history. Between them:
-// inline-edit session name and the connection icon (down states only) — an
+// the rendered object's name — an inline-editable Session name, or the Project
+// id on its home as plain text — and the connection icon (down states only) — an
 // icon-only broken-link control on the ghost spec: motion = trying, stillness
 // = failed; click retries; text lives in the tooltip/aria-label only.
 // ============================================================================
@@ -16,15 +17,15 @@ import { memo, useEffect, useRef, useState } from "react";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import type { ConnectionState } from "../../infra/state/store.ts";
 import { BrokenLinkIcon, ClockIcon, MenuIcon } from "../../render/icons.tsx";
-import { ChangesBadge } from "./ChangesBadge.tsx";
+import { RepositoryMenu } from "./RepositoryMenu.tsx";
 import styles from "./TopBar.module.css";
 
 // Memoized: App re-renders on every streaming patch (it hosts the ViewModel
 // projection), so the TopBar must bail on identical props — which requires
 // every prop to be stable, including the rename callback App passes
-// (useCallback there). That is what keeps the ChangesBadge from re-rendering
-// per delta: its own subscriptions are primitive slices (leafId, isStreaming)
-// that hold steady while a turn streams.
+// (useCallback there). That is what keeps the RepositoryMenu from re-rendering
+// per delta: its own subscriptions are primitive slices (project cwd, leafId,
+// isStreaming) that hold steady while a turn streams.
 export const TopBar = memo(function TopBar({
 	name,
 	connection,
@@ -37,6 +38,7 @@ export const TopBar = memo(function TopBar({
 	showHistoryToggle,
 	onHistory,
 	onHistoryHover,
+	canRename,
 	onRename,
 	onRetry,
 }: {
@@ -72,6 +74,11 @@ export const TopBar = memo(function TopBar({
 	/** Hover signal for the history peek drawer, symmetric with
 	 *  onSidebarHover. */
 	onHistoryHover?: (inside: boolean) => void;
+	/** A Session is rendered, so `name` is a Session name and the slot is its
+	 *  rename control. False on the Project home and the Launcher: the slot is
+	 *  text, because the object it names (a Project id, or the app) is not
+	 *  renameable and a click would rename the Session being left. */
+	canRename: boolean;
 	onRename: (name: string) => Promise<void>;
 	onRetry: () => void;
 }) {
@@ -96,6 +103,13 @@ export const TopBar = memo(function TopBar({
 			inputRef.current?.focus();
 		}
 	}, [editing]);
+
+	// Renaming is a Session operation: when the Session closes with the edit box
+	// open, the mode ends with it, so the next Session does not open into a stale
+	// name. Drop the state too, not just the render, for that next Session.
+	useEffect(() => {
+		if (!canRename) setEditing(false);
+	}, [canRename]);
 
 	const status = connectionStatus(connection);
 
@@ -133,7 +147,7 @@ export const TopBar = memo(function TopBar({
 					)}
 				</button>
 			)}
-			{editing ? (
+			{editing && canRename ? (
 				<input
 					ref={inputRef}
 					className={styles.topBarInput}
@@ -148,10 +162,10 @@ export const TopBar = memo(function TopBar({
 						if (e.key === "Escape") setEditing(false);
 					}}
 				/>
-			) : (
+			) : canRename ? (
 				<button
 					type="button"
-					className={styles.topBarTitle}
+					className={`${styles.topBarTitle} ${styles.topBarTitleEditable}`}
 					onClick={() => {
 						setEditName(name);
 						setEditing(true);
@@ -159,6 +173,8 @@ export const TopBar = memo(function TopBar({
 				>
 					{name || "pi-bridge"}
 				</button>
+			) : (
+				<div className={styles.topBarTitle}>{name || "pi-bridge"}</div>
 			)}
 			{status && (
 				<button
@@ -173,7 +189,7 @@ export const TopBar = memo(function TopBar({
 					<BrokenLinkIcon size={20} />
 				</button>
 			)}
-			<ChangesBadge />
+			<RepositoryMenu />
 			{showHistoryToggle && (
 				<button
 					type="button"

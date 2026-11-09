@@ -12,7 +12,8 @@
 
 import { memo } from "react";
 import type { GitDiffFileStatus } from "../../../../src/core/index.ts";
-import { CaretIcon, WarningIcon } from "../../render/icons.tsx";
+import { baseName } from "../../infra/lib/paths.ts";
+import { CaretIcon, FolderIcon, WarningIcon } from "../../render/icons.tsx";
 import styles from "./FileBrowser.module.css";
 
 export interface TreeNode {
@@ -54,11 +55,6 @@ function statusLetter(status: GitDiffFileStatus | undefined): string {
 }
 
 /** Basename of a `/`- or `\`-separated path. */
-function baseName(path: string): string {
-	const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-	return cut === -1 ? path : path.slice(cut + 1);
-}
-
 /** True when `path` is `ancestor` itself or below it — the active-directory
  * test for the tree's highlight. */
 function isAncestorOf(ancestor: string, path: string | undefined): boolean {
@@ -68,17 +64,43 @@ function isAncestorOf(ancestor: string, path: string | undefined): boolean {
 
 export const FileTree = memo(function FileTree({
 	nodes,
+	root,
 	selectedPath,
 	onSelect,
 	onToggle,
+	onSelectRoot,
 }: {
 	nodes: TreeNode[];
+	/** The tree's root, drawn as its own row: it is the one target that clears
+	 * the selection, so "nothing selected" stays reachable once a file is. */
+	root?: { path: string; name: string };
 	selectedPath?: string;
 	onSelect: (node: TreeNode) => void;
 	onToggle: (node: TreeNode) => void;
+	onSelectRoot?: () => void;
 }) {
 	return (
 		<div className={styles.tree} role="tree">
+			{root !== undefined && (
+				// No caret: this row is the scope the listing already shows, not a fold —
+				// a caret here would promise a collapse it cannot perform. The folder mark
+				// keeps the depth-0 indent grid of the rows below it.
+				<button
+					type="button"
+					role="treeitem"
+					aria-selected={selectedPath === undefined}
+					className={styles.treeRow}
+					data-active={selectedPath === undefined || undefined}
+					style={{ paddingLeft: "6px" }}
+					title={root.path}
+					onClick={onSelectRoot}
+				>
+					<span className={styles.treeMark}>
+						<FolderIcon size={12} />
+					</span>
+					<span className={styles.treeName}>{root.name}</span>
+				</button>
+			)}
 			{nodes.map((node) => (
 				<TreeRow
 					key={node.path}

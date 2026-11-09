@@ -35,6 +35,15 @@ export function parentDirectory(path: string): string {
 	return /^[a-zA-Z]:$/.test(trimmed.slice(0, cut)) ? `${trimmed.slice(0, cut)}\\` : trimmed.slice(0, cut);
 }
 
+/** Last segment of a `/`- or `\`-separated path — the name a directory row
+ * shows for an absolute path. A trailing separator is not part of the name, so a
+ * Windows drive root reads `C:`. */
+export function baseName(path: string): string {
+	const trimmed = path.length > 1 && /[\\/]$/.test(path) ? path.slice(0, -1) : path;
+	const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+	return cut === -1 || cut === trimmed.length - 1 ? trimmed : trimmed.slice(cut + 1);
+}
+
 /** Join a base directory with a relative path, collapsing `.` and `..`.
  * An already-absolute path is returned unchanged (only normalized). */
 export function resolveAgainst(base: string, path: string): string {

@@ -24,7 +24,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DirectoryEntry, GitDiffFileStat, GitDiffFileStatus, SnapshotFile } from "../../../../src/core/index.ts";
-import { isUnder, parentDirectory } from "../../infra/lib/paths.ts";
+import { baseName, isUnder, parentDirectory } from "../../infra/lib/paths.ts";
 import { formatWhen } from "../../infra/lib/time.ts";
 import { useMediaQuery } from "../../infra/lib/useMediaQuery.ts";
 import { useNow } from "../../infra/lib/useNow.ts";
@@ -801,9 +801,16 @@ export const FileBrowser = memo(function FileBrowser() {
 							)}
 							<FileTree
 								nodes={treeNodes}
+								root={{ path: root, name: baseName(root) }}
 								selectedPath={treeSelection}
 								onSelect={selectNode}
 								onToggle={toggleDirectory}
+								// The root row is the way back to "nothing selected": a directory row
+								// only folds, and the browser remembers the last file it read, so
+								// there would otherwise be no deselect target at all.
+								onSelectRoot={() => {
+									if (browser !== null) openBrowser({ ...browser, path: undefined, line: undefined });
+								}}
 							/>
 						</aside>
 					)}

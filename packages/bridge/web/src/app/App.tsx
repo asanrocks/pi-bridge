@@ -29,6 +29,7 @@ import { useHistoryPaneShell } from "../features/history/useHistoryPaneShell.tsx
 import { Launcher } from "../features/launcher/Launcher.tsx";
 import { useSidebarShell } from "../features/sidebar/useSidebarShell.tsx";
 import { TopBar } from "../features/topbar/TopBar.tsx";
+import { topBarTitle } from "../features/topbar/topBarTitle.ts";
 import { waitingBadgeCount, waitingNewCount as waitingNewCountOf } from "../features/topbar/waitingBadge.ts";
 import { FileBrowser } from "../features/viewer/FileBrowser.tsx";
 import { useConnection } from "../infra/net/useConnection.ts";
@@ -78,7 +79,11 @@ function AppInner() {
 	// Status the shell renders directly (TopBar title, busy guard,
 	// notifications). Models, registry lists, and composer status are
 	// consumed inside the features that render them.
-	const statusName = useStore((s) => s.document.status.name);
+	//
+	// The title names the object the surface renders — the attached Session, or
+	// the Project whose home is open — never the `staged` document a detach
+	// leaves behind (see `topBarTitle`). The tab title reads the same value.
+	const statusName = useStore(topBarTitle);
 	const isStreaming = useStore((s) => s.document.status.isStreaming);
 	const connection = useStore((s) => s.connection);
 	const currentStem = useStore((s) => s.currentStem);
@@ -146,6 +151,7 @@ function AppInner() {
 				showHistoryToggle={hasOpenSession && history.mode === "hidden"}
 				onHistory={history.toggle}
 				onHistoryHover={history.setHistoryHover}
+				canRename={hasOpenSession}
 				onRename={handleRename}
 				onRetry={retry}
 			/>
