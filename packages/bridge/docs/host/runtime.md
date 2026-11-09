@@ -962,7 +962,8 @@ execution ended). Archive collects the address's Activation first when one
 exists — archived history is not being worked on — and then writes the
 placement; its attached Connections are detached and notified exactly as
 `trashSession` does. A stem with no Session at all is an error. The result
-reaches every browser as a `queue_changed` push.
+reaches every browser in the next queue delta (see "Queue publication"),
+together with the Project's history invalidation.
 
 ### `detach`
 
@@ -1001,26 +1002,26 @@ recently started tool still running: one sibling ending does not erase the
 other's name or restart the phase clock. The actor records the phase-change
 instant from the Manager's deduped `onActivityChange` — deduped *and*
 phase-scoped, so a text delta does not change the phase, a name change inside
-one phase does not restart the clock, and a phase change emits one
-`queue_changed`.
+one phase does not restart the clock, and a phase change updates the row the
+Worker keeps materialized.
 
 `listQueue` is the global queue: every Inbox and Later Session across every
 Project — membership is the location store's key set, in memory, not the
 registry and not a directory scan, so a dormant Inbox Session is a queue row
-with no runtime and a browsed archived Session is not a row at all, and the
-query costs at most one file per row (a live row reads only the registry's
-metadata; a dormant row the one file its stem names, mtime-cached). A stored
+with no runtime and a browsed archived Session is not a row at all. The Worker
+keeps that slice **materialized** (ADR 24): a metadata-only trigger rebuilds
+live rows from the registry's `metadata()` and reuses the stored dormant rows,
+so an activity or streaming callback reads no Session file; registration,
+placement, Trash, close, rename, and the `listQueue` query itself rebuild in
+full, which is also how an external filesystem edit is discovered. A stored
 record whose stem resolves to no file and no Activation — moved or deleted on
 disk after the record was written — renders no row, and the next boot's
-recovery prunes it. It is ordered Inbox → Later, each group by last activity
-descending. Its rows report `location` and, when running, `activity`; the
-Worker emits `queue_changed` on every placement write, on registration and
-streaming changes, and on each activity-phase change (those refresh the rows'
-preview fields and running fact, never their membership). The queue's total order lives
-in one comparator (`src/host/queue-order.ts`) shared by the Worker that
-orders its slice and the Daemon that aggregates the slices, so a
-multi-Worker queue interleaves by the same rule instead of concatenating
-per-registration blocks.
+recovery prunes it. The slice is ordered Inbox → Later, each group by last
+activity descending, and its total order lives in one browser-safe comparator
+(`src/core/queue-order.ts`) shared by the Worker that orders its slice, the
+Daemon that aggregates the slices, and the browser that orders the rows it
+receives, so a multi-Worker queue interleaves by the same rule instead of
+concatenating per-registration blocks.
 
 `getDaemonInfo` returns the static Project list, per-Project fresh-session
 model and thinking defaults, available model metadata, the daemon-global
@@ -1167,25 +1168,49 @@ file; the preference is hand-edited until an editing verb exists.
 
 ## Pushes and HTTP Serving
 
-A `sessions_changed` push is Project-scoped. It contains the Project id and a
-fresh first page of up to ten `SessionInfo` rows, with its pagination flags
-and cursor. The Daemon publishes it after a Session settles, after a rename,
-and after explicit close disposal; a settle also refreshes metadata when a
-fresh Session first reaches disk.
+### Queue publication
 
-A `queue_changed` push is global. It contains the complete current
-`listQueue` snapshot — the aggregate of every registered Worker's last
-report, re-sorted into the queue's global order by the shared comparator. A
-registration's slice is seeded from a live `listQueue` when the link is
-accepted (a placeholder identity closes the race with a `queue_changed`
-arriving during the seed query, which is fresher than the snapshot), so a
-Worker that arrives holding persisted queue state is visible in the
-aggregate immediately rather than after its next transition. The Daemon
-sends the push when a Session's location changes (a submission's promotion or
-its rollback, a move, a trash) and when a live Activation's registration,
-streaming state, or activity phase changes (those refresh the
-queued rows' preview fields, never their membership). Connections receive
-these pushes regardless of which Project they currently have attached.
+The queue is the one synchronized listing (ADR 24). The Worker reports
+*changes*: a `queue_changed` event carries the registration-local `version` its
+slice moved to, the complete changed rows, and the addresses that left. Rows
+are diffed against the slice the Worker keeps materialized, so several
+callbacks observing one transition — and repeated callbacks observing none —
+emit nothing. `history_changed` names a Project whose cached history a trigger
+touched (settlement, rename, creation, Trash, placement); it carries no rows.
+`session_completed` reports one settled execution in a queued Session.
+
+The Daemon owns aggregation and the rate:
+
+- A registration's slice is seeded from `listQueue`, which answers with the
+  same materialized slice its deltas advance plus that slice's `version`, so a
+  seed that resolves late cannot roll back a delta that already landed.
+- The Daemon merges the slices with the shared comparator, diffs the aggregate
+  against the **published** queue, and broadcasts one `queue_changed` delta at
+  most once per `QUEUE_PUBLISH_INTERVAL_MS` (five seconds; a test seam on
+  `DaemonOptions`). One timer for the whole Daemon bounds the rate no matter
+  how many Workers or Sessions changed, and a change during the cooldown never
+  extends the deadline. An empty diff with no pending history invalidation
+  publishes nothing. The revision increments exactly once per nonempty
+  publication.
+- Each Connection's first queue frame is a `snapshot` of the last published
+  queue, pushed synchronously when the socket is accepted. Capturing it,
+  enqueueing it, and adding the Connection to the broadcast set are one step,
+  so no publication can land between the baseline and the stream; pending
+  changes arrive at the next deadline. Replacing a Connection starts a new
+  revision domain.
+- `session_completed` is forwarded immediately, bypassing the interval: a
+  sample would hide a turn shorter than five seconds. `archive`, `trash`, and
+  explicit close dispose a runtime, and disposal finalizes the in-flight turn;
+  that settlement is suppressed for the address being disposed, because the
+  user asked for the move and is not waiting for a completion. Suppression is
+  released whether the operation succeeds or fails. Worker withdrawal removes
+  its rows at the next publication and announces no completions.
+
+Connections receive these frames regardless of which Project they currently
+have attached. The worker side of the same triggers is described under
+"Session listing".
+
+### Assets
 
 The Daemon serves the built web assets and the SPA shell from one
 `AssetSource` — the disk web root in development, the base64 map inlined at

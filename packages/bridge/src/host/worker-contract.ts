@@ -178,6 +178,15 @@ export interface SessionPage {
 	readonly nextCursor?: SessionListCursor;
 }
 
+/** One Worker's materialized queue slice, with the registration-local version
+ * its increments count from. A Daemon installs a slice only while its version
+ * is newer than the one it holds, so a late seed can never roll back live
+ * deltas (ADR 24). */
+export interface QueueSnapshot {
+	readonly sessions: SessionInfo[];
+	readonly version: number;
+}
+
 /** The environment a Worker owns and a Daemon serves verbatim: Project
  * configuration, the model catalogue, the pinned and visible scopes, and the
  * repository read surface. The Daemon must not read Project files or keep a
@@ -216,10 +225,28 @@ export interface WorkerEnvironment {
 /** What a Worker reports when its served state changes. Delivery is the
  * Daemon's job: a Worker never encodes browser frames. */
 export type WorkerEvent =
-	| { readonly kind: "sessions_changed"; readonly projectId: string; readonly page: SessionPage }
-	/** The queue changed: the complete snapshot of Sessions placed in Inbox or
-	 * Later. */
-	| { readonly kind: "queue_changed"; readonly sessions: SessionInfo[] }
+	/** The Worker's queue slice moved: complete changed rows plus removed
+	 * addresses, never a snapshot (`listQueue` seeds that). `version` is
+	 * registration-local and monotone. */
+	| {
+			readonly kind: "queue_changed";
+			readonly version: number;
+			readonly upsert: SessionInfo[];
+			readonly remove: SessionAddress[];
+	  }
+	/** This Project's cached history may be stale (a settlement, rename,
+	 * creation, Trash, or placement). The receiver refetches; the Worker sends
+	 * no rows. */
+	| { readonly kind: "history_changed"; readonly projectId: string }
+	/** One execution settled in a Session placed in Inbox or Later. An
+	 * occurrence, delivered immediately and independently of queue
+	 * publication; the Daemon forwards it as-is. */
+	| {
+			readonly kind: "session_completed";
+			readonly session: SessionRef;
+			readonly name?: string;
+			readonly lastMessageText?: string;
+	  }
 	/** The global pinned list changed (a `setPinnedModels` mutation). */
 	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
 	/** The Worker can serve nothing more (its execution scope is terminal).
@@ -285,9 +312,10 @@ export interface WorkerService extends WorkerEnvironment {
 
 	// ── Project and Session queries ─────────────────────────────────────
 	listSessions(projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage>;
-	/** The queue: every Inbox and Later Session, ordered Inbox → Later, then
-	 * last activity descending. */
-	listQueue(): Promise<SessionInfo[]>;
+	/** The materialized queue slice: every Inbox and Later Session, ordered
+	 * Inbox → Later, then last activity descending. Read from materialized
+	 * state, so it is a snapshot of the same slice its deltas advance. */
+	listQueue(): Promise<QueueSnapshot>;
 	/** Place a Session in Inbox, Later, or Archive. Legal on a dormant Session
 	 * (a storage write needs no runtime); Archive also ends the runtime. */
 	setSessionLocation(address: SessionAddress, location: SessionLocation): Promise<void>;

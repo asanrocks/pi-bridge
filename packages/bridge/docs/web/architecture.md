@@ -28,9 +28,8 @@ The web source is divided by responsibility:
   identity lookup.
 - `infra/lib/` contains small browser or store-free utilities such as routes,
   unread counting, media queries, notification permission, clipboard writes,
-  secure-context guidance, image preparation, the one OS-notification path
-  (`userNotification.ts`), and the queue-wide completion detector
-  (`queueAttention.ts`).
+  secure-context guidance, image preparation, and the one OS-notification path
+  (`userNotification.ts`).
 - `render/` contains shared rendering primitives, Markdown, code highlighting,
   icons, the centered `Dialog` portal surface, the anchored `Popover` panel that
   every popover, picker, and menu composes, shared resize/result helpers, and the
@@ -116,7 +115,8 @@ The protocol slice contains:
   no other module phrases connection state;
 - `projects`, models, thinking levels, and `devMode` from daemon information;
 - `queue`, the global queue: every Inbox and Later Session, ordered Inbox →
-  Later, then last activity descending; and
+  Later, then last activity descending, plus the `queueRevision` its applied
+  frame carried and the `completions` log the notification hook drains; and
 - `sessionPages`, lazily fetched Project history pages. Each page is
   `loading`, `error`, or `ready` with `sessions`, `hasMore`, and the compound
   `SessionListCursor` in `nextCursor`.
@@ -372,11 +372,17 @@ cache updates:
   records, and establishes the new cache base; and
   before the new Document root is published.
 
-The pipeline handles registry pushes without touching the Document. A
-`sessions_changed` push refreshes an already loaded Project page and records
-address identities; it does not fetch a collapsed page. A `queue_changed`
-push replaces the queue — membership is the stored location, so the queue
-converges across tabs on every placement change.
+The pipeline handles listing pushes without touching the Document. The queue
+arrives as a `queue_changed` snapshot first and then as deltas: one store
+write applies the dirty rows, the removals, and the Projects whose cached
+history the interval invalidated (ADR 24). The store keeps the queue as one
+ordered array derived from those frames, using the comparator shared with the
+host, so a delta can never disagree with the order the server published. A
+delta whose revision is not exactly one ahead is a lost frame: the pipeline
+reports it to its owner (`PipelineOwner.onResyncNeeded`), which replaces the
+socket instead of applying a delta to an untrusted base. Invalidated Project
+pages are dropped from `sessionPages`, so the next unfold refetches them from
+the first page; history replies and pagination never write the queue.
 A `session_closed` push names an address whose live runtime ended on the
 host (a move to Archive or Trash); when it names the rendered Session,
 the server has already severed the attachment, so navigation clears to the
@@ -530,13 +536,13 @@ connecting.
 
 `useAttentionNotifications.ts` (in `app/`) covers the other half of
 completion signaling: the attached conversation drives the tab title and the
-unread count, while a Session this tab is *not* reading is followed through the
-queue. Its detector (`infra/lib/queueAttention.ts`) compares consecutive
-snapshots and reports only a `running → idle` edge, seeding on every
-connect or reconnect (a re-fetched snapshot is not a completion — including the
-one the connect publishes before it confirms the connection, which is why the
-comparison is gated on `connection.kind === "connected"` rather than on the
-state *changing*) and staying silent for the attached Session. Delivery follows
+unread count, while a Session this tab is *not* reading is announced from the
+`session_completed` pushes the pipeline files in the store's `completions` log.
+The signal is an occurrence, not a comparison of queue snapshots: the queue is
+published at most once per five seconds (ADR 24), so a short turn may never
+appear as running, and completion therefore arrives as its own frame. The hook
+drains the log by sequence, so a notice is announced exactly once, and it stays
+silent for the attached Session. Delivery follows
 what the reader can see: an
 in-app toast while the page is visible, one OS notification per finished
 Session while it is
@@ -854,9 +860,11 @@ Other `infra/lib` modules have narrow boundaries:
 
 Reconnect is a new transport, not a continuation of the old WebSocket. The
 old pipeline is frozen before a new one is installed. Initialization refreshes
-Project metadata and the queue (whose membership is daemon-persisted, so
-a daemon restart during the drop loses no queue entries), drops cached sidebar
-pages, and reopens the address currently in the URL.
+Project metadata and drops cached sidebar pages; the queue arrives as the new
+Connection's snapshot push rather than as an initialization query, so a
+reconnect cannot pair a query reply with a delta it already applied. Membership
+is daemon-persisted, so a daemon restart during the drop loses no queue
+entries. The URL's address is then reopened.
 
 When an address-to-session mapping and cache prefix are available, the client
 paints the cached seed immediately and sends the cursor. A valid cursor yields

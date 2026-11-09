@@ -38,6 +38,7 @@ export {
 } from "./git-stamp.ts";
 export type { EntryProjection, EntrySnapshot } from "./projection.ts";
 export { createEntryProjection } from "./projection.ts";
+export { compareQueueRows } from "./queue-order.ts";
 export type {
 	Reactor,
 	ReactorEffect,
@@ -114,6 +115,8 @@ export type {
 	PullReply,
 	PullRequest,
 	QueueChangedMessage,
+	QueueDeltaMessage,
+	QueueSnapshotMessage,
 	ReadFileReply,
 	ReadFileRequest,
 	RecoverableTurnKind,
@@ -129,6 +132,7 @@ export type {
 	ServerPushMessage,
 	SessionActivityInfo,
 	SessionAddress,
+	SessionCompletedMessage,
 	SessionInfo,
 	SessionInfoEntry,
 	SessionListCursor,

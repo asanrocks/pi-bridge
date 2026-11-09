@@ -51,8 +51,8 @@ const isEntryRootPath = (path: string): boolean => /^\/entries\/[^/]+$/.test(pat
 const PUSH_KINDS = new Set([
 	"replace",
 	"patch",
-	"sessions_changed",
 	"queue_changed",
+	"session_completed",
 	"pinned_models_changed",
 	"session_closed",
 ]);
@@ -336,14 +336,15 @@ export class BridgeClient {
 		return this.call(body as RpcRequestBody);
 	}
 
-	/** The queue: the global Inbox-and-Later snapshot, ordered Inbox → Later,
-	 * then last activity descending. */
+	/** The queue: the global Inbox-and-Later listing, ordered Inbox → Later,
+	 * then last activity descending. A query: the browser's live queue comes
+	 * from pushes (ADR 24). */
 	listQueue(): Promise<RpcReply> {
 		return this.call({ verb: "listQueue" });
 	}
 
 	/** Place a session: Inbox, Later, or Archive. Moving to Archive also ends
-	 * the runtime. The result arrives as a `queue_changed` push. */
+	 * the runtime. The result arrives in the next queue delta (ADR 24). */
 	setSessionLocation(projectId: string, stem: string, location: SessionLocation): Promise<RpcReply> {
 		return this.call({ verb: "setSessionLocation", projectId, stem, location });
 	}

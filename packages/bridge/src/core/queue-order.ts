@@ -1,9 +1,9 @@
 // The queue's total order (Inbox, then Later) — one comparator shared by the
-// Worker that orders its slice and the Daemon that aggregates the slices, so a
-// multi-Worker queue interleaves by the same rule instead of concatenating
-// per-registration blocks.
+// Worker that orders its slice, the Daemon that aggregates the slices, and the
+// browser that orders the deltas it receives, so all three interleave by the
+// same rule instead of each re-deriving an order.
 
-import type { SessionInfo } from "../core/index.ts";
+import type { SessionInfo } from "./types.ts";
 
 /** Location rank: Inbox first (the user's attention list), Later second
  * (parked by decision). Archived Sessions are not in the queue and never

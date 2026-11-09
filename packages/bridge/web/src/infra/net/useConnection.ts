@@ -16,9 +16,8 @@
 // ============================================================================
 
 import { useCallback, useEffect, useRef } from "react";
-import { BridgeClient, type GetDaemonInfoReply, type ListQueueReply } from "../../../../src/core/index.ts";
+import { BridgeClient, type GetDaemonInfoReply } from "../../../../src/core/index.ts";
 import { parseRoute } from "../lib/routes.ts";
-import { rememberAddress } from "../persist/addressIndex.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
 import { createBrowserFlushScheduler } from "./browserScheduler.ts";
@@ -59,10 +58,7 @@ export function useConnection(): { retry: () => void } {
 			const timeout = new Promise<never>((_, reject) => {
 				timer = setTimeout(() => reject(new Error("daemon did not respond")), INIT_TIMEOUT_MS);
 			});
-			const [daemonReply, queueReply] = await Promise.race([
-				Promise.all([client.getDaemonInfo(), client.listQueue()]),
-				timeout,
-			]);
+			const [daemonReply] = await Promise.race([Promise.all([client.getDaemonInfo()]), timeout]);
 
 			// Stale-client guard: a superseded connection must not write into the store.
 			if (clientRef.current !== client) return;
@@ -82,11 +78,9 @@ export function useConnection(): { retry: () => void } {
 				hookConsole(client);
 			}
 
-			// Global work-queue snapshot
-			const queue = queueReply as unknown as ListQueueReply;
-			const queueRows = queue.sessions ?? [];
-			for (const row of queueRows) rememberAddress(row.projectId, row.stem, row.sessionId);
-			store.getState().setQueue(queueRows);
+			// The queue is not fetched here: the Connection's first push is its
+			// snapshot (ADR 24), so a reconnect cannot pair a query reply with a
+			// delta the browser already applied.
 
 			// Sidebar folder pages are connection-scoped: a reconnect may be
 			// talking to a restarted daemon, so drop them. Expanded folders see
@@ -176,7 +170,16 @@ export function useConnection(): { retry: () => void } {
 			setGlobalClient(client);
 
 			// Push ingestion + coalescing + cache write-through, frozen at cleanup.
-			const pipeline = createConnectionPipeline(client, createBrowserFlushScheduler());
+			// A revision gap in the queue is unrecoverable on this socket, so the
+			// owner replaces the connection and the new snapshot repairs it.
+			const pipeline = createConnectionPipeline(client, createBrowserFlushScheduler(), {
+				onResyncNeeded: (reason) => {
+					getStore()
+						.getState()
+						.pushToast("queue-resync", `Out of sync with the daemon (${reason}). Reconnecting.`);
+					ws.close();
+				},
+			});
 			client.onPush = pipeline.onPush;
 			connectionCleanup = pipeline.cleanup;
 

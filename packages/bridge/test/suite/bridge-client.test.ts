@@ -503,13 +503,21 @@ describe("BridgeClient", () => {
 		const { client, transport, errors } = makeWatched();
 		const seen: string[] = [];
 		client.onPush = (push) => seen.push(push.kind);
-		transport.inject({ kind: "sessions_changed", projectId: "p", sessions: [], hasMore: false });
+		transport.inject({
+			kind: "session_completed",
+			session: { projectId: "p", stem: "s", sessionId: "sess" },
+		});
 		transport.inject({ kind: "from_the_future" });
 		expect(errors).toEqual(["unknown frame kind: from_the_future"]);
 		// Latched, not blocking: the violation never silently stops the
 		// recognized traffic that shares the burst.
-		transport.inject({ kind: "queue_changed", sessions: [] });
-		expect(seen).toEqual(["sessions_changed", "queue_changed"]);
+		transport.inject({
+			kind: "queue_changed",
+			mode: "snapshot",
+			revision: 1,
+			sessions: [],
+		});
+		expect(seen).toEqual(["session_completed", "queue_changed"]);
 		expect(errors).toHaveLength(1);
 	});
 });

@@ -351,7 +351,8 @@ not its state.
 The menu button carries the Inbox count: one badge, equal to the number of Inbox
 Sessions across every Project — including the ones in collapsed folders — so
 what is waiting to be read is visible while the pane is closed. The count
-crosses tabs through `queue_changed`. Reading a Session does not clear it (the
+crosses tabs through the queue delta (published at most once every five
+seconds, so a count can trail a placement by that interval). Reading a Session does not clear it (the
 count means "yours to read", not "unread"); replying, moving it to Later, or
 moving it to Archive does. A completion is announced without polling: while the
 page is visible the finished Session raises one quiet toast; while it is

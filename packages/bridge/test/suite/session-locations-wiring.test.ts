@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionInfo, SessionRef } from "../../src/core/index.ts";
+import type { SessionRef } from "../../src/core/index.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
@@ -42,6 +42,8 @@ interface FakeManager extends Manager {
 	setActivity: (phase: "idle" | "wait" | "stream" | "tool" | "compact", tool?: string) => void;
 	/** Flip the Document's streaming flag (the fake never streams on its own). */
 	setStreaming: (streaming: boolean) => void;
+	/** The current turn settled (the Manager's rescan signal). */
+	settle: () => void;
 	disposeCalls: () => number;
 }
 
@@ -69,6 +71,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 	let activityPhase: "idle" | "wait" | "stream" | "tool" | "compact" = "idle";
 	let activityTool: string | null = null;
 	const activityListeners = new Set<() => void>();
+	const settledListeners = new Set<() => void>();
 	const status = {
 		leafId: null,
 		name: "",
@@ -98,7 +101,10 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			});
 		},
 		removeConnection: () => {},
-		onSettled: () => () => {},
+		onSettled(listener: () => void) {
+			settledListeners.add(listener);
+			return () => settledListeners.delete(listener);
+		},
 		activity: () => ({ phase: activityPhase, tool: activityTool, recoverable: false }),
 		onActivityChange(listener: () => void) {
 			activityListeners.add(listener);
@@ -122,6 +128,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		recoverTurn: async () => "retry" as const,
 		dispose: async () => {
 			disposed += 1;
+			// Disposal finalizes the in-flight turn, which is exactly the settle
+			// a disposal-induced completion would be derived from.
+			for (const listener of settledListeners) listener();
 		},
 	};
 	return {
@@ -136,6 +145,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		},
 		setStreaming: (streaming) => {
 			status.isStreaming = streaming;
+		},
+		settle: () => {
+			for (const listener of settledListeners) listener();
 		},
 		disposeCalls: () => disposed,
 	} as FakeManager;
@@ -188,13 +200,13 @@ function makeFixture(): Fixture {
 
 /** The queue as seen through the contract: [location, stem] rows. */
 async function queueOf(worker: LocalWorker): Promise<Array<[string, string]>> {
-	return (await worker.listQueue()).map((row) => [row.location, row.stem]);
+	return (await worker.listQueue()).sessions.map((row) => [row.location, row.stem]);
 }
 
 /** Whether the row reports a running execution (its activity, which is the
  * one running fact on the wire). */
 async function runningOf(worker: LocalWorker, stem: string): Promise<boolean> {
-	return (await worker.listQueue()).some((row) => row.stem === stem && row.activity !== undefined);
+	return (await worker.listQueue()).sessions.some((row) => row.stem === stem && row.activity !== undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -214,13 +226,13 @@ describe("session-location wiring: transitions", () => {
 		expect(await runningOf(fx.worker, "a")).toBe(false);
 	});
 
-	it("the queue_changed event fires on every placement transition", async () => {
+	it("the queue_changed event carries each placement transition as a changed row", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const events: string[] = [];
 		fx.worker.onEvent((event) => {
 			if (event.kind === "queue_changed") {
-				events.push(event.sessions.map((s) => `${s.stem}:${s.location}`).join(","));
+				events.push(event.upsert.map((s) => `${s.stem}:${s.location}`).join(","));
 			}
 		});
 
@@ -228,8 +240,9 @@ describe("session-location wiring: transitions", () => {
 		await fx.worker.prompt(target, "hello");
 		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
 
-		// The opening publish is an empty snapshot; the transitions follow it.
-		expect(events.some((event) => event === "a:inbox")).toBe(true);
+		// Admission and the move are each one complete row; no snapshot is
+		// pushed, so an unchanged row never repeats.
+		expect(events).toContain("a:inbox");
 		expect(events[events.length - 1]).toBe("a:later");
 	});
 
@@ -286,7 +299,7 @@ describe("session-location wiring: transitions", () => {
 		);
 		await fx.worker.setSessionLocation({ projectId: "proj", stem: "queued" }, "later");
 
-		const rows = await fx.worker.listQueue();
+		const rows = (await fx.worker.listQueue()).sessions;
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatchObject({
 			stem: "queued",
@@ -299,7 +312,7 @@ describe("session-location wiring: transitions", () => {
 		// A queued record whose file is gone after the record was written
 		// renders no row — the next boot's recovery prunes it.
 		rmSync(join(fx.project.sessionDir, "queued.jsonl"));
-		expect(await fx.worker.listQueue()).toEqual([]);
+		expect((await fx.worker.listQueue()).sessions).toEqual([]);
 	});
 
 	it("moves are legal while running and on a dormant session", async () => {
@@ -376,7 +389,9 @@ describe("session-location wiring: transitions", () => {
 		// it, so the row's metadata is empty while its location is not.
 		writeFileSync(join(fx.project.sessionDir, "broken.jsonl"), "not json\n");
 		await fx.worker.setSessionLocation({ projectId: "proj", stem: "broken" }, "later");
-		expect((await fx.worker.listQueue()).map((row) => [row.stem, row.location])).toEqual([["broken", "later"]]);
+		expect((await fx.worker.listQueue()).sessions.map((row) => [row.stem, row.location])).toEqual([
+			["broken", "later"],
+		]);
 	});
 });
 
@@ -443,8 +458,7 @@ describe("session-location wiring: archive, trash, and stop", () => {
 describe("session-state wiring: queue activity (ADR 23)", () => {
 	/** The queue rows with their activity words, as the wire carries them. */
 	async function activityOf(worker: LocalWorker, stem: string) {
-		const rows = (await worker.listQueue()) as SessionInfo[];
-		return rows.find((r) => r.stem === stem)?.activity;
+		return (await worker.listQueue()).sessions.find((row) => row.stem === stem)?.activity;
 	}
 
 	it("a running tool reaches the queue with its name and start instant", async () => {
@@ -526,7 +540,7 @@ describe("session-state wiring: queue activity (ADR 23)", () => {
 		const pushes: Array<string | null> = [];
 		fx.worker.onEvent((event) => {
 			if (event.kind !== "queue_changed") return;
-			const row = (event.sessions as SessionInfo[]).find((r) => r.stem === "a");
+			const row = event.upsert.find((r) => r.stem === "a");
 			pushes.push(row?.activity?.kind ?? null);
 		});
 		fx.managers[0].setActivity("tool", "Read");
@@ -595,7 +609,112 @@ describe("session-location wiring: restart recovery", () => {
 			["inbox", "n"],
 			["later", "d"],
 		]);
-		expect((await second.worker.listQueue()).every((row) => row.activity === undefined)).toBe(true);
+		expect((await second.worker.listQueue()).sessions.every((row) => row.activity === undefined)).toBe(true);
 		await second.worker.dispose();
+	});
+});
+
+describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
+	it("an unchanged refresh publishes nothing; a change publishes one complete row", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const deltas: Array<{ upsert: string[]; remove: string[] }> = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind !== "queue_changed") return;
+			deltas.push({
+				upsert: event.upsert.map((row) => `${row.stem}:${row.location}:${row.activity?.kind ?? "idle"}`),
+				remove: event.remove.map((address) => address.stem),
+			});
+		});
+
+		// Two full queries in a row observe the same state: the duplicate
+		// emission that dominated the old snapshot traffic is gone.
+		await fx.worker.listQueue();
+		await fx.worker.listQueue();
+		expect(deltas).toEqual([]);
+
+		fx.managers[0].setActivity("tool", "Bash");
+		expect(deltas).toEqual([{ upsert: ["a:inbox:tool"], remove: [] }]);
+
+		// A move changes the location field; the runtime's activity is untouched
+		// by it, so the row keeps reporting the tool.
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "later");
+		expect(deltas[deltas.length - 1]).toEqual({ upsert: ["a:later:tool"], remove: [] });
+	});
+
+	it("a settle in a queued Session announces one completion, carrying the row's label", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const completions: Array<{ stem: string; name?: string; text?: string }> = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind !== "session_completed") return;
+			completions.push({ stem: event.session.stem, name: event.name, text: event.lastMessageText });
+		});
+
+		fx.managers[0].settle();
+		expect(completions).toHaveLength(1);
+		// The notice repeats the row the settlement just refreshed, so a
+		// notification never waits for the next queue delta.
+		const row = (await fx.worker.listQueue()).sessions.find((entry) => entry.stem === "a");
+		expect(completions[0]).toEqual({ stem: "a", name: row?.name, text: row?.lastMessageText });
+	});
+
+	it("a Session outside the queue settles without a completion notice", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		await fx.open("a");
+
+		let completed = 0;
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_completed") completed += 1;
+		});
+		fx.managers[0].settle();
+		expect(completed).toBe(0);
+	});
+
+	it("archive and trash suppress the disposal's completion for that address only", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		fx.addSession("id-b", "b");
+		const first = await fx.open("a");
+		const second = await fx.open("b");
+		await fx.worker.prompt(first, "hello");
+		await fx.worker.prompt(second, "hello");
+
+		const completions: string[] = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_completed") completions.push(event.session.stem);
+		});
+
+		// Disposing a runtime finalizes its turn; the user asked for the move,
+		// so that is not a completion to announce.
+		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "archive");
+		expect(completions).toEqual([]);
+
+		// Another Session's genuine completion still arrives immediately.
+		fx.managers[fx.managers.length - 1].settle();
+		expect(completions).toEqual(["b"]);
+	});
+
+	it("a failed move leaves the Session's completions intact", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const completions: string[] = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_completed") completions.push(event.session.stem);
+		});
+
+		await expect(fx.worker.trashSession({ projectId: "proj", stem: "no-such-session" })).rejects.toThrow();
+		fx.managers[0].settle();
+		expect(completions).toEqual(["a"]);
 	});
 });

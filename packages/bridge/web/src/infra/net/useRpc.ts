@@ -16,7 +16,6 @@ import type {
 	ImageContent,
 	ListDirectoryReply,
 	ListFilesReply,
-	ListQueueReply,
 	ListSessionsReply,
 	ModelRef,
 	PinnedModelSelection,
@@ -220,18 +219,6 @@ export function useRpc() {
 		[openProject],
 	);
 
-	/** Refresh the global queue without side effects. */
-	const refreshQueue = useCallback(async () => {
-		const reply = await getGlobalClient()?.listQueue();
-		if (reply?.ok) {
-			const data = reply as unknown as ListQueueReply;
-			rememberRows(data.sessions);
-			getStore()
-				.getState()
-				.setQueue(data.sessions ?? []);
-		}
-	}, []);
-
 	/** Place a session: Inbox, Later, or Archive. The resulting queue arrives
 	 * from the daemon — the push converges every tab. Moving to Archive also
 	 * ends the runtime, so a Session on screen is re-attached: the reader moved
@@ -316,7 +303,6 @@ export function useRpc() {
 			newSession,
 			detach,
 			trashSession,
-			refreshQueue,
 			setSessionLocation,
 			loadFolderSessions,
 			loadMoreFolderSessions,
@@ -336,7 +322,6 @@ export function useRpc() {
 			newSession,
 			detach,
 			trashSession,
-			refreshQueue,
 			setSessionLocation,
 			loadFolderSessions,
 			loadMoreFolderSessions,

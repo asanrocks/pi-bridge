@@ -30,8 +30,8 @@ and rejects exactly once, so a failed request leaves nothing pending.
 | --- | --- |
 | `replace` | `{ session: SessionRef, document: Document, generation, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
 | `patch` | `{ ops: PatchOp[], session?: SessionRef, generation, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
-| `sessions_changed` | `{ projectId, sessions, hasMore, nextCursor? }`, the refreshed first page for one Project. |
-| `queue_changed` | `{ sessions }`, the global queue: every Inbox and Later Session, ordered Inbox → Later, each group by last activity descending. Membership is the stored location, never runtime retention. |
+| `queue_changed` | Either a **snapshot** (`{ mode: "snapshot", revision, sessions }`) or a **delta** (`{ mode: "delta", revision, upsert, remove, invalidateHistory }`). The snapshot is a Connection's first queue frame: every Inbox and Later Session, ordered Inbox → Later, each group by last activity descending. A delta carries the complete changed rows, the addresses that left the queue, and the Projects whose cached history may be stale. Membership is the stored location, never runtime retention. |
+| `session_completed` | `{ session, name?, lastMessageText? }`. One execution settled in a queued Session. An occurrence, not a sampled state: it is delivered immediately, independently of queue publication, so a turn shorter than the publication interval still announces itself. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
 | `session_closed` | `{ projectId, stem, generation }`. The live runtime behind that address ended (the Session was moved to Archive or Trash). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
@@ -70,10 +70,10 @@ no live frame. A `pull` reply carries the generation current when its
 request was admitted, so a reply that lands after a reattach is dropped
 instead of filling the successor with the old observation's values.
 
-A push is unsolicited. `sessions_changed`, `queue_changed`,
+A push is unsolicited. `queue_changed`, `session_completed`,
 `pinned_models_changed`, and `session_closed` do not alter the Document
-mirror. Every listing row (`sessions_changed`, `queue_changed`,
-`listSessions`, `listQueue`) carries the Session's durable `location`
+mirror. Every listing row (`queue_changed`, `listSessions`, `listQueue`)
+carries the Session's durable `location`
 (`inbox | later | archive`, `archive` by default) and never an execution
 fact — streaming is Document state, not a listing field.
 
@@ -85,10 +85,42 @@ own clock exactly as it does for `status.inFlightTools`. Its presence *is* the
 row's running fact: the field is absent on a dormant row (no runtime, nothing
 executing), so absence is the truthful answer rather than stale state, and no
 second boolean repeats it. `location` remains the authority for where the
-Session belongs. The connection sends session-list pushes to every
-socket; the web client updates the relevant Project page or the queue,
-and a `session_closed` for the rendered Session ends that view
-without touching the mirror.
+Session belongs. The connection sends queue deltas to every socket; the web
+client applies one frame atomically, and a `session_closed` for the rendered
+Session ends that view without touching the mirror.
+
+### Queue delivery
+
+Only the queue is synchronized. A Session is in it because the user placed it
+in the Inbox or Later; Archive is browsed through paginated queries, whose
+correctness is repaired by invalidation rather than by continuous sync.
+
+- **Snapshot first.** A Connection's first queue frame is the `snapshot` of
+the *last published* queue with its `revision`. Capturing it, enqueueing it,
+and letting later deltas reach that Connection happen in one synchronous step
+at the Daemon, so no publication can land between the baseline and the stream.
+- **One revision per publication.** The Daemon increments `revision` exactly
+once per nonempty delta and never reuses it. A client applies only
+`current + 1`; a delta that arrives before initialization, or that skips a
+revision, is a consistency failure and the client replaces the connection for
+a fresh snapshot. A snapshot does not increment the revision, and a new
+Connection starts a new revision domain.
+- **At most one delta per five seconds.** Triggers update the Daemon's latest
+state; publication diffs it against the published state when the interval
+allows. Jobs inside one interval coalesce into a single delta carrying each
+changed row's complete value. Intermediate tool phases, and a row added and
+removed inside the interval, may never appear. An empty publication sends
+nothing and does not restart the cooldown.
+- **Completions are events.** Because the delta is a sample, a turn shorter
+than the interval would be invisible. `session_completed` is sent
+immediately when an execution settles in a queued Session, and it is never
+derived from two queue samples. A reconnect snapshot does not replay
+completions.
+- **History is invalidated, never pushed.** `invalidateHistory` names the
+Projects whose cached history a publication's triggers touched (settlement,
+rename, creation, Trash, placement). The client drops those cached pages and
+refetches what it displays; a history query reply never updates queue rows and
+never advances the queue revision.
 
 ## RPC verb contracts
 
@@ -113,16 +145,16 @@ immediately but tracked (see [host runtime](../host/runtime.md)).
 | `abort` | Attached Session | `{ ok: true }` after abort and its finalization; final document patches precede the reply. |
 | `discardSteer` | Attached Session | `{ ok: true }`; the queue-clear `status.pendingSteer` patch is the effect. |
 | `setPinnedModels` | Daemon-global (ADR 20) | `{ ok: true }` after the global `enabledModels` scope is replaced with the request's ordered list and flushed. The reply is acknowledgement only: the *resulting* resolved list follows as a `pinned_models_changed` push, because the host filters entries the catalogue cannot resolve and keeps the first occurrence of a duplicate identity — a replacement is a proposal, the push is the verdict. Position is meaning (the head is a fresh Session's default model, the order is the cycle order) and an entry's thinking level round-trips verbatim. A malformed entry, a level outside the set `getDaemonInfo` reports, or more than the wire cap is refused before the scope is touched. |
-| `renameSession` | Attached Session | `{ ok: true }`; the session name change and Project session-list refresh are pushed. |
+| `renameSession` | Attached Session | `{ ok: true }`; the name change arrives as a queue row update, and the Project's cached history is invalidated. |
 | `navigate` | Attached Session | `{ ok: true }`; changes `status.leafId` and rebuilds the agent branch context. |
 | `pull` | Attached Session and its observation's demand | `{ ok: true, values: { entryId, fieldPath, value }[] }`. Provisional paths become the observation's live demand; committed paths are one-shot. |
 | `openSession` | Project plus `stem`; reattaches this Connection | `{ ok: true, session: SessionRef }`. The initial `replace` or cursor patch is pushed before the reply. An optional `PrefixCursor` selects the delta path. |
 | `newSession` | Project; first prompt text and an `operationId` are required | `{ ok: true, session: SessionRef, operationId }`. Model/thinking choices are applied and the first prompt is admitted before attach (a `model` pick without a level resolves one as a fresh session on that model — see `ProjectInfo.defaultThinkingLevel`); initial sync carries the in-flight turn and the operation id. Refused admission leaves no empty live Session. A missing `operationId` is refused — an unattributed creation cannot be admitted by a selection owner. |
 | `detach` | This Connection | `{ ok: true }`; releases the attachment and returns the client to Project-level navigation. |
-| `trashSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved trash prefix; the session's location record is dropped. The file survives but is no longer discovered, and its stem is no longer addressable; Project and queue pushes refresh observers. Attached Connections are detached and receive a `session_closed` push. Fails when no durable file exists to move. |
+| `trashSession` | Project plus `stem` | `{ ok: true }` after the live Activation (if any) is disposed and the session file is moved under the reserved trash prefix; the session's location record is dropped. The file survives but is no longer discovered, and its stem is no longer addressable; the queue delta and the Project's history invalidation reach observers. Attached Connections are detached and receive a `session_closed` push. Fails when no durable file exists to move. |
 | `listSessions` | Project plus optional `SessionListCursor` | `{ ok: true, sessions, hasMore, nextCursor? }`; a paginated history query, no Document push. |
-| `listQueue` | Daemon-global | `{ ok: true, sessions }`; the queue: Inbox and Later Sessions, ordered Inbox → Later, then last activity descending. No attachment and no Document push. |
-| `setSessionLocation` | Project plus `stem` and a `location` of `inbox`, `later`, or `archive` | `{ ok: true }` after the placement is durable. Inbox and Later never touch execution; Archive also ends the runtime, so its attached Connections are detached and receive a `session_closed` push as with `trashSession`. Legal on a dormant Session; a stem with no session at all is an error. The change arrives as a `queue_changed` push. |
+| `listQueue` | Daemon-global | `{ ok: true, sessions }`; the queue: Inbox and Later Sessions, ordered Inbox → Later, then last activity descending. A query — the browser's live queue comes from pushes, and this reply never overwrites it. No attachment and no Document push. |
+| `setSessionLocation` | Project plus `stem` and a `location` of `inbox`, `later`, or `archive` | `{ ok: true }` after the placement is durable. Inbox and Later never touch execution; Archive also ends the runtime, so its attached Connections are detached and receive a `session_closed` push as with `trashSession`. Legal on a dormant Session; a stem with no session at all is an error. The change arrives in the next queue delta, together with the Project's history invalidation. |
 | `getDaemonInfo` | Daemon-global | `{ ok: true, projects, models, pinnedModels, visibleModels, thinkingLevels, devMode }`; no attachment and no Document push. `pinnedModels` is the resolved daemon-global pinned list (not Document state, ADR 15); `visibleModels` is the resolved `provider/modelId` key list of the picker's normal tier. |
 | `asrCredentials` | Daemon-global | `{ ok: true, auth }` where `auth` is `{ kind: "device", deviceId }` or `{ kind: "token", token, expiresAt }`. The daemon mints or registers it because a page can neither mint a SAMI token nor register a device; a secret access key never crosses the wire. No attachment, no Document push: the ASR session itself runs from the browser to the endpoint. Failure is an ordinary `ok: false` and is retried on the next request. |
 | `textPolish` | Daemon-global | `{ ok: true, text }` after the daemon rewrote the request's whole `text` through the upstream polish service. Only the draft crosses this socket: the protocol's keys and signatures were never the page's. The reply is the text to show instead, which equals the request's text when there was nothing to arrange. A failure is an ordinary `ok: false` whose `error` is written for the composer's row (unavailable, too long, timed out). Requests are serialized daemon-side. No attachment, no Document push. |

@@ -8,11 +8,13 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
+import { compareQueueRows } from "../../../../src/core/index.ts";
 import type {
 	Document,
 	ModelInfo,
 	PinnedModelInfo,
 	ProjectInfo,
+	SessionAddress,
 	SessionInfo,
 	SessionListCursor,
 	SessionRef,
@@ -47,6 +49,28 @@ export type SessionFolderPage =
 	| { kind: "loading" }
 	| { kind: "error" }
 	| { kind: "ready"; sessions: SessionInfo[]; hasMore: boolean; nextCursor: SessionListCursor | null };
+
+// ---------------------------------------------------------------------------
+// Completion notices — the queue-wide completion signal (ADR 24).
+//
+// A queue delta is a sampled state, so a turn shorter than the publication
+// interval may never appear as running. Completion is therefore its own frame,
+// forwarded immediately; these notices are the small hand-off between the push
+// pipeline (which files them) and the notification hook (which drains them).
+// ---------------------------------------------------------------------------
+
+export interface CompletionNotice {
+	/** Monotone within one Connection: the hook drains by sequence, so a notice
+	 * written while a render was pending is never announced twice. */
+	seq: number;
+	session: SessionRef;
+	name?: string;
+	lastMessageText?: string;
+}
+
+/** How many notices the store retains. The hook drains synchronously after each
+ * write, so this only bounds memory while nothing is subscribed. */
+const COMPLETION_LOG_LIMIT = 32;
 
 // ---------------------------------------------------------------------------
 // Slice shape
@@ -93,9 +117,13 @@ export interface ProtocolSlice {
 	sessionPages: Record<string, SessionFolderPage>;
 	/** Static Project configuration (ADR 11). */
 	projects: ProjectInfo[];
-	/** The global queue: every Inbox and Later Session, ordered Inbox →
-	 * Later, then last activity descending. */
-	queue: SessionInfo[];
+	/** The queue's publication revision: the last frame this client applied. A
+	 * delta must be exactly one ahead, or the client reconnects for a snapshot
+	 * (ADR 24). */
+	queueRevision: number;
+	/** Queued completions not yet drained by the notification hook. */
+	completions: CompletionNotice[];
+	completionsSeq: number;
 	models: ModelInfo[];
 	/** The daemon-global pinned list (ADR 15), resolved from pi's global
 	 * `enabledModels`. One concept for the whole daemon: both the Project home
@@ -125,8 +153,9 @@ export interface ProtocolSlice {
 	setProjects: (projects: ProjectInfo[]) => void;
 	/** Enter/leave the alias-addressed view (ADR 13). */
 	setAddressViaAlias: (viaAlias: boolean) => void;
-	/** Replace the global queue snapshot (a `queue_changed` push). */
-	setQueue: (sessions: SessionInfo[]) => void;
+	/** The global queue: every Inbox and Later Session, ordered Inbox →
+	 * Later, then last activity descending. Derived from the applied frames. */
+	queue: SessionInfo[];
 	/** Replace the daemon-global pinned list (from a `pinned_models_changed` push). */
 	setPinnedModels: (pinnedModels: PinnedModelInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
@@ -143,7 +172,19 @@ export interface ProtocolSlice {
 	clearCurrentSession: (projectId?: string | null) => void;
 	/** Mark a sidebar folder page as fetching (expand / retry). */
 	beginSessionPage: (projectId: string) => void;
-	/** Commit a sidebar folder page (fetch success or sessions_changed). */
+	/** Install the queue baseline (the Connection's first `queue_changed`
+	 * frame) and its revision. */
+	applyQueueSnapshot: (sessions: SessionInfo[], revision: number) => void;
+	/** Apply one queue delta: complete changed rows, removed addresses, and the
+	 * Projects whose cached history is now stale. */
+	applyQueueDelta: (
+		upsert: SessionInfo[],
+		remove: SessionAddress[],
+		invalidateHistory: string[],
+		revision: number,
+	) => void;
+	/** File one completion occurrence for the notification hook to drain. */
+	noteCompletion: (notice: Omit<CompletionNotice, "seq">) => void;
 	setSessionPage: (
 		projectId: string,
 		sessions: SessionInfo[],
@@ -193,6 +234,41 @@ export interface ProtocolSlice {
 	 * (the file-viewer portals close on an address change; the peek pin
 	 * clears on a session-id change). */
 	commitObservation: (ref: SessionRef, doc: Document, revision?: number) => void;
+}
+
+/** The queue's canonical order: one comparator shared with the host, so a
+ * client never re-derives an order the server already decided. */
+function sortedQueue(sessions: readonly SessionInfo[]): SessionInfo[] {
+	return [...sessions].sort(compareQueueRows);
+}
+
+/** Apply one delta to the queue array: a complete row replaces the row at its
+ * address, a removal drops it, and the result is re-sorted. */
+function mergeQueueRows(
+	current: readonly SessionInfo[],
+	upsert: readonly SessionInfo[],
+	remove: readonly SessionAddress[],
+): SessionInfo[] {
+	const rows = new Map(current.map((row) => [queueKey(row), row] as const));
+	for (const row of upsert) rows.set(queueKey(row), row);
+	for (const address of remove) rows.delete(queueKey(address));
+	return sortedQueue([...rows.values()]);
+}
+
+function queueKey(row: { projectId: string; stem: string }): string {
+	return `${row.projectId}\u0000${row.stem}`;
+}
+
+/** Drop the cached pages of the Projects a delta invalidated: the next unfold
+ * refetches them from the first page (their cursors may no longer describe the
+ * refreshed ordering). */
+function withoutPages(
+	pages: Record<string, SessionFolderPage>,
+	projectIds: readonly string[],
+): Record<string, SessionFolderPage> {
+	const next = { ...pages };
+	for (const projectId of projectIds) delete next[projectId];
+	return next;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +340,9 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	sessionPages: {},
 	projects: [],
 	queue: [],
+	queueRevision: 0,
+	completions: [],
+	completionsSeq: 0,
 	addressViaAlias: false,
 	models: [],
 	pinnedModels: [],
@@ -287,7 +366,20 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 
 	setAddressViaAlias: (addressViaAlias) => set({ addressViaAlias }),
 
-	setQueue: (queue) => set({ queue }),
+	applyQueueSnapshot: (sessions, revision) => set({ queue: sortedQueue(sessions), queueRevision: revision }),
+
+	applyQueueDelta: (upsert, remove, invalidateHistory, revision) =>
+		set((s) => ({
+			queue: mergeQueueRows(s.queue, upsert, remove),
+			queueRevision: revision,
+			sessionPages: invalidateHistory.length > 0 ? withoutPages(s.sessionPages, invalidateHistory) : s.sessionPages,
+		})),
+
+	noteCompletion: (notice) =>
+		set((s) => ({
+			completions: [...s.completions, { ...notice, seq: s.completionsSeq + 1 }].slice(-COMPLETION_LOG_LIMIT),
+			completionsSeq: s.completionsSeq + 1,
+		})),
 
 	setPinnedModels: (pinnedModels) => set({ pinnedModels }),
 

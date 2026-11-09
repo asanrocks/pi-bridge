@@ -16,9 +16,14 @@
 import { Buffer } from "node:buffer";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, join, sep } from "node:path";
-import type { SessionInfo, SessionListCursor, SessionLocation, SessionRef } from "../core/index.ts";
+import {
+	compareQueueRows,
+	type SessionInfo,
+	type SessionListCursor,
+	type SessionLocation,
+	type SessionRef,
+} from "../core/index.ts";
 import { containedSessionFile, isTrashedStem, type ProjectConfig, resolveStemPath } from "./projects.ts";
-import { compareQueueRows } from "./queue-order.ts";
 import { type ActorMetadata, clampPreview } from "./session-actor.ts";
 
 import type { SessionPage } from "./worker-contract.ts";
@@ -67,8 +72,14 @@ export interface SessionCatalog {
 		locations: CatalogLocationOverlay,
 	): SessionPage;
 	/** The queue: every Inbox and Later session across every Project, ordered
-	 * Inbox → Later, then by last activity descending. */
-	listQueue(live: readonly CatalogLiveEntry[], locations: CatalogLocationOverlay): SessionInfo[];
+	 * Inbox → Later, then by last activity descending. `reuse` supplies rows a
+	 * caller already holds for dormant Sessions, so a metadata-only refresh
+	 * reads no files (ADR 24). */
+	listQueue(
+		live: readonly CatalogLiveEntry[],
+		locations: CatalogLocationOverlay,
+		reuse?: ReadonlyMap<string, SessionInfo>,
+	): SessionInfo[];
 }
 
 /** Cap for the header-only scan. A pi session header is a single short line. */
@@ -196,6 +207,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 		stem: string,
 		active: CatalogLiveEntry | undefined,
 		locations: CatalogLocationOverlay,
+		reuse: ReadonlyMap<string, SessionInfo> | undefined,
 	): SessionInfo | null => {
 		if (active) {
 			let sortTimeMs = Date.parse(active.metadata.createdAt);
@@ -208,6 +220,12 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			}
 			return toSessionInfo(project, { stem, abs: active.metadata.sessionFile, sortTimeMs, active }, locations);
 		}
+		// A dormant row is reused when the caller supplies a previous slice: its
+		// file can only have changed through a trigger that rebuilds in full, so
+		// an activity or streaming callback never reads it (ADR 24).
+		const key = `${project.id}\0${stem}`;
+		const previous = reuse?.get(key);
+		if (previous !== undefined) return previous;
 		const real = containedSessionFile(project.sessionDir, resolveStemPath(project.sessionDir, stem));
 		if (real === null) return null;
 		let sortTimeMs: number;
@@ -250,7 +268,7 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			};
 		},
 
-		listQueue(live, locations): SessionInfo[] {
+		listQueue(live, locations, reuse): SessionInfo[] {
 			// Membership is the stored locations, in memory: the store's keys are
 			// the queued stems, so the queue never walks the Project's history —
 			// each row costs at most one file (a live row reads only the
@@ -263,11 +281,11 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 					liveByStem.set(entry.ref.stem, entry);
 				}
 				for (const stem of locations.placed(project.id).keys()) {
-					const row = queueRow(project, stem, liveByStem.get(stem), locations);
+					const row = queueRow(project, stem, liveByStem.get(stem), locations, reuse);
 					if (row !== null) out.push(row);
 				}
 			}
-			// The shared total order (queue-order.ts): Inbox first (the attention
+			// The shared total order (core/queue-order.ts): Inbox first (the attention
 			// list), Later second (parked by decision); each group by last
 			// activity descending.
 			out.sort(compareQueueRows);

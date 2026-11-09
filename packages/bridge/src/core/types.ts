@@ -403,23 +403,45 @@ export interface PatchMessage {
 	operationId?: string;
 }
 
-export interface SessionsChangedMessage {
-	kind: "sessions_changed";
-	projectId: string;
-	/** First paginated page used to refresh that Project's session list. */
+/** The queue's first frame on a Connection: every Session placed in the Inbox
+ * or Later, ordered Inbox → Later, each group by last activity descending.
+ * A row is here because the user put it here (directly, or by sending it a
+ * message), not because a runtime is retained. */
+export interface QueueSnapshotMessage {
+	kind: "queue_changed";
+	mode: "snapshot";
+	revision: number;
 	sessions: SessionInfo[];
-	hasMore: boolean;
-	nextCursor?: SessionListCursor;
 }
 
-/** The queue changed: the complete global snapshot of Sessions placed in the
- * Inbox or Later, ordered Inbox → Later, each group by last activity
- * descending. Replaces the activation report as the launcher/sidebar's queue
- * source: a row is here because the user put it here (directly, or by sending
- * it a message), not because a runtime is retained. */
-export interface QueueChangedMessage {
+/** The queue's steady state (ADR 24): complete changed rows, removed
+ * addresses, and the Projects whose cached history the change may have
+ * invalidated. Rows, membership, and invalidations commit as one frame, at
+ * most once per Daemon publication interval. */
+export interface QueueDeltaMessage {
 	kind: "queue_changed";
-	sessions: SessionInfo[];
+	mode: "delta";
+	revision: number;
+	upsert: SessionInfo[];
+	/** Queued addresses that are no longer in the queue — not Sessions that no
+	 * longer exist. */
+	remove: SessionAddress[];
+	/** Project ids whose cached Session history may be stale. */
+	invalidateHistory: string[];
+}
+
+export type QueueChangedMessage = QueueSnapshotMessage | QueueDeltaMessage;
+
+/** One execution finished in a queued Session (ADR 24). An occurrence, not a
+ * sampled state transition: it is delivered immediately, independently of the
+ * queue publication interval, so a turn shorter than that interval still
+ * announces itself. It carries the display metadata the notification needs so
+ * it does not wait for the next queue delta. */
+export interface SessionCompletedMessage {
+	kind: "session_completed";
+	session: SessionRef;
+	name?: string;
+	lastMessageText?: string;
 }
 
 /** The daemon-global pinned model list changed (ADR 15). `pinnedModels` is the
@@ -449,8 +471,8 @@ export interface SessionClosedMessage {
 export type ServerPushMessage =
 	| ReplaceMessage
 	| PatchMessage
-	| SessionsChangedMessage
 	| QueueChangedMessage
+	| SessionCompletedMessage
 	| PinnedModelsChangedMessage
 	| SessionClosedMessage;
 

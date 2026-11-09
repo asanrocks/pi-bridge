@@ -166,30 +166,41 @@ async function serveWorker(projectId = "worker-proj"): Promise<Fixture> {
 async function startDaemon(...endpoints: string[]): Promise<{ port: number; daemon: Daemon }> {
 	const daemon = new Daemon();
 	cleanups.push(() => daemon.dispose());
-	await daemon.start({ workerModes: endpoints.map((endpoint) => ({ kind: "connect" as const, endpoint })) });
+	// The publication interval is a test seam: five seconds (the default) would
+	// make every queue assertion a wait.
+	await daemon.start({
+		workerModes: endpoints.map((endpoint) => ({ kind: "connect" as const, endpoint })),
+		queuePublishIntervalMs: 10,
+	});
 	const address = daemon.address;
 	if (!address) throw new Error("daemon not listening");
 	return { port: address.port, daemon };
 }
 
+/** Frames each socket received, collected from construction: the Daemon sends
+ * the queue snapshot immediately on connection, so a listener attached after
+ * `open` would miss the Connection's baseline. */
+const framesBySocket = new WeakMap<WebSocket, unknown[]>();
+
 function openClient(port: number): Promise<WebSocket> {
 	return new Promise((resolve, reject) => {
 		const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+		const frames: unknown[] = [];
+		framesBySocket.set(ws, frames);
+		ws.on("message", (data) => {
+			try {
+				frames.push(JSON.parse(data.toString()));
+			} catch {
+				// ignore
+			}
+		});
 		ws.on("open", () => resolve(ws));
 		ws.on("error", reject);
 	});
 }
 
 function collect(ws: WebSocket): unknown[] {
-	const frames: unknown[] = [];
-	ws.on("message", (data) => {
-		try {
-			frames.push(JSON.parse(data.toString()));
-		} catch {
-			// ignore
-		}
-	});
-	return frames;
+	return framesBySocket.get(ws) ?? [];
 }
 
 let seq = 0;
@@ -227,7 +238,7 @@ function waitFor(
 		if (existing) return resolve(existing as Record<string, unknown>);
 		const timer = setTimeout(() => {
 			clearInterval(poll);
-			reject(new Error("timed out waiting for a frame"));
+			reject(new Error(`timed out waiting for a frame; saw ${JSON.stringify(frames)}`));
 		}, timeout);
 		const poll = setInterval(() => {
 			const found = frames.find((frame) => pred(frame as Record<string, unknown>));
@@ -290,22 +301,32 @@ describe("daemon routing through several workers", () => {
 		cleanups.push(() => ws.close());
 		const frames = collect(ws);
 
-		// A transition on beta pushes the aggregate: alpha's seeded slice must
-		// ride along (an empty default would drop the persisted row until
-		// alpha's next transition), and the order is global — the Inbox row
-		// leads the Later one across the registration boundary instead of
-		// concatenating per-Worker blocks.
+		// The Connection's baseline carries alpha's persisted slice: an empty
+		// start would hide it until alpha published its first delta.
+		const snapshot = await waitFor(frames, (frame) => frame.kind === "queue_changed" && frame.mode === "snapshot");
+		expect(
+			(snapshot.sessions as Array<{ projectId: string; location: string }>).map(
+				(row) => `${row.projectId}:${row.location}`,
+			),
+		).toEqual(["alpha:later"]);
+
+		// A transition on beta publishes one changed row; the order stays global
+		// across the registration boundary (the aggregate re-sorts with the
+		// shared comparator instead of concatenating per-Worker blocks).
 		const toggle = send(ws, { verb: "setSessionLocation", projectId: "beta", stem: "s1", location: "inbox" });
 		await waitFor(frames, (frame) => frame.id === toggle && frame.ok === true);
 		const push = await waitFor(
 			frames,
 			(frame) =>
 				frame.kind === "queue_changed" &&
-				(frame.sessions as Array<{ projectId: string }>).some((s) => s.projectId === "beta"),
+				frame.mode === "delta" &&
+				(frame.upsert as Array<{ projectId: string }>).some((row) => row.projectId === "beta"),
 		);
 		expect(
-			(push.sessions as Array<{ projectId: string; location: string }>).map((r) => `${r.projectId}:${r.location}`),
-		).toEqual(["beta:inbox", "alpha:later"]);
+			(push.upsert as Array<{ projectId: string; location: string }>).map(
+				(row) => `${row.projectId}:${row.location}`,
+			),
+		).toEqual(["beta:inbox"]);
 
 		// The RPC aggregate carries the same global order.
 		send(ws, { verb: "listQueue" });

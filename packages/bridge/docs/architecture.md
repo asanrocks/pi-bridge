@@ -223,11 +223,15 @@ The push contract is:
   do not. An address-bearing frame establishes the client mirror's
   generation, and a live frame from an older attachment is dropped before
   the mirror — same address or not.
-- `sessions_changed` carries the refreshed first page for one Project.
-- `queue_changed` carries the global queue: every Inbox and Later Session,
-  ordered Inbox → Later, each group by last activity descending. Membership is
-  the stored location, never runtime retention — an archived Session never
-  appears, and idle collection never removes a row.
+- `queue_changed` carries the queue: a `snapshot` first (every Inbox and Later
+  Session, ordered Inbox → Later, each group by last activity descending), then
+  `delta` frames of complete changed rows, removed addresses, and the Projects
+  whose cached history a publication invalidated. Membership is the stored
+  location, never runtime retention — an archived Session never appears, and
+  idle collection never removes a row.
+- `session_completed` names one execution that finished in a queued Session.
+  It is an occurrence, delivered immediately, because the queue itself is
+  published at most once every five seconds (ADR 24).
 
 The host sends exactly one initial-sync frame when a Connection attaches. The
 frame is sent before later live patches and before the successful navigation
@@ -453,9 +457,10 @@ and authoritative initial sync govern delivery, with a cursor delta or replace
 on reconnect. The browser-smoke gate checks the curated browser-safe exports;
 there is no corresponding Node-only import gate.
 
-Session changes are broadcast across tabs through `queue_changed` and
-Project-scoped `sessions_changed`; static Project configuration has no
-project-list push. When a live runtime is closed out from under attached
+Queue changes are broadcast across tabs through `queue_changed` (a snapshot,
+then throttled deltas); archived history is invalidated per Project and
+refetched by whichever tab displays it, so no page is pushed to a client that
+is not looking at one. Static Project configuration has no project-list push. When a live runtime is closed out from under attached
 clients (a move to Archive or Trash), they are detached and receive a
 `session_closed` push naming the address, so a view never stalls waiting for
 a runtime that no longer exists; idle collection has no attached Connection

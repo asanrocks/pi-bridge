@@ -4,7 +4,8 @@ import { extname, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { SessionInfo, SessionListCursor, SessionRef } from "../core/index.ts";
+import type { SessionInfo, SessionRef } from "../core/index.ts";
+import { compareQueueRows } from "../core/index.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
@@ -16,7 +17,6 @@ import { TrafficLogger } from "./logger.ts";
 import type { createManager, Manager } from "./manager.ts";
 import { setDaemonTitle } from "./process-title.ts";
 import { buildProjects } from "./projects.ts";
-import { compareQueueRows } from "./queue-order.ts";
 import { bindWorkerCommands } from "./session-commands.ts";
 import { createTextPolishProvider, TEXT_POLISH_IDENTITY_ENV, type TextPolishProvider } from "./text-polish.ts";
 import type { WorkerHello } from "./worker-client.ts";
@@ -45,8 +45,9 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const DEFAULT_PORT_RANGE = { start: 33334, end: 33340 }; // [33334, 33340)
-/** First page size for `sessions_changed` refreshes. */
-const SESSION_PAGE_SIZE = 10;
+/** The default queue publication interval (ADR 24): one delta at most per
+ * five seconds, however dense the triggers. */
+const DEFAULT_QUEUE_PUBLISH_INTERVAL_MS = 5_000;
 
 export interface DaemonOptions {
 	agentDir?: string;
@@ -78,6 +79,9 @@ export interface DaemonOptions {
 	/** Idle GC delays in ms (ADR 11). Test seam. */
 	idleGcMs?: number;
 	unflushedIdleGcMs?: number;
+	/** Queue publication interval (ADR 24). Test seam: the default five
+	 * seconds would make every publication test a wait. */
+	queuePublishIntervalMs?: number;
 }
 
 export class Daemon {
@@ -89,10 +93,25 @@ export class Daemon {
 	/** The routing table: a Project id is served by exactly one Worker. Claiming
 	 * is atomic across registrations, so `/<projectId>` is never ambiguous. */
 	private routes = new Map<string, WorkerHost>();
-	/** Each Worker's last reported work-queue snapshot. The browser
-	 * store replaces its list on every push, so a push carries the aggregate
-	 * rather than one Worker's slice. */
+	/** Each Worker's last installed queue slice. The browser store applies one
+	 * aggregate delta, so the Daemon merges the slices rather than forwarding
+	 * one Worker's rows. */
 	private queueByHost = new Map<WorkerHost, SessionInfo[]>();
+	/** The registration-local version each installed slice came from, so a late
+	 * seed cannot roll back a delta that already landed (ADR 24). */
+	private queueVersionByHost = new Map<WorkerHost, number>();
+	/** The last published queue, keyed by address: the base every delta is
+	 * diffed against and the text every new Connection is seeded with. */
+	private publishedQueue = new Map<string, SessionInfo>();
+	/** Published queue revision: one per nonempty publication, never reused. */
+	private queueRevision = 0;
+	/** Projects whose cached history a pending publication must invalidate. */
+	private pendingHistory = new Set<string>();
+	/** The single publication timer: one broadcast at most per interval, no
+	 * matter how many Workers or Sessions changed (ADR 24). */
+	private queuePublishTimer: ReturnType<typeof setTimeout> | null = null;
+	private lastQueuePublishAt = 0;
+	private queuePublishIntervalMs: number = DEFAULT_QUEUE_PUBLISH_INTERVAL_MS;
 	private wss: WebSocketServer | null = null;
 	private httpServer: HttpServer | null = null;
 	/** The dial-in registration listener, when one was requested. */
@@ -154,6 +173,10 @@ export class Daemon {
 		this.webRoot = options.webRoot;
 		this.agentDir = options.agentDir ?? getAgentDir();
 		this.devMode = options.dev ?? false;
+		this.queuePublishIntervalMs = options.queuePublishIntervalMs ?? DEFAULT_QUEUE_PUBLISH_INTERVAL_MS;
+		// The first publication is eligible immediately: the cooldown describes
+		// the distance between two broadcasts, not a startup delay.
+		this.lastQueuePublishAt = Date.now() - this.queuePublishIntervalMs;
 
 		// Injectable embedded assets (test seam); otherwise the bundled web
 		// assets serve when no --web-root is given (single-file distribution).
@@ -253,10 +276,12 @@ export class Daemon {
 			throw error;
 		}
 		this.workers = created;
-		// Seed every slice from the live Worker (see `seedQueueSlice`): a fresh
-		// registration can hold persisted queue state.
+		// Seed every slice from the Worker's materialized state (see
+		// `seedQueue`): a fresh registration can hold persisted queue state.
 		this.queueByHost = new Map();
-		await Promise.all(created.map((host) => this.seedQueueSlice(host)));
+		this.queueVersionByHost = new Map();
+		await Promise.all(created.map((host) => this.seedQueue(host)));
+		this.publishQueue();
 		this.publishTitle();
 	}
 
@@ -340,15 +365,14 @@ export class Daemon {
 
 		for (const project of host.info.projects) this.routes.set(project.id, host);
 		this.workers = [...this.workers, host];
-		// Seed before the first broadcast: a dial-in registration can hold
-		// persisted queue state, and the empty default would hide it from every
-		// push until that Worker's next transition.
-		await this.seedQueueSlice(host);
+		// Seed before the aggregate is published: a dial-in registration can hold
+		// persisted queue state, and an empty default would hide it.
+		await this.seedQueue(host);
 		this.publishTitle();
 		// A newly registered Worker changes the aggregate; the browser's Project
 		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
 		// reload), because the surface has no project-list push.
-		this.broadcastQueue();
+		this.scheduleQueuePublish();
 	}
 
 	/**
@@ -428,6 +452,10 @@ export class Daemon {
 	 * closed settles before the daemon's teardown returns. */
 	async dispose(): Promise<void> {
 		this.disposing = true;
+		if (this.queuePublishTimer !== null) {
+			clearTimeout(this.queuePublishTimer);
+			this.queuePublishTimer = null;
+		}
 		// Stop accepting registrations first: a Worker that joined during teardown
 		// would be routed to a Daemon that is already draining. Closing the
 		// listener drops the links without asking those Workers to stop — their
@@ -449,18 +477,36 @@ export class Daemon {
 		await Promise.allSettled(workers.map((host) => host.dispose()));
 	}
 
-	/** A Worker-reported state change, broadcast to every browser. The Worker
-	 * computes the payload (the page, the active snapshot, the pinned list)
-	 * because it owns the state those rows describe; the Daemon only addresses
-	 * the frames. */
+	/** A Worker-reported state change. The Worker reports rows and occurrences;
+	 * the Daemon owns aggregation, the publication interval, and addressing the
+	 * frames (ADR 24). */
 	private onWorkerEvent(host: WorkerHost, event: WorkerEvent): void {
-		if (event.kind === "sessions_changed") {
-			this.pushSessionsChanged(event.projectId, event.page.sessions, event.page.hasMore, event.page.nextCursor);
+		if (event.kind === "queue_changed") {
+			// A seed that resolves after a delta must not roll it back: the
+			// version says which slice is newer.
+			if (event.version <= (this.queueVersionByHost.get(host) ?? 0)) return;
+			this.queueVersionByHost.set(host, event.version);
+			const rows = new Map((this.queueByHost.get(host) ?? []).map((row) => [queueKey(row), row] as const));
+			for (const row of event.upsert) rows.set(queueKey(row), row);
+			for (const address of event.remove) rows.delete(queueKey(address));
+			this.queueByHost.set(host, [...rows.values()]);
+			this.scheduleQueuePublish();
 			return;
 		}
-		if (event.kind === "queue_changed") {
-			this.queueByHost.set(host, event.sessions);
-			this.broadcastQueue();
+		if (event.kind === "history_changed") {
+			this.pendingHistory.add(event.projectId);
+			this.scheduleQueuePublish();
+			return;
+		}
+		if (event.kind === "session_completed") {
+			// An occurrence, not queue state: delivered immediately so a turn
+			// shorter than the publication interval still announces itself.
+			this.pushToAll({
+				kind: "session_completed",
+				session: event.session,
+				...(event.name !== undefined ? { name: event.name } : {}),
+				...(event.lastMessageText !== undefined ? { lastMessageText: event.lastMessageText } : {}),
+			});
 			return;
 		}
 		if (event.kind === "pinned_models_changed") {
@@ -484,41 +530,41 @@ export class Daemon {
 		}
 		this.workers = this.workers.filter((worker) => worker !== host);
 		this.queueByHost.delete(host);
+		this.queueVersionByHost.delete(host);
 		this.publishTitle();
-		this.broadcastQueue();
+		// Its rows leave the queue; the removal rides the next publication, and
+		// no completion is announced for them.
+		this.scheduleQueuePublish();
 		console.error(`Daemon: worker unavailable, routes withdrawn: ${reason}`);
 		await host.dispose().catch(() => {});
 	}
 
-	/** Seed one registration's queue slice from the live Worker instead of an
-	 * empty default: a registration can carry persisted queue state (Inbox or
-	 * Later rows). The placeholder identity closes
-	 * the race with a `queue_changed` arriving while the query is in flight —
-	 * the event installed a fresher full slice, and the snapshot must not
-	 * overwrite it; a removal (`dispose`, `onWorkerUnavailable`) drops the
-	 * placeholder, and the seed stands down. A failed query leaves the empty
-	 * default; the Worker's next event fills the slice. */
-	private async seedQueueSlice(host: WorkerHost): Promise<void> {
+	/** Install one registration's materialized queue slice. Its version orders it
+	 * against deltas that may already have landed, so a seed resolving late can
+	 * never overwrite newer rows. */
+	private async seedQueue(host: WorkerHost): Promise<void> {
 		const placeholder: SessionInfo[] = [];
 		this.queueByHost.set(host, placeholder);
-		let seed: SessionInfo[];
+		let seed: Awaited<ReturnType<WorkerHost["service"]["listQueue"]>>;
 		try {
 			seed = await host.service.listQueue();
 		} catch {
 			return;
 		}
-		if (this.queueByHost.get(host) === placeholder) this.queueByHost.set(host, seed);
+		if (this.queueByHost.get(host) !== placeholder) return;
+		if (seed.version < (this.queueVersionByHost.get(host) ?? 0)) return;
+		this.queueVersionByHost.set(host, seed.version);
+		this.queueByHost.set(host, seed.sessions);
 	}
 
-	/** The global queue: the Workers own the stored locations those rows
-	 * describe, so each reports its own slice — each already in queue order.
-	 * The aggregate re-sorts with the shared comparator, so a multi-Worker
-	 * queue interleaves by the same rule instead of concatenating
-	 * per-registration blocks. */
+	/** The global queue as the Workers report it now: each slice is already in
+	 * queue order, and the shared comparator interleaves them by the same rule
+	 * instead of concatenating per-registration blocks. A query — publication
+	 * diffs this against what browsers hold. */
 	async listQueue(): Promise<SessionInfo[]> {
 		if (this.workers.length === 0) return [];
 		const slices = await Promise.all(this.workers.map((host) => host.service.listQueue()));
-		return slices.flat().sort(compareQueueRows);
+		return slices.flatMap((slice) => slice.sessions).sort(compareQueueRows);
 	}
 
 	// ── Broadcasts ────────────────────────────────────────────────────────
@@ -527,40 +573,77 @@ export class Daemon {
 		for (const conn of this.connections) conn.push(frame);
 	}
 
-	/** Push one Project's refreshed first page to every browser. */
-	private pushSessionsChanged(
-		projectId: string,
-		sessions: SessionInfo[],
-		hasMore: boolean,
-		nextCursor?: SessionListCursor,
-	): void {
-		const frame: Record<string, unknown> = { kind: "sessions_changed", projectId, sessions, hasMore };
-		if (nextCursor) frame.nextCursor = nextCursor;
-		this.pushToAll(frame);
+	/** The aggregate queue rows, in the shared total order. */
+	private aggregateQueue(): SessionInfo[] {
+		return this.workers.flatMap((host) => this.queueByHost.get(host) ?? []).sort(compareQueueRows);
 	}
 
-	/** Refresh and push one Project's first page (a close or an archive changed
-	 * its ordering; a rename rewrites its row). */
-	private broadcastSessionsChanged(projectId: string): void {
-		const host = this.route(projectId);
-		if (host === undefined) return;
-		void host.service
-			.listSessions(projectId, SESSION_PAGE_SIZE)
-			.then((page) => this.pushSessionsChanged(projectId, page.sessions, page.hasMore, page.nextCursor))
-			.catch(() => {
-				// A failed refresh is recoverable: the client still holds a
-				// previous page and will re-query on the next navigation.
-			});
+	/** Ask for a publication once the interval allows one. One timer for the
+	 * whole Daemon: several Workers changing cannot multiply broadcasts, and a
+	 * change during the cooldown never extends the deadline. */
+	private scheduleQueuePublish(): void {
+		if (this.disposing || this.queuePublishTimer !== null) return;
+		const due = this.lastQueuePublishAt + this.queuePublishIntervalMs;
+		this.queuePublishTimer = setTimeout(
+			() => {
+				this.queuePublishTimer = null;
+				this.publishQueue();
+			},
+			Math.max(0, due - Date.now()),
+		);
 	}
 
-	/** Push the aggregate queue: one push carries the join of every
-	 * registration's last report, never one Worker's slice — re-sorted with
-	 * the shared comparator so the aggregate keeps the queue's global order
-	 * (each slice is already ordered, but a concatenation would interleave
-	 * the state groups across registrations). */
-	private broadcastQueue(): void {
-		const sessions = this.workers.flatMap((host) => this.queueByHost.get(host) ?? []).sort(compareQueueRows);
-		this.pushToAll({ kind: "queue_changed", sessions });
+	/** Publish the difference between the latest aggregate and the last published
+	 * queue: complete changed rows, removed addresses, and the Projects whose
+	 * history the interval's triggers invalidated. An empty publication sends
+	 * nothing and does not restart the cooldown. */
+	private publishQueue(): void {
+		if (this.disposing) return;
+		const next = new Map<string, SessionInfo>();
+		const upsert: SessionInfo[] = [];
+		for (const row of this.aggregateQueue()) {
+			const key = queueKey(row);
+			next.set(key, row);
+			const previous = this.publishedQueue.get(key);
+			if (previous === undefined || JSON.stringify(previous) !== JSON.stringify(row)) upsert.push(row);
+		}
+		const remove = [...this.publishedQueue.values()]
+			.filter((row) => !next.has(queueKey(row)))
+			.map((row) => ({ projectId: row.projectId, stem: row.stem }));
+		const invalidateHistory = [...this.pendingHistory];
+		if (upsert.length === 0 && remove.length === 0 && invalidateHistory.length === 0) return;
+		this.publishedQueue = next;
+		this.pendingHistory.clear();
+		this.queueRevision += 1;
+		this.lastQueuePublishAt = Date.now();
+		this.pushToAll({
+			kind: "queue_changed",
+			mode: "delta",
+			revision: this.queueRevision,
+			upsert,
+			remove,
+			invalidateHistory,
+		});
+	}
+
+	/** Send one Connection the queue baseline it applies deltas to. Capturing,
+	 * enqueueing, and letting later publications reach the Connection are one
+	 * synchronous step: publication runs only in a later task. */
+	private sendQueueSnapshot(conn: Connection): void {
+		conn.push({
+			kind: "queue_changed",
+			mode: "snapshot",
+			revision: this.queueRevision,
+			sessions: [...this.publishedQueue.values()].sort(compareQueueRows),
+		});
+	}
+
+	/** Mark one Project's cached history stale. `sessions_changed` is gone: the
+	 * browser refetches what it holds instead of receiving a page nobody may be
+	 * looking at. */
+	private markHistoryChanged(projectId: string): void {
+		this.pendingHistory.add(projectId);
+		this.scheduleQueuePublish();
 	}
 
 	/** Where the text-polish guest identity lives: the operator's override, else a
@@ -651,16 +734,16 @@ export class Daemon {
 				const host = this.route(projectId);
 				if (host === undefined) return { ok: false, error: `Unknown project: ${projectId}` };
 				await host.service.trashSession({ projectId, stem });
-				// The row leaves the history pages. A live session's row already left
-				// the queue via the collection broadcast.
-				this.broadcastSessionsChanged(projectId);
+				// The row leaves the Project's history too; the queue change came
+				// from the Worker.
+				this.markHistoryChanged(projectId);
 				return { ok: true };
 			} catch (err) {
 				return { ok: false, error: (err as Error).message };
 			}
 		},
 
-		sessionsChanged: (projectId) => this.broadcastSessionsChanged(projectId),
+		sessionsChanged: (projectId) => this.markHistoryChanged(projectId),
 
 		// The browser cannot mint a SAMI token or register a device; it gets the
 		// result and never the access key. See asr-credentials.ts.
@@ -776,6 +859,11 @@ export class Daemon {
 		wss.on("connection", (ws: WebSocket) => {
 			const conn = new Connection(ws, this.daemonVerbs, this.logger, this.devMode);
 			this.connections.add(conn);
+			// The queue's ordered initialization (ADR 24): the Connection joins the
+			// broadcast set first, then receives the baseline synchronously, so no
+			// publication can land between the two and the client applies exactly
+			// the revision it was seeded with. History is queried, never seeded.
+			this.sendQueueSnapshot(conn);
 
 			ws.on("close", () => {
 				// Disposing the Connection releases its observation, which is what
@@ -822,4 +910,9 @@ export class Daemon {
  * the Worker resolved. */
 function sessionRefOf(target: SessionTarget): SessionRef {
 	return { projectId: target.projectId, stem: target.stem, sessionId: target.sessionId };
+}
+
+/** A queue row's address key: the pair a delta addresses it by. */
+function queueKey(row: { projectId: string; stem: string }): string {
+	return `${row.projectId}\0${row.stem}`;
 }

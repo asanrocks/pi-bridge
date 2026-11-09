@@ -34,6 +34,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
+	compareQueueRows,
 	filterPatchForSocket,
 	type ModelInfo,
 	type ModelRef,
@@ -45,6 +46,7 @@ import {
 	type SessionInfo,
 	type SessionListCursor,
 	type SessionLocation,
+	type SessionRef,
 	THINKING_LEVEL_NAMES,
 } from "../core/index.ts";
 import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
@@ -87,8 +89,11 @@ import type {
 	WorkerService,
 } from "./worker-contract.ts";
 
-/** First page size for `sessions_changed` refreshes. */
-const SESSION_PAGE_SIZE = 10;
+/** The queue slice's address key, and the identity a completion suppression is
+ * recorded under. */
+function addressKey(projectId: string, stem: string): string {
+	return `${projectId}\0${stem}`;
+}
 
 export type LocalManagerFactory = (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
 
@@ -263,25 +268,74 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		};
 	};
 
-	/** The queue snapshot: membership is the stored locations, so browsing a
-	 * session never reaches this list and idle collection never removes a row
-	 * from it. */
-	const emitQueue = (): void => {
+	/** This Worker's materialized queue slice, keyed by address. It is the base
+	 * every delta is diffed against and the snapshot `listQueue` reports, so a
+	 * Daemon never seeds from a query that raced a delta (ADR 24). */
+	let publishedQueue = new Map<string, SessionInfo>();
+	/** Registration-local version: bumped once per emitted queue delta. */
+	let queueVersion = 0;
+	/** Addresses whose disposal-induced completion must not be announced: an
+	 * Archive or Trash is a user move, not a finished turn. */
+	const suppressedCompletions = new Set<string>();
+
+	/** Rows a metadata-only refresh may reuse: a dormant row's file cannot have
+	 * changed except through a trigger that asks for a full rebuild. */
+	const reusedQueueRows = (): Map<string, SessionInfo> => publishedQueue;
+
+	/**
+	 * Refresh the queue slice and publish the difference.
+	 *
+	 * `live` rebuilds live rows from registry metadata and reuses dormant rows,
+	 * so streaming, activity, and settle triggers read no Session files. `full`
+	 * re-reads dormant rows; only registration, placement, Trash, close, and
+	 * rename triggers need it.
+	 */
+	const refreshQueue = (mode: "live" | "full"): void => {
 		if (disposed) return;
-		emit({ kind: "queue_changed", sessions: catalog.listQueue(liveEntries(), locations) });
+		const rows = catalog.listQueue(liveEntries(), locations, mode === "live" ? reusedQueueRows() : undefined);
+		const next = new Map<string, SessionInfo>();
+		const upsert: SessionInfo[] = [];
+		for (const row of rows) {
+			const key = addressKey(row.projectId, row.stem);
+			next.set(key, row);
+			const previous = publishedQueue.get(key);
+			// Repeated callbacks observing one transition produce identical rows:
+			// nothing to publish, which is what removes the duplicate traffic.
+			if (previous === undefined || JSON.stringify(previous) !== JSON.stringify(row)) upsert.push(row);
+		}
+		const remove = [...publishedQueue.values()]
+			.filter((row) => !next.has(addressKey(row.projectId, row.stem)))
+			.map((row) => ({ projectId: row.projectId, stem: row.stem }));
+		publishedQueue = next;
+		if (upsert.length > 0 || remove.length > 0) {
+			emit({ kind: "queue_changed", version: ++queueVersion, upsert, remove });
+		}
 	};
 
-	const emitSessionsChanged = (projectId: string): void => {
+	/** A Project's cached history may be stale. A notice, never a page: the
+	 * receiver decides whether it holds that history at all. */
+	const emitHistoryChanged = (projectId: string): void => {
 		if (disposed) return;
+		emit({ kind: "history_changed", projectId });
+	};
+
+	/** One execution settled in a queued Session. Suppressed for an address whose
+	 * runtime is being disposed by an Archive or Trash move. */
+	const emitCompleted = (ref: SessionRef): void => {
+		if (disposed || suppressedCompletions.has(addressKey(ref.projectId, ref.stem))) return;
+		const row = publishedQueue.get(addressKey(ref.projectId, ref.stem));
+		if (row === undefined) return;
+		emit({ kind: "session_completed", session: ref, name: row.name, lastMessageText: row.lastMessageText });
+	};
+
+	/** Run a disposal whose settlement is a consequence of the caller's move. */
+	const withoutCompletion = async (projectId: string, stem: string, op: () => Promise<void>): Promise<void> => {
+		const key = addressKey(projectId, stem);
+		suppressedCompletions.add(key);
 		try {
-			emit({
-				kind: "sessions_changed",
-				projectId,
-				page: catalog.listSessions(projectId, SESSION_PAGE_SIZE, null, liveEntries(), locations),
-			});
-		} catch {
-			// An unknown project or an unreadable directory is not a reason to
-			// break the caller's operation: the client re-queries on navigation.
+			await op();
+		} finally {
+			suppressedCompletions.delete(key);
 		}
 	};
 
@@ -297,25 +351,30 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		idleGcMs,
 		unflushedIdleGcMs,
 		onSettled: (ref) => {
-			// The first settle after newSession flushes the file — rescan so the
-			// session moves to mtime ordering and its metadata appears.
-			emitSessionsChanged(ref.projectId);
-			emitQueue();
+			// The runtime's metadata advanced (a flush): the live row is rebuilt
+			// from memory, the Project's cached history is now stale, and a
+			// completion — an occurrence, not a sampled state — is announced for
+			// a queued Session.
+			refreshQueue("live");
+			emitHistoryChanged(ref.projectId);
+			emitCompleted(ref);
 			refreshTitle();
 		},
 		onStreamingChange: () => {
-			emitQueue();
+			refreshQueue("live");
 			refreshTitle();
 		},
 		onRegistryChange: () => {
-			emitQueue();
+			// Registration and collection move the address between live and
+			// dormant, which changes what a row can be read from.
+			refreshQueue("full");
 			refreshTitle();
 		},
 		onActivityChange: () => {
 			// The runtime changed phase (a tool started, text began streaming):
 			// the queue's activity line moved. The Manager dedupes these to phase
 			// transitions, so this cannot fire per token.
-			emitQueue();
+			refreshQueue("live");
 			refreshTitle();
 		},
 		onCollected: (record) => endObservations(record),
@@ -338,6 +397,13 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	}
 
 	refreshTitle();
+
+	// Seed the materialized slice before anything can observe it: `listQueue`
+	// reports it as the baseline and the first delta is a difference from it.
+	// Nothing is emitted here — a registration's seed is the query, not a push.
+	publishedQueue = new Map(
+		catalog.listQueue(liveEntries(), locations).map((row) => [addressKey(row.projectId, row.stem), row] as const),
+	);
 
 	assertNoSessionIdConflicts(projects);
 
@@ -541,12 +607,15 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 					// in Inbox — and a refused preflight restores the placement it
 					// replaced.
 					const admission = locations.promote(project.id, record.ref.stem);
+					refreshQueue("full");
 					try {
 						await manager.promptAdmitted(text, images);
 					} catch (err) {
 						locations.restore(project.id, record.ref.stem, admission);
+						refreshQueue("full");
 						throw err;
 					}
+					emitHistoryChanged(project.id);
 				} catch (err) {
 					await registry.collect(record);
 					throw err;
@@ -564,12 +633,13 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			if (record) {
 				// Disposal aborts and finalizes the in-flight turn; the placement is
 				// untouched, because a stop says nothing about where a Session
-				// belongs.
-				await registry.collect(record);
+				// belongs. Finalizing a turn is not a completion the user is waiting
+				// for: they asked for the stop.
+				await withoutCompletion(project.id, stem, () => registry.collect(record));
 			} else if (!(await sessionExistsAt(project, stem))) {
 				throw new Error(`No such session: ${stem}`);
 			}
-			emitQueue();
+			refreshQueue("full");
 		},
 
 		trashSession: async (address) => {
@@ -580,29 +650,29 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Stop first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
 			const record = await registry.awaitSettled(project.id, stem);
-			if (record) await registry.collect(record);
+			if (record) await withoutCompletion(project.id, stem, () => registry.collect(record));
 			// The trashed session leaves discovery and the queue together: the
 			// move takes the file out of the Project's namespace and the prune
 			// drops the placement record keyed by the stem it was addressed at.
 			trashStemFile(project.sessionDir, stem);
 			locations.prune(project.id, stem);
-			emitSessionsChanged(project.id);
-			emitQueue();
+			emitHistoryChanged(project.id);
+			refreshQueue("full");
 		},
 
 		// ── Session commands (target-addressed) ─────────────────────────
 		prompt: async (target, text, images, model, thinkingLevel) => {
 			const admission = admissionFor(target);
 			// A submitted message places the Session in Inbox before the turn
-			// starts, so the queue shows what the user is waiting on immediately;
-			// a refused preflight restores the placement it replaced.
+			// starts, so the queue shows what the user is waiting on; a refused
+			// preflight restores the placement it replaced.
 			const token = locations.promote(target.projectId, target.stem);
-			emitQueue();
+			refreshQueue("full");
 			try {
 				await admission.prompt(text, images, model, thinkingLevel);
 			} catch (err) {
 				locations.restore(target.projectId, target.stem, token);
-				emitQueue();
+				refreshQueue("full");
 				throw err;
 			}
 		},
@@ -610,7 +680,9 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
 		renameSession: async (target, name) => {
 			await admissionFor(target).renameSession(name);
-			emitSessionsChanged(target.projectId);
+			// The name is row content and history content alike.
+			refreshQueue("full");
+			emitHistoryChanged(target.projectId);
 		},
 		setLabel: async (target, entryId, label) => admissionFor(target).setLabel(entryId, label),
 		navigate: async (target, entryId) => admissionFor(target).navigate(entryId),
@@ -620,12 +692,12 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Session in Inbox like any other submitted work — and a refusal
 			// restores the placement it replaced.
 			const token = locations.promote(target.projectId, target.stem);
-			emitQueue();
+			refreshQueue("full");
 			try {
 				return await admission.recoverTurn();
 			} catch (err) {
 				locations.restore(target.projectId, target.stem, token);
-				emitQueue();
+				refreshQueue("full");
 				throw err;
 			}
 		},
@@ -633,7 +705,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		// ── Queries ─────────────────────────────────────────────────────
 		listSessions: async (projectId: string, max?: number, cursor?: SessionListCursor | null): Promise<SessionPage> =>
 			catalog.listSessions(projectId, max, cursor ?? null, liveEntries(), locations),
-		listQueue: async (): Promise<SessionInfo[]> => catalog.listQueue(liveEntries(), locations),
+		// The materialized slice: the same state the deltas are diffed against,
+		// so a seed and the delta that follows it cannot disagree. A query is a
+		// full rebuild, which is also where external filesystem edits are
+		// discovered — they publish as an ordinary delta (ADR 24).
+		listQueue: async () => {
+			refreshQueue("full");
+			return { sessions: [...publishedQueue.values()].sort(compareQueueRows), version: queueVersion };
+		},
 
 		setSessionLocation: async (address: SessionAddress, location: SessionLocation): Promise<void> => {
 			const project = requireProject(address.projectId);
@@ -643,17 +722,16 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// the existence probe below see an unflushed Session's file.
 			if (location === "archive") {
 				const record = await registry.awaitSettled(project.id, stem);
-				if (record) await registry.collect(record);
+				if (record) await withoutCompletion(project.id, stem, () => registry.collect(record));
 			}
 			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
 			// Durable-or-fail: a failed write leaves the store untouched, so a retry
 			// re-attempts it instead of reporting a move that never landed.
 			locations.place(project.id, stem, location);
-			// The placement is a listing field, so the Project's open page must
-			// rescan: the row moves between the folder's groups without leaving
-			// discovery. The queue push covers the Inbox/Later membership.
-			emitSessionsChanged(project.id);
-			emitQueue();
+			// The row changes place, and the Project's cached history groups it
+			// differently.
+			refreshQueue("full");
+			emitHistoryChanged(project.id);
 		},
 
 		// ── Environment (Worker-owned reads and settings) ───────────────

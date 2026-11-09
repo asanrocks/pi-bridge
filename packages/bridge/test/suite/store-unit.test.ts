@@ -92,7 +92,7 @@ describe("createClientStore", () => {
 		expect(store.getState().connection).toEqual({ kind: "init_failed", error: "boom" });
 	});
 
-	it("setProjects and setQueue update the daemon registries", () => {
+	it("setProjects and the queue snapshot update the daemon registries", () => {
 		const store = createClientStore();
 
 		const projects = [
@@ -111,7 +111,7 @@ describe("createClientStore", () => {
 				timestamp: new Date(0).toISOString(),
 			},
 		];
-		store.getState().setQueue(queue);
+		store.getState().applyQueueSnapshot(queue, 1);
 		expect(store.getState().queue).toEqual(queue);
 	});
 

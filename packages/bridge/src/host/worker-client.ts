@@ -21,11 +21,12 @@
 
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import type { ImageContent, JsonValue, PullRequestItem, SessionInfo } from "../core/index.ts";
+import type { ImageContent, JsonValue, PullRequestItem } from "../core/index.ts";
 import { endpointUrl } from "./daemon-socket.ts";
 import type {
 	ObservedSession,
 	ObserveSessionOptions,
+	QueueSnapshot,
 	SessionAddress,
 	SessionPage,
 	SessionTarget,
@@ -412,7 +413,7 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 
 			listSessions: (projectId, max, cursor) =>
 				request<SessionPage>({ kind: "listSessions", projectId, max, cursor: cursor ?? null }),
-			listQueue: () => request<SessionInfo[]>({ kind: "listQueue" }),
+			listQueue: () => request<QueueSnapshot>({ kind: "listQueue" }),
 			setSessionLocation: (address, location) => request<void>({ kind: "setSessionLocation", address, location }),
 
 			info: () => request<WorkerInfo>({ kind: "info" }),

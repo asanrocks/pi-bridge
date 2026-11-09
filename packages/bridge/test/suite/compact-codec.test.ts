@@ -28,7 +28,14 @@ function otherAppend(value: string): Frame {
 }
 
 const rpcReply: Frame = { id: "7", ok: true };
-const broadcast: Frame = { kind: "sessions_changed", projectId: "p", sessions: [], hasMore: false };
+const broadcast: Frame = {
+	kind: "queue_changed",
+	mode: "delta",
+	revision: 1,
+	upsert: [],
+	remove: [],
+	invalidateHistory: [],
+};
 const multiOp: Frame = {
 	kind: "patch",
 	generation: 1,

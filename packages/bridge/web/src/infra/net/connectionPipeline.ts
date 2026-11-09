@@ -48,7 +48,18 @@ export interface ConnectionPipeline {
 	cleanup(): void;
 }
 
-export function createConnectionPipeline(client: BridgeClient, scheduler: FlushScheduler): ConnectionPipeline {
+/** What the pipeline may ask of its owner when its own state is no longer
+ * trustworthy (a queue revision gap). Repair belongs to the Connection,
+ * because only it owns the socket. */
+export interface PipelineOwner {
+	onResyncNeeded(reason: string): void;
+}
+
+export function createConnectionPipeline(
+	client: BridgeClient,
+	scheduler: FlushScheduler,
+	owner?: PipelineOwner,
+): ConnectionPipeline {
 	let disposed = false;
 
 	// ── Patch coalescing ────────────────────────────────────────────────
@@ -171,25 +182,33 @@ export function createConnectionPipeline(client: BridgeClient, scheduler: FlushS
 		// `/<project>/@latest`) the URL keeps the alias form — address-bearing
 		// frames commit the store address only.
 
-		// Project-scoped session-list refresh (ADR 11). The sidebar folder
-		// cache is the only consumer: refresh a page that is already cached;
-		// never load one just because the push arrived (folders fetch on
-		// expand). Loading pages heal via their in-flight fetch.
-		if (push.kind === "sessions_changed") {
-			for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-			if (store.getState().sessionPages[push.projectId]?.kind === "ready") {
-				store
-					.getState()
-					.setSessionPage(push.projectId, push.sessions, push.hasMore === true, push.nextCursor ?? null);
+		// The global queue (ADR 24): a snapshot establishes the baseline, a delta
+		// must be exactly one revision ahead of what this client holds. A gap
+		// means frames were lost, so the connection is replaced rather than a
+		// delta applied to a base it cannot trust.
+		if (push.kind === "queue_changed") {
+			if (push.mode === "snapshot") {
+				for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
+				store.getState().applyQueueSnapshot(push.sessions, push.revision);
+				return;
 			}
+			if (push.revision !== store.getState().queueRevision + 1) {
+				owner?.onResyncNeeded(`queue revision gap: ${store.getState().queueRevision} → ${push.revision}`);
+				return;
+			}
+			for (const row of push.upsert) rememberAddress(row.projectId, row.stem, row.sessionId);
+			store.getState().applyQueueDelta(push.upsert, push.remove, push.invalidateHistory, push.revision);
 			return;
 		}
 
-		// Global work-queue snapshot: membership is the durable session
-		// state, so the queue replaces its list wholesale on every push.
-		if (push.kind === "queue_changed") {
-			for (const row of push.sessions) rememberAddress(row.projectId, row.stem, row.sessionId);
-			store.getState().setQueue(push.sessions);
+		// One execution finished in a queued Session (ADR 24): an occurrence, so
+		// it is never inferred from a queue revision.
+		if (push.kind === "session_completed") {
+			store.getState().noteCompletion({
+				session: push.session,
+				...(push.name !== undefined ? { name: push.name } : {}),
+				...(push.lastMessageText !== undefined ? { lastMessageText: push.lastMessageText } : {}),
+			});
 			return;
 		}
 

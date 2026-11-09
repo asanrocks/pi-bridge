@@ -1,12 +1,15 @@
 // ============================================================================
-// useAttentionNotifications — the queue-wide completion signal (ADR 23).
+// useAttentionNotifications — the queue-wide completion signal (ADR 24).
 //
 // The attached conversation already drives the tab title, the unread count,
 // and its own completion notice. This hook covers the rest: a Session the tab
 // is NOT reading finishes its turn, and the user has to learn about it without
 // polling the switcher.
 //
-// Delivery is chosen by what the user can see:
+// The signal is an occurrence, not a sampled state: a five-second queue
+// publication interval would hide a whole short turn, so the daemon forwards
+// `session_completed` immediately and this hook drains the store's notice log
+// by sequence. Delivery is chosen by what the user can see:
 //   - page hidden  → one OS notification naming the Session, whose click opens
 //     it (`infra/lib/userNotification.ts` plus the service worker's
 //     `notificationclick` handler);
@@ -19,45 +22,35 @@
 // ============================================================================
 
 import { useEffect } from "react";
-import { QueueAttention, sessionKey } from "../infra/lib/queueAttention.ts";
 import { notifyTurnCompletion } from "../infra/lib/userNotification.ts";
 import { getStore } from "../infra/state/store.tsx";
 
 export function useAttentionNotifications(): void {
 	useEffect(() => {
-		const tracker = new QueueAttention();
 		const store = getStore();
-		const initial = store.getState();
-		tracker.seed(initial.queue);
-		tracker.setAttached(attachedKey(initial));
+		// Notices already filed before this hook mounted were announced by the
+		// transition that filed them; drain only what arrives from now on.
+		let drained = store.getState().completionsSeq;
 
-		return store.subscribe((s, prev) => {
-			// The address this tab reads decides whether a completion is this
-			// hook's to announce at all.
-			if (s.currentProjectId !== prev.currentProjectId || s.currentStem !== prev.currentStem) {
-				tracker.setAttached(attachedKey(s));
-			}
-			// A connect or reconnect re-fetches the queue: seed, never announce.
-			// Every row of that snapshot is news the client has not seen.
-			if (s.connection !== prev.connection) {
-				tracker.seed(s.queue);
-				return;
-			}
-			if (s.queue === prev.queue) return;
-			// The snapshot itself is compared only once the connection is
-			// confirmed: the connect path publishes `listQueue`'s rows before it
-			// flips the store to `connected`, so a reconnect's baseline would
-			// otherwise read as a burst of completions.
-			for (const row of tracker.observe(s.queue, s.connection.kind === "connected")) {
-				const label = row.name || row.firstMessageText || row.stem;
+		return store.subscribe((s) => {
+			if (s.completionsSeq === drained) return;
+			const attached = attachedKey(s);
+			for (const notice of s.completions) {
+				if (notice.seq <= drained) continue;
+				drained = notice.seq;
+				const key = `${notice.session.projectId}/${notice.session.stem}`;
+				// The Session this tab reads carries its own completion in the tab
+				// title and unread count (`useStatusNotifications`).
+				if (key === attached) continue;
+				const label = notice.name || notice.lastMessageText || notice.session.stem;
 				if (document.hidden) {
 					void notifyTurnCompletion({
 						label,
 						body: `${label} · Ready for your input`,
-						address: { projectId: row.projectId, stem: row.stem },
+						address: { projectId: notice.session.projectId, stem: notice.session.stem },
 					});
 				} else {
-					store.getState().pushToast(`attention:${sessionKey(row)}`, `${label} · Ready for your input`);
+					store.getState().pushToast(`attention:${key}`, `${label} · Ready for your input`);
 				}
 			}
 		});

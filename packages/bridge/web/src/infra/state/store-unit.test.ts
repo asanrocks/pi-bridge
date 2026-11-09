@@ -65,7 +65,7 @@ describe("clearCurrentSession", () => {
 	it("keeps the static Project list and the global queue", () => {
 		const store = createClientStore();
 		store.getState().setProjects([{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]);
-		store.getState().setQueue([session("a")]);
+		store.getState().applyQueueSnapshot([session("a")], 1);
 		openAndDirty(store);
 
 		store.getState().clearCurrentSession();
@@ -463,5 +463,75 @@ describe("adoptBrowserPath", () => {
 		store.getState().adoptBrowserPath("~/other.md", "/home/u/other.md");
 
 		expect(store.getState().browser).toMatchObject({ path: "~/notes/todo.md" });
+	});
+});
+
+describe("queue deltas (ADR 24)", () => {
+	function row(stem: string, location: SessionInfo["location"], lastActivityAt?: string): SessionInfo {
+		return {
+			projectId: "proj",
+			sessionId: `sess-${stem}`,
+			stem,
+			location,
+			timestamp: new Date(0).toISOString(),
+			...(lastActivityAt !== undefined ? { lastActivityAt } : {}),
+		};
+	}
+
+	it("a delta replaces the complete row at its address, clearing omitted fields", () => {
+		const store = createClientStore();
+		store.getState().applyQueueSnapshot([{ ...row("a", "inbox"), activity: { kind: "responding" } }], 1);
+
+		// The running fact ended: the complete row omits `activity`, so the
+		// stored copy must not keep the stale one.
+		store.getState().applyQueueDelta([row("a", "inbox")], [], [], 2);
+
+		expect(store.getState().queue).toEqual([row("a", "inbox")]);
+		expect(store.getState().queueRevision).toBe(2);
+	});
+
+	it("removals drop rows and leaves the rest in the shared queue order", () => {
+		const store = createClientStore();
+		store
+			.getState()
+			.applyQueueSnapshot([row("later", "later"), row("inbox-old", "inbox", "2024-01-01T00:00:00Z")], 1);
+
+		store
+			.getState()
+			.applyQueueDelta(
+				[row("inbox-new", "inbox", "2024-06-01T00:00:00Z")],
+				[{ projectId: "proj", stem: "later" }],
+				[],
+				2,
+			);
+
+		// Inbox leads Later, and within a group the newest activity leads.
+		expect(store.getState().queue.map((entry) => entry.stem)).toEqual(["inbox-new", "inbox-old"]);
+	});
+
+	it("invalidation drops the cached history pages it names", () => {
+		const store = createClientStore();
+		store.getState().setSessionPage("proj", [row("a", "archive")], false, null);
+		store.getState().setSessionPage("other", [row("b", "archive")], false, null);
+
+		store.getState().applyQueueDelta([], [], ["proj"], 1);
+
+		expect(store.getState().sessionPages.proj).toBeUndefined();
+		expect(store.getState().sessionPages.other).toBeDefined();
+	});
+
+	it("files completion notices in sequence order for the notification hook", () => {
+		const store = createClientStore();
+		store.getState().noteCompletion({
+			session: { projectId: "proj", stem: "a", sessionId: "sess-a" },
+			name: "A",
+		});
+		store.getState().noteCompletion({
+			session: { projectId: "proj", stem: "b", sessionId: "sess-b" },
+			lastMessageText: "done",
+		});
+
+		expect(store.getState().completions.map((notice) => notice.seq)).toEqual([1, 2]);
+		expect(store.getState().completionsSeq).toBe(2);
 	});
 });

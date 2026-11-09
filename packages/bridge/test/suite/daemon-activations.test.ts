@@ -275,30 +275,38 @@ function stubMediator(): NonNullable<DaemonOptions["managerFactory"]> {
 async function startDaemon(opts: DaemonOptions): Promise<{ port: number; daemon: Daemon }> {
 	const daemon = new Daemon();
 	daemons.push(daemon);
-	await daemon.start(opts);
+	// The queue's publication interval is a test seam: the default five seconds
+	// would make every queue assertion a wait.
+	await daemon.start({ queuePublishIntervalMs: 10, ...opts });
 	const addr = daemon.address;
 	if (!addr) throw new Error("daemon not listening");
 	return { port: addr.port, daemon };
 }
 
+/** Frames each socket received, collected from construction: the Daemon sends
+ * the queue snapshot immediately on connection, so a listener attached after
+ * `open` would miss the Connection's baseline. */
+const framesBySocket = new WeakMap<WebSocket, unknown[]>();
+
 function openClient(port: number): Promise<WebSocket> {
 	return new Promise((resolvePromise, reject) => {
 		const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+		const frames: unknown[] = [];
+		framesBySocket.set(ws, frames);
+		ws.on("message", (data) => {
+			try {
+				frames.push(JSON.parse(data.toString()));
+			} catch {
+				// ignore malformed
+			}
+		});
 		ws.on("open", () => resolvePromise(ws));
 		ws.on("error", reject);
 	});
 }
 
 function collectFrames(ws: WebSocket): unknown[] {
-	const frames: unknown[] = [];
-	ws.on("message", (data) => {
-		try {
-			frames.push(JSON.parse(data.toString()));
-		} catch {
-			// ignore malformed
-		}
-	});
-	return frames;
+	return framesBySocket.get(ws) ?? [];
 }
 
 let rpcId = 0;
@@ -1741,11 +1749,13 @@ describe("daemon: setSessionLocation(archive)", () => {
 		expect((await waitForReply(frames, closeId)).ok).toBe(true);
 		expect(stub!.handles.disposed()).toBe(true);
 
-		// The queue drops the row (the move archived it); the history file
-		// survives, because archived history stays browsable.
+		// The move invalidates the Project's cached history (the row changed
+		// group); the history file survives, because archived history stays
+		// browsable.
 		await waitFor(
 			frames,
-			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+			(f) =>
+				f.kind === "queue_changed" && f.mode === "delta" && (f.invalidateHistory as string[]).includes(projectId),
 		);
 		expect(existsSync(join(sessionDirFor(a, agentDir), `${stem}.jsonl`))).toBe(true);
 
@@ -2014,8 +2024,13 @@ describe("daemon: trashSession", () => {
 		expect(existsSync(join(dir, `${stem}.jsonl`))).toBe(false);
 		expect(existsSync(join(dir, ".trash", `${stem}.jsonl`))).toBe(true);
 
-		// The Project push refreshes the page the row just left.
-		await waitForPush(frames, "sessions_changed");
+		// The Project notice tells the browser the page the row just left is
+		// stale; the rows themselves come from a query.
+		await waitFor(
+			frames,
+			(f) =>
+				f.kind === "queue_changed" && f.mode === "delta" && (f.invalidateHistory as string[]).includes(projectId),
+		);
 		const after = (await waitForReply(frames, send(ws, { verb: "listSessions", projectId }))) as unknown as {
 			sessions: Array<{ stem: string }>;
 		};
@@ -2051,7 +2066,8 @@ describe("daemon: trashSession", () => {
 		expect(existsSync(join(dir, ".trash", `${stem}.jsonl`))).toBe(true);
 		await waitFor(
 			frames,
-			(f) => f.kind === "queue_changed" && !(f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
+			(f) =>
+				f.kind === "queue_changed" && f.mode === "delta" && (f.invalidateHistory as string[]).includes(projectId),
 		);
 
 		ws.close();
@@ -2118,8 +2134,7 @@ describe("daemon: trashSession", () => {
 		await waitFor(
 			frames,
 			(f) =>
-				f.kind === "queue_changed" &&
-				!(f.sessions as Array<{ stem: string }>).some((s) => s.stem === created.session.stem),
+				f.kind === "queue_changed" && f.mode === "delta" && (f.invalidateHistory as string[]).includes(projectId),
 		);
 
 		ws.close();
@@ -2374,7 +2389,7 @@ describe("daemon: session listing", () => {
 		ws.close();
 	});
 
-	it("broadcasts sessions_changed for the Project and the global queue", async () => {
+	it("broadcasts a history notice for the Project and a queue delta for admitted work", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: stubMediator() });
 		const projectId = basename(a).toLowerCase();
@@ -2389,23 +2404,141 @@ describe("daemon: session listing", () => {
 		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
 		await waitForPush(frames, "replace");
 
-		// Rename triggers a project-scoped first-page refresh.
+		// Rename invalidates the Project's cached history; no page is pushed.
 		const renameId = send(ws, { verb: "renameSession", name: "renamed" });
 		expect((await waitForReply(frames, renameId)).ok).toBe(true);
-		const changed = await waitForPush(frames, "sessions_changed");
-		expect(changed.projectId).toBe(projectId);
-		expect(Array.isArray(changed.sessions)).toBe(true);
+		const notice = (await waitFor(
+			frames,
+			(f) =>
+				f.kind === "queue_changed" && f.mode === "delta" && (f.invalidateHistory as string[]).includes(projectId),
+		)) as { invalidateHistory: string[] };
+		expect(notice.invalidateHistory).toContain(projectId);
 
-		// Admitted work reaches the launcher's queue: the push carries
-		// the busy row.
+		// Admitted work reaches the launcher's queue: the delta carries the
+		// placed row, not the whole queue.
 		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
-		await waitFor(
+		const delta = (await waitFor(
 			launcherFrames,
-			(f) => f.kind === "queue_changed" && (f.sessions as Array<{ stem: string }>).some((s) => s.stem === stem),
-		);
+			(f) =>
+				f.kind === "queue_changed" &&
+				f.mode === "delta" &&
+				(f.upsert as Array<{ stem: string }>).some((row) => row.stem === stem),
+		)) as { upsert: unknown[] };
+		expect(delta.upsert).toHaveLength(1);
 
 		ws.close();
 		launcher.close();
+	});
+});
+
+describe("daemon: queue publication (ADR 24)", () => {
+	it("sends a baseline snapshot first and then at most one delta per interval", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: stubMediator(),
+			queuePublishIntervalMs: 400,
+		});
+		const projectId = basename(a).toLowerCase();
+		const first = writeSessionFile(a, agentDir, "q-1");
+		const second = writeSessionFile(a, agentDir, "q-2");
+		const third = writeSessionFile(a, agentDir, "q-3");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const deltas = () => frames.filter((f) => (f as { mode?: string }).mode === "delta");
+
+		// The Connection's first queue frame is its baseline, revision included.
+		const snapshot = (await waitFor(frames, (f) => f.kind === "queue_changed" && f.mode === "snapshot")) as {
+			revision: number;
+			sessions: Array<{ stem: string }>;
+		};
+		expect(snapshot.revision).toBe(0);
+		expect(snapshot.sessions).toEqual([]);
+
+		// Warm-up: the first change outside the cooldown publishes immediately.
+		expect(
+			(
+				await waitForReply(
+					frames,
+					send(ws, { verb: "setSessionLocation", projectId, stem: first, location: "inbox" }),
+				)
+			).ok,
+		).toBe(true);
+		await waitFor(frames, (f) => f.kind === "queue_changed" && f.mode === "delta");
+		expect(deltas()).toHaveLength(1);
+
+		// Two changes inside one cooldown: one delta carries both changed rows
+		// and advances the revision by exactly one.
+		expect(
+			(
+				await waitForReply(
+					frames,
+					send(ws, { verb: "setSessionLocation", projectId, stem: second, location: "later" }),
+				)
+			).ok,
+		).toBe(true);
+		expect(
+			(
+				await waitForReply(
+					frames,
+					send(ws, { verb: "setSessionLocation", projectId, stem: third, location: "inbox" }),
+				)
+			).ok,
+		).toBe(true);
+		await waitFor(frames, () => deltas().length === 2);
+		const delta = deltas()[1] as {
+			revision: number;
+			upsert: Array<{ stem: string; location: string }>;
+			remove: unknown[];
+		};
+		expect(delta.revision).toBe(2);
+		expect(delta.upsert.map((row) => `${row.stem}:${row.location}`).sort()).toEqual([
+			`${second}:later`,
+			`${third}:inbox`,
+		]);
+		expect(delta.remove).toEqual([]);
+		expect(deltas()).toHaveLength(2);
+
+		ws.close();
+	});
+
+	it("forwards a completion immediately while queue publication is cooling down", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const { port } = await startDaemon({
+			agentDir,
+			allow: [a],
+			managerFactory: stubMediator(),
+			queuePublishIntervalMs: 60_000,
+		});
+		const projectId = basename(a).toLowerCase();
+		const stem = writeSessionFile(a, agentDir, "q-c");
+
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const deltas = () => frames.filter((f) => (f as { mode?: string }).mode === "delta");
+		expect((await waitForReply(frames, send(ws, { verb: "openSession", projectId, stem }))).ok).toBe(true);
+		const stub = [...stubs.values()][stubs.size - 1];
+		expect(stub).toBeDefined();
+
+		// Admission places the row in Inbox and publishes the immediate first
+		// delta; the interval then closes for a minute.
+		expect((await waitForReply(frames, send(ws, { verb: "prompt", text: "hi" }))).ok).toBe(true);
+		await waitFor(frames, (f) => f.kind === "queue_changed" && f.mode === "delta");
+		const published = deltas().length;
+
+		// Settlement is an occurrence: it crosses immediately, so a short turn
+		// is announced even though no running row was ever published.
+		stub!.handles.setStreaming(true);
+		stub!.handles.settle();
+		const completed = (await waitFor(frames, (f) => f.kind === "session_completed")) as {
+			session: { stem: string };
+		};
+		expect(completed.session.stem).toBe(stem);
+		expect(deltas()).toHaveLength(published);
+
+		ws.close();
 	});
 });
 

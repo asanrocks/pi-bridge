@@ -60,23 +60,26 @@ describe("worker contract values", () => {
 	it("round-trips the worker events the daemon broadcasts", () => {
 		const events: WorkerEvent[] = [
 			{
-				kind: "sessions_changed",
-				projectId: "proj",
-				page: {
-					sessions: [
-						{
-							projectId: "proj",
-							sessionId: "sess-1",
-							stem: "work/review",
-							location: "inbox",
-							timestamp: "2024-01-01T00:00:00Z",
-						},
-					],
-					hasMore: true,
-					nextCursor: { sortTimeMs: 1704067200000, stem: "work/review" },
-				},
+				kind: "queue_changed",
+				version: 4,
+				upsert: [
+					{
+						projectId: "proj",
+						sessionId: "sess-1",
+						stem: "work/review",
+						location: "inbox",
+						timestamp: "2024-01-01T00:00:00Z",
+					},
+				],
+				remove: [ADDRESS],
 			},
-			{ kind: "queue_changed", sessions: [] },
+			{ kind: "history_changed", projectId: "proj" },
+			{
+				kind: "session_completed",
+				session: { projectId: "proj", stem: "work/review", sessionId: "sess-1" },
+				name: "Review",
+				lastMessageText: "done",
+			},
 			{ kind: "unavailable", reason: "drain failed" },
 		];
 		for (const event of events) expect(roundTrip(event)).toEqual(event);
