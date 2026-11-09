@@ -149,38 +149,6 @@ export function useCwd(): string | null {
 export { displayPath };
 
 // ---------------------------------------------------------------------------
-// File extension → language name
-// ---------------------------------------------------------------------------
-
-/** Map file extensions to language names for code fence language tagging. */
-export function extToLang(path: string): string {
-	const ext = path.split(".").pop()?.toLowerCase() ?? "";
-	const map: Record<string, string> = {
-		ts: "typescript",
-		tsx: "typescript",
-		js: "javascript",
-		jsx: "javascript",
-		json: "json",
-		md: "markdown",
-		yml: "yaml",
-		yaml: "yaml",
-		toml: "toml",
-		css: "css",
-		html: "html",
-		sh: "bash",
-		bash: "bash",
-		py: "python",
-		rs: "rust",
-		go: "go",
-		sql: "sql",
-		svg: "svg",
-		xml: "xml",
-		graphql: "graphql",
-	};
-	return map[ext] ?? "";
-}
-
-// ---------------------------------------------------------------------------
 // Argument formatting
 // ---------------------------------------------------------------------------
 

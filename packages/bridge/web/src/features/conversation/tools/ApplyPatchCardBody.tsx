@@ -14,8 +14,9 @@ import { memo } from "react";
 import { applyPatchInput, displayPath, parseApplyPatch } from "../../../../../src/viewmodel/index.ts";
 import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
+import { highlightLanguageFor } from "../../../render/lang.ts";
 import styles from "../actions.module.css";
-import { type ActionDetailsProps, extToLang, useCwd } from "./args.ts";
+import { type ActionDetailsProps, useCwd } from "./args.ts";
 import { type DiffSectionSpec, DiffSections } from "./DiffSections.tsx";
 
 export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resultText }: ActionDetailsProps) {
@@ -44,7 +45,7 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 				sections.push({
 					title: `Add ${rel(section.filePath)}`,
 					viewPath: section.filePath,
-					lang: extToLang(section.filePath),
+					lang: highlightLanguageFor(section.filePath),
 					oldText: "",
 					newText: section.content,
 				});
@@ -65,7 +66,7 @@ export const ApplyPatchCardBody = memo(function ApplyPatchCardBody({ args, resul
 					section.movePath !== null
 						? `Update ${rel(section.filePath)} → ${rel(section.movePath)}`
 						: `Update ${rel(section.filePath)}`;
-				const lang = extToLang(section.movePath ?? section.filePath);
+				const lang = highlightLanguageFor(section.movePath ?? section.filePath);
 				// A move's content lives at the target afterwards — the viewer
 				// shows current disk state, so it opens the move target.
 				const viewPath = section.movePath ?? section.filePath;

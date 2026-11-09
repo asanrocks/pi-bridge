@@ -875,7 +875,12 @@ path at the read state, and each review section fetches that file's content at
 each end of the pair and diffs the two snapshots in the client with the shared
 diff-line spec — so syntax highlighting, word-level inline diffs, the dual
 old/new gutter, and context elision are the same spec the edit and apply_patch
-cards use. There is no unified-patch parser. A fetch that fails, or a snapshot
+cards use. The language comes from the path in every one of those surfaces —
+`render/lang.ts` maps a filename or its longest known extension to a Shiki id
+through one table generated from GitHub Linguist's `languages.yml`, filtered to
+the grammars this client can load (a test pins every mapped id to that set).
+A path the table does not know renders as plain text rather than a guessed
+grammar. There is no unified-patch parser. A fetch that fails, or a snapshot
 the host truncated (which would diff as a phantom tail), says so instead of
 rendering a wrong diff. Untracked files are listed by the directive (without
 counts) and always fetch their content on expand; when the host capped the

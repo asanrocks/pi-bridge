@@ -33,7 +33,7 @@ import { useStore } from "../../infra/state/store.tsx";
 import { useViewModel } from "../../infra/state/useViewModel.ts";
 import { FileContent } from "../../render/FileContent.tsx";
 import { CaretIcon, ChevronDownIcon, ChevronUpIcon, CloseIcon } from "../../render/icons.tsx";
-import { extToLang } from "../conversation/tools/args.ts";
+import { highlightLanguageFor } from "../../render/lang.ts";
 import { DiffSections } from "../conversation/tools/DiffSections.tsx";
 import { browserHeading } from "./browserHeading.ts";
 import { type SectionRect, sectionKey, visibleSectionKey } from "./browserSections.ts";
@@ -964,7 +964,7 @@ function FilePaneView({
 							<FileContent
 								path={pane.path}
 								content={pane.content}
-								language={extToLang(pane.path)}
+								language={highlightLanguageFor(pane.path)}
 								truncated={pane.truncated}
 								lineNumbers
 								{...(line === undefined ? {} : { highlightLine: line })}
@@ -997,7 +997,9 @@ const DiffBody = memo(function DiffBody({
 	if (payload.oldText === payload.newText) return <div className={styles.note}>No content changes.</div>;
 	return (
 		<DiffSections
-			sections={[{ title: null, lang: extToLang(path), oldText: payload.oldText, newText: payload.newText }]}
+			sections={[
+				{ title: null, lang: highlightLanguageFor(path), oldText: payload.oldText, newText: payload.newText },
+			]}
 			lineNumbers
 			contextLines={contextLines}
 			wrap={wrap}
@@ -1096,7 +1098,7 @@ const FullFile = memo(function FullFile({ fileView }: { fileView: FileView }) {
 			<FileContent
 				path={fileView.path}
 				content={fileView.content}
-				language={extToLang(fileView.path)}
+				language={highlightLanguageFor(fileView.path)}
 				truncated={fileView.truncated}
 				lineNumbers
 			/>

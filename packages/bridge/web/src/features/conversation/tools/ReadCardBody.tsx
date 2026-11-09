@@ -7,10 +7,11 @@
 import { memo, useMemo } from "react";
 import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
+import { highlightLanguageFor } from "../../../render/lang.ts";
 import { ResultImages } from "../../../render/ResultImages.tsx";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
 import styles from "../actions.module.css";
-import { type ActionDetailsProps, extToLang } from "./args.ts";
+import type { ActionDetailsProps } from "./args.ts";
 import { parseReadNotice } from "./resultText.ts";
 
 // Render as soon as `path` or `resultText` is available. `path` streams as
@@ -25,7 +26,7 @@ export const ReadCardBody = memo(function ReadCardBody({ args, resultText, resul
 	const parsed = useMemo(() => parseReadNotice(resultText ?? ""), [resultText]);
 	const path = args?.path as string | undefined;
 	if (path === undefined && !resultText && resultImages.length === 0) return null;
-	const lang = path ? extToLang(path) : "";
+	const lang = path ? highlightLanguageFor(path) : "";
 	const renderProse =
 		markdown && path !== undefined && path.endsWith(".md") && parsed.content !== "" && resultText !== null;
 	return (

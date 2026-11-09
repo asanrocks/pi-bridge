@@ -7,9 +7,10 @@
 import { memo } from "react";
 import { useStore } from "../../../infra/state/store.tsx";
 import { CodeSnippet } from "../../../render/CodeSnippet.tsx";
+import { highlightLanguageFor } from "../../../render/lang.ts";
 import { AppMarkdown } from "../../viewer/AppMarkdown.tsx";
 import styles from "../actions.module.css";
-import { type ActionDetailsProps, extToLang } from "./args.ts";
+import type { ActionDetailsProps } from "./args.ts";
 
 // Render as soon as either `path` or `content` is streaming in. The LLM may
 // emit the (large) content before the `path` key; gating the whole body on
@@ -22,7 +23,7 @@ export const WriteCardBody = memo(function WriteCardBody({ args, resultText }: A
 	const path = args?.path as string | undefined;
 	const content = args?.content as string | undefined;
 	if (path === undefined && (content === undefined || content === null)) return null;
-	const lang = path ? extToLang(path) : "";
+	const lang = path ? highlightLanguageFor(path) : "";
 	const renderProse = markdown && path !== undefined && path.endsWith(".md");
 	return (
 		<div className={styles.cardBody}>

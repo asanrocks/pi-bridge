@@ -30,7 +30,9 @@ The web source is divided by responsibility:
   unread counting, media queries, notification permission, clipboard writes,
   secure-context guidance, image preparation, and the one OS-notification path
   (`userNotification.ts`).
-- `render/` contains shared rendering primitives, Markdown, code highlighting,
+- `render/` contains shared rendering primitives, Markdown, code highlighting
+  (`shiki.ts` plus `lang.ts`, whose path-to-language table is generated from
+  GitHub Linguist and filtered to the grammars the bundle can load),
   icons, the centered `Dialog` portal surface, the anchored `Popover` panel that
   every popover, picker, and menu composes, shared resize/result helpers, and the
   side-pane shell (`PaneShell` +

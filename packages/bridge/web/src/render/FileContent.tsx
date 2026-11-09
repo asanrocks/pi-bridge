@@ -4,9 +4,10 @@
 // toggles. The browser's file pane and its review sections' whole-file view render
 // through it, so a file looks the same wherever it is opened.
 //
-// `language` is passed in rather than derived: this module lives in render/
-// and must not reach into a feature for `extToLang`; `path` only decides
-// markdown-versus-code.
+// `language` is passed in rather than derived here: the decision belongs to
+// `./lang.ts` (`highlightLanguageFor`, one table shared with the tool cards and
+// the review sections) and this module only decides markdown-versus-code from
+// `path`.
 // ============================================================================
 
 import { useStore } from "../infra/state/store.tsx";
