@@ -2,11 +2,16 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/compat
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import { isEntrySealed, type PatchOp } from "../../src/core/index.ts";
+import { type Document, isEntrySealed, type MessageEntry, type PatchOp } from "../../src/core/index.ts";
 import type { BridgeHarness, MirrorHarness } from "./harness.ts";
 import { assertMirrorInSync, createBridgeHarness, createMirrorHarness } from "./harness.ts";
 
 const FIXTURE_URL = new URL("../../../coding-agent/test/fixtures/before-compaction.jsonl", import.meta.url);
+
+// Enough chunks that a stream is still in flight after its first delta lands,
+// however fast the provider paces: the abort and steer assertions need a turn
+// in progress, not a particular wall-clock delay.
+const LONG_STREAM = "processing a longer turn that keeps the stream open across several chunks of text ".repeat(2);
 
 // ---------------------------------------------------------------------------
 // Test tools
@@ -70,6 +75,23 @@ interface TrackedMirror {
 	/** All ops across all patches. */
 	ops: PatchOp[];
 	cleanup: () => void;
+}
+
+/** Poll until `cond` holds; the stream is a macrotask cadence, so there is no promise to await. */
+async function waitFor(cond: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!cond()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+		await new Promise((r) => setTimeout(r, 5));
+	}
+}
+
+/** Text projected for assistant messages so far. */
+function streamedAssistantText(doc: Document): string {
+	return Object.values(doc.entries)
+		.filter((entry): entry is MessageEntry => entry.kind === "message" && entry.role === "assistant")
+		.map((entry) => entry.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""))
+		.join("");
 }
 
 function createTrackedMirror(bh: BridgeHarness): TrackedMirror {
@@ -229,14 +251,17 @@ describe("streaming edge cases", () => {
 		const harness = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
 			responses: [fauxAssistantMessage("This is a longer response that streams across multiple macrotasks.")],
-			tokensPerSecond: 1,
+			tokensPerSecond: 50,
 		});
 		harnesses.push(harness);
 		const tm = createTrackedMirror(harness);
 
+		const before = streamedAssistantText(tm.mh.manager.document).length;
 		const promptPromise = tm.mh.manager.prompt("abort test");
 
-		await new Promise((r) => setTimeout(r, 200));
+		// A delta has been committed and the stream has not ended: that is
+		// `mid-stream` regardless of how fast the provider paces.
+		await waitFor(() => streamedAssistantText(tm.mh.manager.document).length > before, "the first streamed delta");
 		await tm.mh.manager.abort();
 		await promptPromise;
 
@@ -361,18 +386,19 @@ describe("streaming edge cases", () => {
 	it("steered user messages arrive as committed entries in the client mirror", async () => {
 		const harness = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
-			responses: [fauxAssistantMessage("processing...")],
-			tokensPerSecond: 1,
+			responses: [fauxAssistantMessage(LONG_STREAM)],
+			tokensPerSecond: 50,
 			settings: { steeringMode: "all" },
 		});
 		harnesses.push(harness);
 		const tm = createTrackedMirror(harness);
 
+		const before = streamedAssistantText(tm.mh.manager.document).length;
 		const turnPromise = tm.mh.manager.prompt("first message");
 
-		await new Promise((r) => setTimeout(r, 50));
+		await waitFor(() => streamedAssistantText(tm.mh.manager.document).length > before, "the first streamed delta");
 		const s1 = tm.mh.manager.prompt("steer msg 1");
-		await new Promise((r) => setTimeout(r, 50));
+		await s1;
 		const s2 = tm.mh.manager.prompt("steer msg 2");
 
 		await Promise.all([turnPromise, s1, s2]);
@@ -395,15 +421,16 @@ describe("streaming edge cases", () => {
 	it("pending steers surface in status and discardSteer clears them", async () => {
 		const harness = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
-			responses: [fauxAssistantMessage("processing...")],
-			tokensPerSecond: 1,
+			responses: [fauxAssistantMessage(LONG_STREAM)],
+			tokensPerSecond: 50,
 			settings: { steeringMode: "all" },
 		});
 		harnesses.push(harness);
 		const tm = createTrackedMirror(harness);
 
+		const before = streamedAssistantText(tm.mh.manager.document).length;
 		const turnPromise = tm.mh.manager.prompt("first message");
-		await new Promise((r) => setTimeout(r, 50));
+		await waitFor(() => streamedAssistantText(tm.mh.manager.document).length > before, "the first streamed delta");
 
 		// Queue a steer mid-stream. queue_update fires synchronously during
 		// session.prompt, so the /status/pendingSteer patch reaches the mirror
@@ -437,15 +464,16 @@ describe("streaming edge cases", () => {
 	it("abort stops the assistant and clears the steer queue (no auto-delivery)", async () => {
 		const harness = await createBridgeHarness({
 			fixturePath: FIXTURE_URL.pathname,
-			responses: [fauxAssistantMessage("processing...")],
-			tokensPerSecond: 1,
+			responses: [fauxAssistantMessage(LONG_STREAM)],
+			tokensPerSecond: 50,
 			settings: { steeringMode: "all" },
 		});
 		harnesses.push(harness);
 		const tm = createTrackedMirror(harness);
 
+		const before = streamedAssistantText(tm.mh.manager.document).length;
 		const turnPromise = tm.mh.manager.prompt("first message");
-		await new Promise((r) => setTimeout(r, 50));
+		await waitFor(() => streamedAssistantText(tm.mh.manager.document).length > before, "the first streamed delta");
 
 		// Queue a steer mid-stream.
 		await tm.mh.manager.prompt("steer msg");

@@ -105,6 +105,12 @@ jobs:
           npm run test:scripts
           npm run test --if-present "${args[@]}"
 
+      # The bridge suite reuses one module graph per worker (packages/bridge/vitest.config.ts),
+      # so shuffled file order is what catches a file that leaves module state behind.
+      - name: Test bridge in shuffled file order
+        if: matrix.name == 'other'
+        run: npm run test:shuffle --workspace packages/bridge
+
   mcp-conformance:
     runs-on: ubuntu-latest
     steps:

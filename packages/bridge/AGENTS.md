@@ -48,6 +48,9 @@ Then read the docs for the area being changed:
   access key; do not add a browser-side minting path or an HTTP route for it.
 - Use the glossary's vocabulary. Add new coined terms there first, respect
   its domain-composition rule, and do not reintroduce retired words.
+- A test file that mocks modules, stubs globals, uses fake timers, or writes
+  process env/cwd must be listed in `ISOLATED_TESTS` in `vitest.config.ts`; the
+  suite otherwise shares one module graph per worker.
 
 ## Documentation ownership
 
@@ -83,6 +86,8 @@ From `packages/bridge/`:
 | Purpose | Command |
 | --- | --- |
 | Focused test | `node ../../node_modules/vitest/dist/cli.js --run test/suite/<name>.test.ts` |
+| Shared-module-graph order canary | `npm run test:shuffle` |
+| Faster local reruns (disk transform cache, `node_modules/.experimental-vitest-cache`) | add `--experimental.fsModuleCache` to the focused-test command |
 | Web types only | `node ../../node_modules/.bin/tsc --noEmit -p web/tsconfig.json` |
 | Bridge suite, including web tests (when authorized) | `npm test` |
 | Core/host/CLI build (when authorized) | `npm run build` |

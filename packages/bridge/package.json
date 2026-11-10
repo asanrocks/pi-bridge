@@ -35,6 +35,7 @@
 		"dev": "npm run build && npm run build:web:dev && node ./dist/cli.js --port 33339",
 		"build:binary": "npm run build && npm run build:web && node scripts/bundle-single.mjs",
 		"test": "vitest --run",
+		"test:shuffle": "vitest --run --sequence.shuffle.files --project=shared",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
