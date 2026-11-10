@@ -406,6 +406,12 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 				}),
 			abort: (target) => request<void>({ kind: "abort", target }),
 			discardSteer: (target) => request<void>({ kind: "discardSteer", target }),
+			compact: (target, customInstructions) =>
+				request<{ tokensBefore: number; estimatedTokensAfter?: number }>({
+					kind: "compact",
+					target,
+					customInstructions,
+				}),
 			renameSession: (target, name) => request<void>({ kind: "renameSession", target, name }),
 			setLabel: (target, entryId, label) => request<void>({ kind: "setLabel", target, entryId, label }),
 			navigate: (target, entryId) => request<void>({ kind: "navigate", target, entryId }),

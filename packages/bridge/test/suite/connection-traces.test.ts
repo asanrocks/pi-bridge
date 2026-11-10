@@ -95,6 +95,7 @@ function traceManager(stem: string, sessionFile = `/proj/sessions/${stem}.jsonl`
 		executeBash: async () => {},
 		abort: async () => {},
 		discardSteer: async () => {},
+		compact: async () => ({ tokensBefore: 0, estimatedTokensAfter: 0 }),
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
 		renameSession: async () => {

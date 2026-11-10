@@ -198,6 +198,7 @@ function toCompactionEntry(entry: PiCompactionEntry): Entry {
 		summary: entry.summary,
 		firstKeptEntryId: entry.firstKeptEntryId,
 		tokensBefore: entry.tokensBefore,
+		usage: (entry.usage as unknown as Usage) ?? null,
 		details: jsonValue(entry.details),
 		fromHook: entry.fromHook ?? false,
 	};

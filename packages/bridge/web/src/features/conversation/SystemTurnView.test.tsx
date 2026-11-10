@@ -70,4 +70,29 @@ describe("SystemTurnView — unrecognized entry fallback", () => {
 		expect(html).not.toContain("read, write");
 		expect(html).not.toContain("Unrecognized");
 	});
+
+	test("renders a compaction boundary as a collapsed card naming its size", () => {
+		const html = render({
+			kind: "system",
+			type: "compaction",
+			entryId: "c1",
+			index: 0,
+			timestamp: "2024-01-01T00:00:00Z",
+			summary: "# Summary\n\n- earlier work",
+			tokensBefore: 120_000,
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.012 },
+			},
+		});
+		// Folded by default: the row is the boundary's size, not the summary
+		// prose (which would push the tail turn away).
+		expect(html).toContain("Context compacted · 120k tokens");
+		expect(html).toContain("Expand compaction summary");
+		expect(html).not.toContain("earlier work");
+	});
 });

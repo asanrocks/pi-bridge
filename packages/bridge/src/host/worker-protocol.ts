@@ -125,6 +125,12 @@ export type WorkerRequest =
 	  }
 	| { readonly id: string; readonly kind: "abort"; readonly target: SessionTarget }
 	| { readonly id: string; readonly kind: "discardSteer"; readonly target: SessionTarget }
+	| {
+			readonly id: string;
+			readonly kind: "compact";
+			readonly target: SessionTarget;
+			readonly customInstructions?: string;
+	  }
 	| { readonly id: string; readonly kind: "renameSession"; readonly target: SessionTarget; readonly name: string }
 	| {
 			readonly id: string;

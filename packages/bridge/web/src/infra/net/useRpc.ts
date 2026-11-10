@@ -112,6 +112,24 @@ export function useRpc() {
 
 	const discardSteer = useCallback(() => rpc(() => getGlobalClient()?.discardSteer(), "discard steer failed"), []);
 
+	/** Manual compaction. Unlike the generic wrapper this never toasts: the
+	 * composer owns the outcome, and its rule is that a press is answered by the
+	 * surface that made it. A failure is returned as an `ok: false` reply (pi's
+	 * reason, or the transport's) for an in-place line. */
+	const compact = useCallback(async (customInstructions?: string): Promise<RpcReply | undefined> => {
+		const client = getGlobalClient();
+		if (!client) return undefined;
+		try {
+			return await client.compact(customInstructions);
+		} catch (err) {
+			return {
+				id: "",
+				ok: false,
+				error: err instanceof Error ? err.message : String(err),
+			};
+		}
+	}, []);
+
 	const setPinnedModels = useCallback(
 		(models: PinnedModelSelection[]) => rpc(() => getGlobalClient()?.setPinnedModels(models), "pin model failed"),
 		[],
@@ -292,6 +310,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
+			compact,
 			setPinnedModels,
 			renameSession,
 			setLabel,
@@ -311,6 +330,7 @@ export function useRpc() {
 			prompt,
 			abort,
 			discardSteer,
+			compact,
 			setPinnedModels,
 			renameSession,
 			setLabel,

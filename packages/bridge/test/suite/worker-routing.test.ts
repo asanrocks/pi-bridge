@@ -85,6 +85,7 @@ function stubManager(sessionPath: string | undefined): StubManager {
 			calls.push("abort");
 		},
 		discardSteer: async () => {},
+		compact: async () => ({ tokensBefore: 0, estimatedTokensAfter: 0 }),
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
 		renameSession: async () => {},

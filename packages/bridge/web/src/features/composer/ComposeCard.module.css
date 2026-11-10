@@ -144,6 +144,62 @@
 .editHeaderLabel {
 }
 
+/* ── Compaction line (same slot as the edit header) ──────────────────────
+   The run is the composer's own status, like the edit header: the reader is
+   waiting on it here, and Stop (in the control row) is its cancel. The outcome
+   reuses the line for one sentence so a press is answered in place. */
+.compactHeader {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 6px 16px 0;
+	font-size: var(--fs-xs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: var(--tracking-caps);
+	color: var(--color-accent);
+}
+
+/* The outcome is a sentence, not a state: it keeps the line but drops the
+   all-caps state treatment. Failures wear the error hue; "cancelled" is a
+   neutral report, not a failure to correct. */
+.compactHeader[data-kind="done"] {
+	color: var(--color-success);
+	text-transform: none;
+	letter-spacing: normal;
+	font-weight: 500;
+}
+.compactHeader[data-kind="failed"] {
+	color: var(--color-error);
+	text-transform: none;
+	letter-spacing: normal;
+	font-weight: 500;
+}
+.compactHeader[data-kind="cancelled"] {
+	color: var(--color-muted-foreground);
+	text-transform: none;
+	letter-spacing: normal;
+	font-weight: 500;
+}
+
+.compactHeaderLabel {
+	flex-shrink: 0;
+}
+
+/* The instructions in flight: one line, clipped. They were the draft, so they
+   are content the reader wrote and should be recognizable, never reflowing the
+   header into a paragraph. */
+.compactHeaderDetail {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-transform: none;
+	letter-spacing: normal;
+	font-weight: 400;
+	color: var(--color-muted-foreground);
+}
+
 /* Cancel beside the edit header. A glyph, not the word: this card already draws
    "abandon what is in here" as `CloseIcon` twice — the pending steers and an
    attached image — so the word was the outlier in one surface. Square from the
@@ -577,6 +633,12 @@
 
 /* ── Context bar — session ledger ─────────────────────────────────────── */
 
+/* Track and fill are spans because the bar sits inside the disclosure button,
+   which may only hold phrasing content. The track is blockified as a flex item
+   of that button — its display is deliberately not stated here, where it would
+   outrank the narrow-viewport `display: none` above — while the fill needs it:
+   width and height on an inline box are ignored, and the bar would paint empty
+   at every value. */
 .composerContextBar {
 	width: 60px;
 	height: 6px;
@@ -587,17 +649,30 @@
 }
 
 .composerContextBarFill {
+	display: block;
 	height: 100%;
 	background: var(--color-accent);
 	border-radius: var(--radius-sm);
 	transition: width var(--dur-slow) ease;
 }
 
+/* The context disclosure: the percentage and the bar it explains are one
+   control, so aiming at the meter opens the one action that changes it. Same
+   box as the cost ledger, chromeless at rest — a value disclosure, not a
+   button with a glyph (design.md). */
+.composerContextBtn {
+	composes: dim from "../../render/buttons.module.css";
+	composes: composerValueBtn;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Wide enough for a three-digit percentage, right-aligned: the bar keeps its
+   place as the number gains a digit, and the whole group stays one target. */
 .composerContextPct {
-	min-width: 24px;
-	/* Leading position in the control row (before the bar): right-aligned
-	   so the fixed-width pct does not shift the bar when the tens digit
-	   appears. */
+	min-width: 4ch;
 	text-align: right;
 }
 

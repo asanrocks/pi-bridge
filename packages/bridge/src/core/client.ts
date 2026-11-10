@@ -270,6 +270,19 @@ export class BridgeClient {
 		return this.call({ verb: "abort" });
 	}
 
+	/** Compact the context now (pi's manual `compact()`). Completion-style: the
+	 * reply arrives after the summary was appended, and carries pi's
+	 * `tokensBefore` / `estimatedTokensAfter`; failures are `ok: false` with pi's
+	 * reason ("Nothing to compact", "Already compacted", "Compaction
+	 * cancelled"). `customInstructions` focuses the summary. */
+	compact(customInstructions?: string): Promise<RpcReply> {
+		return this.call(
+			customInstructions !== undefined && customInstructions !== ""
+				? { verb: "compact", customInstructions }
+				: { verb: "compact" },
+		);
+	}
+
 	discardSteer(): Promise<RpcReply> {
 		return this.call({ verb: "discardSteer" });
 	}

@@ -140,6 +140,11 @@ export interface CompactionEntry extends EntryBase {
 	summary: string;
 	firstKeptEntryId: string;
 	tokensBefore: number;
+	/** Usage of the LLM request that produced the summary, when pi recorded it.
+	 * The session ledger counts it: a summary is a billed request. It carries no
+	 * provider/model identity (pi's entry does not), so it joins the totals but
+	 * not the per-model breakdown. */
+	usage: Usage | null;
 	details: JsonValue | null;
 	fromHook: boolean;
 }
@@ -251,11 +256,18 @@ export interface Stats {
 }
 
 export interface ContextUsage {
-	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
+	/** Context tokens, or null if no model window is known. */
 	tokens: number | null;
 	contextWindow: number;
-	/** Context usage as percentage of context window, or null if tokens is unknown. */
+	/** Context usage as a percentage of the window, or null if tokens is null. */
 	percent: number | null;
+	/** True when `tokens`/`percent` are the host's projection estimate rather
+	 * than usage a provider reported. pi answers "unknown" after a compaction
+	 * (its last trusted usage predates the boundary) and reports the projection
+	 * estimate only as the run's result; the host publishes that estimate here
+	 * so the readout keeps a number, and the next settled response clears the
+	 * flag with measured usage. */
+	estimated: boolean;
 }
 
 /** Broken-tail recovery kinds (ADR 16). `failedTurn`: the tail run ended in
@@ -514,6 +526,11 @@ export const MAX_IMAGE_BASE64_LENGTH = 4.5 * 1024 * 1024;
  * pinned list is a curated shortlist; the cap only bounds a malformed one. */
 export const MAX_PINNED_MODELS = 64;
 
+/** Max characters of custom compaction instructions (wire limit, enforced
+ * host-side). Instructions focus the summary; the cap only bounds a malformed
+ * request. */
+export const MAX_COMPACT_INSTRUCTIONS = 8_000;
+
 export interface PromptRequest {
 	verb: "prompt";
 	text: string;
@@ -533,6 +550,16 @@ export interface PromptRequest {
 
 export interface AbortRequest {
 	verb: "abort";
+}
+
+/** Compact the attached Session's context now (pi's manual `compact()`), the
+ * `/compact [instructions]` equivalent. Completion-style: the reply arrives
+ * after the summary was appended (or the attempt failed), and `isCompacting`
+ * patches describe the run in the meantime. `customInstructions` focuses the
+ * summary; the host trims it and treats an empty string as absent. */
+export interface CompactRequest {
+	verb: "compact";
+	customInstructions?: string;
 }
 
 /** Clear all pending steer/follow-up messages from the session queue. */
@@ -932,6 +959,7 @@ export interface TrashSessionRequest {
 export type RpcRequestBody =
 	| PromptRequest
 	| AbortRequest
+	| CompactRequest
 	| DiscardSteerRequest
 	| SetPinnedModelsRequest
 	| RenameSessionRequest

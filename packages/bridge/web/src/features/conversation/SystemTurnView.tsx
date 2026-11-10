@@ -14,6 +14,7 @@ import { CodeSnippet } from "../../render/CodeSnippet.tsx";
 import { CaretIcon } from "../../render/icons.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
+import { formatCost, formatTokens } from "../composer/formatters.ts";
 import actionStyles from "./actions.module.css";
 import styles from "./turns.module.css";
 
@@ -97,9 +98,62 @@ const SystemPromptCard = memo(function SystemPromptCard({ turn, isDimmed }: { tu
 	);
 });
 
+/** A compaction boundary as a folded card, mirroring the system-prompt card:
+ * the collapsed row is the boundary's size, and expanding reveals the summary
+ * pi wrote. Folded by default because the summary is model prose, not the
+ * conversation: a long one must not push the tail turn off screen. */
+const CompactionCard = memo(function CompactionCard({ turn, isDimmed }: { turn: SystemTurn; isDimmed: boolean }) {
+	const [expanded, setExpanded] = useState(false);
+	const now = useNow();
+	const tokens = turn.tokensBefore !== undefined ? formatTokens(turn.tokensBefore) : null;
+	const summaryLine = tokens !== null ? `Context compacted · ${tokens} tokens` : "Context compacted";
+	const ts = turn.timestamp !== undefined ? formatWhen(turn.timestamp, now) : "";
+	const fullTs = turn.timestamp !== undefined ? formatWhenFull(turn.timestamp) : "";
+	const cost = turn.usage !== undefined && turn.usage !== null ? formatCost(turn.usage.cost.total) : null;
+	const headerLine = [tokens !== null ? `${tokens} tokens summarized` : null, cost, ts].filter(Boolean).join(" · ");
+	return (
+		<div className={`${actionStyles.action} ${isDimmed ? styles.msgDimmed : ""}`} data-kind="read">
+			<div className={actionStyles.actionHead}>
+				<button
+					type="button"
+					className={actionStyles.actionCollapsed}
+					onClick={() => setExpanded((v) => !v)}
+					aria-expanded={expanded}
+					aria-label={`${expanded ? "Collapse" : "Expand"} compaction summary`}
+				>
+					<span className={actionStyles.collapseTri}>
+						<CaretIcon size={12} direction={expanded ? "down" : "right"} />
+					</span>
+					<span className={actionStyles.actionSummary}>{summaryLine}</span>
+				</button>
+			</div>
+			{expanded && (
+				<div className={actionStyles.detailsCard}>
+					<div className={actionStyles.cardHeader} title={fullTs || undefined}>
+						{headerLine}
+					</div>
+					{turn.summary !== undefined && (
+						<div className={actionStyles.actionDetailsWrap}>
+							<div className={actionStyles.actionDetails}>
+								<div className={`${actionStyles.cardBody} ${styles.markdownContent}`}>
+									<Markdown text={turn.summary} mode="static" />
+								</div>
+							</div>
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	);
+});
+
 export const SystemTurnView = memo(function SystemTurnView({ turn }: { turn: SystemTurn }) {
 	const isDimmed = useStore(useCallback((s) => s.draft.kind === "edit" && turn.index >= s.draft.index, [turn.index]));
 	const models = useStore(useCallback((s) => s.models, []));
+
+	if (turn.type === "compaction") {
+		return <CompactionCard turn={turn} isDimmed={isDimmed} />;
+	}
 
 	if (turn.type === "model_switch" && turn.switchTo) {
 		const { provider, modelId, thinkingLevel } = turn.switchTo;

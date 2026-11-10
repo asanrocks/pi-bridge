@@ -352,6 +352,7 @@ describe("initial sync: subscription reset", () => {
 			executeBash: async () => {},
 			abort: async () => {},
 			discardSteer: async () => {},
+			compact: async () => ({ tokensBefore: 0, estimatedTokensAfter: 0 }),
 			setModel: async () => {},
 			setThinkingLevel: async () => {},
 			renameSession: async () => {},

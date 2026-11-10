@@ -513,8 +513,18 @@ The Manager API has these Session operations:
 - `executeBash(command, options?)` runs a user `!`/`!!` command in the Session
   cwd and records a `bashExecution` message. The host uses the persisted entry
   as the `user_bash_end` git-stamp boundary.
-- `abort` clears queued steering text before waiting for pi to stop.
+- `abort` clears queued steering text before waiting for pi to stop; it also
+  aborts a running compaction (pi's `abort()` aborts the controller), which is
+  what makes Stop the manual compaction's cancel.
 - `discardSteer` clears queued steering text without aborting the run.
+- `compact(customInstructions?)` runs pi's manual `/compact` path: it refuses
+  while a turn streams (pi aborts first) or a compaction runs, appends the
+  `CompactionEntry`, and recomputes `status.contextUsage` for it. pi answers
+  "unknown" after a boundary (the last trusted usage predates it), so the host
+  publishes the projection estimate — the same number as the run's
+  `estimatedTokensAfter` — and the next settled response replaces it with
+  measured usage. The verb reports pi's `tokensBefore`/`estimatedTokensAfter`,
+  and the entry carries the summary request's usage for the ledger.
 - `renameSession` and `navigate` update the
   Session and refresh or patch the Document as needed. `navigate` is the
   server-side mutation lock enforcement point: it throws while the Document
@@ -566,10 +576,14 @@ Work arrives in two admission classes, and the classes exist because the
 bridge must not add a competing turn lifecycle (architecture invariant 5:
 pi's event loop is serial and the bridge observes it):
 
-- **Mutations** (`renameSession`, `setLabel`, `navigate`) are serialized among
-  themselves — one at a time, in admission order — so concurrent commands
-  from different Connections get a deterministic order. Mutations are quick
-  and never await a turn, so the line cannot deadlock behind streaming.
+- **Mutations** (`compact`, `renameSession`, `setLabel`, `navigate`) are
+  serialized among themselves — one at a time, in admission order — so
+  concurrent commands from different Connections get a deterministic order.
+  `compact` is the long one (a summary request): it holds the line for its
+  duration, which is what keeps a navigate or a second compaction from
+  interleaving with the boundary. It cannot deadlock behind streaming because
+  it refuses while a turn is in flight (pi's manual compaction aborts the run
+  first), and a Stop is immediate work, so cancellation never queues.
 - **Immediate work** (turns — `prompt`, `recoverTurn` — plus `abort`, and
   reads — `pull`, `gitShow`'s cwd) runs without queueing: a Stop must reach a
   streaming turn rather than wait behind it, and a read that queued behind a
@@ -649,7 +663,7 @@ through a `VerbContext` exposing only the daemon seam, the attachment
 target-bound commands, and the reply path — no socket, no transition state,
 no runtime. Attached Session verbs are:
 `prompt` (which carries the send's model selection — there is no separate
-model verb), `abort`, `discardSteer`,
+model verb), `abort`, `discardSteer`, `compact`,
 `renameSession`, `setLabel`, `navigate`, and `recoverTurn`. They require an
 attachment and are issued through the target-bound commands — the two
 admission classes (immediate commands, serialized mutations) are the

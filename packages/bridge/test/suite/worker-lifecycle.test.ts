@@ -119,6 +119,7 @@ function fakeWorker(): FakeWorker {
 		prompt: notImplemented,
 		abort: notImplemented,
 		discardSteer: notImplemented,
+		compact: notImplemented,
 		renameSession: notImplemented,
 		setLabel: notImplemented,
 		navigate: notImplemented,

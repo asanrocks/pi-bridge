@@ -229,6 +229,36 @@ describe("sessionAccounting", () => {
 		expect(acc.byModel).toHaveLength(1);
 	});
 
+	it("counts a compaction summary's usage in the totals but not in a model row", () => {
+		// pi's CompactionEntry carries the summary request's usage without the
+		// model that produced it, so the ledger's total is complete while the
+		// per-model breakdown stays what can be attributed.
+		const acc = sessionAccounting({
+			c1: {
+				id: "c1",
+				parentId: null,
+				timestamp: "2024-01-01T00:00:00Z",
+				kind: "compaction",
+				summary: "sum",
+				firstKeptEntryId: "a1",
+				tokensBefore: 120_000,
+				usage: {
+					input: 4000,
+					output: 500,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 4500,
+					cost: { input: 0.02, output: 0.03, cacheRead: 0, cacheWrite: 0, total: 0.05 },
+				},
+				details: null,
+				fromHook: false,
+			} as unknown as Entry,
+		});
+		expect(acc.cost).toBeCloseTo(0.05);
+		expect(acc.requests).toBe(1);
+		expect(acc.byModel).toHaveLength(0);
+	});
+
 	it("ignores assistant entries without usage (provisional/error)", () => {
 		const acc = sessionAccounting({
 			a1: makeAssistantEntry("a1", { usage: undefined }),

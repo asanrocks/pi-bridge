@@ -10,9 +10,12 @@
 //   - navigation-invariant (browsing side branches doesn't change it),
 //   - consistent with pi-tui's session totals (summed billed tokens + cost).
 //
-// Only assistant message entries carry usage on the wire (the projection
-// drops tool/compaction usage, which real sessions don't populate anyway —
-// verified against fixtures: 0/448 tool results have usage).
+// Only assistant messages and compaction summaries carry usage on the wire
+// (the projection drops tool-result usage, which real sessions don't populate
+// anyway — verified against fixtures: 0/448 tool results have usage). A
+// summary's usage has no provider/model identity on pi's entry, so it joins
+// the session totals but not the per-model breakdown; the totals are the
+// complete billed figure, the breakdown is what can be attributed.
 //
 // Pure + browser-safe: no node:* imports, no DOM.
 // ============================================================================
@@ -64,8 +67,8 @@ export function sessionAccounting(
 	const byModel = new Map<string, ModelCostRow>();
 
 	for (const e of Object.values(entries)) {
-		if (e.kind !== "message" || !e.usage) continue;
-		const u = e.usage;
+		const u = e.kind === "message" ? e.usage : e.kind === "compaction" ? e.usage : null;
+		if (!u) continue;
 		const c = u.cost.total;
 		const ic = u.input;
 		const oc = u.output;
@@ -78,6 +81,10 @@ export function sessionAccounting(
 		cacheWrite += cw;
 		requests++;
 
+		// A summary is attributed to the totals only: pi's CompactionEntry
+		// carries usage without the model that produced it, so inventing a row
+		// would misreport which model to blame.
+		if (e.kind !== "message") continue;
 		const modelId = billingModelId(e, models);
 		const key = `${e.provider}/${modelId}`;
 		let row = byModel.get(key);

@@ -66,6 +66,7 @@ function gatedStub(sessionId: string, sessionFile: string, opts?: { holdDispose?
 		executeBash: async () => {},
 		abort: async () => {},
 		discardSteer: async () => {},
+		compact: async () => ({ tokensBefore: 0, estimatedTokensAfter: 0 }),
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
 		renameSession: async () => {},

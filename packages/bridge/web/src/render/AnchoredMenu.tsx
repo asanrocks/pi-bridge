@@ -54,6 +54,7 @@ export function AnchoredMenu({
 	items,
 	onClose,
 	align = "start",
+	placement = "below",
 	label,
 }: {
 	/** The trigger element: the menu is positioned from its box. */
@@ -62,6 +63,9 @@ export function AnchoredMenu({
 	onClose: () => void;
 	/** Which edge of the anchor the panel aligns to. */
 	align?: "start" | "end";
+	/** Which side it opens on. A host at the viewport bottom (the composer)
+	 * must open above, or the panel is clipped by the edge. */
+	placement?: "above" | "below";
 	/** The menu's accessible name — every host names its own action list. */
 	label: string;
 }) {
@@ -102,7 +106,15 @@ export function AnchoredMenu({
 	};
 
 	return (
-		<Popover anchor={anchor} onClose={onClose} align={align} role="menu" label={label} className={styles.menu}>
+		<Popover
+			anchor={anchor}
+			onClose={onClose}
+			align={align}
+			placement={placement}
+			role="menu"
+			label={label}
+			className={styles.menu}
+		>
 			{/* `role="none"`: the wrapper exists to own focus/arrow handling, not to
 			    stand between the menu and its items in the a11y tree. */}
 			<div role="none" ref={listRef} onKeyDown={rove}>

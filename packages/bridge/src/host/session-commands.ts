@@ -25,6 +25,10 @@ export interface SessionCommandSurface {
 	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	abort(): Promise<void>;
 	discardSteer(): Promise<void>;
+	/** Compact the context now; returns pi's token estimates. A serialized
+	 * mutation, not a turn: it refuses while a turn is in flight (pi's manual
+	 * compaction aborts first) and reports pi's reasons on failure. */
+	compact(customInstructions?: string): Promise<{ tokensBefore: number; estimatedTokensAfter?: number }>;
 	renameSession(name: string): Promise<void>;
 	setLabel(entryId: string, label: string): Promise<void>;
 	navigate(entryId: string | null): Promise<void>;
@@ -47,6 +51,7 @@ export function bindSessionCommands(target: SessionTarget, surface: SessionComma
 		prompt: (text, images, model, thinkingLevel) => surface.prompt(text, images, model, thinkingLevel),
 		abort: () => surface.abort(),
 		discardSteer: () => surface.discardSteer(),
+		compact: (customInstructions) => surface.compact(customInstructions),
 		renameSession: (name) => surface.renameSession(name),
 		setLabel: (entryId, label) => surface.setLabel(entryId, label),
 		navigate: (entryId) => surface.navigate(entryId),
@@ -67,6 +72,7 @@ export function bindWorkerCommands(
 		prompt: (text, images, model, thinkingLevel) => worker.prompt(target, text, images, model, thinkingLevel),
 		abort: () => worker.abort(target),
 		discardSteer: () => worker.discardSteer(target),
+		compact: (customInstructions) => worker.compact(target, customInstructions),
 		renameSession: (name) => worker.renameSession(target, name),
 		setLabel: (entryId, label) => worker.setLabel(target, entryId, label),
 		navigate: (entryId) => worker.navigate(target, entryId),

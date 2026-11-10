@@ -52,6 +52,7 @@ function fakeManager(overrides: Partial<Manager> = {}): Manager {
 		executeBash: async () => {},
 		abort: async () => {},
 		discardSteer: async () => {},
+		compact: async () => ({ tokensBefore: 0, estimatedTokensAfter: 0 }),
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
 		renameSession: async () => {},
@@ -131,6 +132,39 @@ describe("Connection + Daemon", () => {
 		});
 		expect((reply as Record<string, unknown>).ok).toBe(true);
 
+		serverWs.close();
+		clientWs.close();
+	});
+
+	// ── manual compaction ──────────────────────────────────────────────
+
+	it("runs a manual compaction and replies with the token estimates", async () => {
+		const bh = await createBridgeHarness({
+			fixturePath: FIXTURE_URL.pathname,
+			// A tiny budget forces a cut on the fixture; the summary text is scripted.
+			settings: { compaction: { enabled: false, keepRecentTokens: 1, reserveTokens: 1 } },
+			responses: [fauxAssistantMessage("earlier work")],
+		});
+		harnesses.push(bh);
+
+		const { serverWs, clientWs } = await createWsPair();
+		const frames = collectFrames(clientWs);
+		const conn = new Connection(serverWs, mockDaemonVerbs, null, false);
+		await attachTestManager(conn, bh.manager, mockSessionRef, null);
+		await waitForFrame(frames, (f) => (f as Record<string, unknown>).kind === "replace");
+
+		clientWs.send(JSON.stringify({ id: "c1", verb: "compact", customInstructions: "focus" }));
+
+		const reply = (await waitForFrame(frames, (f) => {
+			const r = f as Record<string, unknown>;
+			return r.id === "c1" && r.ok !== undefined;
+		})) as Record<string, unknown>;
+		expect(reply.ok).toBe(true);
+		expect(typeof reply.tokensBefore).toBe("number");
+
+		// The boundary arrived as document state, not only in the reply.
+		const compaction = Object.values(bh.manager.document.entries).find((entry) => entry.kind === "compaction");
+		expect(compaction?.kind).toBe("compaction");
 		serverWs.close();
 		clientWs.close();
 	});

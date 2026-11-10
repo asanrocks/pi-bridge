@@ -20,6 +20,7 @@ import type {
 	AsrCredential,
 	AsrCredentialsReply,
 	ClientMessage,
+	CompactRequest,
 	DirectoryListing,
 	GetDaemonInfoReply,
 	GitBaseRequest,
@@ -54,6 +55,7 @@ import type {
 	TrashSessionRequest,
 } from "../core/index.ts";
 import {
+	MAX_COMPACT_INSTRUCTIONS,
 	MAX_IMAGE_BASE64_LENGTH,
 	MAX_IMAGES_PER_MESSAGE,
 	MAX_PINNED_MODELS,
@@ -265,6 +267,27 @@ const sessionVerbs: Record<string, VerbHandler> = {
 		const commands = ctx.requireCommands();
 		await commands.discardSteer();
 		ctx.reply(msg.id, true);
+	},
+	compact: async (ctx, msg) => {
+		const commands = ctx.requireCommands();
+		const m = msg as unknown as CompactRequest;
+		if (m.customInstructions !== undefined && typeof m.customInstructions !== "string") {
+			throw new Error("Invalid `customInstructions`");
+		}
+		if (m.customInstructions !== undefined && m.customInstructions.length > MAX_COMPACT_INSTRUCTIONS) {
+			throw new Error("`customInstructions` is too long");
+		}
+		const instructions = m.customInstructions?.trim();
+		const result = await commands.compact(instructions === "" ? undefined : instructions);
+		// Completion-style, unlike `prompt`: the reply names what the summary
+		// replaced, so the composer can state the outcome in place. Effects (the
+		// CompactionEntry, the cleared `isCompacting`) arrive as patches first.
+		ctx.send({
+			id: msg.id,
+			ok: true,
+			tokensBefore: result.tokensBefore,
+			...(result.estimatedTokensAfter !== undefined ? { estimatedTokensAfter: result.estimatedTokensAfter } : {}),
+		});
 	},
 	renameSession: async (ctx, msg) => {
 		const commands = ctx.requireCommands();

@@ -685,6 +685,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// not a completion to announce.
 			withoutCompletion(target.projectId, target.stem, () => admissionFor(target).abort()),
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
+		compact: async (target, customInstructions) => {
+			const result = await admissionFor(target).compact(customInstructions);
+			// The CompactionEntry is an appended entry: the row's message count and
+			// last activity move, and the Project's cached history is stale.
+			refreshQueue("full", "user");
+			emitHistoryChanged(target.projectId);
+			return result;
+		},
 		renameSession: async (target, name) => {
 			await admissionFor(target).renameSession(name);
 			// The name is row content and history content alike.

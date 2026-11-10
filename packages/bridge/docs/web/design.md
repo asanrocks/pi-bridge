@@ -37,7 +37,19 @@ browse branches in History. A steerer can do the following:
   Session.
 - Abort a streaming turn with Stop. Stop also salvages queued steers into the
   compose draft before aborting, so they remain editable. Stop is shown while
-  streaming or compacting; compaction itself blocks Send.
+  streaming or compacting; during a compaction it cancels the summary (pi's
+  `abort()` aborts the compaction controller too).
+- Compact the context manually from the compose dock: the context readout —
+  percentage and bar, one control — is a value disclosure that opens a
+  one-item action menu (`Compact context`, opening above because the dock
+  sits at the viewport bottom), and the draft in the composer is the summary's
+  custom instructions, like `/compact <text>`.
+  The draft is consumed at the trigger (the header shows it), the field is
+  locked for the run, and a failed or cancelled run puts the draft back. The
+  outcome is stated in place — `Context compacted · 120k → ~14k tokens`, or
+  pi's reason ("Nothing to compact (session too small)", "Already
+  compacted", "Compaction cancelled"). Auto-compaction is pi's setting (on by
+  default) and has no bridge toggle.
 - Rename the current Session by clicking the topbar title, pressing Enter to
   save, or Escape to cancel.
 - Choose a model and thinking level from the model picker. Model selection is
@@ -202,9 +214,13 @@ browse branches in History. A steerer can do the following:
 
 The UI distinguishes three busy cases. Streaming permits steering and
 Session switching, shows Stop, and drives live conversation updates.
-Compacting shows Stop but disables Send and edit; browsing stays available
-through peek. Disconnected state makes Send, attachments, and model selection
-unavailable; drafts remain local and are kept for retry.
+Compacting shows a header in the edit-header slot naming the run ("Compacting
+context…" with the instructions in flight, or "Auto-compacting…"), keeps Stop
+(its cancellation), and disables Send and edit; browsing stays available
+through peek. The header also carries the outcome for one sentence after the
+run, so a press is answered in the place it was made. Disconnected state makes
+Send, attachments, and model selection unavailable; drafts remain local and
+are kept for retry.
 
 ## Shell Layout
 
@@ -667,15 +683,34 @@ when disconnected, empty, compacting, or already committing, but is enabled
 during streaming to queue a steer. Model and thinking selection are separate
 from Send and can be changed while connected. Send and Stop are the row's only
 filled controls and the client's only two; every other control in the row is
-chromeless — the glyph-only ones compose `ghost` or `dim`, and the model and
-cost readouts are value disclosures: their words are the whole control, with no
+chromeless — the glyph-only ones compose `ghost` or `dim`, and the context,
+model, and cost readouts are value disclosures: their words are the whole
+control (the context one also carries the bar its number explains), with no
 caret beside them, because a text control carries no glyph (see
 [Iconography and control surfaces](#iconography-and-control-surfaces)).
-The two readouts share one box, `.composerValueBtn`: 28px, the same step as the
+The readouts share one box, `.composerValueBtn`: 28px, the same step as the
 attach and microphone squares, holding `--fs-xs` words and nothing else — so
 Send and Stop at 32 are the row's only boxes of their own size. On a coarse
 pointer that box keeps its 28px and a transparent overlay of the row's own gap carries
 the target to 36, the rule the chip category follows.
+
+The context readout — the percentage and the bar it explains — is also the
+compaction disclosure, because it is the number compaction changes. It stays a
+number across a compaction: pi reports the window unknown until a response
+settles after the boundary (its last trusted usage predates it), so the daemon
+publishes the projection estimate the summary produced instead of a blank. Its
+menu has one item, `Compact context`, whose detail line carries the state: the
+draft it will use as instructions, the current token count, or why the action
+is unavailable (a running turn, a running compaction, disconnected, peeking,
+editing). A disabled item stays focusable so touch readers get the reason. That
+estimate is marked, never passed off as a measurement: the readout prefixes it
+with `~`, the disclosure's detail line appends `, estimated`, the accessible
+name says "estimated until the next response", and the next settled response
+clears the mark with measured usage. A bare `?` remains only for a Session
+with no model window to measure against. Compaction never adds a filled
+control: Send and Stop remain the row's only two. The manual run's header
+lives in the edit-header slot above the textarea, and the auto-compaction run
+uses it too, so a long summary is never an unexplained silence.
 
 When the tail turn is broken — it ended in an error after retries were
 exhausted, was stopped (a user Stop or a session close mid-run, which leave
@@ -972,8 +1007,11 @@ clipping a value when the essential fields cannot fit one line.
   rule in [Styling invariants](#styling-invariants)). Streaming text uses the
   streaming Markdown mode and a cursor; provider errors, aborts, and
   output-length stops render beneath the content.
-- **System turns** render compaction and branch summaries as a divider plus
-  Markdown summary. Model changes render as one divider line naming the new
+- **System turns** render compaction boundaries as folded read-style cards:
+  a tinted collapsible row (`Context compacted · 120k tokens`) whose details
+  card carries the summary cost, the time, and Markdown summary. Branch
+  summaries keep the divider plus Markdown summary. Model changes render as
+  one divider line naming the new
   model and thinking level. A system-prompt diff renders as a read-style card:
   a tinted collapsible row named `System prompt update`, expanding to a details
   card with the changed sections and the prompt text (pulled lazily) highlighted

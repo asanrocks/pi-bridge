@@ -622,7 +622,22 @@ describe("cross-entry merge", () => {
 describe("system turns", () => {
 	it("compaction entries produce SystemTurn with summary", () => {
 		const doc = emptyDoc();
-		appendEntry(doc, makeEntry("c1", null, "2024-01-01T00:00:00Z", "compaction", { summary: "Compacted context" }));
+		const usage = {
+			input: 10,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 15,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+		};
+		appendEntry(
+			doc,
+			makeEntry("c1", null, "2024-01-01T00:00:00Z", "compaction", {
+				summary: "Compacted context",
+				tokensBefore: 120_000,
+				usage,
+			}),
+		);
 
 		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1);
@@ -631,6 +646,10 @@ describe("system turns", () => {
 		if (st.kind === "system") {
 			expect(st.type).toBe("compaction");
 			expect(st.summary).toBe("Compacted context");
+			// The folded card names the boundary's size, its cost, and when it ran.
+			expect(st.tokensBefore).toBe(120_000);
+			expect(st.usage).toEqual(usage);
+			expect(st.timestamp).toBe("2024-01-01T00:00:00Z");
 		}
 	});
 

@@ -55,7 +55,11 @@ describe("viewModelCacheKey", () => {
 		expect(viewModelCacheKey(doc({ isStreaming: true }), "stem", 0)).not.toBe(base);
 		expect(viewModelCacheKey(doc({ isCompacting: true }), "stem", 0)).not.toBe(base);
 		expect(
-			viewModelCacheKey(doc({ contextUsage: { tokens: 100, contextWindow: 240, percent: 42 } }), "stem", 0),
+			viewModelCacheKey(
+				doc({ contextUsage: { tokens: 100, contextWindow: 240, percent: 42, estimated: false } }),
+				"stem",
+				0,
+			),
 		).not.toBe(base);
 	});
 

@@ -7,6 +7,7 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
+	estimateProjectedContextTokens,
 	getAgentDir,
 	getDefaultSessionDir,
 	ModelRuntime,
@@ -42,19 +43,31 @@ import { resolveActivity, type SessionActivity, type SessionPhase } from "./proc
 // Helpers
 // ============================================================================
 
-/** Convert pi's ContextUsage to the bridge's ContextUsage type. */
-function toBridgeContextUsage(pi: PiContextUsage | undefined): ContextUsage | null {
+/** Convert pi's ContextUsage to the bridge's ContextUsage type.
+ *
+ * pi reports `tokens: null` after a compaction: the last trusted assistant
+ * usage predates the boundary, and pi will not present a pre-boundary
+ * measurement as the current context. The projection still has a size, and it
+ * is exactly what the summary produced (pi's own `estimatedTokensAfter` for
+ * the run), so the readout shows that projection estimate — the same estimate
+ * pi computes for the percent in every other case — marked `estimated` rather
+ * than a question mark until the next response. The next settled assistant
+ * replaces it with measured usage and clears the marker. */
+function toBridgeContextUsage(pi: PiContextUsage | undefined, session: AgentSession): ContextUsage | null {
 	if (!pi) return null;
-	return {
-		tokens: pi.tokens,
-		contextWindow: pi.contextWindow,
-		percent: pi.percent,
-	};
+	if (pi.tokens !== null) {
+		return { tokens: pi.tokens, contextWindow: pi.contextWindow, percent: pi.percent, estimated: false };
+	}
+	const tokens = estimateProjectedContextTokens(
+		session.sessionManager.buildSessionProjection(),
+		session.sessionManager.getBranch(),
+	).tokens;
+	return { tokens, contextWindow: pi.contextWindow, percent: (tokens / pi.contextWindow) * 100, estimated: true };
 }
 
-/** Get context usage from session, return it (or null) for inclusion in ReconcileOptions. */
-function getContextUsageOption(session: AgentSession | undefined): ContextUsage | null | undefined {
-	return toBridgeContextUsage(session?.getContextUsage());
+/** The session's context usage, or null when there is no model window to measure against. */
+function getContextUsageOption(session: AgentSession): ContextUsage | null {
+	return toBridgeContextUsage(session.getContextUsage(), session);
 }
 
 /** The repair per recovery kind (ADR 16): whether recovery branches past
@@ -184,6 +197,13 @@ export interface Manager {
 	abort(): Promise<void>;
 	/** Clear all pending steer/follow-up messages from the session queue. */
 	discardSteer(): Promise<void>;
+	/** Compact the context now (pi's manual `compact()`), focusing the summary
+	 * with optional custom instructions. Refuses while a turn is in flight: pi's
+	 * manual compaction aborts the run first, which would silently kill a turn
+	 * the client has a Stop for. Runs on the serialized mutation line, so a
+	 * second compaction and a navigate/label cannot interleave with it. Returns
+	 * pi's token estimates for the settled-state line. */
+	compact(customInstructions?: string): Promise<{ tokensBefore: number; estimatedTokensAfter?: number }>;
 	/** Apply a model selection to pi's session (recorded as a `model_change`,
 	 * level re-derived by pi for the switch). Not a wire verb: the prompt
 	 * carries and `newSession`'s pre-session choices are the callers. */
@@ -480,7 +500,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// sent by addConnection will include the value.
 	{
 		const cu = getContextUsageOption(session);
-		if (cu !== undefined) {
+		if (cu !== null) {
 			state.document = setAtPath(state.document, "/status/contextUsage", cu as unknown as JsonValue);
 		}
 	}
@@ -544,7 +564,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		}
 		if (options.settle === true || options.usage === true) {
 			const cu = getContextUsageOption(session);
-			if (cu !== undefined && JSON.stringify(cu) !== JSON.stringify(state.document.status.contextUsage)) {
+			if (JSON.stringify(cu) !== JSON.stringify(state.document.status.contextUsage)) {
 				state.document = setAtPath(state.document, "/status/contextUsage", cu as unknown as JsonValue);
 				ops.push({ op: "replace", path: "/status/contextUsage", value: cu as unknown as JsonValue });
 			}
@@ -754,6 +774,28 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// resolves, so the patch push lands ahead of the RPC reply
 			// (effects-via-push, §7.13).
 			session.clearQueue();
+		},
+
+		async compact(customInstructions?: string) {
+			// pi's compact() begins with `await this.abort()`: admitting one during
+			// a turn would kill the run under the client's back, bypassing Stop's
+			// steer salvage. The client gates on the same state; the daemon is the
+			// enforcement point for second tabs and raw RPC. A recovery
+			// continuation (ADR 16) runs outside pi's streaming flag, so it is
+			// checked separately.
+			if (state.document.status.isStreaming || recoveryRun !== null) {
+				throw new Error("Cannot compact while a turn is running");
+			}
+			if (state.document.status.isCompacting) {
+				throw new Error("Compaction already in progress");
+			}
+			const result = await session.compact(customInstructions);
+			// pi emitted compaction_end (isCompacting false) and appended the
+			// CompactionEntry, which the event path installed. Sample usage at this
+			// boundary: post-compaction it is unknown until the next response, so
+			// the readout must leave its pre-compaction number rather than keep it.
+			tryReconcile();
+			return { tokensBefore: result.tokensBefore, estimatedTokensAfter: result.estimatedTokensAfter };
 		},
 
 		async setModel(provider: string, modelId: string) {

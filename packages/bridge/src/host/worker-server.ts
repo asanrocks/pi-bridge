@@ -222,6 +222,16 @@ export async function serveWorkerConnection(
 				await service.discardSteer(request.target);
 				replyOk(request.id, null);
 				return;
+			case "compact": {
+				const result = await service.compact(request.target, request.customInstructions);
+				replyOk(request.id, {
+					tokensBefore: result.tokensBefore,
+					...(result.estimatedTokensAfter !== undefined
+						? { estimatedTokensAfter: result.estimatedTokensAfter }
+						: {}),
+				} as unknown as JsonValue);
+				return;
+			}
 			case "renameSession":
 				await service.renameSession(request.target, request.name);
 				replyOk(request.id, null);

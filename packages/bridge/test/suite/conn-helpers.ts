@@ -148,6 +148,7 @@ export async function attachTestManager(
 				prompt: (text, images) => admission.prompt(text, images),
 				abort: () => admission.abort(),
 				discardSteer: () => admission.discardSteer(),
+				compact: (customInstructions) => admission.compact(customInstructions),
 				renameSession: (name) => admission.renameSession(name),
 				setLabel: (entryId, label) => admission.setLabel(entryId, label),
 				navigate: (entryId) => admission.navigate(entryId),

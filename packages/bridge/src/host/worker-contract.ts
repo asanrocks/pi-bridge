@@ -311,6 +311,12 @@ export interface WorkerService extends WorkerEnvironment {
 	): Promise<void>;
 	abort(target: SessionTarget): Promise<void>;
 	discardSteer(target: SessionTarget): Promise<void>;
+	/** Compact the context now (a serialized mutation); reports pi's token
+	 * estimates. Refuses while a turn is in flight or compaction is running. */
+	compact(
+		target: SessionTarget,
+		customInstructions?: string,
+	): Promise<{ tokensBefore: number; estimatedTokensAfter?: number }>;
 	/** Serialized mutations: one at a time, in admission order. */
 	renameSession(target: SessionTarget, name: string): Promise<void>;
 	setLabel(target: SessionTarget, entryId: string, label: string): Promise<void>;

@@ -154,6 +154,9 @@ function makeStubManager(opts: {
 		async executeBash() {},
 		async abort() {},
 		async discardSteer() {},
+		async compact() {
+			return { tokensBefore: 0, estimatedTokensAfter: 0 };
+		},
 		async setModel(provider: string, modelId: string) {
 			events.push("model");
 			if (opts.setModelError) throw opts.setModelError;

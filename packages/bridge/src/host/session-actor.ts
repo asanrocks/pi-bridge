@@ -18,11 +18,12 @@
 // Admission keeps the two classes the bridge has always needed (architecture
 // invariant 5: pi's event loop is serial and the bridge observes it):
 //
-//   - Mutations (renameSession, setLabel, navigate) are serialized among
+//   - Mutations (compact, renameSession, setLabel, navigate) are serialized among
 //     themselves — one at a time, in admission order — so concurrent
-//     commands from different Connections get a deterministic order.
-//     Mutations are quick and never await a turn, so the line cannot
-//     deadlock behind streaming.
+//     commands from different Connections get a deterministic order. A
+//     mutation never waits on a turn: `compact` is the long one (a summary
+//     request) and refuses while a turn streams, because pi's manual
+//     compaction aborts the run first.
 //   - Immediate work (turns — prompt, recoverTurn — plus abort, and reads —
 //     pull, gitShow's cwd) runs without queueing: a Stop must reach a
 //     streaming turn rather than wait behind it, and a read that queued
@@ -141,6 +142,9 @@ export interface SessionAdmission {
 	prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string): Promise<void>;
 	abort(): Promise<void>;
 	discardSteer(): Promise<void>;
+	/** A serialized mutation: one at a time, in admission order. Refuses while
+	 * a turn is in flight (pi's manual compaction aborts the run first). */
+	compact(customInstructions?: string): Promise<{ tokensBefore: number; estimatedTokensAfter?: number }>;
 	/** A serialized mutation: one at a time, in admission order. */
 	renameSession(name: string): Promise<void>;
 	setLabel(entryId: string, label: string): Promise<void>;
@@ -361,6 +365,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				commandOp((session) => session.promptAdmitted(text, images, model, thinkingLevel)),
 			abort: () => commandOp((session) => session.abort()),
 			discardSteer: () => commandOp((session) => session.discardSteer()),
+			compact: (customInstructions) => mutateOp((session) => session.compact(customInstructions)),
 			renameSession: (name) => mutateOp((session) => session.renameSession(name)),
 			setLabel: (entryId, label) => mutateOp((session) => session.setLabel(entryId, label)),
 			navigate: (entryId) => mutateOp((session) => session.navigate(entryId)),

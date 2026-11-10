@@ -8,6 +8,8 @@
 //   - leftControls?: session ledger (cost/context); home renders nothing
 //   - onStop?/isBusy: turn-aware Stop (session only)
 //   - pendingSteer/onDiscardSteer, editLabel/onCancelEdit: session overlays
+//   - compactStatus: the compaction header (running, or its outcome) in the
+//     edit header's slot — the composer is where a compaction is waited on
 //   - model: ModelRef | null — null renders "none" (no model available)
 // The card shell spec (elevation, radius, surface) is shared with ComposeBar
 // via the same CSS module — one spec per role (ADR 07 §Styling invariants).
@@ -29,6 +31,16 @@ import { displayModelName } from "../../render/modelNames.ts";
 import styles from "./ComposeCard.module.css";
 import { ModelPickerPortal } from "./ModelPickerPortal.tsx";
 import type { ImageAttachmentHandlers } from "./useImageAttachments.ts";
+
+/** The composer's compaction line: the run itself (manual or auto) or its
+ * outcome. `detail` carries the manual instructions in flight — consumed from
+ * the draft, so the header is the only place they are still visible — or the
+ * failure reason pi reported. */
+export interface CompactionStatus {
+	kind: "running" | "done" | "failed" | "cancelled";
+	text: string;
+	detail?: string;
+}
 
 export interface ComposeCardProps {
 	// ── Text ── controlled textarea
@@ -61,6 +73,10 @@ export interface ComposeCardProps {
 	/** Non-null renders the edit header (label text). */
 	editLabel?: string | null;
 	onCancelEdit?: () => void;
+	/** Compaction status in the same slot: the run itself, or its outcome.
+	 * `detail` is the manual instructions in flight or the failure reason; it is
+	 * the only place a manual compaction's input is visible once consumed. */
+	compactStatus?: CompactionStatus | null;
 	pendingSteer?: string[];
 	onDiscardSteer?: () => void;
 
@@ -71,8 +87,9 @@ export interface ComposeCardProps {
 	isCompacting?: boolean;
 	/** Dictation owns the field: Send is unavailable until the utterance settles. */
 	dictating?: boolean;
-	/** The dictation is rewriting its span, so edits are refused. Narrower than
-	 * `dictating`: the commit itself writes through the native edit command. */
+	/** The dictation is rewriting its span (or a manual compaction owns the
+	 * draft), so edits are refused. Narrower than `dictating`: the commit itself
+	 * writes through the native edit command. */
 	editsBlocked?: boolean;
 	/** Live dictation panel (record/keep/discard, phase, clock, meter), owned by
 	 * the container: the microphone toggles it and it outlives an utterance. */
@@ -130,6 +147,7 @@ export const ComposeCard = memo(function ComposeCard({
 	attachTitle,
 	editLabel = null,
 	onCancelEdit,
+	compactStatus = null,
 	pendingSteer = [],
 	onDiscardSteer,
 	isBusy = false,
@@ -286,6 +304,16 @@ export const ComposeCard = memo(function ComposeCard({
 							<CloseIcon size={14} />
 						</button>
 					</div>
+				)}
+				{compactStatus !== null && (
+					<output className={styles.compactHeader} data-kind={compactStatus.kind}>
+						<span className={styles.compactHeaderLabel}>{compactStatus.text}</span>
+						{compactStatus.detail !== undefined && compactStatus.detail !== "" && (
+							<span className={styles.compactHeaderDetail} title={compactStatus.detail}>
+								{compactStatus.detail}
+							</span>
+						)}
+					</output>
 				)}
 				{pendingSteer.length > 0 && (
 					<div className={styles.steerChips}>

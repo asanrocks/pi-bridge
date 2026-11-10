@@ -289,8 +289,15 @@ export interface SystemTurn {
 	type: SystemTurnType;
 	entryId: string;
 	index: number;
+	/** The entry's own timestamp, for a card header (compaction). */
+	timestamp?: string;
 	/** Markdown, for compaction/branch_summary (wire-eager). */
 	summary?: string;
+	/** Compaction only: pi's estimate of the context before the summary, so the
+	 * folded card can name the boundary's size. */
+	tokensBefore?: number;
+	/** Compaction only: usage of the summary request, for the card's cost line. */
+	usage?: Usage | null;
 	/** Raw source entry: the prompt diff behind a `system_prompt` turn, or the
 	 * detail dump of an unrecognized one. */
 	detail?: Entry;
@@ -687,7 +694,12 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 			case "compaction":
 				flushSwitchTurn();
 				flushPending();
-				turns.push(buildSystemTurn(entry, turns.length, "compaction", entry.summary, prevTurns));
+				turns.push(
+					buildSystemTurn(entry, turns.length, "compaction", entry.summary, prevTurns, undefined, {
+						tokensBefore: entry.tokensBefore,
+						usage: entry.usage,
+					}),
+				);
 				break;
 			case "branch_summary":
 				flushSwitchTurn();
@@ -1432,15 +1444,28 @@ function buildSystemTurn(
 	summary: string | undefined,
 	prevTurns: Map<string, TurnVM>,
 	detail?: Entry,
+	extra?: Pick<SystemTurn, "tokensBefore" | "usage">,
 ): SystemTurn {
-	const turn: SystemTurn = { kind: "system", type, entryId: entry.id, index, summary, detail };
+	const turn: SystemTurn = {
+		kind: "system",
+		type,
+		entryId: entry.id,
+		index,
+		timestamp: entry.timestamp,
+		summary,
+		detail,
+		...(extra ?? {}),
+	};
 	const prev = prevTurns.get(`system:${entry.id}`);
 	if (
 		prev &&
 		prev.kind === "system" &&
 		prev.type === turn.type &&
 		prev.index === turn.index &&
+		prev.timestamp === turn.timestamp &&
 		prev.summary === turn.summary &&
+		prev.tokensBefore === turn.tokensBefore &&
+		prev.usage === turn.usage &&
 		prev.detail === turn.detail
 	) {
 		return prev;

@@ -24,17 +24,19 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { sessionAccounting } from "../../../../src/viewmodel/index.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
+import type { ComposerDraft } from "../../infra/state/composer.ts";
 import type { ClientStore } from "../../infra/state/store.ts";
-import { useStore } from "../../infra/state/store.tsx";
+import { getStore, useStore } from "../../infra/state/store.tsx";
 import { selectRenderDiverged } from "../../infra/state/ui.ts";
+import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
 import { ComposeBar, type ComposeDot } from "./ComposeBar.tsx";
 import cardStyles from "./ComposeCard.module.css";
-import { ComposeCard } from "./ComposeCard.tsx";
+import { type CompactionStatus, ComposeCard } from "./ComposeCard.tsx";
 import styles from "./ComposeDock.module.css";
 import { CostPopover } from "./CostPopover.tsx";
 import { DictationToggle } from "./DictationToggle.tsx";
 import { DictationToolbar } from "./DictationToolbar.tsx";
-import { formatCost } from "./formatters.ts";
+import { formatCost, formatTokens } from "./formatters.ts";
 import { useComposeCapabilities } from "./useComposeCapabilities.ts";
 import { useDictation } from "./useDictation.ts";
 import { useModelCycling } from "./useModelCycling.ts";
@@ -119,6 +121,10 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// resolves the insets), so only the open flag is state.
 	const [costOpen, setCostOpen] = useState(false);
 	const costBtnRef = useRef<HTMLButtonElement>(null);
+	// Context disclosure: the percentage opens the one action that changes the
+	// number. Same anchoring rule as the ledger.
+	const [contextOpen, setContextOpen] = useState(false);
+	const contextBtnRef = useRef<HTMLButtonElement>(null);
 
 	// Picker writes are local (the stateless client API has no model verb):
 	// a model pick keeps whatever level was picked, and nextSelectionOf clamps
@@ -155,6 +161,25 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// draft it was editing.
 	const currentProjectId = useStore((s) => s.currentProjectId);
 	const currentStem = useStore((s) => s.currentStem);
+	// Manual compaction owns the draft as its instructions: the snapshot is what
+	// a failed or cancelled run puts back, and the instructions show in the
+	// header while consumed. `stopRequested` tells a Stop-cancellation (a user
+	// decision) from a failure. Reset on every Session switch: a reply about the
+	// previous Session must not touch this one.
+	const [manualCompact, setManualCompact] = useState<{ draft: ComposerDraft; instructions: string } | null>(null);
+	const [compactNotice, setCompactNotice] = useState<CompactionStatus | null>(null);
+	const stopRequestedRef = useRef(false);
+	// The card's busy state: the wire's flag or a just-requested manual run, so
+	// the header and Send's lock are instant instead of one round trip late.
+	const compacting = isCompacting || manualCompact !== null;
+	const sessionKey = `${currentProjectId ?? ""}/${currentStem ?? ""}`;
+	const sessionKeyRef = useRef(sessionKey);
+	useEffect(() => {
+		sessionKeyRef.current = sessionKey;
+		setManualCompact(null);
+		setCompactNotice(null);
+		stopRequestedRef.current = false;
+	}, [sessionKey]);
 	const dictation = useDictation({
 		textareaRef,
 		enabled: connected,
@@ -172,10 +197,10 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	// dormant compose draft exists is intentional (the draft has nowhere to
 	// "go"; collapse is visual, the draft persists either way).
 	useEffect(() => {
-		if (isStreaming || isEditing || pendingSteer.length > 0) {
+		if (isStreaming || compacting || isEditing || pendingSteer.length > 0) {
 			setExpanded(true);
 		}
-	}, [isStreaming, isEditing, pendingSteer.length, setExpanded]);
+	}, [isStreaming, compacting, isEditing, pendingSteer.length, setExpanded]);
 
 	// Publish the live dock footprint so the conversation's bottom padding
 	// (and thus the last message) clears the fixed card as it expands and
@@ -282,6 +307,9 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const closeCompletion = capabilities.closeCompletion;
 	const handleCommit = useCallback(() => {
 		closeCompletion();
+		// The next send is a new action; an outcome line for the previous
+		// compaction has been read by then.
+		setCompactNotice(null);
 		void onCommit();
 	}, [closeCompletion, onCommit]);
 
@@ -297,8 +325,76 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 			const current = draft.kind === "compose" ? draft.text : "";
 			setDraftText(current.trim() ? `${drafts}\n\n${current}` : drafts);
 		}
+		// A Stop during a manual compaction is the cancellation, so its reply is
+		// reported as "cancelled" rather than as a failure to dismiss.
+		if (manualCompact !== null) stopRequestedRef.current = true;
 		rpc.abort();
-	}, [pendingSteer, draft, setDraftText, rpc]);
+	}, [pendingSteer, draft, setDraftText, rpc, manualCompact]);
+
+	// ── Manual compaction ───────────────────────────────────────────────
+	// The draft is the instructions (`/compact <text>`): consumed at the trigger
+	// so the header can show what is being used, and put back by a failed or
+	// cancelled run. The field is locked while a manual run owns the draft, like
+	// polish, so "restore what was there" cannot overwrite typing.
+	const compactStatus: CompactionStatus | null =
+		manualCompact !== null
+			? {
+					kind: "running",
+					text: "Compacting context…",
+					...(manualCompact.instructions !== "" ? { detail: manualCompact.instructions } : {}),
+				}
+			: isCompacting
+				? { kind: "running", text: "Auto-compacting…" }
+				: compactNotice;
+
+	const compactUnavailable = !connected
+		? "Not connected"
+		: compacting
+			? "Compaction is running"
+			: isStreaming
+				? "A turn is running"
+				: isEditing
+					? "Finish editing first"
+					: sendLocked
+						? "Back to live to compact"
+						: undefined;
+
+	const handleCompact = useCallback(async () => {
+		if (compactUnavailable !== undefined) return;
+		const s = getStore().getState();
+		const saved = s.draft;
+		const instructions = saved.kind === "idle" ? "" : saved.text.trim();
+		const keyAtStart = sessionKey;
+		s.clearDraft();
+		setManualCompact({ draft: saved, instructions });
+		setCompactNotice(null);
+		stopRequestedRef.current = false;
+		const reply = await rpc.compact(instructions === "" ? undefined : instructions);
+		// The reply describes the Session it was issued against; a switch while it
+		// ran owns the composer now.
+		if (sessionKeyRef.current !== keyAtStart) return;
+		setManualCompact(null);
+		if (reply?.ok === true) {
+			const before = typeof reply.tokensBefore === "number" ? reply.tokensBefore : null;
+			const after = typeof reply.estimatedTokensAfter === "number" ? reply.estimatedTokensAfter : null;
+			setCompactNotice({
+				kind: "done",
+				text:
+					before !== null && after !== null
+						? `Context compacted · ${formatTokens(before)} → ~${formatTokens(after)} tokens`
+						: "Context compacted",
+			});
+			return;
+		}
+		// Nothing was consumed: the instructions go back to the composer.
+		s.setDraft(saved);
+		const reason = typeof reply?.error === "string" && reply.error !== "" ? reply.error : "Compaction failed";
+		setCompactNotice(
+			stopRequestedRef.current
+				? { kind: "cancelled", text: "Compaction cancelled" }
+				: { kind: "failed", text: reason },
+		);
+	}, [compactUnavailable, rpc, sessionKey]);
 
 	// ── Escape: dismiss in order of what is most transient ─────────────
 	// A running utterance first (its transcript is a pre-edit, so collapsing now
@@ -355,24 +451,64 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	const docAuthority = useStore((s) => s.docAuthority);
 	const dot: ComposeDot = !connected ? "red" : isStreaming || docAuthority !== "authoritative" ? "orange" : "green";
 
-	// Context usage is synced from the server via status.contextUsage.
-	// pi's AgentSession.getContextUsage() handles compaction gaps and
-	// trailing-message estimation. Null means unknown (post-compaction,
-	// no response yet).
+	// Context usage is synced from the server via status.contextUsage, which
+	// the daemon keeps filled: it estimates the projection where pi declines to
+	// answer (the gap a compaction opens until the next response). Null here
+	// means the daemon has no model window to measure against, so the readout
+	// falls back to a question mark — the one case with nothing to say.
 	const contextPercent = contextUsage?.percent ?? null;
+	// An estimate is a value, not a blank: `~` keeps it from reading as a
+	// measurement, and the disclosure's detail says it in words.
+	const contextEstimated = contextUsage?.estimated ?? false;
+	const contextLabel = contextPercent !== null ? `${contextEstimated ? "~" : ""}${Math.round(contextPercent)}%` : "?";
 
 	// The session ledger: context % + bar + cost (the card's leftControls
-	// slot; the Project home renders none of this).
+	// slot; the Project home renders none of this). The percentage is the
+	// disclosure: it opens the one action that changes the number.
+	const compactItemDetail = compactUnavailable
+		? compactUnavailable
+		: draft.kind !== "idle" && draft.text.trim() !== ""
+			? "Uses your draft as instructions"
+			: contextUsage?.tokens != null
+				? `${formatTokens(contextUsage.tokens)} of ${formatTokens(contextUsage.contextWindow)} tokens${
+						contextEstimated ? ", estimated" : ""
+					}`
+				: "Summarizes older messages";
+	const contextItems: MenuItem[] = [
+		{
+			key: "compact",
+			label: "Compact context",
+			detail: compactItemDetail,
+			disabled: compactUnavailable !== undefined,
+			onSelect: () => {
+				void handleCompact();
+			},
+		},
+	];
 	const leftControls = (
 		<>
-			<span className={cardStyles.composerContextPct}>
-				{contextPercent !== null ? `${Math.round(contextPercent)}%` : "?"}
-			</span>
-			<div className={cardStyles.composerContextBar}>
-				{contextPercent !== null && (
-					<div className={cardStyles.composerContextBarFill} style={{ width: `${contextPercent}%` }} />
-				)}
-			</div>
+			<button
+				ref={contextBtnRef}
+				type="button"
+				className={cardStyles.composerContextBtn}
+				onClick={() => setContextOpen((v) => !v)}
+				aria-haspopup="menu"
+				aria-expanded={contextOpen}
+				aria-label={
+					contextPercent !== null
+						? `Context ${Math.round(contextPercent)}%${
+								contextEstimated ? " (estimated until the next response)" : ""
+							} — compaction options`
+						: "Context usage — compaction options"
+				}
+			>
+				<span className={cardStyles.composerContextPct}>{contextLabel}</span>
+				<span className={cardStyles.composerContextBar}>
+					{contextPercent !== null && (
+						<span className={cardStyles.composerContextBarFill} style={{ width: `${contextPercent}%` }} />
+					)}
+				</span>
+			</button>
 			<button
 				ref={costBtnRef}
 				type="button"
@@ -392,7 +528,12 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 	return (
 		<div className={styles.composer} ref={dockRef}>
 			{!expanded ? (
-				<ComposeBar dot={dot} placeholder="Type a message…" onClick={handleBarClick} disabled={!connected} />
+				<ComposeBar
+					dot={dot}
+					placeholder={compacting ? "Compacting context…" : "Type a message…"}
+					onClick={handleBarClick}
+					disabled={!connected}
+				/>
 			) : (
 				<ComposeCard
 					{...capabilities.cardProps}
@@ -408,13 +549,14 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 					attachTitle={isEditing ? "Images can't be added while editing" : undefined}
 					editLabel={isEditing ? "Editing message" : null}
 					onCancelEdit={handleEditCancel}
+					compactStatus={compactStatus}
 					pendingSteer={pendingSteer}
 					onDiscardSteer={rpc.discardSteer}
 					isBusy={isBusy}
-					isCompacting={isCompacting}
+					isCompacting={compacting}
 					sendLocked={sendLocked}
 					dictating={dictating}
-					editsBlocked={dictation.editsBlocked}
+					editsBlocked={dictation.editsBlocked || manualCompact !== null}
 					dictationToolbar={
 						toolbarOpen ? (
 							<DictationToolbar
@@ -450,6 +592,18 @@ export const ComposeDock = memo(function ComposeDock({ onCommit }: ComposeDockPr
 
 			{/* Cost breakdown popover */}
 			{costOpen && <CostPopover anchor={costBtnRef.current} onClose={() => setCostOpen(false)} />}
+
+			{/* Context disclosure: the compaction trigger lives here, beside the
+			    number it changes. */}
+			{contextOpen && (
+				<AnchoredMenu
+					anchor={contextBtnRef.current}
+					items={contextItems}
+					label="Context options"
+					placement="above"
+					onClose={() => setContextOpen(false)}
+				/>
+			)}
 		</div>
 	);
 });
