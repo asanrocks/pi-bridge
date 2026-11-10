@@ -402,18 +402,19 @@ are per page and in memory: neither is synced across tabs nor survives a reload,
 because novelty answers "what arrived while I watched", not "what exists", and a
 row that leaves the waiting set loses its ring with its count.
 
-A visible page therefore raises nothing per completion; the badge is the whole
+A visible page therefore raises nothing per settle; the badge is the whole
 announcement. A hidden page, where no badge is on screen, gets one OS
 notification per finished Session instead, naming it, and a click lands on that
 Session — the open tab is handed the address and navigates through the usual
 open intent, or a new tab opens the address directly. Each notice
 carries its own Session's tag, so two Sessions finishing together stay two
-clickable notices rather than the later one replacing the earlier. The
-completion edge is `running` → not running on a queued row; a location move is
-not a completion. A reconnect's re-fetched queue is not a
-burst of completions (a snapshot published before the connection is confirmed
-is a baseline, never a comparison), and the attached Session's own completion
-keeps the tab title and unread count it already had.
+clickable notices rather than the later one replacing the earlier. The signal is
+the execution's own end, reported with its outcome: a finished run is named, a
+failure says so in its own words, and a stop is the reader's own gesture and is
+announced nowhere — neither as a notice nor as a badge dot. A location move is
+not a settle. A reconnect's snapshot is a baseline, never a comparison, so it
+cannot produce a burst of announcements, and the attached Session's own
+completion keeps the tab title and unread count it already had.
 
 The rows open Sessions. The row menu is shaped by the row's location instead of
 being one uniform destination picker: a `Move to …` list repeated everywhere

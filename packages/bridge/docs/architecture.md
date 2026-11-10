@@ -229,11 +229,13 @@ The push contract is:
   whose cached history a publication invalidated. Membership is the stored
   location, never runtime retention — an archived Session never appears, and
   idle collection never removes a row.
-- `session_completed` names one execution that finished in a queued Session
-  (the execution, never a pi turn boundary), and is silent for a
-  user-requested end. It is an occurrence, delivered immediately, because the
-  queue itself is published at most once every five seconds for execution
-  state — a user's own placement publishes at a short floor instead (ADR 24).
+- `session_settled` names one execution ending, with how it ended
+  (`completed`, `aborted`, or `error`) — the execution, never a pi turn
+  boundary, and reported even when the reader caused the stop. It is an
+  occurrence, delivered immediately, because the queue itself is published at
+  most once every five seconds for execution state — a user's own placement
+  publishes at a short floor instead (ADR 24). What to announce is the
+  client's policy.
 
 The host sends exactly one initial-sync frame when a Connection attaches. The
 frame is sent before later live patches and before the successful navigation

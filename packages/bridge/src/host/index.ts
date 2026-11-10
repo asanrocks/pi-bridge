@@ -11,7 +11,7 @@ export {
 } from "./daemon-socket.ts";
 export type { DiscoverySteps, ProbeResult, StartupRole } from "./discovery.ts";
 export { isSocketTaken, resolveStartupRole } from "./discovery.ts";
-export type { ConnectionHandle, CreateManagerOptions, Manager, SettlementBoundary } from "./manager.ts";
+export type { ConnectionHandle, CreateManagerOptions, Manager, Settlement } from "./manager.ts";
 export { createManager } from "./manager.ts";
 export type {
 	DaemonTitleState,

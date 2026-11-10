@@ -19,7 +19,7 @@ import {
 	Daemon,
 	type DaemonOptions,
 	type Manager,
-	type SettlementBoundary,
+	type Settlement,
 } from "../../src/host/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ function makeStubManager(opts: {
 	const admittedCalls: Array<{ text: string; images?: unknown[] }> = [];
 	const setModelCalls: Array<{ provider: string; modelId: string }> = [];
 	const setThinkingLevelCalls: string[] = [];
-	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
+	const settledListeners = new Set<(settlement: Settlement) => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	let wasDisposed = false;
 
@@ -194,10 +194,10 @@ function makeStubManager(opts: {
 			emit({ ops: [{ op: "replace", path: "/status/isStreaming", value: streaming }] });
 		},
 		/** The execution settled (pi's `agent_settled`), the Manager's completion
-		 * signal: fires the rescan listeners with the execution boundary.
-		 * Placements are untouched — a settlement is not a move. */
+		 * signal: fires the rescan listeners with the execution boundary and its
+		 * outcome. Placements are untouched — a settlement is not a move. */
 		settle: () => {
-			for (const listener of settledListeners) listener("execution");
+			for (const listener of settledListeners) listener({ boundary: "execution", outcome: "completed" });
 		},
 		patchListenerCount: () => patchListenerCount(patchListeners, connectionHandles),
 		disposed: () => wasDisposed,
@@ -2557,7 +2557,7 @@ describe("daemon: queue publication (ADR 24)", () => {
 		ws.close();
 	});
 
-	it("forwards a completion immediately while queue publication is cooling down", async () => {
+	it("forwards a settle immediately while queue publication is cooling down", async () => {
 		const { agentDir, a } = makeProjectRoots();
 		const { port } = await startDaemon({
 			agentDir,
@@ -2581,14 +2581,16 @@ describe("daemon: queue publication (ADR 24)", () => {
 		await waitFor(frames, (f) => f.kind === "queue_changed" && f.mode === "delta");
 		const published = deltas().length;
 
-		// Settlement is an occurrence: it crosses immediately, so a short turn
-		// is announced even though no running row was ever published.
+		// A settle is an occurrence: it crosses immediately with its outcome, so a
+		// short run is reported even though no running row was ever published.
 		stub!.handles.setStreaming(true);
 		stub!.handles.settle();
-		const completed = (await waitFor(frames, (f) => f.kind === "session_completed")) as {
+		const settled = (await waitFor(frames, (f) => f.kind === "session_settled")) as {
 			session: { stem: string };
+			outcome: string;
 		};
-		expect(completed.session.stem).toBe(stem);
+		expect(settled.session.stem).toBe(stem);
+		expect(settled.outcome).toBe("completed");
 		expect(deltas()).toHaveLength(published);
 
 		ws.close();

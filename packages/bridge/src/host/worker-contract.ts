@@ -46,6 +46,7 @@ import type {
 	SessionInfo,
 	SessionListCursor,
 	SessionLocation,
+	SessionOutcome,
 	SessionRef,
 	SnapshotFile,
 } from "../core/index.ts";
@@ -246,14 +247,14 @@ export type WorkerEvent =
 	 * creation, Trash, or placement). The receiver refetches; the Worker sends
 	 * no rows. */
 	| { readonly kind: "history_changed"; readonly projectId: string }
-	/** One execution settled in a Session placed in Inbox or Later. An
-	 * occurrence, delivered immediately and independently of queue
-	 * publication; the Daemon forwards it as-is. */
+	/** One execution settled, with how it ended. An occurrence, delivered
+	 * immediately and independently of queue publication; the Daemon forwards it
+	 * as-is, and only the client decides whether that outcome is news (ADR 24). */
 	| {
-			readonly kind: "session_completed";
+			readonly kind: "session_settled";
 			readonly session: SessionRef;
+			readonly outcome: SessionOutcome;
 			readonly name?: string;
-			readonly lastMessageText?: string;
 	  }
 	/** The global pinned list changed (a `setPinnedModels` mutation). */
 	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }

@@ -76,10 +76,10 @@ describe("worker contract values", () => {
 			},
 			{ kind: "history_changed", projectId: "proj" },
 			{
-				kind: "session_completed",
+				kind: "session_settled",
 				session: { projectId: "proj", stem: "work/review", sessionId: "sess-1" },
+				outcome: "error",
 				name: "Review",
-				lastMessageText: "done",
 			},
 			{ kind: "unavailable", reason: "drain failed" },
 		];

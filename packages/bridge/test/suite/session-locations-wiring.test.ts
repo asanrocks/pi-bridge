@@ -12,8 +12,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import type { SessionRef } from "../../src/core/index.ts";
-import type { ConnectionHandle, Manager, SettlementBoundary } from "../../src/host/manager.ts";
+import type { SessionOutcome, SessionRef } from "../../src/core/index.ts";
+import type { ConnectionHandle, Manager, Settlement } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
 
@@ -44,7 +44,7 @@ interface FakeManager extends Manager {
 	setStreaming: (streaming: boolean) => void;
 	/** The whole execution settled (pi's `agent_settled`): the Manager's
 	 * completion signal. */
-	settle: () => void;
+	settle: (outcome?: SessionOutcome) => void;
 	/** One pi turn ended mid-execution (i.e. an assistant step with its tool
 	 * results, before the loop continues): the metadata rescan signal only. */
 	turnEnd: () => void;
@@ -75,7 +75,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 	let activityPhase: "idle" | "wait" | "stream" | "tool" | "compact" = "idle";
 	let activityTool: string | null = null;
 	const activityListeners = new Set<() => void>();
-	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
+	const settledListeners = new Set<(settlement: Settlement) => void>();
 	const status = {
 		leafId: null,
 		name: "",
@@ -105,7 +105,7 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 			});
 		},
 		removeConnection: () => {},
-		onSettled(listener: (boundary: SettlementBoundary) => void) {
+		onSettled(listener: (settlement: Settlement) => void) {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);
 		},
@@ -123,9 +123,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		},
 		executeBash: async () => {},
 		abort: async () => {
-			// The real runtime's abort settles the execution (pi emits
-			// `agent_settled` before the abort's idle wait resolves).
-			for (const listener of settledListeners) listener("execution");
+			// The real runtime's abort settles the execution *aborted* (pi emits
+			// `agent_settled` with the abort flag before the idle wait resolves).
+			for (const listener of settledListeners) listener({ boundary: "execution", outcome: "aborted" });
 		},
 		discardSteer: async () => {},
 		setModel: async () => {},
@@ -136,9 +136,9 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		recoverTurn: async () => "retry" as const,
 		dispose: async () => {
 			disposed += 1;
-			// Disposal aborts the in-flight turn, which settles the execution —
-			// the boundary a disposal-induced completion would be derived from.
-			for (const listener of settledListeners) listener("execution");
+			// Disposal aborts the in-flight turn, which settles the execution as
+			// aborted — reported like any other settle, never withheld.
+			for (const listener of settledListeners) listener({ boundary: "execution", outcome: "aborted" });
 		},
 	};
 	return {
@@ -154,11 +154,11 @@ function fakeManager(sessionPath: string | undefined): FakeManager {
 		setStreaming: (streaming) => {
 			status.isStreaming = streaming;
 		},
-		settle: () => {
-			for (const listener of settledListeners) listener("execution");
+		settle: (outcome: SessionOutcome = "completed") => {
+			for (const listener of settledListeners) listener({ boundary: "execution", outcome });
 		},
 		turnEnd: () => {
-			for (const listener of settledListeners) listener("turn");
+			for (const listener of settledListeners) listener({ boundary: "turn" });
 		},
 		disposeCalls: () => disposed,
 	} as FakeManager;
@@ -703,24 +703,39 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		expect(origins).toContainEqual(["a:later", "user"]);
 	});
 
-	it("a settle in a queued Session announces one completion, carrying the row's label", async () => {
+	it("a settle in a queued Session is reported once, with its outcome and name", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
 
-		const completions: Array<{ stem: string; name?: string; text?: string }> = [];
+		const settles: Array<{ stem: string; outcome: string; name?: string }> = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind !== "session_completed") return;
-			completions.push({ stem: event.session.stem, name: event.name, text: event.lastMessageText });
+			if (event.kind !== "session_settled") return;
+			settles.push({ stem: event.session.stem, outcome: event.outcome, name: event.name });
 		});
 
 		fx.managers[0].settle();
-		expect(completions).toHaveLength(1);
+		expect(settles).toHaveLength(1);
 		// The notice repeats the row the settlement just refreshed, so a
 		// notification never waits for the next queue delta.
 		const row = (await fx.worker.listQueue()).sessions.find((entry) => entry.stem === "a");
-		expect(completions[0]).toEqual({ stem: "a", name: row?.name, text: row?.lastMessageText });
+		expect(settles[0]).toEqual({ stem: "a", outcome: "completed", name: row?.name });
+	});
+
+	it("a failed execution is reported as an error, not as a completion", async () => {
+		const fx = makeFixture();
+		fx.addSession("id-a", "a");
+		const target = await fx.open("a");
+		await fx.worker.prompt(target, "hello");
+
+		const outcomes: string[] = [];
+		fx.worker.onEvent((event) => {
+			if (event.kind === "session_settled") outcomes.push(event.outcome);
+		});
+
+		fx.managers[0].settle("error");
+		expect(outcomes).toEqual(["error"]);
 	});
 
 	it("a mid-execution turn boundary announces no completion", async () => {
@@ -733,52 +748,53 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
 
-		const completions: string[] = [];
+		const outcomes: string[] = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "session_completed") completions.push(event.session.stem);
+			if (event.kind === "session_settled") outcomes.push(event.outcome);
 		});
 
 		fx.managers[0].turnEnd();
 		fx.managers[0].turnEnd();
-		expect(completions).toEqual([]);
+		expect(outcomes).toEqual([]);
 
-		// The execution's own end still announces exactly one.
+		// The execution's own end still reports exactly one.
 		fx.managers[0].settle();
-		expect(completions).toEqual(["a"]);
+		expect(outcomes).toEqual(["completed"]);
 	});
 
-	it("a user stop announces no completion", async () => {
+	it("a user stop reports the execution as aborted rather than withholding it", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
 
-		const completions: string[] = [];
+		const outcomes: string[] = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "session_completed") completions.push(event.session.stem);
+			if (event.kind === "session_settled") outcomes.push(event.outcome);
 		});
 
-		// Stop aborts the run, and pi's abort settles the execution while the verb
-		// is still running; the user asked for it, so it is not news that the
-		// Session is ready for input.
+		// Stop aborts the run and pi's abort settles the execution while the verb
+		// is still running. The wire reports the fact; the reader's own gesture is
+		// the client's reason not to announce it.
 		await fx.worker.abort(target);
-		expect(completions).toEqual([]);
+		expect(outcomes).toEqual(["aborted"]);
 	});
 
-	it("a Session outside the queue settles without a completion notice", async () => {
+	it("an execution outside the queue is still reported, without inventing a label", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		await fx.open("a");
 
-		let completed = 0;
+		const settles: Array<{ stem: string; name?: string }> = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "session_completed") completed += 1;
+			if (event.kind === "session_settled") settles.push({ stem: event.session.stem, name: event.name });
 		});
 		fx.managers[0].settle();
-		expect(completed).toBe(0);
+		// Reported, because it happened; unnamed, because no queue row describes it.
+		expect(settles).toEqual([{ stem: "a", name: undefined }]);
 	});
 
-	it("archive and trash suppress the disposal's completion for that address only", async () => {
+	it("archive and trash report the disposal as aborted, leaving other Sessions' settles alone", async () => {
 		const fx = makeFixture();
 		fx.addSession("id-a", "a");
 		fx.addSession("id-b", "b");
@@ -787,19 +803,19 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		await fx.worker.prompt(first, "hello");
 		await fx.worker.prompt(second, "hello");
 
-		const completions: string[] = [];
+		const settles: Array<{ stem: string; outcome: string }> = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "session_completed") completions.push(event.session.stem);
+			if (event.kind === "session_settled") settles.push({ stem: event.session.stem, outcome: event.outcome });
 		});
 
-		// Disposing a runtime finalizes its turn; the user asked for the move,
-		// so that is not a completion to announce.
+		// Disposing a runtime finalizes its turn: the run did not finish, and the
+		// report says so instead of claiming a completion.
 		await fx.worker.setSessionLocation({ projectId: "proj", stem: "a" }, "archive");
-		expect(completions).toEqual([]);
+		expect(settles).toEqual([{ stem: "a", outcome: "aborted" }]);
 
-		// Another Session's genuine completion still arrives immediately.
+		// Another Session's finished run still arrives immediately.
 		fx.managers[fx.managers.length - 1].settle();
-		expect(completions).toEqual(["b"]);
+		expect(settles.at(-1)).toEqual({ stem: "b", outcome: "completed" });
 	});
 
 	it("a failed move leaves the Session's completions intact", async () => {
@@ -808,13 +824,13 @@ describe("session-state wiring: queue deltas and completions (ADR 24)", () => {
 		const target = await fx.open("a");
 		await fx.worker.prompt(target, "hello");
 
-		const completions: string[] = [];
+		const outcomes: string[] = [];
 		fx.worker.onEvent((event) => {
-			if (event.kind === "session_completed") completions.push(event.session.stem);
+			if (event.kind === "session_settled") outcomes.push(event.outcome);
 		});
 
 		await expect(fx.worker.trashSession({ projectId: "proj", stem: "no-such-session" })).rejects.toThrow();
 		fx.managers[0].settle();
-		expect(completions).toEqual(["a"]);
+		expect(outcomes).toEqual(["completed"]);
 	});
 });

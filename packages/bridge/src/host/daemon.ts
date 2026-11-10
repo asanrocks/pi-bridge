@@ -506,14 +506,16 @@ export class Daemon {
 			this.scheduleQueuePublish();
 			return;
 		}
-		if (event.kind === "session_completed") {
-			// An occurrence, not queue state: delivered immediately so a turn
-			// shorter than the publication interval still announces itself.
+		if (event.kind === "session_settled") {
+			// An occurrence, not queue state: delivered immediately so a run shorter
+			// than the publication interval still announces itself. The outcome
+			// travels unfiltered — a Stop or a failure is a fact, and what to do
+			// about it is the client's policy (ADR 24).
 			this.pushToAll({
-				kind: "session_completed",
+				kind: "session_settled",
 				session: event.session,
+				outcome: event.outcome,
 				...(event.name !== undefined ? { name: event.name } : {}),
-				...(event.lastMessageText !== undefined ? { lastMessageText: event.lastMessageText } : {}),
 			});
 			return;
 		}

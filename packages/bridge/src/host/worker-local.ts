@@ -46,6 +46,7 @@ import {
 	type SessionInfo,
 	type SessionListCursor,
 	type SessionLocation,
+	type SessionOutcome,
 	type SessionRef,
 	THINKING_LEVEL_NAMES,
 } from "../core/index.ts";
@@ -274,9 +275,6 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 	let publishedQueue = new Map<string, SessionInfo>();
 	/** Registration-local version: bumped once per emitted queue delta. */
 	let queueVersion = 0;
-	/** Addresses whose disposal-induced completion must not be announced: an
-	 * Archive or Trash is a user move, not a finished turn. */
-	const suppressedCompletions = new Set<string>();
 
 	/** Rows a metadata-only refresh may reuse: a dormant row's file cannot have
 	 * changed except through a trigger that asks for a full rebuild. */
@@ -321,24 +319,18 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		emit({ kind: "history_changed", projectId });
 	};
 
-	/** One execution settled in a queued Session. Suppressed for an address whose
-	 * runtime is being disposed by an Archive or Trash move. */
-	const emitCompleted = (ref: SessionRef): void => {
-		if (disposed || suppressedCompletions.has(addressKey(ref.projectId, ref.stem))) return;
+	/** One execution ended, with how it ended. Membership is not consulted and
+	 * nothing is withheld: whether a stop or a failure deserves a notification is
+	 * the client's decision, so the report is the fact only (ADR 24). */
+	const emitSettled = (ref: SessionRef, outcome: SessionOutcome): void => {
+		if (disposed) return;
 		const row = publishedQueue.get(addressKey(ref.projectId, ref.stem));
-		if (row === undefined) return;
-		emit({ kind: "session_completed", session: ref, name: row.name, lastMessageText: row.lastMessageText });
-	};
-
-	/** Run a disposal whose settlement is a consequence of the caller's move. */
-	const withoutCompletion = async (projectId: string, stem: string, op: () => Promise<void>): Promise<void> => {
-		const key = addressKey(projectId, stem);
-		suppressedCompletions.add(key);
-		try {
-			await op();
-		} finally {
-			suppressedCompletions.delete(key);
-		}
+		emit({
+			kind: "session_settled",
+			session: ref,
+			outcome,
+			...(row?.name !== undefined ? { name: row.name } : {}),
+		});
 	};
 
 	const registry = new ActivationRegistry({
@@ -352,16 +344,15 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			}),
 		idleGcMs,
 		unflushedIdleGcMs,
-		onSettled: (ref, boundary) => {
+		onSettled: (ref, settlement) => {
 			// The runtime's metadata advanced (a flush): the live row is rebuilt
 			// from memory, the Project's cached history is now stale, and the
-			// execution's own end is announced as a completion. pi emits a turn
-			// boundary after every assistant step, so only the execution boundary
-			// qualifies — otherwise a tool-using turn would announce itself once per
-			// tool batch (ADR 24).
+			// execution's own end is reported. pi emits a turn boundary after every
+			// assistant step, so only the execution boundary is a settle — otherwise
+			// a tool-using turn would report itself once per tool batch (ADR 24).
 			refreshQueue("live", "runtime");
 			emitHistoryChanged(ref.projectId);
-			if (boundary === "execution") emitCompleted(ref);
+			if (settlement.boundary === "execution") emitSettled(ref, settlement.outcome);
 			refreshTitle();
 		},
 		onStreamingChange: () => {
@@ -637,9 +628,9 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			if (record) {
 				// Disposal aborts and finalizes the in-flight turn; the placement is
 				// untouched, because a stop says nothing about where a Session
-				// belongs. Finalizing a turn is not a completion the user is waiting
-				// for: they asked for the stop.
-				await withoutCompletion(project.id, stem, () => registry.collect(record));
+				// belongs. The finalized execution reports as aborted, which every
+				// client can read for itself.
+				await registry.collect(record);
 			} else if (!(await sessionExistsAt(project, stem))) {
 				throw new Error(`No such session: ${stem}`);
 			}
@@ -654,7 +645,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Stop first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
 			const record = await registry.awaitSettled(project.id, stem);
-			if (record) await withoutCompletion(project.id, stem, () => registry.collect(record));
+			if (record) await registry.collect(record);
 			// The trashed session leaves discovery and the queue together: the
 			// move takes the file out of the Project's namespace and the prune
 			// drops the placement record keyed by the stem it was addressed at.
@@ -680,10 +671,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 				throw err;
 			}
 		},
-		abort: async (target) =>
-			// A Stop finalizes the in-flight turn; the user asked for it, so it is
-			// not a completion to announce.
-			withoutCompletion(target.projectId, target.stem, () => admissionFor(target).abort()),
+		abort: async (target) => admissionFor(target).abort(),
 		discardSteer: async (target) => admissionFor(target).discardSteer(),
 		compact: async (target, customInstructions) => {
 			const result = await admissionFor(target).compact(customInstructions);
@@ -737,7 +725,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// the existence probe below see an unflushed Session's file.
 			if (location === "archive") {
 				const record = await registry.awaitSettled(project.id, stem);
-				if (record) await withoutCompletion(project.id, stem, () => registry.collect(record));
+				if (record) await registry.collect(record);
 			}
 			if (!(await sessionExistsAt(project, stem))) throw new Error(`No such session: ${stem}`);
 			// Durable-or-fail: a failed write leaves the store untouched, so a retry

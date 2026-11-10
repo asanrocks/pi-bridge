@@ -201,13 +201,14 @@ export function createConnectionPipeline(
 			return;
 		}
 
-		// One execution finished in a queued Session (ADR 24): an occurrence, so
-		// it is never inferred from a queue revision.
-		if (push.kind === "session_completed") {
-			store.getState().noteCompletion({
+		// One execution settled (ADR 24): an occurrence, so it is never inferred
+		// from a queue revision, and its outcome is filed as reported. Which
+		// outcomes this page treats as news is the notification hook's policy.
+		if (push.kind === "session_settled") {
+			store.getState().noteSettlement({
 				session: push.session,
+				outcome: push.outcome,
 				...(push.name !== undefined ? { name: push.name } : {}),
-				...(push.lastMessageText !== undefined ? { lastMessageText: push.lastMessageText } : {}),
 			});
 			return;
 		}

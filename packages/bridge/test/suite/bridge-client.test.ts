@@ -504,8 +504,9 @@ describe("BridgeClient", () => {
 		const seen: string[] = [];
 		client.onPush = (push) => seen.push(push.kind);
 		transport.inject({
-			kind: "session_completed",
+			kind: "session_settled",
 			session: { projectId: "p", stem: "s", sessionId: "sess" },
+			outcome: "completed",
 		});
 		transport.inject({ kind: "from_the_future" });
 		expect(errors).toEqual(["unknown frame kind: from_the_future"]);
@@ -517,7 +518,7 @@ describe("BridgeClient", () => {
 			revision: 1,
 			sessions: [],
 		});
-		expect(seen).toEqual(["session_completed", "queue_changed"]);
+		expect(seen).toEqual(["session_settled", "queue_changed"]);
 		expect(errors).toHaveLength(1);
 	});
 });

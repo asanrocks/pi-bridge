@@ -31,7 +31,7 @@ and rejects exactly once, so a failed request leaves nothing pending.
 | `replace` | `{ session: SessionRef, document: Document, generation, operationId? }`. Always an initial sync. It replaces the mirror wholesale. `operationId` is present only when the frame was emitted by a `newSession` transition: the operation id of that creation. |
 | `patch` | `{ ops: PatchOp[], session?: SessionRef, generation, operationId? }`. A live patch has no `session`; a cursor-aware initial-sync patch has one. `operationId` is present only on a creation's initial-sync patch. |
 | `queue_changed` | Either a **snapshot** (`{ mode: "snapshot", revision, sessions }`) or a **delta** (`{ mode: "delta", revision, upsert, remove, invalidateHistory }`). The snapshot is a Connection's first queue frame: every Inbox and Later Session, ordered Inbox → Later, each group by placement stamp descending (the instant of the transition that placed the row, so a running turn cannot reorder the queue). A delta carries the complete changed rows, the addresses that left the queue, and the Projects whose cached history may be stale. Membership is the stored location, never runtime retention. |
-| `session_completed` | `{ session, name?, lastMessageText? }`. One execution settled in a queued Session — the execution, not a pi turn: a turn boundary falls after every assistant step, so a tool-using turn has several and none is a completion. An occurrence, not a sampled state: it is delivered immediately, independently of queue publication, so a turn shorter than the publication interval still announces itself. |
+| `session_settled` | `{ session, outcome, name? }`. One execution settled — the execution, not a pi turn: a turn boundary falls after every assistant step, so a tool-using turn has several and none is a settle. `outcome` is `completed`, `aborted` (a Stop gesture, or a disposal that finalizes a turn), or `error`. An occurrence, not a sampled state: it is delivered immediately, independently of queue publication, so a run shorter than the publication interval still announces itself, and it is reported for every execution — the outcome is a fact no listing row carries, and what to do with it is the client's policy, never the host's. |
 | `pinned_models_changed` | `{ pinnedModels }`, the daemon-global pinned list after a pin or unpin (ADR 15). |
 | `session_closed` | `{ projectId, stem, generation }`. The live runtime behind that address ended (the Session was moved to Archive or Trash). Every Connection attached to it is detached before the frame is sent, so a session command that arrives afterwards fails with `no session attached`; a client rendering that Session lands on its Project home. |
 
@@ -70,7 +70,7 @@ no live frame. A `pull` reply carries the generation current when its
 request was admitted, so a reply that lands after a reattach is dropped
 instead of filling the successor with the old observation's values.
 
-A push is unsolicited. `queue_changed`, `session_completed`,
+A push is unsolicited. `queue_changed`, `session_settled`,
 `pinned_models_changed`, and `session_closed` do not alter the Document
 mirror. Every listing row (`queue_changed`, `listSessions`, `listQueue`)
 carries the Session's durable `location`
@@ -118,9 +118,9 @@ seconds. The Worker tags such a change (`origin: "user"`) and the Daemon
 publishes it after a 150 ms floor instead of the interval, so a repeated click
 still coalesces into one frame. Execution state keeps the interval, which is
 what bounds the traffic.
-- **Completions are events.** Because the delta is a sample, a turn shorter
-than the interval would be invisible. `session_completed` is sent
-immediately when an execution settles in a queued Session, and it is never
+- **Settles are events.** Because the delta is a sample, a run shorter
+than the interval would be invisible. `session_settled` is sent
+immediately when an execution ends, with its outcome, and it is never
 derived from two queue samples, nor from a turn boundary: pi ends a turn after
 every assistant step (a tool-using turn has several), and only the execution's
 own end is a completion. A user-requested end — Stop, Archive, Trash, an

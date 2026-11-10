@@ -544,13 +544,15 @@ connecting.
 `useAttentionNotifications.ts` (in `app/`) covers the other half of
 completion signaling: the attached conversation drives the tab title and the
 unread count, while a Session this tab is *not* reading is announced from the
-`session_completed` pushes the pipeline files in the store's `completions` log.
+`session_settled` pushes the pipeline files in the store's `settlements` log.
 The signal is an occurrence, not a comparison of queue snapshots: the queue is
 published at most once per five seconds for execution state (ADR 24), so a
-short turn may never
-appear as running, and completion therefore arrives as its own frame — sent at
+short run may never
+appear as running, and the settle therefore arrives as its own frame — sent at
 the execution's end, not at a pi turn boundary (which falls after every
-assistant step) and not for a user-requested Stop. The hook
+assistant step). The frame carries the outcome and this hook owns the policy: a
+finished run is announced, a failure in its own words, and an abort is silent
+because the reader caused it. The hook
 drains the log by sequence, so a notice is announced exactly once, and it stays
 silent for the attached Session. Delivery follows what the reader can see. A
 visible page raises no per-completion surface: the store files the address in

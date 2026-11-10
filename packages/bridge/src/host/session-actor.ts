@@ -69,7 +69,7 @@ import type {
 import { isEntrySealed, resolveFieldPath } from "../core/index.ts";
 import type { ActivationAuthorization } from "./activation-registry.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
-import type { ConnectionHandle, Manager, SettlementBoundary } from "./manager.ts";
+import type { ConnectionHandle, Manager, Settlement } from "./manager.ts";
 import type { SessionActivity } from "./process-title.ts";
 import type { WorkerPulledValue } from "./worker-contract.ts";
 
@@ -183,8 +183,8 @@ export interface SessionActorOptions {
 	/** The runtime settled (its file may have just been written) — the
 	 * registry's broadcast hook, riding the actor's own observation of its
 	 * runtime. The boundary says whether the execution finished or one turn
-	 * did, so a completion is never announced mid-turn. */
-	onSettled?: (boundary: SettlementBoundary) => void;
+	 * did, and the execution carries how it ended. */
+	onSettled?: (settlement: Settlement) => void;
 	/** The runtime's streaming flag changed — the registry's broadcast hook,
 	 * riding the actor's own observation of its runtime. The actor dedups
 	 * transitions itself; the hook fires once per real transition. */
@@ -245,7 +245,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	// streaming transitions itself — the registry's records carry no
 	// runtime state of their own (ADR 19).
 	let lastStreaming = manager.document.status.isStreaming;
-	manager.onSettled((boundary) => options.onSettled?.(boundary));
+	manager.onSettled((settlement) => options.onSettled?.(settlement));
 	// The phase clock the listing's `activity.startedAt` reports: the moment
 	// the runtime entered its current phase. Recorded here because the listing
 	// needs the start instant and the Manager's activity word is instantaneous.

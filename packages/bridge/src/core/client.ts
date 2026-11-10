@@ -52,7 +52,7 @@ const PUSH_KINDS = new Set([
 	"replace",
 	"patch",
 	"queue_changed",
-	"session_completed",
+	"session_settled",
 	"pinned_models_changed",
 	"session_closed",
 ]);

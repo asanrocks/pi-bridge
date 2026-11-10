@@ -32,6 +32,7 @@ import {
 	type PatchOp,
 	type PrefixCursor,
 	type RecoverableTurnKind,
+	type SessionOutcome,
 	type SessionRef,
 	setAtPath,
 } from "../core/index.ts";
@@ -122,8 +123,26 @@ export interface ConnectionHandle {
 
 /** Which settle a Manager reports: the end of one pi turn (an assistant step,
  * with the tool results it produced) or of the whole execution. One tagged
- * value rather than a boolean, because each listener acts on one of the two. */
-export type SettlementBoundary = "turn" | "execution";
+ * value rather than a boolean, because each listener acts on one of the two.
+ *
+ * Only the execution carries an outcome: pi reports the stop reason on the
+ * turn's message and repeats only the abort flag on `agent_settled`, so the
+ * run's own end is where "finished", "stopped", and "failed" become one
+ * fact. A turn boundary never has one — the run continues past it. */
+export type Settlement =
+	| { readonly boundary: "turn" }
+	| { readonly boundary: "execution"; readonly outcome: SessionOutcome };
+
+/** The message a `turn_end` carries. */
+type TurnMessage = Extract<AgentSessionEvent, { type: "turn_end" }>["message"];
+
+/** pi's stop reason as the outcome vocabulary: an aborted or failed assistant
+ * message ends the run that way; anything else finished it. */
+function outcomeOf(message: TurnMessage): SessionOutcome {
+	if (message.role !== "assistant") return "completed";
+	if (message.stopReason === "aborted") return "aborted";
+	return message.stopReason === "error" ? "error" : "completed";
+}
 
 export interface Manager {
 	/** The canonical Document — mutated by the Manager, read by Connections. */
@@ -161,10 +180,10 @@ export interface Manager {
 	 * The boundary is the tag the listener needs to tell the two apart: pi emits
 	 * `turn_end` after every assistant step — a tool-using turn has one per tool
 	 * batch — and `agent_settled` once, when the whole run is over. Metadata
-	 * refreshes want both; a completion notification wants only the execution
-	 * (ADR 24). Returns unsubscribe function.
+	 * refreshes want both; a completion is the execution, and its outcome is
+	 * reported rather than judged here (ADR 24). Returns unsubscribe function.
 	 */
-	onSettled(listener: (boundary: SettlementBoundary) => void): () => void;
+	onSettled(listener: (settlement: Settlement) => void): () => void;
 	/**
 	 * What this Session is doing right now, as pi's event stream reports it.
 	 * Derived from the events themselves rather than from the projection: the
@@ -260,7 +279,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	}
 
 	const patchListeners = new Set<(patch: Patch) => void>();
-	const settledListeners = new Set<(boundary: SettlementBoundary) => void>();
+	const settledListeners = new Set<(settlement: Settlement) => void>();
 	const activityListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
@@ -419,7 +438,14 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// Notify connections that the session has settled — the first turn
 			// after newSession writes the session file, and listeners can rescan
 			// to pick up the now-on-disk metadata (name, message count, etc.).
-			for (const l of settledListeners) l(execution ? "execution" : "turn");
+			// The execution also reports how the run ended: the abort flag from
+			// this event, else the last turn's stop reason.
+			if (event.type === "turn_end") runOutcome = outcomeOf(event.message);
+			const settlement: Settlement = execution
+				? { boundary: "execution", outcome: event.aborted ? "aborted" : runOutcome }
+				: { boundary: "turn" };
+			if (execution) runOutcome = "completed";
+			for (const l of settledListeners) l(settlement);
 		}
 
 		// ADR 10 v2: a persisted user bash entry (a `!`/`!!` command) is a Git
@@ -594,6 +620,13 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	// the Manager tracks the run itself, and abort/dispose await it before
 	// treating the session as settled.
 	let recoveryRun: Promise<void> | null = null;
+	/** The outcome of the run in progress, from the last turn's stop reason:
+	 * `agent_settled` repeats only the abort flag, not how the run ended. */
+	let runOutcome: SessionOutcome = "completed";
+	/** True while this Manager owns the stop (a Stop verb or a disposal): the
+	 * recovery continuation's end is reported here rather than by pi, so it has
+	 * to know a stop caused it. */
+	let stopping = false;
 	// The memoized teardown (see dispose): null until the first call.
 	let disposed: Promise<void> | null = null;
 	const settleRecoveryRun = async (): Promise<void> => {
@@ -762,11 +795,18 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// draft text is the client's job — it reads /status/pendingSteer
 			// and refills its input box before sending Stop.
 			session.clearQueue();
-			await session.abort();
-			// A recovery continuation is invisible to session.abort()'s idle-wait
-			// (ADR 16); await it so Stop's flush semantics hold — the aborted
-			// tail is persisted and derived before the reply.
-			await settleRecoveryRun();
+			// The recovery continuation's end is reported by this Manager, not by
+			// pi (ADR 16), so a stop has to be visible while it settles.
+			stopping = true;
+			try {
+				await session.abort();
+				// A recovery continuation is invisible to session.abort()'s idle-wait
+				// (ADR 16); await it so Stop's flush semantics hold — the aborted
+				// tail is persisted and derived before the reply.
+				await settleRecoveryRun();
+			} finally {
+				stopping = false;
+			}
 		},
 
 		async discardSteer() {
@@ -914,8 +954,12 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			// missing retry loop is an accepted limitation (ADR 16).
 			const run = session.agent.continue();
 			recoveryRun = run;
+			let failed = false;
 			try {
 				await run;
+			} catch (err) {
+				failed = true;
+				throw err;
 			} finally {
 				recoveryRun = null;
 				const ops: PatchOp[] = [];
@@ -927,8 +971,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				const recPatch = boundaryReconcile(true);
 				if (recPatch) emitPatch(recPatch);
 				// The recovery run's own end is the execution boundary: its
-				// continuation runs outside pi's turn loop (ADR 16).
-				for (const l of settledListeners) l("execution");
+				// continuation runs outside pi's turn loop (ADR 16), which is also
+				// why its outcome comes from this scope rather than a stop reason.
+				for (const l of settledListeners)
+					l({ boundary: "execution", outcome: stopping ? "aborted" : failed ? "error" : "completed" });
 			}
 			return "retry";
 		},
@@ -945,8 +991,15 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				//    tabs see the final patches before teardown. Turn boundaries
 				//    may enqueue git-stamp observations; they are admitted before
 				//    the scope closes and drained below.
-				await session.abort();
-				await settleRecoveryRun();
+				// A disposal is a stop: the execution it finalizes did not finish, and
+				// the outcome says so rather than being withheld (ADR 24).
+				stopping = true;
+				try {
+					await session.abort();
+					await settleRecoveryRun();
+				} finally {
+					stopping = false;
+				}
 				// 2. Stop event-driven observations, then drain the observation
 				//    scope BEFORE the runtime goes: every observation the
 				//    finalization admitted is awaited here (its append lands on

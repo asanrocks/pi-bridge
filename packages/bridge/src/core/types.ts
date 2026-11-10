@@ -444,16 +444,26 @@ export interface QueueDeltaMessage {
 
 export type QueueChangedMessage = QueueSnapshotMessage | QueueDeltaMessage;
 
-/** One execution finished in a queued Session (ADR 24). An occurrence, not a
- * sampled state transition: it is delivered immediately, independently of the
- * queue publication interval, so a turn shorter than that interval still
- * announces itself. It carries the display metadata the notification needs so
- * it does not wait for the next queue delta. */
-export interface SessionCompletedMessage {
-	kind: "session_completed";
+/** How one execution ended, in pi's own stop-reason vocabulary: the run
+ * finished, it was aborted (a Stop gesture, or a disposal that finalizes a
+ * turn), or it failed. */
+export type SessionOutcome = "completed" | "aborted" | "error";
+
+/** One execution settled (ADR 24). An occurrence, not a sampled state: it is
+ * delivered immediately, independently of the queue publication interval, so a
+ * run shorter than that interval still announces itself.
+ *
+ * The outcome is reported, not filtered: an idle queue row reads the same
+ * whether the run finished, was stopped, or failed, so no client could derive
+ * it, and which outcomes deserve a notification (or a badge dot) is a
+ * presentation decision that belongs to the client, not to the host. */
+export interface SessionSettledMessage {
+	kind: "session_settled";
 	session: SessionRef;
+	outcome: SessionOutcome;
+	/** The Session's display name when the Worker knew it. A client holding the
+	 * queue row resolves its own label; this spares the unnamed case the stem. */
 	name?: string;
-	lastMessageText?: string;
 }
 
 /** The daemon-global pinned model list changed (ADR 15). `pinnedModels` is the
@@ -484,7 +494,7 @@ export type ServerPushMessage =
 	| ReplaceMessage
 	| PatchMessage
 	| QueueChangedMessage
-	| SessionCompletedMessage
+	| SessionSettledMessage
 	| PinnedModelsChangedMessage
 	| SessionClosedMessage;
 

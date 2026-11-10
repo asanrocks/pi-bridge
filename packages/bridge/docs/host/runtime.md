@@ -1213,12 +1213,15 @@ are diffed against the slice the Worker keeps materialized, so several
 callbacks observing one transition — and repeated callbacks observing none —
 emit nothing. `history_changed` names a Project whose cached history a trigger
 touched (settlement, rename, creation, Trash, placement); it carries no rows.
-`session_completed` reports one settled execution in a queued Session. The
-Manager reports both settle boundaries it observes — pi's `turn_end`, which
+`session_settled` reports one execution ending, with how it ended: `completed`,
+`aborted` (Stop, Archive, Trash, an explicit close, or a disposal), or `error`.
+The Manager reports both settle boundaries it observes — pi's `turn_end`, which
 falls after every assistant step, and `agent_settled`, which ends the run —
-because metadata refreshes need both; the completion rides only the execution
-boundary. A user-requested end (Stop, Archive, Trash, explicit close)
-finalizes a turn without announcing a completion.
+because metadata refreshes need both; only the execution carries an outcome, and
+the stop reason comes from the turn's message because `agent_settled` repeats
+only the abort flag. Every execution is reported: the outcome is a fact the
+queue cannot carry (a stopped run and a finished run both leave an idle row), so
+what to announce is the client's decision, never the host's.
 
 The Daemon owns aggregation and the rate:
 
@@ -1243,14 +1246,12 @@ The Daemon owns aggregation and the rate:
   so no publication can land between the baseline and the stream; pending
   changes arrive at the next deadline. Replacing a Connection starts a new
   revision domain.
-- `session_completed` is forwarded immediately, bypassing the interval: a
-  sample would hide a turn shorter than five seconds. `archive`, `trash`,
-  explicit close, and Stop dispose or abort a runtime, and that finalizes the
-  in-flight turn; the resulting settlement is suppressed for the address being
-  ended, because the user asked for it and is not waiting for a completion.
-  Suppression is released whether the operation succeeds or fails. Worker
-  withdrawal removes its rows at the next publication and announces no
-  completions.
+- `session_settled` is forwarded immediately, bypassing the interval: a sample
+  would hide a run shorter than five seconds, and the outcome travels
+  unfiltered — `archive`, `trash`, an explicit close, and Stop finalize a run as
+  `aborted`, which the client can recognise instead of having the fact withheld.
+  Worker withdrawal removes its rows at the next publication and settles
+  nothing.
 
 Connections receive these frames regardless of which Project they currently
 have attached. The worker side of the same triggers is described under

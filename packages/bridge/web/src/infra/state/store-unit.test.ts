@@ -545,19 +545,32 @@ describe("queue deltas (ADR 24)", () => {
 		expect(store.getState().sessionPages.other).toBeDefined();
 	});
 
-	it("files completion notices in sequence order for the notification hook", () => {
+	it("files settle notices in sequence order for the notification hook", () => {
 		const store = createClientStore();
-		store.getState().noteCompletion({
+		store.getState().noteSettlement({
 			session: { projectId: "proj", stem: "a", sessionId: "sess-a" },
+			outcome: "completed",
 			name: "A",
 		});
-		store.getState().noteCompletion({
+		store.getState().noteSettlement({
 			session: { projectId: "proj", stem: "b", sessionId: "sess-b" },
-			lastMessageText: "done",
+			outcome: "error",
 		});
 
-		expect(store.getState().completions.map((notice) => notice.seq)).toEqual([1, 2]);
-		expect(store.getState().completionsSeq).toBe(2);
+		expect(store.getState().settlements.map((notice) => notice.seq)).toEqual([1, 2]);
+		expect(store.getState().settlementsSeq).toBe(2);
+		expect(store.getState().settlements.map((notice) => notice.outcome)).toEqual(["completed", "error"]);
+	});
+
+	it("files an aborted settle without treating it as news", () => {
+		const store = createClientStore();
+		store.getState().noteSettlement({
+			session: { projectId: "proj", stem: "a", sessionId: "sess-a" },
+			outcome: "aborted",
+		});
+		// Reported, never dropped: the hook decides what to announce.
+		expect(store.getState().settlements).toHaveLength(1);
+		expect(store.getState().unreadCompletions).toEqual([]);
 	});
 });
 
@@ -566,12 +579,15 @@ describe("queue deltas (ADR 24)", () => {
 // ---------------------------------------------------------------------------
 
 describe("unread completions", () => {
-	const notice = (stem: string) => ({ session: { projectId: "proj", stem, sessionId: `sess-${stem}` } });
+	const notice = (stem: string) => ({
+		session: { projectId: "proj", stem, sessionId: `sess-${stem}` },
+		outcome: "completed" as const,
+	});
 
 	it("a completion this page is not reading becomes unread", () => {
 		const store = createClientStore();
-		store.getState().noteCompletion(notice("a"));
-		store.getState().noteCompletion(notice("b"));
+		store.getState().noteSettlement(notice("a"));
+		store.getState().noteSettlement(notice("b"));
 		expect(store.getState().unreadCompletions).toEqual([
 			addressKeyOf({ projectId: "proj", stem: "a" }),
 			addressKeyOf({ projectId: "proj", stem: "b" }),
@@ -581,28 +597,28 @@ describe("unread completions", () => {
 	it("the attached Session's own completion is not news", () => {
 		const store = createClientStore();
 		store.getState().commitAddress("proj", "a", "sess-a");
-		store.getState().noteCompletion(notice("a"));
+		store.getState().noteSettlement(notice("a"));
 		expect(store.getState().unreadCompletions).toEqual([]);
 	});
 
 	it("one address is unread once, however many turns it finishes", () => {
 		const store = createClientStore();
-		store.getState().noteCompletion(notice("a"));
-		store.getState().noteCompletion(notice("a"));
+		store.getState().noteSettlement(notice("a"));
+		store.getState().noteSettlement(notice("a"));
 		expect(store.getState().unreadCompletions).toHaveLength(1);
 	});
 
 	it("attaching the Session reads it: the optimistic commit clears it, not the sync", () => {
 		const store = createClientStore();
-		store.getState().noteCompletion(notice("a"));
+		store.getState().noteSettlement(notice("a"));
 		store.getState().setCurrentSession("proj", "a");
 		expect(store.getState().unreadCompletions).toEqual([]);
 	});
 
 	it("a confirmed attach clears it too, and reading one leaves the other", () => {
 		const store = createClientStore();
-		store.getState().noteCompletion(notice("a"));
-		store.getState().noteCompletion(notice("b"));
+		store.getState().noteSettlement(notice("a"));
+		store.getState().noteSettlement(notice("b"));
 		store
 			.getState()
 			.commitObservation({ projectId: "proj", stem: "b", sessionId: "sess-b" }, store.getState().document);

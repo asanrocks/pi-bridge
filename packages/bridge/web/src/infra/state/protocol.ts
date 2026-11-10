@@ -17,6 +17,7 @@ import type {
 	SessionAddress,
 	SessionInfo,
 	SessionListCursor,
+	SessionOutcome,
 	SessionRef,
 } from "../../../../src/core/types.ts";
 import type { ComposerDraft } from "./composer.ts";
@@ -51,26 +52,28 @@ export type SessionFolderPage =
 	| { kind: "ready"; sessions: SessionInfo[]; hasMore: boolean; nextCursor: SessionListCursor | null };
 
 // ---------------------------------------------------------------------------
-// Completion notices — the queue-wide completion signal (ADR 24).
+// Settle notices — the queue-wide completion signal (ADR 24).
 //
-// A queue delta is a sampled state, so a turn shorter than the publication
-// interval may never appear as running. Completion is therefore its own frame,
-// forwarded immediately; these notices are the small hand-off between the push
-// pipeline (which files them) and the notification hook (which drains them).
+// A queue delta is a sampled state, so a run shorter than the publication
+// interval may never appear as running. A settle is therefore its own frame,
+// forwarded immediately with how the execution ended; these notices are the
+// small hand-off between the push pipeline (which files them) and the
+// notification hook (which drains them and decides what counts as news).
 // ---------------------------------------------------------------------------
 
-export interface CompletionNotice {
+export interface SettlementNotice {
 	/** Monotone within one Connection: the hook drains by sequence, so a notice
 	 * written while a render was pending is never announced twice. */
 	seq: number;
 	session: SessionRef;
+	/** How the execution ended, reported rather than judged upstream. */
+	outcome: SessionOutcome;
 	name?: string;
-	lastMessageText?: string;
 }
 
 /** How many notices the store retains. The hook drains synchronously after each
  * write, so this only bounds memory while nothing is subscribed. */
-const COMPLETION_LOG_LIMIT = 32;
+const SETTLEMENT_LOG_LIMIT = 32;
 
 /** One address's identity in the unread list. */
 export function addressKeyOf(address: { projectId: string; stem: string }): string {
@@ -135,14 +138,15 @@ export interface ProtocolSlice {
 	 * delta must be exactly one ahead, or the client reconnects for a snapshot
 	 * (ADR 24). */
 	queueRevision: number;
-	/** Queued completions not yet drained by the notification hook. */
-	completions: CompletionNotice[];
-	completionsSeq: number;
-	/** Addresses (`addressKeyOf`) whose completion this page has not read yet:
-	 * the badge's novelty ring. Membership is an occurrence this page witnessed,
-	 * so it is deliberately neither synced across tabs nor persisted — a reload
-	 * means "nothing new since this page loaded". A local overlay on the synced
-	 * count, never a second authority on what it counts. */
+	/** Queued settle notices not yet drained by the notification hook. */
+	settlements: SettlementNotice[];
+	settlementsSeq: number;
+	/** Addresses (`addressKeyOf`) whose settle this page has not read yet: the
+	 * badge's novelty ring. A finished run and a failure are news; an abort is
+	 * the reader's own gesture and never lands here. Membership is an occurrence
+	 * this page witnessed, so it is deliberately neither synced across tabs nor
+	 * persisted — a reload means "nothing new since this page loaded". A local
+	 * overlay on the synced count, never a second authority on what it counts. */
 	unreadCompletions: string[];
 	models: ModelInfo[];
 	/** The daemon-global pinned list (ADR 15), resolved from pi's global
@@ -203,8 +207,8 @@ export interface ProtocolSlice {
 		invalidateHistory: string[],
 		revision: number,
 	) => void;
-	/** File one completion occurrence for the notification hook to drain. */
-	noteCompletion: (notice: Omit<CompletionNotice, "seq">) => void;
+	/** File one settle occurrence for the notification hook to drain. */
+	noteSettlement: (notice: Omit<SettlementNotice, "seq">) => void;
 	setSessionPage: (
 		projectId: string,
 		sessions: SessionInfo[],
@@ -361,8 +365,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	projects: [],
 	queue: [],
 	queueRevision: 0,
-	completions: [],
-	completionsSeq: 0,
+	settlements: [],
+	settlementsSeq: 0,
 	unreadCompletions: [],
 	addressViaAlias: false,
 	models: [],
@@ -396,20 +400,23 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			sessionPages: invalidateHistory.length > 0 ? withoutPages(s.sessionPages, invalidateHistory) : s.sessionPages,
 		})),
 
-	noteCompletion: (notice) =>
+	noteSettlement: (notice) =>
 		set((s) => {
 			const attached = s.currentProjectId === notice.session.projectId && s.currentStem === notice.session.stem;
 			const key = addressKeyOf(notice.session);
 			// The Session this tab is reading carries its own completion in the tab
 			// title and unread count (`useStatusNotifications`), so it is never news
-			// here; everything else is unread until this page attaches it.
+			// here. A stop is the reader's own gesture and never novelty either;
+			// a finished run and a failure both are, until this page attaches the
+			// Session. The notice itself is filed whatever the outcome.
+			const news = notice.outcome !== "aborted" && !attached;
 			const unread =
-				attached || s.unreadCompletions.includes(key)
+				!news || s.unreadCompletions.includes(key)
 					? s.unreadCompletions
-					: [...s.unreadCompletions, key].slice(-COMPLETION_LOG_LIMIT);
+					: [...s.unreadCompletions, key].slice(-SETTLEMENT_LOG_LIMIT);
 			return {
-				completions: [...s.completions, { ...notice, seq: s.completionsSeq + 1 }].slice(-COMPLETION_LOG_LIMIT),
-				completionsSeq: s.completionsSeq + 1,
+				settlements: [...s.settlements, { ...notice, seq: s.settlementsSeq + 1 }].slice(-SETTLEMENT_LOG_LIMIT),
+				settlementsSeq: s.settlementsSeq + 1,
 				unreadCompletions: unread,
 			};
 		}),
