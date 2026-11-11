@@ -10,7 +10,7 @@ import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { Document, Patch, SessionRef } from "../../src/core/index.ts";
+import { type Document, type Patch, PROTOCOL_VERSION, type SessionRef } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
@@ -146,6 +146,7 @@ const stubVerbs: DaemonVerbs = {
 	listQueue: async () => [],
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
+		protocol: PROTOCOL_VERSION,
 		projects: [],
 		models: [],
 		pinnedModels: [],

@@ -21,7 +21,7 @@
 
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import type { ImageContent, JsonValue, PullRequestItem } from "../core/index.ts";
+import { type ImageContent, type JsonValue, PROTOCOL_VERSION, type PullRequestItem } from "../core/index.ts";
 import { endpointUrl } from "./daemon-socket.ts";
 import type {
 	ObservedSession,
@@ -42,7 +42,6 @@ import {
 	parseWorkerFrame,
 	WORKER_HEARTBEAT_INTERVAL_MS,
 	WORKER_HEARTBEAT_TIMEOUT_MS,
-	WORKER_PROTOCOL_VERSION,
 	WORKER_REJECTED_CLOSE_CODE,
 	type WorkerPush,
 	type WorkerReply,
@@ -238,9 +237,9 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 		 * caller's promise rejects with `WorkerRegistrationError`. */
 		const acceptHello = (candidate: WorkerHello): void => {
 			if (hello !== null || settled) return;
-			if (candidate.protocol !== WORKER_PROTOCOL_VERSION) {
+			if (candidate.protocol !== PROTOCOL_VERSION) {
 				settled = true;
-				const reason = `worker protocol mismatch: peer ${candidate.protocol}, expected ${WORKER_PROTOCOL_VERSION}`;
+				const reason = `protocol mismatch: peer ${candidate.protocol}, expected ${PROTOCOL_VERSION}`;
 				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
 				rejectConnect(new WorkerRegistrationError(reason));
 				return;

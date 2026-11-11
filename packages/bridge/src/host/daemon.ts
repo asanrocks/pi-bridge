@@ -5,7 +5,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { SessionInfo, SessionRef } from "../core/index.ts";
-import { compareQueueRows } from "../core/index.ts";
+import { compareQueueRows, PROTOCOL_VERSION } from "../core/index.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
@@ -790,7 +790,11 @@ export class Daemon {
 		gitDiff: (directory, oldState, newState) =>
 			this.forPath(directory).service.gitDiff(directory, oldState, newState),
 
-		getDaemonInfo: async () => ({ ...(await this.aggregateInfo()), devMode: this.devMode }),
+		getDaemonInfo: async () => ({
+			...(await this.aggregateInfo()),
+			devMode: this.devMode,
+			protocol: PROTOCOL_VERSION,
+		}),
 
 		setPinnedModels: (models) => {
 			// The pinned scope is Worker-global; with several registrations the

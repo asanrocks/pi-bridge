@@ -10,11 +10,14 @@
 // the rendered object's name — an inline-editable Session name, or the Project
 // id on its home as plain text — and the connection icon (down states only) — an
 // icon-only broken-link control on the ghost spec: motion = trying, stillness
-// = failed; click retries; text lives in the tooltip/aria-label only.
+// = failed, amber pulse = version skew; click runs the one action the state
+// offers (retry, or reload into the daemon's app); text lives in the
+// tooltip/aria-label only.
 // ============================================================================
 
 import { memo, useEffect, useRef, useState } from "react";
-import { connectionStatus } from "../../infra/state/connectionStatus.ts";
+import { reloadFromDaemon } from "../../infra/lib/appUpgrade.ts";
+import { type ConnectionStatus, connectionStatus } from "../../infra/state/connectionStatus.ts";
 import type { ConnectionState } from "../../infra/state/store.ts";
 import { BrokenLinkIcon, ClockIcon, MenuIcon } from "../../render/icons.tsx";
 import { RepositoryMenu } from "./RepositoryMenu.tsx";
@@ -179,10 +182,13 @@ export const TopBar = memo(function TopBar({
 			{status && (
 				<button
 					type="button"
-					className={`${styles.topBarBtn} ${CONN_TONE[status.tone]} ${
-						status.phase === "trying" ? (status.tone === "err" ? styles.connTryingErr : styles.connTrying) : ""
-					}`}
-					onClick={onRetry}
+					className={`${styles.topBarBtn} ${CONN_TONE[status.tone]} ${motionClass(status)}`}
+					onClick={() => {
+						// The state names its own remedy (see connectionStatus.ts): only a
+						// stale app can be replaced from the page.
+						if (status.action === "reload-app") void reloadFromDaemon();
+						else onRetry();
+					}}
 					title={status.detail}
 					aria-label={status.label}
 				>
@@ -211,4 +217,13 @@ export const TopBar = memo(function TopBar({
 const CONN_TONE = {
 	muted: styles.connMuted,
 	err: styles.connErr,
+	warn: styles.connWarn,
 } as const;
+
+/** Motion = what the icon is doing: reaching (a retry loop), standing still, or
+ * pulsing for attention because nothing retries a version mismatch. */
+function motionClass(status: ConnectionStatus): string {
+	if (status.blink) return styles.connAttention;
+	if (status.phase !== "trying") return "";
+	return status.tone === "err" ? styles.connTryingErr : styles.connTrying;
+}

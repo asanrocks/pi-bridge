@@ -13,13 +13,13 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type { Document, Patch } from "../../src/core/index.ts";
+import { PROTOCOL_VERSION } from "../../src/core/index.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { connectWorker } from "../../src/host/worker-client.ts";
 import type { WorkerObservationFrame } from "../../src/host/worker-contract.ts";
 import type { LocalManagerFactory, LocalWorker } from "../../src/host/worker-local.ts";
 import { createLocalWorker } from "../../src/host/worker-local.ts";
-import { WORKER_PROTOCOL_VERSION } from "../../src/host/worker-protocol.ts";
 import { createWorkerSocketServer, serveWorkerConnection } from "../../src/host/worker-server.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -295,7 +295,7 @@ describe("worker link liveness", () => {
 			ws.send(
 				JSON.stringify({
 					kind: "hello",
-					protocol: WORKER_PROTOCOL_VERSION,
+					protocol: PROTOCOL_VERSION,
 					registration: { id: "reg", incarnation: "inc", generation: 1 },
 					info: {
 						projects: [],

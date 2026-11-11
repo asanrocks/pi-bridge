@@ -20,7 +20,7 @@ import { unlink } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { JsonValue } from "../core/index.ts";
+import { type JsonValue, PROTOCOL_VERSION } from "../core/index.ts";
 import type {
 	ObservedSession,
 	WorkerObservation,
@@ -32,7 +32,6 @@ import {
 	parseWorkerFrame,
 	WORKER_HEARTBEAT_INTERVAL_MS,
 	WORKER_HEARTBEAT_TIMEOUT_MS,
-	WORKER_PROTOCOL_VERSION,
 	type WorkerReply,
 	type WorkerRequest,
 } from "./worker-protocol.ts";
@@ -321,7 +320,7 @@ export async function serveWorkerConnection(
 	}
 	send({
 		kind: "hello",
-		protocol: WORKER_PROTOCOL_VERSION,
+		protocol: PROTOCOL_VERSION,
 		registration: service.registration,
 		info,
 	});

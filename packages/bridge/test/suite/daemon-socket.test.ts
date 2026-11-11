@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../src/core/index.ts";
 import { Daemon } from "../../src/host/daemon.ts";
 import {
 	defaultDaemonSocketPath,
@@ -311,6 +312,8 @@ describe("dial-in Worker registration", () => {
 		cleanups.push(() => ws.close());
 		const info = await rpc(ws, { verb: "getDaemonInfo" });
 		expect(info.ok).toBe(true);
+		// The Daemon defines the protocol version the app and its Workers follow.
+		expect(info.protocol).toBe(PROTOCOL_VERSION);
 		expect((info.projects as Array<{ id: string }>).map((project) => project.id)).toEqual(["dials-in"]);
 
 		const page = await rpc(ws, { verb: "listSessions", projectId: "dials-in", max: 10 });

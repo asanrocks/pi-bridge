@@ -128,6 +128,7 @@ export {
 	LAZY_FIELD_PATTERNS,
 	MAX_IMAGE_BASE64_LENGTH,
 	MAX_IMAGES_PER_MESSAGE,
+	PROTOCOL_VERSION,
 	parseCommitSubject,
 	parseGitIdentity,
 	parseGitStampData,

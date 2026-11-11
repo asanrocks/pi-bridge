@@ -6,10 +6,10 @@
 // listener serves two kinds of peer:
 //
 //   probe   — a launcher's one-shot question before it commits to a role. The
-//             reply carries the worker protocol version and the Daemon's web
-//             address, so a stale file, an unrelated UNIX service, and a
-//             mismatched bridge are distinct, actionable results, and a joining
-//             Worker can name the page a browser should open.
+//             reply carries the protocol version and the Daemon's web address,
+//             so a stale file, an unrelated UNIX service, and a mismatched
+//             bridge are distinct, actionable results, and a joining Worker can
+//             name the page a browser should open.
 //   worker  — a registration: the first frame is `hello`, which is handed to
 //             the Daemon together with the socket. The peek consumes that frame,
 //             so the adoption is seeded with it rather than requiring a second
@@ -26,15 +26,10 @@ import { createConnection } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../core/index.ts";
 import type { ProbeResult } from "./discovery.ts";
 import type { WorkerHello } from "./worker-client.ts";
-import {
-	isWorkerProbeRequest,
-	WORKER_PROBE_ID,
-	WORKER_PROTOCOL_VERSION,
-	workerProbeReply,
-	workerProbeRequest,
-} from "./worker-protocol.ts";
+import { isWorkerProbeRequest, WORKER_PROBE_ID, workerProbeReply, workerProbeRequest } from "./worker-protocol.ts";
 
 /** A listener that does not answer is not a daemon, and one that answers slowly
  * is not one worth waiting for. */
@@ -286,10 +281,10 @@ export async function probeDaemonSocket(socketPath: string): Promise<ProbeResult
 	if (reply.ok !== true) {
 		return { kind: "refused", reason: `${socketPath} refused the handshake: ${String(reply.error)}` };
 	}
-	if (reply.protocol !== WORKER_PROTOCOL_VERSION) {
+	if (reply.protocol !== PROTOCOL_VERSION) {
 		return {
 			kind: "refused",
-			reason: `${socketPath} speaks pi-bridge worker protocol ${String(reply.protocol)}, this build speaks ${WORKER_PROTOCOL_VERSION}. Stop the old daemon or use a different --socket.`,
+			reason: `${socketPath} speaks pi-bridge protocol ${String(reply.protocol)}, this build speaks ${PROTOCOL_VERSION}. Stop the old daemon or use a different --socket.`,
 		};
 	}
 	return { kind: "live", web: typeof reply.web === "string" ? reply.web : null };

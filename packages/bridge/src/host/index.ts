@@ -83,7 +83,6 @@ export {
 	parseWorkerFrame,
 	WORKER_HEARTBEAT_INTERVAL_MS,
 	WORKER_HEARTBEAT_TIMEOUT_MS,
-	WORKER_PROTOCOL_VERSION,
 } from "./worker-protocol.ts";
 export type { WorkerSocketServerOptions } from "./worker-server.ts";
 export { createWorkerSocketServer, serveWorkerConnection } from "./worker-server.ts";

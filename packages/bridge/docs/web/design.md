@@ -296,6 +296,11 @@ The launcher also owns the connection down-state panels:
 - Unreachable shows a warning, the host explanation, manual retry, and the
   fact that automatic retry continues.
 - Daemon unresponsive shows the initialization error and a `Retry` action.
+- App out of date (a version mismatch whose newer side is the daemon) shows
+  `Reload app`, which reloads into the daemon's copy.
+- Daemon out of date (the newer side is the app) explains that restarting
+  pi-bridge is the fix and offers `Check again` instead of a reload that could
+  not help.
 
 The attached topbar mirrors these states with a clickable connection control on
 the TopBar's ghost spec; the launcher panel remains the full explanation when
@@ -513,15 +518,19 @@ is the History clock, symmetric with the hamburger: shown when a session is
 open and the History pane is hidden, hidden when the pane has a surface of
 its own, and hover-peeks the pane while it is hidden. It is not shown on the
 launcher, where there is no history. A down-state connection icon sits beside
-the name and retries when clicked: an icon-only broken-chain-link control on
-the TopBar's ghost spec, with no text — the state phrase lives in the tooltip
-and `aria-label`.
-Its visible grammar is two-state: an animated link (opacity pulse; slow in
+the name and runs the one action its state offers: an icon-only
+broken-chain-link control on the TopBar's ghost spec, with no text — the state
+phrase lives in the tooltip and `aria-label`. Clicking retries, except for a
+version mismatch whose newer side is the daemon, where clicking reloads into
+the daemon's app.
+Its visible grammar is three-state: an animated link (opacity pulse; slow in
 muted gray while first connecting, fast in error red while retrying) means a
-retry loop is running, and a still red link means the connection has given
-up. The icon never uses the streaming orange or the liveness-dot vocabulary,
-and all motion is gated behind `prefers-reduced-motion`, falling back to
-steady half-opacity for trying and full red for failed. In desktop rail mode
+retry loop is running, a still red link means the connection has given up, and
+an amber link pulsing at its own rhythm means version skew — nothing is
+retrying, but the user must act. The icon never uses the streaming orange or
+the liveness-dot vocabulary, and all motion is gated behind
+`prefers-reduced-motion`, falling back to steady half-opacity for trying and
+skew and full red for failed. In desktop rail mode
 the Sidebar edge is the close affordance;
 the topbar hamburger is not duplicated there.
 

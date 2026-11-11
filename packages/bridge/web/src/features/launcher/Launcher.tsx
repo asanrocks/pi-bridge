@@ -14,6 +14,7 @@
 // ============================================================================
 
 import { memo, useMemo } from "react";
+import { reloadFromDaemon } from "../../infra/lib/appUpgrade.ts";
 import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
 import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
 import { useNow } from "../../infra/lib/useNow.ts";
@@ -49,10 +50,10 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const latest = useMemo(() => sortByLastActivity(queued.filter((s) => s.location === "inbox"))[0] ?? null, [queued]);
 
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
-	// Wording and visible state come from the shared connectionStatus mapping
-	// (the TopBar icon is the other consumer). The warn glyph marks the
-	// failed phase; auto-retrying states show a hint; init_failed does not
-	// self-retry; connecting has nothing to retry yet.
+	// Wording, phase, and the one action come from the shared connectionStatus
+	// mapping (the TopBar icon is the other consumer). The warn glyph marks the
+	// failed phase; auto-retrying states show a hint; a version mismatch shows
+	// neither a retry loop nor a reload the direction cannot justify.
 	const status = connectionStatus(connection);
 	if (status) {
 		return (
@@ -64,14 +65,16 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				)}
 				<div className={styles.stateTitle}>{status.label}</div>
 				<div className={styles.stateSub}>{status.detail}</div>
-				{connection.kind !== "connecting" && (
-					<button type="button" className={styles.stateBtn} onClick={retry}>
-						Retry now
+				{status.action !== null && (
+					<button
+						type="button"
+						className={styles.stateBtn}
+						onClick={status.action === "reload-app" ? () => void reloadFromDaemon() : retry}
+					>
+						{status.actionLabel}
 					</button>
 				)}
-				{(connection.kind === "reconnecting" || connection.kind === "unreachable") && (
-					<div className={styles.stateHint}>Auto-retrying…</div>
-				)}
+				{status.autoRetry && <div className={styles.stateHint}>Auto-retrying…</div>}
 			</div>
 		);
 	}

@@ -251,9 +251,31 @@ a bare string with no established run, or a frame shape outside the
 protocol (an unknown push kind) — is never silently tolerated: the client
 surfaces it (`BridgeClientOptions.onProtocolError`), and the web client
 toasts and closes the socket, so the reconnect path's initial sync
-repairs the stream. The daemon and the app ship together, so a repeated
-violation is version skew and the toast names reloading the page as the
-fix. The wire carries no version negotiation by design; the one cost is
-the upgrade window: a tab left open across a daemon upgrade speaks the
-previous dialect, and its transcript may stall mid-stream until the page
-is reloaded.
+repairs the stream. While the version check is still running, an
+undecodable frame is held back: it may be a symptom of skew, and only the
+check can tell skew from a genuine bug (see Version).
+
+## Version
+
+`PROTOCOL_VERSION` (`core/protocol-version.ts`) is the version of every frame
+this package sends, and it is bumped when a frame's meaning changes in a way an
+older peer would misinterpret — a renamed kind, a changed field meaning. Adding
+an optional field is not a bump; an older peer ignores what it does not know.
+
+All three peers ship in one build, and the Daemon is the authority: it reports
+the version in `getDaemonInfo` (for the browser), in the daemon-socket probe
+(for a launcher), and in the Worker handshake (for a registering Worker).
+
+- A **Worker** that reports another version is refused at the handshake with a
+  terminal registration error ([host runtime](../host/runtime.md)). There is no
+  compatibility window: a partially understood frame stream is worse than a
+  stopped Worker.
+- A **browser** cannot be refused at a handshake — it is already running — so
+  it compares `getDaemonInfo.protocol` with its own constant before applying
+  anything else. A difference is reported as a connection state, not as a
+  protocol error: nothing retries, because no retry can change either build.
+- The **remedy depends on the direction**. The Daemon serves the app from disk
+  on every navigation but keeps its own frames frozen in the running process, so
+  a reload takes the Daemon's copy — a fix only while the app is the older side.
+  A Daemon that is older must be restarted on the host. See
+  [web architecture](../web/architecture.md) for the surfaces.

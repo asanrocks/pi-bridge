@@ -2,7 +2,13 @@
 // (connection-daemon.test.ts, initial-sync-integration.test.ts).
 
 import WebSocket, { WebSocketServer } from "ws";
-import { filterPatchForSocket, type PrefixCursor, type SessionInfo, type SessionRef } from "../../src/core/index.ts";
+import {
+	filterPatchForSocket,
+	PROTOCOL_VERSION,
+	type PrefixCursor,
+	type SessionInfo,
+	type SessionRef,
+} from "../../src/core/index.ts";
 import type { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { Manager } from "../../src/host/manager.ts";
@@ -177,6 +183,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	listQueue: async () => [],
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
+		protocol: PROTOCOL_VERSION,
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
 		pinnedModels: [],

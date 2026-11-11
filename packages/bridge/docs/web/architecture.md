@@ -325,15 +325,37 @@ sections for the web card, and feeds the action summary/header (`patch: <file>
 The state machine is:
 
 ```text
-connecting -> connected | init_failed
+connecting -> connected | init_failed | version_mismatch
 connected connection drop -> reconnecting -> unreachable
 ```
 
 A socket being open is not enough to become connected. Initialization must
-complete `getDaemonInfo` and `listQueue` within 8 seconds, populate
-Projects, model metadata, development mode, and the queue, then open the
-route-driven address. Failure after the socket opens
-is `init_failed` and can be retried without replacing the socket.
+complete `getDaemonInfo` within 8 seconds, populate Projects, model metadata,
+development mode, and the queue, then open the route-driven address. Failure
+after the socket opens is `init_failed` and can be retried without replacing the
+socket.
+
+`getDaemonInfo` also carries the daemon's `protocol` version, and it is checked
+before anything else the reply reports is applied — the browser half of
+[core protocol](../core/protocol.md), "Version" (`infra/net/protocolSkew.ts`).
+A difference is `version_mismatch`: the socket closes deliberately, nothing
+retries, and the state carries both numbers so `connectionStatus` can name the
+side that has to move. An undecodable frame that arrives while init is still
+running is held back rather than closing the socket, because it may be a symptom
+of that skew; once the versions agree it is a genuine protocol error and takes
+the toast path. The route's address stays unclaimed and the document already on
+screen is left as it was, so a mismatch mid-session keeps its transcript.
+
+The direction decides the remedy, and `connectionStatus` owns both wordings. A
+**newer daemon** is reached by reloading: it serves the shell from its asset
+root, so a reload takes its copy. `infra/lib/appUpgrade.ts` clears the service
+worker's caches first (the shell cache, not the content-hashed `/assets/*`, would
+otherwise survive as the offline fallback), refreshes the worker registration,
+and suppresses the draft guard's `beforeunload` prompt — drafts are persisted per
+address, so an upgrade reload loses nothing. A **newer app** cannot be fixed from
+the page at all: the running daemon's frames are frozen in its process, so the
+state says to restart pi-bridge on the host and offers only `Check again`, which
+opens a new connection and asks again.
 
 After a successful connection, drops count from one. Attempts below five are
 `reconnecting`; attempt five and later are `unreachable`. `unreachable` still

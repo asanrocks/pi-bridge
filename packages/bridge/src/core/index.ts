@@ -38,6 +38,7 @@ export {
 } from "./git-stamp.ts";
 export type { EntryProjection, EntrySnapshot } from "./projection.ts";
 export { createEntryProjection } from "./projection.ts";
+export { PROTOCOL_VERSION } from "./protocol-version.ts";
 export { compareQueueRows } from "./queue-order.ts";
 export type {
 	Reactor,

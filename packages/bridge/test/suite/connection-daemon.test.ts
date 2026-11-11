@@ -1,7 +1,12 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BridgeTransport, Document, SessionRef } from "../../src/core/index.ts";
-import { BridgeClient, MAX_IMAGE_BASE64_LENGTH, MAX_IMAGES_PER_MESSAGE } from "../../src/core/index.ts";
+import {
+	BridgeClient,
+	MAX_IMAGE_BASE64_LENGTH,
+	MAX_IMAGES_PER_MESSAGE,
+	PROTOCOL_VERSION,
+} from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
@@ -391,6 +396,7 @@ describe("Connection + Daemon", () => {
 		});
 		const r = reply as Record<string, unknown>;
 		expect(r.ok).toBe(true);
+		expect(r.protocol).toBe(PROTOCOL_VERSION);
 		expect(r.models).toBeDefined();
 		expect(r.thinkingLevels).toBeDefined();
 		// liveSessionId was removed from GetDaemonInfoReply

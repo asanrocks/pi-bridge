@@ -30,7 +30,9 @@ import type { ClientStore } from "./store.ts";
 // after a successful connect, attempt < threshold. `unreachable` = attempts
 // exhausted (still auto-retrying, but loud). `init_failed` = WS opened but
 // the init RPC (getDaemonInfo + listActiveSessions) failed — distinct from
-// unreachable.
+// unreachable. `version_mismatch` = the daemon answers, but its protocol
+// version is not the one this app was built against; it is not a connection
+// problem, so nothing retries.
 // ---------------------------------------------------------------------------
 
 export type ConnectionState =
@@ -38,7 +40,10 @@ export type ConnectionState =
 	| { kind: "connected" }
 	| { kind: "reconnecting"; attempt: number }
 	| { kind: "unreachable"; attempt: number }
-	| { kind: "init_failed"; error: string };
+	| { kind: "init_failed"; error: string }
+	/** `daemon` is null when the reply carried no version at all — a daemon older
+	 * than the check, which is the same verdict as a different number. */
+	| { kind: "version_mismatch"; daemon: number | null; app: number };
 
 // ---------------------------------------------------------------------------
 // Sidebar folder pages — lazily fetched per-Project session lists for the

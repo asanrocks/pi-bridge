@@ -74,6 +74,10 @@ export interface DaemonVerbs {
 	 * address sessions by `(projectId, stem)`. Async because per-Project
 	 * default-model resolution may check auth. */
 	getDaemonInfo: () => Promise<{
+		/** The Daemon's `PROTOCOL_VERSION` (core/protocol-version.ts): the browser
+		 * compares it with the constant its own build carries, and a difference is
+		 * reported instead of guessed at frame by frame. */
+		protocol: number;
 		projects: ProjectInfo[];
 		models: {
 			provider: string;

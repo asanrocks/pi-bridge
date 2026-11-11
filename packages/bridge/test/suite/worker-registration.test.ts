@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../src/core/index.ts";
 import { connectWorker } from "../../src/host/worker-client.ts";
 import type {
 	ObservedSession,
@@ -18,7 +19,6 @@ import type {
 	WorkerRegistration,
 	WorkerService,
 } from "../../src/host/worker-contract.ts";
-import { WORKER_PROTOCOL_VERSION } from "../../src/host/worker-protocol.ts";
 import { createWorkerSocketServer } from "../../src/host/worker-server.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -153,7 +153,7 @@ describe("worker registration", () => {
 			ws.send(
 				JSON.stringify({
 					kind: "hello",
-					protocol: WORKER_PROTOCOL_VERSION + 1,
+					protocol: PROTOCOL_VERSION + 1,
 					registration,
 					info: info(["alpha"]),
 				}),

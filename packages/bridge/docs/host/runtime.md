@@ -200,7 +200,9 @@ its socket and its storage claims — and a Worker that becomes
 unavailable withdraws only its own Projects; the others keep serving, and the
 browser's queue is republished as the aggregate of the survivors.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
-catalogue, and pinned/visible scopes, deduped by identity.
+catalogue, and pinned/visible scopes, deduped by identity, and adds the two
+facts only the Daemon owns: `devMode` and the `protocol` version the browser
+compares against its own build ([core protocol](../core/protocol.md), "Version").
 
 Four modes share one host implementation:
 
@@ -249,7 +251,11 @@ The accepted set is the Daemon's routing table: a Project outside it answers
 
 The protocol version is checked at the handshake. A peer speaking a different
 version is refused rather than parsed, because a frame whose meaning changed
-cannot be handled on a best-effort basis.
+cannot be handled on a best-effort basis. The version is the package-wide
+`PROTOCOL_VERSION` the Daemon also reports to the browser
+([core protocol](../core/protocol.md), "Version"); the refusal names both
+numbers, and a refused registration is terminal — the Worker is restarted, not
+re-dialed.
 
 ### Worker startup mode
 

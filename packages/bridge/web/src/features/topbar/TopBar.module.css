@@ -171,10 +171,12 @@
 /* Connection icon — shown only on down states. Icon-only broken-link button
    on the .topBarBtn spec (no chip surface); the Launcher renders the full
    text panel when unattached. Motion grammar (see connectionStatus.ts):
-   moving = trying, still = failed. Hue is secondary: muted while first
-   connecting, error red once dropped/broken — never the streaming orange.
-   Rhythm (2s slow reach, 0.8s fast retry) is deliberately unlike the 1.5s
-   streaming-pulse so even the animations don't rhyme. */
+   moving = trying, still = failed, pulsing = the user must act. Hue is
+   secondary: muted while first connecting, error red once dropped/broken,
+   amber for version skew (a deployment problem, not a network one) — never the
+   streaming orange. Rhythm (2s slow reach, 0.8s fast retry, 1.2s skew) is
+   deliberately unlike the 1.5s streaming pulse so even the animations don't
+   rhyme. */
 .connMuted {
 	color: var(--color-muted-foreground);
 }
@@ -183,11 +185,19 @@
 	color: var(--color-error);
 }
 
-/* .ghost:hover would gray the red out on hover — re-assert the state hue so the
+.connWarn {
+	color: var(--color-warning);
+}
+
+/* .ghost:hover would gray the state hue out on hover — re-assert it so the
    pointer never mutes a down-state signal. (The muted tone is identical to the
    default hover and needs no override.) */
 .connErr:hover {
 	color: var(--color-error);
+}
+
+.connWarn:hover {
+	color: var(--color-warning);
 }
 
 @keyframes conn-reach {
@@ -208,13 +218,19 @@
 	.connTryingErr {
 		animation: conn-reach 0.8s ease-in-out infinite;
 	}
+
+	/* Version skew: nothing is retrying, but the user must act. */
+	.connAttention {
+		animation: conn-reach 1.2s ease-in-out infinite;
+	}
 }
 
 /* Reduced-motion fallback: animation is gone, so the trying/failed
    distinction falls back to steady dimness vs full-strength red. */
 @media (prefers-reduced-motion: reduce) {
 	.connTrying,
-	.connTryingErr {
+	.connTryingErr,
+	.connAttention {
 		opacity: 0.5;
 	}
 }

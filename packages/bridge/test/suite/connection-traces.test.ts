@@ -11,7 +11,7 @@ import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { Document, SessionRef } from "../../src/core/index.ts";
+import { type Document, PROTOCOL_VERSION, type SessionRef } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
@@ -187,6 +187,7 @@ function makeBundle(): Bundle {
 			}
 		},
 		getDaemonInfo: async () => ({
+			protocol: PROTOCOL_VERSION,
 			projects: [],
 			models: [],
 			pinnedModels: [],

@@ -14,14 +14,15 @@
 // name claiming atomic without a second protocol round trip.
 // ============================================================================
 
-import type {
-	JsonValue,
-	ModelRef,
-	PinnedModelSelection,
-	PrefixCursor,
-	PullRequestItem,
-	SessionListCursor,
-	SessionLocation,
+import {
+	type JsonValue,
+	type ModelRef,
+	type PinnedModelSelection,
+	PROTOCOL_VERSION,
+	type PrefixCursor,
+	type PullRequestItem,
+	type SessionListCursor,
+	type SessionLocation,
 } from "../core/index.ts";
 import type {
 	ObservationId,
@@ -32,10 +33,6 @@ import type {
 	WorkerObservationFrame,
 	WorkerRegistration,
 } from "./worker-contract.ts";
-
-/** Bumped when a frame's meaning changes in a way an older peer would
- * misinterpret. A mismatch is a failed registration, not a best-effort parse. */
-export const WORKER_PROTOCOL_VERSION = 1;
 
 /** Close code a Daemon uses when it refuses a Worker's registration. A refused
  * registration is terminal — the same handshake cannot succeed on a retry — so
@@ -74,7 +71,7 @@ export interface WorkerProbeReply {
 }
 
 export function workerProbeReply(web: string | null): string {
-	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: WORKER_PROTOCOL_VERSION, web });
+	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: PROTOCOL_VERSION, web });
 }
 
 /** How often the Daemon probes an idle link, and how long a silent link may

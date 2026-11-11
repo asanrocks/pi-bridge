@@ -19,6 +19,7 @@
 // ============================================================================
 
 import { useEffect, useRef } from "react";
+import { isAppReloadInFlight } from "../lib/appUpgrade.ts";
 import { getStore, useStore } from "../state/store.tsx";
 
 const DRAFT_PREFIX = "pi-bridge:draft:";
@@ -98,9 +99,11 @@ export function useDraftGuard(): void {
 
 	// ── Warn on tab close with unsent text ───────────────────────────────
 	// Reads fresh store state at event time. Fires for any non-empty draft
-	// (compose or edit) — edit text is user work too.
+	// (compose or edit) — edit text is user work too. An upgrade reload is the
+	// user's own gesture and drafts are persisted, so it never prompts.
 	useEffect(() => {
 		const handler = (e: BeforeUnloadEvent) => {
+			if (isAppReloadInFlight()) return;
 			const draft = getStore().getState().draft;
 			const text = draft.kind === "idle" ? "" : draft.text;
 			if (text.trim()) {

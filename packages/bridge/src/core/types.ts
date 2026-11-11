@@ -1108,6 +1108,12 @@ export interface ModelRef {
 export interface GetDaemonInfoReply {
 	id: string;
 	ok: true;
+	/** The Daemon's `PROTOCOL_VERSION`. The browser app was built against the
+	 * same constant, so a difference means the two halves of one deployment are
+	 * not the same build: the app reports it and offers the remedy the direction
+	 * allows. Absent only from a Daemon older than this check, which is the same
+	 * verdict. */
+	protocol: number;
 	projects: ProjectInfo[];
 	models: ModelInfo[];
 	/** The daemon's global `enabledModels` scope (settings.json), resolved
