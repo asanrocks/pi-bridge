@@ -1,7 +1,7 @@
 // ============================================================================
-// SessionRow — one sidebar leaf: location mark + name + relative time (plus a
-// status line: what a running execution is doing, or what an Inbox row last
-// said), and the row menu.
+// SessionRow — one sidebar leaf: location mark + name + time (recency, or the
+// run clock while an execution is in flight) plus a status line: what a running
+// execution is doing, or what an Inbox row last said — and the row menu.
 //
 // Two facts are kept apart, because conflating them was the confusion: the
 // *location* (Inbox, Later, Archive — durable, the user's own classification)
@@ -33,12 +33,14 @@
 
 import { memo, useRef, useState } from "react";
 import type { SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
-import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
-import { useNow } from "../../infra/lib/useNow.ts";
+import { formatWhenFull } from "../../infra/lib/time.ts";
+import { useLabelClock } from "../../infra/lib/useNow.ts";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
 import { MoreIcon } from "../../render/icons.tsx";
-import { activityLabel } from "./activityLabel.ts";
+import { ToolChip } from "../../render/ToolChip.tsx";
+import { type ActivityLine, activityLine, activityLineTitle } from "./activityLine.ts";
 import styles from "./Sidebar.module.css";
+import { sessionTime } from "./sessionTime.ts";
 
 /** One menu entry: what it says, and the location it moves the Session to. */
 interface Move {
@@ -135,7 +137,7 @@ export const SessionRow = memo(function SessionRow({
 	onMenuOpenChange?: (open: boolean) => void;
 }) {
 	const label = (session.name || session.firstMessageText || session.stem) ?? "";
-	const now = useNow();
+	const now = useLabelClock(session.activity !== undefined);
 	const menuBtnRef = useRef<HTMLButtonElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const setMenu = (open: boolean) => {
@@ -143,6 +145,7 @@ export const SessionRow = memo(function SessionRow({
 		onMenuOpenChange?.(open);
 	};
 	const mark = markOf(session);
+	const time = sessionTime(session, now);
 	const dotCls = [
 		styles.sidebarLiveDot,
 		mark === "running"
@@ -165,34 +168,42 @@ export const SessionRow = memo(function SessionRow({
 	// The working row's second line: what the agent is doing (running) or what
 	// it last said (Inbox). Later and Archive rows stay one line — nothing is
 	// owed there.
-	const status =
+	const line: ActivityLine | null =
 		mark === "running"
-			? activityLabel(session.activity, now)
+			? activityLine(session, now)
 			: mark === "inbox"
-				? (session.lastMessageText ?? "")
-				: "";
+				? { text: session.lastMessageText ?? "" }
+				: null;
+	// The row's own title is the precise instant: the trailing slot hands itself
+	// to the menu button on hover, so a title on the timestamp itself is the one
+	// thing the pointer can never reach. The name and the second line carry their
+	// own, so hovering the row never merely repeats the name.
+	const rowTitle = formatWhenFull(time.when);
 	return (
 		<div className={styles.sidebarItemWrap}>
 			<button
 				type="button"
 				className={[styles.sidebarItem, selected ? styles.sidebarItemSelected : ""].filter(Boolean).join(" ")}
 				onClick={() => onOpen(session)}
-				title={label}
+				title={rowTitle}
 				aria-current={selected ? "page" : undefined}
 			>
 				<span className={dotCls} aria-hidden="true" />
 				<span className={styles.sidebarItemText}>
 					<span className={styles.sidebarItemRow}>
-						<span className={styles.sidebarItemName}>{label.slice(0, 60)}</span>
-						<time
-							className={styles.sidebarItemTime}
-							dateTime={session.timestamp}
-							title={formatWhenFull(session.timestamp)}
-						>
-							{formatWhen(session.timestamp, now)}
+						<span className={styles.sidebarItemName} title={label}>
+							{label.slice(0, 60)}
+						</span>
+						<time className={styles.sidebarItemTime} dateTime={time.when} title={formatWhenFull(time.when)}>
+							{time.text}
 						</time>
 					</span>
-					{status !== "" && <span className={styles.sidebarItemStatus}>{status}</span>}
+					{line !== null && (line.tool !== undefined || line.text !== "") && (
+						<span className={styles.sidebarItemStatus} title={activityLineTitle(line)}>
+							{line.tool !== undefined && <ToolChip tool={line.tool} />}
+							{line.text !== "" && <span className={styles.sidebarItemStatusText}>{line.text}</span>}
+						</span>
+					)}
 				</span>
 			</button>
 			{items.length > 0 && (

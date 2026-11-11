@@ -16,15 +16,13 @@
 import { memo, useMemo } from "react";
 import { reloadFromDaemon } from "../../infra/lib/appUpgrade.ts";
 import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
-import { formatWhen, formatWhenFull } from "../../infra/lib/time.ts";
-import { useNow } from "../../infra/lib/useNow.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
-import { activityLabel } from "../sidebar/activityLabel.ts";
 import styles from "./Launcher.module.css";
+import { QueueRow } from "./QueueRow.tsx";
 
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
 	const connection = useStore((s) => s.connection);
@@ -39,7 +37,6 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	/** The daemon's resolved normal-tier keys (ADR 15) — the home's folded boundary. */
 	const visibleModels = useStore((s) => s.visibleModels);
 	const rpc = useRpc();
-	const now = useNow();
 	/** The daemon's queue order is the presentation order: Inbox → Later, each
 	 * group by placement stamp descending — the same order the sidebar's pinned
 	 * sections show. The `Latest` row is the exception: "latest" asks about
@@ -166,49 +163,9 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 				</div>
 			) : (
 				<div className={styles.rows}>
-					{queued.map((session) => {
-						const label = session.name || session.firstMessageText || session.stem;
-						// A running row says what it is doing; otherwise preview the latest
-						// message, falling back to the first when the copy only has one (or
-						// the file scan predates the field).
-						const running = session.activity !== undefined;
-						const activity = activityLabel(session.activity, now);
-						const preview = activity || (session.lastMessageText ?? session.firstMessageText);
-						const when = session.lastActivityAt ?? session.timestamp;
-						// Two independent facts: running overrides the location mark.
-						const dotCls = [
-							styles.dot,
-							running ? styles.dotStreaming : session.location === "later" ? styles.dotLater : "",
-						]
-							.filter(Boolean)
-							.join(" ");
-						return (
-							<div key={`${session.projectId}/${session.stem}`} className={styles.row}>
-								<span className={dotCls} aria-hidden="true" />
-								<button
-									type="button"
-									className={styles.rowMain}
-									onClick={() => rpc.openSession(session.projectId, session.stem, session.sessionId)}
-									title={label}
-								>
-									<div className={styles.rowLine1}>
-										<span className={styles.rowName} title={label}>
-											{label}
-										</span>
-										<span className={styles.rowCwd} title={session.stem}>
-											<bdi>{session.projectId}</bdi>
-										</span>
-										{running && <span className={styles.streaming}>running</span>}
-										{session.location === "later" && <span className={styles.later}>later</span>}
-										<time className={styles.rowTime} dateTime={when} title={formatWhenFull(when)}>
-											{formatWhen(when, now)}
-										</time>
-									</div>
-									{preview && <div className={styles.rowPreview}>{preview}</div>}
-								</button>
-							</div>
-						);
-					})}
+					{queued.map((session) => (
+						<QueueRow key={`${session.projectId}/${session.stem}`} session={session} />
+					))}
 				</div>
 			)}
 		</div>

@@ -243,14 +243,26 @@
 
 /* The status line: one line, quieter than the name, clamped rather than
    wrapping — a busy row must not grow the rail by a live tool name. */
+/* The second line is a row of its own: the running tool's chip, then the
+   words. It keeps its own hit area (no `pointer-events: none`) so its hover
+   title can answer — the row button underneath is still the only click target,
+   and a span inside it forwards the press. */
 .sidebarItemStatus {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* The words take the truncation: the chip is the mark in front of them, and a
+   clipped pill would read as a broken shape. */
+.sidebarItemStatusText {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: var(--fs-xs);
-	color: var(--color-muted-foreground);
-	/* A live line is not a click target of its own; the row is. */
-	pointer-events: none;
+	min-width: 0;
 }
 
 .sidebarItemRow {

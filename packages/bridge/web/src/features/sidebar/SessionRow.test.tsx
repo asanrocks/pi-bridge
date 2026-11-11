@@ -1,13 +1,17 @@
 // ============================================================================
-// SessionRow — the row's mark and its menu: the menu is shaped by the current
-// location, Park/Unpark walk between Inbox and Later, Archive/Unarchive is the
-// resting place, and a running row names the stop it performs while an idle one
-// does not.
+// SessionRow — the row's mark, its time slot, and its menu: the menu is shaped
+// by the current location, Park/Unpark walk between Inbox and Later,
+// Archive/Unarchive is the resting place, and a running row names the stop it
+// performs while an idle one does not. The time slot reports the run clock
+// while an execution is in flight and recency otherwise.
 // ============================================================================
 
-import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, test, vi } from "vitest";
 import type { SessionInfo } from "../../../../src/core/index.ts";
-import { markOf, sessionMenuItems } from "./SessionRow.tsx";
+import { formatWhenFull } from "../../infra/lib/time.ts";
+import { markOf, SessionRow, sessionMenuItems } from "./SessionRow.tsx";
 
 function session(location: SessionInfo["location"], running = false): SessionInfo {
 	return {
@@ -120,5 +124,75 @@ describe("sessionMenuItems", () => {
 
 	it("is empty when the row offers no actions (the panel has no menu)", () => {
 		expect(sessionMenuItems(session("inbox"))).toEqual([]);
+	});
+});
+
+describe("SessionRow — the time slot", () => {
+	// The shared clock's server snapshot is read at import time, i.e. before this
+	// instant, so fixtures sit half a minute past the minute they name: the
+	// recency label floors, and the reading must not tip into the previous minute.
+	const now = Date.now();
+	const ago = (minutes: number) => new Date(now - minutes * 60_000 - 30_000).toISOString();
+
+	function render(sessionInfo: SessionInfo): string {
+		return renderToStaticMarkup(createElement(SessionRow, { session: sessionInfo, onOpen: () => {} }));
+	}
+
+	test("a running row counts its run from the human's last message", () => {
+		const html = render({
+			...session("inbox", true),
+			lastUserActivity: ago(12),
+			lastAgentActivity: new Date(now - 1000).toISOString(),
+		});
+		expect(html).toContain(">12m 30s</time>");
+	});
+
+	test("a settled row reports recency from the agent's last word", () => {
+		const html = render({ ...session("inbox"), lastUserActivity: ago(20), lastAgentActivity: ago(5) });
+		expect(html).toContain("5 min ago");
+	});
+});
+
+describe("SessionRow — the second line and its hover titles", () => {
+	const now = Date.now();
+	const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+
+	function render(sessionInfo: SessionInfo): string {
+		return renderToStaticMarkup(createElement(SessionRow, { session: sessionInfo, onOpen: () => {} }));
+	}
+
+	test("a running row chips the tool in front of the agent's words", () => {
+		const html = render({
+			...session("inbox", true),
+			activity: { kind: "tool", name: "bash", startedAt: new Date(now - 3000).toISOString() },
+			lastUserActivity: ago(12),
+			lastAgentText: "Now the sessionTime test:",
+		});
+		expect(html).toContain(">bash<");
+		expect(html).toContain("·");
+		expect(html).toContain("Now the sessionTime test:");
+		// The flat line is the hover title, so a narrow row still says all of it.
+		expect(html).toContain('title="bash · ');
+	});
+
+	test("each line states its own fact instead of repeating the Session name", () => {
+		const running: SessionInfo = {
+			...session("inbox", true),
+			name: "the parser",
+			activity: { kind: "responding" },
+			lastUserActivity: ago(12),
+			lastAgentText: "Now the sessionTime test:",
+		};
+		const html = render(running);
+		// The name, the line's own text, and the precise instant — never the name
+		// three times over.
+		expect(html).toContain('title="the parser"');
+		expect(html).toContain('title="Now the sessionTime test:"');
+		expect(html).toContain(`title="${formatWhenFull(running.lastUserActivity ?? "")}"`);
+	});
+
+	test("an Inbox preview carries its full line as the title", () => {
+		const html = render({ ...session("inbox"), lastMessageText: "the reply, in full" });
+		expect(html).toContain('title="the reply, in full"');
 	});
 });

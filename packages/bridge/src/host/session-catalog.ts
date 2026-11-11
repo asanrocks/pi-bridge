@@ -42,6 +42,9 @@ interface FileMeta {
 	firstMessageText?: string;
 	lastMessageText?: string;
 	lastActivityAt?: string;
+	lastUserActivity?: string;
+	lastAgentActivity?: string;
+	lastAgentText?: string;
 	messageCount?: number;
 }
 
@@ -189,10 +192,13 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			name: meta?.name ?? liveMeta?.name,
 			timestamp: new Date(entry.sortTimeMs).toISOString(),
 			firstMessageText: meta?.firstMessageText ?? liveMeta?.firstMessageText,
-			// The live preview/activity win over the last flush for an active row;
+			// The live preview/clocks win over the last flush for an active row;
 			// an archived row with no runtime has only the file scan.
 			lastMessageText: liveMeta?.lastMessageText ?? meta?.lastMessageText,
+			lastAgentText: liveMeta?.lastAgentText ?? meta?.lastAgentText,
 			lastActivityAt: liveMeta?.lastActivityAt ?? meta?.lastActivityAt,
+			lastUserActivity: liveMeta?.lastUserActivity ?? meta?.lastUserActivity,
+			lastAgentActivity: liveMeta?.lastAgentActivity ?? meta?.lastAgentActivity,
 			messageCount: meta?.messageCount ?? liveMeta?.messageCount,
 			// Only a live runtime knows what it is executing; a dormant row has
 			// nothing running, so the field is absent rather than stale.
@@ -393,6 +399,10 @@ function parseSessionFile(filePath: string): FileMeta | null {
 		let firstMessageText: string | undefined;
 		let lastMessageText: string | undefined;
 		let lastActivityAt: string | undefined;
+		let lastUserActivity: string | undefined;
+		let lastAgentActivity: string | undefined;
+		let lastAgentText: string | undefined;
+		let agentWordsAt: string | undefined;
 		let messageCount = 0;
 		let foundHeader = false;
 
@@ -425,6 +435,23 @@ function parseSessionFile(filePath: string): FileMeta | null {
 				messageCount++;
 
 				const msg = entry.message;
+				// The role clocks are stamped for every message, text or not: a
+				// tool-only assistant message is still the agent speaking.
+				if (typeof entry.timestamp === "string" && entry.timestamp) {
+					const ts = entry.timestamp;
+					if (msg?.role === "user" && (!lastUserActivity || ts > lastUserActivity)) lastUserActivity = ts;
+					if (msg?.role === "assistant" && (!lastAgentActivity || ts > lastAgentActivity)) lastAgentActivity = ts;
+					// The running row's status text: the newest assistant words,
+					// whether they are the answer or only thinking. A later message
+					// without words (a tool call) must not blank the line.
+					if (msg?.role === "assistant") {
+						const words = firstAgentWords(msg.content);
+						if (words !== undefined && (agentWordsAt === undefined || ts >= agentWordsAt)) {
+							lastAgentText = words;
+							agentWordsAt = ts;
+						}
+					}
+				}
 				if (msg?.role === "user" && !firstMessageText) {
 					firstMessageText = extractSimpleText(msg.content);
 				}
@@ -446,7 +473,10 @@ function parseSessionFile(filePath: string): FileMeta | null {
 			name,
 			firstMessageText: firstMessageText || undefined,
 			lastMessageText: lastMessageText ? clampPreview(lastMessageText) : undefined,
+			lastAgentText: lastAgentText ? clampPreview(lastAgentText) : undefined,
 			lastActivityAt,
+			lastUserActivity,
+			lastAgentActivity,
 			messageCount: messageCount || undefined,
 		};
 	} catch {
@@ -482,4 +512,22 @@ function firstTextBlock(content: unknown): string | undefined {
 		}
 	}
 	return undefined;
+}
+
+/** The agent's own words in one durable message, for the running row's status
+ * line: its first `text` block, else its first `thinking` block — the same
+ * rule the live-document extractor applies. */
+function firstAgentWords(content: unknown): string | undefined {
+	if (typeof content === "string") return content || undefined;
+	if (!Array.isArray(content)) return undefined;
+	let thinking: string | undefined;
+	for (const item of content) {
+		const block = item as { type?: string; text?: string; thinking?: string; redacted?: boolean };
+		if (block.type === "text" && block.text) return block.text;
+		// Redacted reasoning is not words the agent wrote that a reader may see.
+		if (block.type === "thinking" && block.redacted !== true && block.thinking && thinking === undefined) {
+			thinking = block.thinking;
+		}
+	}
+	return thinking;
 }

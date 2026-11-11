@@ -182,14 +182,25 @@
 	margin-left: auto;
 }
 
+/* The preview line: the running tool's chip, then the words (see the sidebar
+   row's second line — one spec, two hosts). */
 .rowPreview {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
 	font-size: var(--fs-sm);
 	color: var(--color-muted-foreground);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 	/* Copy target (message text) — opts back in against the row's none. */
 	user-select: text;
+}
+
+/* The words take the truncation; a clipped chip would read as a broken shape. */
+.rowPreviewText {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
 }
 
 /* ── Down states (connecting / reconnecting / unreachable / init_failed) ─ */

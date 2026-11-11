@@ -906,7 +906,10 @@ describe("daemon: session activation", () => {
 				timestamp: "2026-01-01T00:00:02Z",
 				kind: "message",
 				role: "assistant",
-				content: [{ type: "text", text: "latest reply" }],
+				content: [
+					{ type: "thinking", thinking: "weighing the options", thinkingSignature: undefined, redacted: false },
+					{ type: "text", text: "latest reply" },
+				],
 			},
 		};
 		const factory: NonNullable<DaemonOptions["managerFactory"]> = async (opts) => {
@@ -924,11 +927,75 @@ describe("daemon: session activation", () => {
 
 		const listId = send(ws, { verb: "listQueue" });
 		const reply = (await waitForReply(frames, listId)) as unknown as {
-			sessions: Array<{ firstMessageText?: string; lastMessageText?: string; lastActivityAt?: string }>;
+			sessions: Array<{
+				firstMessageText?: string;
+				lastMessageText?: string;
+				lastActivityAt?: string;
+				lastUserActivity?: string;
+				lastAgentActivity?: string;
+				lastAgentText?: string;
+			}>;
 		};
 		expect(reply.sessions[0]?.firstMessageText).toBe("first prompt");
 		expect(reply.sessions[0]?.lastMessageText).toBe("latest reply");
 		expect(reply.sessions[0]?.lastActivityAt).toBe("2026-01-01T00:00:02Z");
+		// The role clocks are what the row's time slot reads: the run clock from
+		// the human, the recency clock from the agent.
+		expect(reply.sessions[0]?.lastUserActivity).toBe("2026-01-01T00:00:01Z");
+		expect(reply.sessions[0]?.lastAgentActivity).toBe("2026-01-01T00:00:02Z");
+		// The status line reads the agent's words; the answer wins over the
+		// thinking that preceded it in the same message.
+		expect(reply.sessions[0]?.lastAgentText).toBe("latest reply");
+
+		ws.close();
+	});
+
+	it("shows the agent's thinking when it has not written an answer yet", async () => {
+		const { agentDir, a } = makeProjectRoots();
+		const entries: Document["entries"] = {
+			m1: {
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01Z",
+				kind: "message",
+				role: "user",
+				content: [{ type: "text", text: "first prompt" }],
+			},
+			m2: {
+				id: "m2",
+				parentId: "m1",
+				timestamp: "2026-01-01T00:00:02Z",
+				kind: "message",
+				role: "assistant",
+				content: [
+					{
+						type: "thinking",
+						// One preview line: newlines collapse and the tail is clamped.
+						thinking: "reading the sidebar\nand the launcher",
+						thinkingSignature: undefined,
+						redacted: false,
+					},
+				],
+			},
+		};
+		const factory: NonNullable<DaemonOptions["managerFactory"]> = async (opts) => {
+			const stub = makeStubManager({ ...opts, entries, sessionId: "sess-live-thinking" });
+			stubs.set(stub.sessionId, stub);
+			return stub.manager;
+		};
+		const { port } = await startDaemon({ agentDir, allow: [a], managerFactory: factory });
+		const ws = await openClient(port);
+		const frames = collectFrames(ws);
+		const projectId = basename(a).toLowerCase();
+
+		const id = send(ws, { verb: "newSession", projectId, text: "first prompt", operationId: "op-1" });
+		await waitForReply(frames, id);
+
+		const listId = send(ws, { verb: "listQueue" });
+		const reply = (await waitForReply(frames, listId)) as unknown as {
+			sessions: Array<{ lastAgentText?: string }>;
+		};
+		expect(reply.sessions[0]?.lastAgentText).toBe("reading the sidebar and the launcher");
 
 		ws.close();
 	});
@@ -2351,6 +2418,9 @@ describe("daemon: session listing", () => {
 				firstMessageText?: string;
 				lastMessageText?: string;
 				lastActivityAt?: string;
+				lastUserActivity?: string;
+				lastAgentActivity?: string;
+				lastAgentText?: string;
 			}>;
 		};
 		const row = reply.sessions.find((s) => s.stem === stem);
@@ -2359,6 +2429,12 @@ describe("daemon: session listing", () => {
 		expect(row?.lastMessageText).toBe("latest reply");
 		// Activity tracks every entry, including the tool result.
 		expect(row?.lastActivityAt).toBe("2026-01-01T00:00:03Z");
+		// The role clocks skip it: the row's run clock counts from the human's
+		// message, its recency clock from the agent's.
+		expect(row?.lastUserActivity).toBe("2026-01-01T00:00:01Z");
+		expect(row?.lastAgentActivity).toBe("2026-01-01T00:00:02Z");
+		// The status line keeps the agent's words: the tool result has none.
+		expect(row?.lastAgentText).toBe("latest reply");
 
 		ws.close();
 	});

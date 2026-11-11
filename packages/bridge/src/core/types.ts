@@ -1032,12 +1032,31 @@ export interface SessionInfo {
 	 * launcher's preview. A live activation reads it from its Document, so it is
 	 * fresher than the last flush; inactive rows use the file scan. */
 	lastMessageText?: string;
-	/** Latest entry timestamp of the Session. The active-session list uses it
-	 * for the row's activity time; `timestamp` stays the durable sort key (mtime
-	 * / header creation). It never decides the queue's order: a streaming turn
-	 * advances it on every delta, so ordering by it moved every other row under
-	 * the reader (see `placedAt`). */
+	/** The latest agent-authored words: the first text block of the last
+	 * assistant message, else its first thinking block (a thinking-only step is
+	 * still the agent speaking), clamped to one line. It is what a running row's
+	 * status line says, so it must never be the human's own prompt: that is
+	 * `lastMessageText`, which stays user-or-assistant. */
+	lastAgentText?: string;
+	/** Latest entry timestamp of any kind: the ordering value `@latest`
+	 * resolves to and the archived history sorts by. The row's own time slot
+	 * reads the two role clocks below; `timestamp` stays the durable sort key
+	 * (mtime / header creation). It never decides the queue's order: a streaming
+	 * turn advances it on every delta, so ordering by it moved every other row
+	 * under the reader (see `placedAt`). */
 	lastActivityAt?: string;
+	/** When the human last spoke: the latest user message's timestamp. A
+	 * running row measures its time slot from it (`12m`) because every fresher
+	 * entry is the agent's own work — a live row writes one per
+	 * second, so any other instant pins the label at "just now" for the whole
+	 * run. A steer is a user message too, so it restarts the clock: the durable
+	 * entry stream cannot tell a steer from a fresh prompt, and both are the
+	 * human speaking. */
+	lastUserActivity?: string;
+	/** When the agent last spoke: the latest assistant message's timestamp, the
+	 * time slot of every row that is not running. Absent until something
+	 * answered the human. */
+	lastAgentActivity?: string;
 	/** The instant the placement transition that put this Session in Inbox or
 	 * Later was written — the queue's ordering value, so only a decision (a
 	 * submission, a user move, a restored refusal) reorders the list. `""` is

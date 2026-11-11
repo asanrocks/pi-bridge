@@ -208,6 +208,10 @@ Web:
   `lastMessageText`) and busy (`activity`) rows; the row grows to two lines
   only for those states. The launcher's queue rows render the same second
   line (`Launcher.tsx` already has the preview field; add activity).
+  *Superseded:* a busy row's line now also carries the agent's own words
+  (`lastAgentText`), so the listing is rebuilt on a coalesced interval rather
+  than only at tool boundaries; current behavior lives in
+  [web design](../web/design.md) and [core protocol](../core/protocol.md).
 
 **Acceptance criteria.**
 

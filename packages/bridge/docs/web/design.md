@@ -265,8 +265,9 @@ preview, or time. It exists only while something is queued. Queue rows show a
 mark — Inbox keeps the success-green dot, Later uses the accent tint with a
 "later" chip, and a running Session overwrites either with the streaming color
 and pulse plus a "running" chip — name or first-message fallback, Project, the
-shared time label tracked to the Session's last activity, and a latest-message
-preview.
+shared time label (the run clock while the turn is in flight, the agent's last
+word otherwise), and a preview line — its status line while running,
+otherwise the latest message.
 Selecting a Project opens its Project home at `/<projectId>`.
 
 Project home is an unattached, compose-first surface. It shows the expanded
@@ -351,27 +352,52 @@ where its last transition put it — a submitted message or a user move to the
 head of its group, most recently placed first — and running never reorders
 anything, so a streaming row never drags the list out from under the reader.
 Archived history has no placement, so it is newest-activity first; the time
-label on every row carries recency in both cases.
+label on every row carries recency in both cases — except while a Session is
+running, where the slot becomes its run clock (see below).
 
 - The floor of the ladder shows the Project's Inbox rows. Two independent
   facts draw the mark: the location (green for Inbox, the accent tint for
   Later, the muted tint for Archive) and running (orange, pulsing), which
   overwrites the location because an execution is the more urgent fact. An
   Inbox or running row carries a second line, clamped to one line so a live
-  name never grows the rail: a running row names what it is doing
-  (`Bash · 15m`, `Responding…`, `Compacting…`) from the row's `activity` field
-  — the tool name and the phase's start instant, rebased onto the reader's
-  clock by the shared label clock — and an idle Inbox row previews its latest
-  assistant reply. Later and archived rows stay one line. The attached
-  `(Project, stem)` row is the only selected row: the accent tint plus weight
-  `500` on its name, per Row states below. A folder row never carries identity
-  — it is a fold control, not a target.
+  name never grows the rail: a running row says what the agent is writing — a
+  value chip naming the tool and its phase clock (`bash · 5s`), then the words
+  (`Now the sessionTime test:`) — from the row's `activity` field (the tool and
+  the phase's start instant, rebased onto the reader's clock by the shared label
+  clock) and its `lastAgentText` (the agent's own latest text, or its thinking
+  while that is all it has written). The chip is one spec shared by the rail and
+  the Launcher queue (`render/ToolChip`): a mark, not a control, so it takes a
+  hairline boundary where a state fill would be texture on the chrome, and its
+  clock uses tabular digits so a per-second reading does not twitch. It is absent
+  when no tool runs, the words are absent while the tool has not said anything
+  yet, and `Responding…`/`Compacting…` remain the no-words fallbacks;
+  a compaction never shows the previous reply, because its last words were about
+  different work. The text is a snapshot of the run, not a stream: the host
+  rebuilds the listing at most once per execution-state interval, so it can
+  trail the live text by up to two intervals while the phase clock in front of
+  it ticks every second. An idle Inbox row previews its latest assistant reply.
+  Every one of those lines, and the row-name fallback, is plain display text:
+  Markdown markers are stripped and the line clamped, because a rail label is
+  not a renderer and the transcript is where the document itself lives. Later
+  and archived rows stay one line. The row's time slot follows the same split:
+  a running row's slot is the run's duration in words it needs no prefix for
+  (`12m 30s` — the dot and the status line already say what is running),
+  counted from the human's last message because the agent's own entries are
+  seconds apart and would read "just now" for the whole run;
+  every other row carries recency from the agent's last word. Both instants are
+  durable, so a reload or a reconnect shows the same number; the run counts
+  seconds and its row ticks once a second, while every other row stays on the
+  shared minute clock, so a long rail never re-renders for a label that changes
+  once a minute. The
+  attached `(Project, stem)` row is the only selected row: the accent tint plus
+  weight `500` on its name, per Row states below. A folder row never carries
+  identity — it is a fold control, not a target.
 - The ladder's next step adds the Later rows (the accent dot; "still open, not
   next"), and its cap adds the archived ones, fetched lazily on arrival. Each
   row carries the shared time label (relative while fresh, then a clock, a
-  weekday, or a date). The list's end carries the ladder's two controls as one
-  pair of glyphs: Load more (down) adds Later, then the history, then the next
-  server page of it — the continuation is the one sidebar control drawn as a
+  weekday, or a date; a running row's slot is its run clock instead). The
+  list's end carries the ladder's two controls as one pair of glyphs: Load
+  more (down) adds Later, then the history, then the next server page of it — the continuation is the one sidebar control drawn as a
   glyph rather than words, because "more below" is the meaning a chevron
   already carries — and Show less (up) removes the history, then Later, and is
   absent at the floor, where nothing is left below. A step that would add no
@@ -1459,6 +1485,13 @@ transient (the pointer, or the keyboard cursor in a list that moves one).
 - **A structural header never paints a state fill.** Group and section headers
   are a hairline plus an uppercase `--tracking-caps` label; a header fill
   1.09:1 from the hover fill reads as a hovered row.
+- **Every part of a row states its own hover.** The name, the second line, and
+  the time each carry the fact they show: the name in full, the whole second
+  line (a chip and words the row may have clipped), the precise instant. The row
+  button's own title is that same precise instant, because the trailing slot
+  hands itself to the menu button on hover — a title on the timestamp is the one
+  thing the pointer can never reach. A row-wide tooltip repeating the name says
+  nothing the reader can already see.
 - **Reveal follows position, not the pointer.** A row control revealed on hover
   appears for the keyboard cursor too (`.portalItem[data-cursor] .portalPin`),
   or the user who needs Shift+Enter never sees the target. `aria-current` (and

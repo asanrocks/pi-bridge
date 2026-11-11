@@ -89,6 +89,30 @@ Session belongs. The connection sends queue deltas to every socket; the web
 client applies one frame atomically, and a `session_closed` for the rendered
 Session ends that view without touching the mirror.
 
+A row carries three clock instants, all derived from the stored entries and so
+identical after a reload, a reconnect, or in a second tab. `lastActivityAt` is
+the latest entry of any kind: the ordering value `@latest` resolves to and the
+archived-history sort read. The two role clocks are what a row's time slot
+reads: `lastUserActivity` (the latest user message) is the run clock a running
+row counts from — every fresher entry is the agent's own work, so counting
+from one would pin the label at "just now" for the whole run — and
+`lastAgentActivity` (the latest assistant message) is the recency clock of a
+row that is not running. A steer is a user message too, so it restarts the run
+clock: the entry stream cannot tell a steer from a fresh prompt, and both are
+the human speaking.
+
+A row's status text is a fourth derived value, `lastAgentText`: the newest
+assistant message's first text block, else its first thinking block (a
+thinking-only step is still the agent speaking), clamped to one line of display
+text — like every preview field, Markdown markers are stripped, because a rail
+label is a label and not a rendered document.
+It is the agent's own words only — `lastMessageText` stays user-or-assistant —
+so a running row can never label itself with the human's prompt. Because that
+text moves on streamed tokens, the actor coalesces the rebuild to one per
+execution-state publish interval rather than one per token: the status line is a
+snapshot of the run, and it can trail the live text by up to two intervals (the
+actor's rebuild, then the Daemon's publication floor).
+
 ### Queue delivery
 
 Only the queue is synchronized. A Session is in it because the user placed it

@@ -81,6 +81,14 @@ import type { WorkerPulledValue } from "./worker-contract.ts";
 export const DEFAULT_IDLE_GC_MS = 5 * 60_000;
 export const DEFAULT_UNFLUSHED_IDLE_GC_MS = 30 * 60_000;
 
+/** How often a running row's status text may be rebuilt while the agent
+ * streams. The Manager emits a patch per token, and the listing rebuilds every
+ * live row's summary from its Document, so the trigger has to be coalesced;
+ * matching the Daemon's execution-state publish interval means one rebuild per
+ * frame at most, instead of one per token (ADR 23's rule that token cadence
+ * never pays). */
+const TEXT_REFRESH_MS = 5_000;
+
 /** Listing facts the daemon derives from a live Session (ADR 19): the
  * identity the file-scan path needs plus the preview fields computed from
  * the canonical Document. This is the actor's only read surface — the
@@ -92,7 +100,15 @@ export interface ActorMetadata {
 	readonly messageCount?: number;
 	readonly firstMessageText?: string;
 	readonly lastMessageText?: string;
+	/** The running row's status text: the agent's own words (see
+	 * `SessionInfo.lastAgentText`). */
+	readonly lastAgentText?: string;
 	readonly lastActivityAt?: string;
+	/** The human's and the agent's last message instants (see
+	 * `SessionInfo.lastUserActivity`/`lastAgentActivity`): the row's run clock
+	 * and its recency clock. */
+	readonly lastUserActivity?: string;
+	readonly lastAgentActivity?: string;
 	/** The execution's current activity, on a running Session (ADR 23). Its
 	 * presence is the row's running fact. */
 	readonly activity?: SessionActivityInfo;
@@ -245,7 +261,30 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 	// streaming transitions itself — the registry's records carry no
 	// runtime state of their own (ADR 19).
 	let lastStreaming = manager.document.status.isStreaming;
-	manager.onSettled((settlement) => options.onSettled?.(settlement));
+	// The running row's status text is rebuilt at most once per interval, never
+	// per token: the Manager emits a patch per token, and one token is not news.
+	let textRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+	const cancelTextRefresh = (): void => {
+		if (textRefreshTimer !== null) {
+			clearTimeout(textRefreshTimer);
+			textRefreshTimer = null;
+		}
+	};
+
+	const scheduleTextRefresh = (): void => {
+		if (textRefreshTimer !== null) return;
+		textRefreshTimer = setTimeout(() => {
+			textRefreshTimer = null;
+			if (phase !== "live") return;
+			options.onActivityChange?.();
+		}, TEXT_REFRESH_MS);
+	};
+
+	manager.onSettled((settlement) => {
+		cancelTextRefresh();
+		options.onSettled?.(settlement);
+	});
 	// The phase clock the listing's `activity.startedAt` reports: the moment
 	// the runtime entered its current phase. Recorded here because the listing
 	// needs the start instant and the Manager's activity word is instantaneous.
@@ -267,6 +306,10 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 		if (streaming !== lastStreaming) {
 			lastStreaming = streaming;
 			options.onStreamingChange?.();
+		} else if (streaming) {
+			// The text the row shows moved, and no phase or tool boundary will
+			// announce it. Coalesced: one refresh per interval, never per token.
+			scheduleTextRefresh();
 		}
 	});
 
@@ -467,7 +510,10 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 				messageCount: doc.status.stats.messages || undefined,
 				firstMessageText: summary.firstMessageText,
 				lastMessageText: summary.lastMessageText,
+				lastAgentText: summary.lastAgentText,
 				lastActivityAt: summary.lastActivityAt,
+				lastUserActivity: summary.lastUserActivity,
+				lastAgentActivity: summary.lastAgentActivity,
 				activity: currentActivity(),
 			};
 		},
@@ -483,6 +529,7 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 			// check refuses the actor even while its disposal is in flight.
 			phase = "closing";
 			cancelIdle();
+			cancelTextRefresh();
 			closed = (async () => {
 				// Queued mutations reject instead of running against a disposing
 				// runtime; the one still running settles first (mutations are
@@ -508,33 +555,93 @@ export function createSessionActor(options: SessionActorOptions): SessionActor {
 // ── Listing summary (the daemon's preview derivation, owned here) ───────
 
 const PREVIEW_MAX = 120;
+/** The stripper runs on a bounded prefix: the preview keeps 120 characters, so
+ * nothing past this can be visible, and a lazy span with a backreference over a
+ * pathological single-line message would scan the whole thing. */
+const PREVIEW_SOURCE_MAX = PREVIEW_MAX * 4;
 
-/** Clamp text to one preview line. Exported for the daemon's durable-file
- * parser, which clamps the same way. */
+/** A fence line and a horizontal rule carry no words: the code they guard and
+ * the text around them do. */
+const MARKUP_LINE = /^[ \t]*(?:(?:```|~~~)[^\n]*|([-*_])[ \t]*(?:[ \t]*\1){2,}[ \t]*)$/gm;
+/** A blockquote's marker is a prefix of its own: the line may hold nothing else. */
+const QUOTE_PREFIX = /^[ \t]*(?:>[ \t]*)+/gm;
+/** Line-start structure: headings, bullets, task boxes, ordered items. */
+const LINE_PREFIX = /^[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+(?:\[[ xX]\][ \t]+)?|\d{1,9}[.)][ \t]+)/gm;
+/** Paired delimiters around a non-space run: bold, italic, strike, code. The
+ * opening one must start a word and the closing one must end it, so
+ * `snake_case` and `a*b` keep their markers — they are not markup there. */
+const PAIRED = /(^|[\s(])(\*\*\*|\*\*|\*|___|__|_|~~|`+)(?=\S)([^\n]*?\S)\2(?=[\s).,;:!?]|$)/gm;
+/** A tag, never a stray angle bracket: "a < b > c" is prose. */
+const HTML_TAG = /<\/?[a-zA-Z][^>\n]*>/g;
+
+/** Display text for a one-line preview: a label, not a renderer. Links and
+ * images keep their label, code keeps its content, emphasis loses its
+ * delimiters, and line-start structure vanishes. Deliberately small and
+ * syntactic — a preview that mangles an identifier or an arithmetic asterisk
+ * is worse than one that leaves a marker behind. */
+function stripMarkdown(text: string): string {
+	return (
+		text
+			.replace(MARKUP_LINE, " ")
+			.replace(QUOTE_PREFIX, "")
+			.replace(LINE_PREFIX, "")
+			.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+			.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+			.replace(PAIRED, "$1$3")
+			.replace(HTML_TAG, " ")
+			// Table cells are separated by pipes; a space keeps them apart as words.
+			.replace(/\|/g, " ")
+	);
+}
+
+/** Clamp text to one preview line of plain display text. Exported for the
+ * daemon's durable-file parser, which clamps the same way. */
 export function clampPreview(text: string): string {
-	const single = text.replace(/\s+/g, " ").trim();
+	const single = stripMarkdown(text.slice(0, PREVIEW_SOURCE_MAX)).replace(/\s+/g, " ").trim();
 	if (single.length <= PREVIEW_MAX) return single;
 	return `${single.slice(0, PREVIEW_MAX - 1)}…`;
 }
 
 /** Launcher-facing summary derived from a live Document (an unflushed or
  * active Session): the first user text, the most recent user/assistant
- * message text, and the latest entry timestamp. Text is clamped to one
- * line. */
+ * message text, and the three clock instants the listing exposes. Text is
+ * clamped to one line. The role clocks are stamped for every message, text or
+ * not: a tool-only assistant message is still the agent speaking. */
 function documentSummary(doc: Document): {
 	firstMessageText?: string;
 	lastMessageText?: string;
+	lastAgentText?: string;
 	lastActivityAt?: string;
+	lastUserActivity?: string;
+	lastAgentActivity?: string;
 } {
 	let first: string | undefined;
 	let firstTs = "";
 	let last: string | undefined;
 	let lastTs: string | undefined;
+	let agentText: string | undefined;
+	let agentTextTs: string | undefined;
 	let lastActivityAt: string | undefined;
+	let lastUserActivity: string | undefined;
+	let lastAgentActivity: string | undefined;
 	for (const entry of Object.values(doc.entries)) {
 		const ts = entry.timestamp ?? "";
 		if (ts && (!lastActivityAt || ts > lastActivityAt)) lastActivityAt = ts;
 		if (entry.kind !== "message") continue;
+		if (ts) {
+			if (entry.role === "user" && (!lastUserActivity || ts > lastUserActivity)) lastUserActivity = ts;
+			if (entry.role === "assistant" && (!lastAgentActivity || ts > lastAgentActivity)) lastAgentActivity = ts;
+		}
+		if (entry.role === "assistant") {
+			// The row's status text: the newest assistant words, whether they are
+			// the answer or only thinking. A later message without words (a tool
+			// call) must not blank the line.
+			const words = extractAgentText(entry.content);
+			if (words !== undefined && (agentTextTs === undefined || ts >= agentTextTs)) {
+				agentText = words;
+				agentTextTs = ts;
+			}
+		}
 		const text = extractFirstText(entry.content);
 		if (!text) continue;
 		if (entry.role === "user" && (first === undefined || firstTs === "" || ts < firstTs)) {
@@ -549,7 +656,10 @@ function documentSummary(doc: Document): {
 	return {
 		firstMessageText: first ? clampPreview(first) : undefined,
 		lastMessageText: last ? clampPreview(last) : undefined,
+		lastAgentText: agentText === undefined ? undefined : clampPreview(agentText),
 		lastActivityAt,
+		lastUserActivity,
+		lastAgentActivity,
 	};
 }
 
@@ -558,4 +668,18 @@ function extractFirstText(content: Content[]): string | undefined {
 		if (block.type === "text" && block.text) return block.text;
 	}
 	return undefined;
+}
+
+/** The agent's own words in one message, for the running row's status line:
+ * its first text block, else its first unredacted thinking block (a
+ * thinking-only step is still the agent speaking). */
+function extractAgentText(content: Content[]): string | undefined {
+	let thinking: string | undefined;
+	for (const block of content) {
+		if (block.type === "text" && block.text) return block.text;
+		if (block.type === "thinking" && !block.redacted && block.thinking && thinking === undefined) {
+			thinking = block.thinking;
+		}
+	}
+	return thinking;
 }
