@@ -18,6 +18,8 @@ export type {
 	Content,
 	CustomEntry,
 	CustomMessageEntry,
+	DaemonInfo,
+	DaemonInfoChangedMessage,
 	DetachRequest,
 	DirectoryEntry,
 	DirectoryListing,
@@ -110,6 +112,7 @@ export type {
 	ToolResultEntry,
 	Usage,
 	VerbReply,
+	WorkerUnavailableMessage,
 } from "./core/index.ts";
 /* eslint-disable import/export */
 export {

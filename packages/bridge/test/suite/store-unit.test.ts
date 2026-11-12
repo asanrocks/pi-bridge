@@ -4,12 +4,19 @@
 // ============================================================================
 
 import { describe, expect, it } from "vitest";
-import type { Document, ImageContent } from "../../src/core/types.ts";
+import type { DaemonInfo, Document, ImageContent, ProjectInfo } from "../../src/core/types.ts";
 import { createClientStore, selectDraftImages } from "../../web/src/infra/state/store.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** One daemon aggregate frame (a `getDaemonInfo` baseline or a
+ * `daemon_info_changed` push): the store applies the whole snapshot and orders
+ * two that crossed by `revision`. */
+function daemonInfo(revision: number, projects: ProjectInfo[] = []): DaemonInfo {
+	return { revision, projects, models: [], pinnedModels: [], visibleModels: [], thinkingLevels: [] };
+}
 
 function emptyDoc(): Document {
 	return {
@@ -92,14 +99,14 @@ describe("createClientStore", () => {
 		expect(store.getState().connection).toEqual({ kind: "init_failed", error: "boom" });
 	});
 
-	it("setProjects and the queue snapshot update the daemon registries", () => {
+	it("applyDaemonInfo seeds the registries; the queue snapshot stays separate", () => {
 		const store = createClientStore();
 
 		const projects = [
 			{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null },
 			{ id: "b", cwd: "/b", defaultModel: null, defaultThinkingLevel: null },
 		];
-		store.getState().setProjects(projects);
+		store.getState().applyDaemonInfo(daemonInfo(1, projects));
 		expect(store.getState().projects).toEqual(projects);
 
 		const queue = [
@@ -115,10 +122,50 @@ describe("createClientStore", () => {
 		expect(store.getState().queue).toEqual(queue);
 	});
 
+	it("a daemon-info frame older than the held one is dropped", () => {
+		// The Daemon serializes its aggregate reads, and a `getDaemonInfo` reply can
+		// land after a push that describes a later read: the revision decides.
+		const store = createClientStore();
+		store.getState().applyDaemonInfo(daemonInfo(2, []));
+		store
+			.getState()
+			.applyDaemonInfo(
+				daemonInfo(1, [{ id: "stale", cwd: "/stale", defaultModel: null, defaultThinkingLevel: null }]),
+			);
+
+		expect(store.getState().projects).toEqual([]);
+		expect(store.getState().daemonInfoRevision).toBe(2);
+	});
+
+	it("a removed Project drops its cached pages and queue rows", () => {
+		const store = createClientStore();
+		const a = { id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null };
+		const b = { id: "b", cwd: "/b", defaultModel: null, defaultThinkingLevel: null };
+		store.getState().applyDaemonInfo(daemonInfo(1, [a, b]));
+		store.getState().setSessionPage("a", [], false, null);
+		store.getState().setSessionPage("b", [], false, null);
+		store.getState().applyQueueSnapshot(
+			[
+				{ projectId: "a", sessionId: "s1", stem: "one", location: "inbox", timestamp: new Date(0).toISOString() },
+				{ projectId: "b", sessionId: "s2", stem: "two", location: "inbox", timestamp: new Date(0).toISOString() },
+			],
+			1,
+		);
+
+		store.getState().applyDaemonInfo(daemonInfo(2, [a]));
+
+		// No Worker serves `b` any more, so neither its page nor its rows can be
+		// valid; `a` keeps both.
+		expect(Object.keys(store.getState().sessionPages)).toEqual(["a"]);
+		expect(store.getState().queue.map((row) => row.projectId)).toEqual(["a"]);
+	});
+
 	it("clearCurrentSession resets to initial state but keeps the registries", () => {
 		const store = createClientStore();
 
-		store.getState().setProjects([{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null }]);
+		store
+			.getState()
+			.applyDaemonInfo(daemonInfo(1, [{ id: "a", cwd: "/a", defaultModel: null, defaultThinkingLevel: null }]));
 		store.getState().setCurrentSession("a", "2024-01-01_s1");
 		store.getState().toggleActionGroup("e1:0");
 
@@ -131,12 +178,19 @@ describe("createClientStore", () => {
 		expect(state.loadingPaths).toEqual(new Set());
 	});
 
-	it("setModels updates models, thinking levels, and pinned models", () => {
+	it("applyDaemonInfo carries the catalogue and the pinned scope", () => {
 		const store = createClientStore();
 		const models = [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: false }];
 		const pinnedModels = [{ provider: "faux", id: "faux-1", name: "Faux 1" }];
 		const visibleModels = ["faux/faux-1"];
-		store.getState().setModels(models, ["off", "low", "high"], pinnedModels, visibleModels);
+		store.getState().applyDaemonInfo({
+			revision: 1,
+			projects: [],
+			models,
+			pinnedModels,
+			visibleModels,
+			thinkingLevels: ["off", "low", "high"],
+		});
 		expect(store.getState().models).toEqual(models);
 		expect(store.getState().thinkingLevels).toEqual(["off", "low", "high"]);
 		expect(store.getState().pinnedModels).toEqual(pinnedModels);

@@ -643,7 +643,7 @@ describe("daemon: projects", () => {
 				],
 			}),
 		);
-		const push = await waitForPush(frames, "pinned_models_changed");
+		const push = await waitForPush(frames, "daemon_info_changed");
 		// Position is meaning (the head is a fresh Session's default) and the
 		// level round-trips verbatim, so a reorder cannot change what a pin
 		// means.
@@ -681,7 +681,7 @@ describe("daemon: projects", () => {
 		// The push is the verdict: the ghost is dropped, and the first
 		// occurrence of an identity wins (position is meaning, so a later
 		// duplicate cannot move it or restate its level).
-		const push = await waitForPush(frames, "pinned_models_changed");
+		const push = await waitForPush(frames, "daemon_info_changed");
 		expect(push.pinnedModels).toEqual([
 			{ provider: "faux", id: "faux-1", name: expect.any(String), thinkingLevel: "high" },
 		]);
@@ -721,7 +721,7 @@ describe("daemon: projects", () => {
 		await waitFor(
 			frames,
 			(f) =>
-				f.kind === "pinned_models_changed" &&
+				f.kind === "daemon_info_changed" &&
 				(f.pinnedModels as Array<{ id: string }>).map((m) => m.id).join(",") === "faux-2",
 		);
 		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual(["faux/faux-2"]);
@@ -776,7 +776,7 @@ describe("daemon: projects", () => {
 		const frames = collectFrames(ws);
 
 		await waitForReply(frames, send(ws, { verb: "setPinnedModels", models: [] }));
-		const push = await waitForPush(frames, "pinned_models_changed");
+		const push = await waitForPush(frames, "daemon_info_changed");
 		expect(push.pinnedModels).toEqual([]);
 		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toBeUndefined();
 

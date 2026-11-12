@@ -81,6 +81,8 @@ export type {
 	ContextUsage,
 	CustomEntry,
 	CustomMessageEntry,
+	DaemonInfo,
+	DaemonInfoChangedMessage,
 	DetachRequest,
 	DirectoryEntry,
 	DirectoryListing,
@@ -172,6 +174,7 @@ export type {
 	TrashSessionRequest,
 	Usage,
 	VerbReply,
+	WorkerUnavailableMessage,
 } from "./types.ts";
 export {
 	isEntrySealed,

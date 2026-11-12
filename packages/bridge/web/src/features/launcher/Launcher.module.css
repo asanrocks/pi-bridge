@@ -61,6 +61,52 @@
 	gap: 0;
 }
 
+/* A read-only row: the Project a withdrawn Worker took away. Same row
+   geometry as an openable one, without the pointer or the hover fill —
+   there is no gesture that works while nothing serves the id. */
+.rowStatic {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 6px;
+	border-radius: var(--radius-sm);
+	user-select: none;
+}
+
+.rowLost {
+	display: inline-flex;
+	align-items: center;
+	margin-top: 2px;
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+	line-height: 1;
+}
+
+.rowBody {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.rowReason {
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+	flex-shrink: 0;
+}
+
+/* The link's reason, on the row's second line: plain truncation (the path
+   rule's head-truncation would hide the start of a sentence). */
+.rowReasonText {
+	font-size: var(--fs-sm);
+	color: var(--color-muted-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
 /* Instance rows — the whole row is the button, so it reads as app chrome:
    no selection on tap/drag. The cwd and preview spans opt back in below
    (paths and message text are copy targets). */

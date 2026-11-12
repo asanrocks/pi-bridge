@@ -466,12 +466,33 @@ export interface SessionSettledMessage {
 	name?: string;
 }
 
-/** The daemon-global pinned model list changed (ADR 15). `pinnedModels` is the
- * resolved list; the client replaces its store copy. One concept, one list,
- * backed by pi's global `enabledModels`. */
-export interface PinnedModelsChangedMessage {
-	kind: "pinned_models_changed";
-	pinnedModels: PinnedModelInfo[];
+/** The daemon's aggregate changed: a Worker registration joined or was
+ * withdrawn, or the daemon-global pinned scope was replaced (ADR 15). The
+ * frame is the whole mutable aggregate, not a delta — registrations change
+ * once per process, so there is nothing to save and no merge rule to get
+ * wrong. `getDaemonInfo` is the same shape, so the baseline and the stream
+ * cannot drift apart. */
+export interface DaemonInfoChangedMessage extends DaemonInfo {
+	kind: "daemon_info_changed";
+}
+
+/** A Worker registration withdrew, so the Daemon no longer routes the Projects
+ * it served. The frame is sent before the two frames that describe the loss —
+ * each attached Session's `session_closed`, and the `daemon_info_changed`
+ * aggregate without those Projects — so a client can say *why* an address
+ * disappeared instead of only that it did. The registration itself is not
+ * named: it is daemon-internal, and the Projects are the loss a reader can act
+ * on. Not part of the aggregate: the aggregate states what is served now, and
+ * a Project that is gone is absent from it rather than described. */
+export interface WorkerUnavailableMessage {
+	kind: "worker_unavailable";
+	/** The Projects that registration owned. Their homes and Sessions have no
+	 * address until a registration claims those ids again. */
+	projectIds: string[];
+	/** Why the link went, in the transport's own words ("worker link closed",
+	 * "worker link lost: heartbeat timeout") or as the Worker reported its own
+	 * withdrawal. Diagnostic text, stated to the reader as-is. */
+	reason: string;
 }
 
 /** The live runtime behind an attached Session ended (the Session was moved
@@ -495,7 +516,8 @@ export type ServerPushMessage =
 	| PatchMessage
 	| QueueChangedMessage
 	| SessionSettledMessage
-	| PinnedModelsChangedMessage
+	| DaemonInfoChangedMessage
+	| WorkerUnavailableMessage
 	| SessionClosedMessage;
 
 // ── RPC (client → server, with `id`) ─────────────────────────────────────
@@ -589,8 +611,8 @@ export interface PinnedModelSelection {
 /** Replace the daemon-global pinned model list with this ordered list (ADR 20).
  * Position is meaning: the head is a fresh Session's default model, and the
  * cycle order follows. The host filters entries the catalogue cannot resolve
- * and answers with the resulting list as a `pinned_models_changed` push — a
- * replace is a proposal, the push is the verdict — so the reply is
+ * and answers with the resulting list inside a `daemon_info_changed` push — a
+ * replace is a proposal, the frame is the verdict — so the reply is
  * acknowledgement only. */
 export interface SetPinnedModelsRequest {
 	verb: "setPinnedModels";
@@ -1131,15 +1153,18 @@ export interface ModelRef {
 	modelId: string;
 }
 
-export interface GetDaemonInfoReply {
-	id: string;
-	ok: true;
-	/** The Daemon's `PROTOCOL_VERSION`. The browser app was built against the
-	 * same constant, so a difference means the two halves of one deployment are
-	 * not the same build: the app reports it and offers the remedy the direction
-	 * allows. Absent only from a Daemon older than this check, which is the same
-	 * verdict. */
-	protocol: number;
+/** The daemon's mutable aggregate: what its accepted registrations serve and
+ * the pinned scope they share. `getDaemonInfo` reports it as a baseline and
+ * `daemon_info_changed` re-states it whenever it moves, so the reply and the
+ * push carry one shape.
+ *
+ * `revision` is monotone across both, one per daemon-info read, never reused
+ * on one connection domain. A reply may be sent after a push it does not
+ * describe (a registration landing between the read and the frame), and the
+ * client keeps the newer of the two by this number — the frame it drops costs
+ * nothing, because the next one is absolute. */
+export interface DaemonInfo {
+	revision: number;
 	projects: ProjectInfo[];
 	models: ModelInfo[];
 	/** The daemon's global `enabledModels` scope (settings.json), resolved
@@ -1155,6 +1180,17 @@ export interface GetDaemonInfoReply {
 	 * checks these keys against its catalogue. */
 	visibleModels: string[];
 	thinkingLevels: string[];
+}
+
+export interface GetDaemonInfoReply extends DaemonInfo {
+	id: string;
+	ok: true;
+	/** The Daemon's `PROTOCOL_VERSION`. The browser app was built against the
+	 * same constant, so a difference means the two halves of one deployment are
+	 * not the same build: the app reports it and offers the remedy the direction
+	 * allows. Absent only from a Daemon older than this check, which is the same
+	 * verdict. */
+	protocol: number;
 	devMode: boolean;
 }
 

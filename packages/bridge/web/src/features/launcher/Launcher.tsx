@@ -19,7 +19,7 @@ import { sortByLastActivity } from "../../infra/lib/sortByLastActivity.ts";
 import { useRpc } from "../../infra/net/useRpc.ts";
 import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
-import { WarningIcon } from "../../render/icons.tsx";
+import { BrokenLinkIcon, WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
 import styles from "./Launcher.module.css";
 import { QueueRow } from "./QueueRow.tsx";
@@ -27,6 +27,11 @@ import { QueueRow } from "./QueueRow.tsx";
 export const Launcher = memo(function Launcher({ retry }: { retry: () => void }) {
 	const connection = useStore((s) => s.connection);
 	const projects = useStore((s) => s.projects);
+	/** Projects a withdrawn Worker took away (a `worker_unavailable` push): they
+	 * have no row in `projects` any more, so this is the only place the loss is
+	 * still named — and it clears itself when a registration serves the id
+	 * again. */
+	const unavailable = useStore((s) => s.unavailableProjects);
 	const queue = useStore((s) => s.queue);
 	/** When set, the Launcher is the Project home (compose only). */
 	const projectId = useStore((s) => s.currentProjectId);
@@ -151,6 +156,35 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 						</button>
 					))}
 				</div>
+			)}
+
+			{unavailable.length > 0 && (
+				<>
+					<div className={styles.header}>
+						<span className={styles.headerTitle}>Unavailable</span>
+					</div>
+					{/* Not a button: there is nothing to open until a Worker serves the
+					    id again, and offering a gesture that cannot work is the thing
+					    this row exists to avoid. Read-only, cleared by the aggregate. */}
+					<div className={styles.rows}>
+						{unavailable.map((entry) => (
+							<div key={entry.projectId} className={styles.rowStatic} role="note">
+								<span className={styles.rowLost} aria-hidden="true">
+									<BrokenLinkIcon size={14} />
+								</span>
+								<div className={styles.rowBody}>
+									<div className={styles.rowLine1}>
+										<span className={styles.rowName}>{entry.projectId}</span>
+										<span className={styles.rowReason}>no Worker</span>
+									</div>
+									<span className={styles.rowReasonText} title={entry.reason}>
+										{entry.reason}
+									</span>
+								</div>
+							</div>
+						))}
+					</div>
+				</>
 			)}
 
 			<div className={styles.header}>

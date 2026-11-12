@@ -88,7 +88,7 @@ import { getGlobalClient } from "./client.ts";
 import { resolveLatestSession } from "./latestSession.ts";
 import type { LocalSessionSeed } from "./sessionBoot.ts";
 import { promoteCandidate, type SessionCandidate } from "./sessionCandidate.ts";
-import type { ViewObservationEvent } from "./viewEvents.ts";
+import type { NavigationEvent } from "./viewEvents.ts";
 import { createNavigationViewPort, type NavigationViewPort } from "./viewPort.ts";
 
 // ---------------------------------------------------------------------------
@@ -264,6 +264,10 @@ type NavigationMessage =
 	// attachment generation it severed (ADR 19) — required on every
 	// observation frame.
 	| { kind: "closed"; projectId: string; stem: string; generation: number }
+	// The daemon's routing table lost Projects: a registration withdrew or died.
+	// Their homes and Sessions have nowhere to be, and no attachment describes
+	// the loss (the Daemon severed each attachment through `closed`).
+	| { kind: "projectsRemoved"; projectIds: string[] }
 	// An address-bearing initial-sync frame (replace: ops null; cursor-aware
 	// delta: ops set), delivered by the connection pipeline as a typed
 	// observation event. `operationId` is present when the frame was emitted
@@ -562,6 +566,16 @@ function landProjectHome(
 	port.clearSession(projectId);
 	port.writeRoute({ kind: "project", projectId });
 	return { view: { kind: "project", projectId }, sessionId: null };
+}
+
+/** Land on the global Launcher: the address, the session identity, and the
+ * alias flag all go, because no Project is left to retain — the Project home is
+ * exactly the address that stopped existing. */
+function landLauncher(port: NavigationViewPort): { view: NavigationView; sessionId: string | null } {
+	port.setAddressViaAlias(false);
+	port.clearSession();
+	port.writeRoute({ kind: "launcher" });
+	return { view: { kind: "launcher" }, sessionId: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,13 +1039,71 @@ function navigationStep(
 			const rendered = deps.port.renderedAddress();
 			if (rendered.projectId === message.projectId && rendered.stem === message.stem) {
 				// The rendered Session's runtime ended: the document can never
-				// progress again, so the address, the session id, and the route
-				// all go, retaining the Project to land on its home.
-				deps.port.clearSession(message.projectId);
-				deps.port.writeRoute({ kind: "project", projectId: message.projectId });
-				current = { view: { kind: "project", projectId: message.projectId }, sessionId: null };
+				// progress again, so the address, the session id, and the route all
+				// go. The Project home is the fallback only while the Project is still
+				// routed: a withdrawn Worker took its homes with it, and landing there
+				// would show one whose history no longer exists until the aggregate
+				// removes it a frame later.
+				if (deps.port.projectUnavailable(message.projectId)) {
+					current = landLauncher(deps.port);
+				} else {
+					deps.port.clearSession(message.projectId);
+					deps.port.writeRoute({ kind: "project", projectId: message.projectId });
+					current = { view: { kind: "project", projectId: message.projectId }, sessionId: null };
+				}
 			}
 			return { state: { ...state, pending, current, cancelled, abandoned: { key } } };
+		}
+
+		case "projectsRemoved": {
+			// A Worker withdrew, so the Daemon routes none of its Projects: their
+			// homes and Sessions stopped existing. Unlike a terminal close — which
+			// retains the Project to land on its home — there is no address to land
+			// on, so the committed view falls back to the launcher. A pending
+			// transition to one of those Projects is cancelled the way a closed
+			// target cancels one: its runtime went with the Worker, so its prepare
+			// must admit no RPC, and its late sync and reply commit nothing.
+			const gone = new Set(message.projectIds);
+			let pending = state.pending;
+			let cancelledTarget = false;
+			if (pending !== null && gone.has(pending.view.projectId)) {
+				pending.reply?.({ ok: false, error: "project removed" });
+				state.cancelled.add(pending.id);
+				pending = null;
+				cancelledTarget = true;
+			}
+			// A rollback target that stopped existing must not be restored when
+			// the in-flight transition fails.
+			if (
+				pending !== null &&
+				pending.previous.view.kind !== "launcher" &&
+				gone.has(pending.previous.view.projectId)
+			) {
+				pending = { ...pending, previous: { view: { kind: "launcher" }, sessionId: null } };
+			}
+			const endsCommitted = state.current.view.kind !== "launcher" && gone.has(state.current.view.projectId);
+			if (!cancelledTarget && !endsCommitted) {
+				return pending === state.pending ? { state } : { state: { ...state, pending } };
+			}
+			// A cancelled transition had staged its target's address and route, so
+			// the store names an address no view holds. Republish the committed one
+			// — a cancelled prepare never promoted a candidate, so the mirror still
+			// holds its root — or the launcher when the committed view is the one
+			// that went away.
+			let current = state.current;
+			if (endsCommitted) {
+				current = landLauncher(deps.port);
+			} else if (cancelledTarget) {
+				deps.port.restoreView(current.view, current.sessionId, deps.getClient()?.mirror.document);
+			}
+			return {
+				state: {
+					...state,
+					pending,
+					current,
+					committedGeneration: endsCommitted ? null : state.committedGeneration,
+				},
+			};
 		}
 
 		case "sync": {
@@ -1348,7 +1420,7 @@ export function navigationLocalSeed(seed: LocalSessionSeed): Promise<void> {
 	return runtime.reactor.send({ kind: "localSeed", seed });
 }
 
-export function navigationObservation(event: ViewObservationEvent): void {
+export function navigationObservation(event: NavigationEvent): void {
 	if (event.kind === "initial_sync") {
 		void runtime.reactor
 			.send({
@@ -1363,5 +1435,7 @@ export function navigationObservation(event: ViewObservationEvent): void {
 		void runtime.reactor
 			.send({ kind: "closed", projectId: event.projectId, stem: event.stem, generation: event.generation })
 			.catch(() => {});
+	} else if (event.kind === "projects_removed") {
+		void runtime.reactor.send({ kind: "projectsRemoved", projectIds: event.projectIds }).catch(() => {});
 	}
 }

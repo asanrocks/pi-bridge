@@ -9,6 +9,7 @@ import { detectProtocolSkew } from "./protocolSkew.ts";
 const info: GetDaemonInfoReply = {
 	id: "1",
 	ok: true,
+	revision: 1,
 	protocol: PROTOCOL_VERSION,
 	projects: [],
 	models: [],

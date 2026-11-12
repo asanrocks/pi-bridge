@@ -39,7 +39,7 @@ Pinned models is a single daemon-global list, backed by pi's **global**
 `Document.pinnedModels` and the `/pinnedModels` initial-sync op are removed.
 The client holds the list in the store (`pinnedModels`) for both the Project
 home and an attached Session; `getDaemonInfo.pinnedModels` seeds it and the
-`pinned_models_changed` push refreshes it.
+`daemon_info_changed` push refreshes it.
 
 Pinning is explicit. The Manager no longer calls `session.setScopedModels`, so
 pi's implicit `_addPersistedDefaultToNonEmptyScope` never fires; a model is
@@ -55,7 +55,8 @@ pinned only by the control below.
 reads the raw global `enabledModels`, resolves it to concrete ids (pi's TUI
 normalizes globs the same way on save), adds or removes the one model,
 persists via `setEnabledModels` + `flush`, and broadcasts
-`pinned_models_changed { pinnedModels }` to every Connection. The reply is
+`daemon_info_changed`, whose aggregate carries the resolved `pinnedModels`, to
+every Connection. The reply is
 acknowledgement only; the push is the state channel. The picker reveals each
 row's `provider/modelId` on hover and renders a ghost pin toggle (Shift+Enter
 for the keyboard-focused row).

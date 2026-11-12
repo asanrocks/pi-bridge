@@ -202,7 +202,11 @@ startup — every Worker created so far is disposed, including the one whose
 claim failed, so a spawned Worker cannot leak past a failed startup holding
 its socket and its storage claims — and a Worker that becomes
 unavailable withdraws only its own Projects; the others keep serving, and the
-browser's queue is republished as the aggregate of the survivors.
+browser's queue is republished as the aggregate of the survivors while the
+daemon aggregate is re-stated without the withdrawn Projects. The withdrawal is
+announced first, as a `worker_unavailable` push naming the Projects and the
+link's reason: the observation closes and the aggregate follow it, so an open
+tab can say why a Project vanished instead of only showing that it did.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity, and adds the two
 facts only the Daemon owns: `devMode` and the `protocol` version the browser
@@ -235,9 +239,11 @@ one socket with no browser protocol; signals dispose it, so a supervisor stops
 it without leaving an exclusion claim behind.
 
 A registration that arrives after startup joins the routing table under the
-same all-or-nothing rule. The browser learns about it on its next
-`getDaemonInfo` (a reload or reconnect): the surface has no project-list push,
-so an already-open tab does not gain the new Projects live.
+same all-or-nothing rule, and the Daemon re-states its aggregate in a
+`daemon_info_changed` push: an already-open tab gains the new Projects, the
+catalogue they contribute, and the pinned union without a reload. The frame is
+the same aggregate `getDaemonInfo` reports, so the baseline and the stream
+cannot describe different things.
 
 ### Registration and Project claiming
 
@@ -282,9 +288,10 @@ its Projects, and its observations until TCP noticed, which can take hours.
 A lost link is not a crash. Pending requests reject, every observation ends — its
 sink receives a terminal `closed` frame, so the browser's attachment ends
 instead of waiting for content that cannot arrive — and `unavailable` listeners
-fire once. The Daemon withdraws that registration, stops advertising its
-Projects, and can reconnect as a new registration. The Worker keeps its
-runtimes, because losing a Daemon is not a reason to kill an in-flight turn.
+fire once. The Daemon withdraws that registration, announces the loss
+(`worker_unavailable`), stops advertising its Projects, and can reconnect as a
+new registration. The Worker keeps its runtimes, because losing a Daemon is not
+a reason to kill an in-flight turn.
 
 `unavailable` is terminal on both sides, not a hint. The Worker stops admitting
 requests and ends the connection's observations when it reports one; the client
@@ -352,8 +359,10 @@ one settings file, so several Workers over distinct agent directories is not a
 supported configuration — a partial write failure or divergent scopes would
 leave the reports disagreeing, and giving the pinned scope one authoritative
 owner across registrations is deferred until multi-Worker deployment is an
-actual goal. `pinned_models_changed` reaches browsers as a Worker event, not a
-Daemon poll.
+actual goal. The Worker's `pinned_models_changed` event is a trigger, not a
+value: the Daemon re-reads every registration and pushes the resolved
+aggregate, so a pin can never be announced beside a catalogue the Worker did
+not resolve it against.
 
 Dictation credentials and text polish stay on the Daemon: the browser cannot
 mint a SAMI token, register a device, or speak the polish protocol, and neither
@@ -1085,11 +1094,14 @@ orders its slice, the Daemon that aggregates the slices, and the browser that
 orders the rows it receives, so a multi-Worker queue interleaves by the same
 rule instead of concatenating per-registration blocks.
 
-`getDaemonInfo` returns the static Project list, per-Project fresh-session
+`getDaemonInfo` returns the Project list, per-Project fresh-session
 model and thinking defaults, available model metadata, the daemon-global
 `pinnedModels` list resolved from pi's global `enabledModels`, the
 normal-tier `visibleModels` keys resolved from the bridge settings file,
-supported thinking levels, and dev-mode state. Model defaults are resolved
+supported thinking levels, dev-mode state, and the aggregate `revision`.
+That reply is the baseline a `daemon_info_changed` push continues: aggregate
+reads are serialized here and each mints the next revision, so a reply that
+crosses a push is ordered by it instead of by arrival. Model defaults are resolved
 from each Project's settings and the shared model runtime; they are display
 data and do not pin a future `newSession` request when the client omits an
 override. The thinking level is the pre-clamp resolution (per-model override
@@ -1101,8 +1113,8 @@ a model the Project home *picked* — rather than the default — is host-side
 state the reply does not carry, so the display ignores it while the session
 runs at the override. Pinned models is one daemon-global concept (ADR 15): a project-level
 `.pi/settings.json` `enabledModels` override is not reflected, and the
-`setPinnedModels` verb writes the same global list (broadcasting
-`pinned_models_changed`). The verb carries the whole ordered list, so its
+`setPinnedModels` verb writes the same global list (the resolved result arrives
+in a `daemon_info_changed` push). The verb carries the whole ordered list, so its
 mutations are serialized inside the Worker that owns the scope — one at a time,
 in arrival order — and the worker rewrites the scope in that order, dropping
 entries the runtime cannot resolve, deduping by identity (first position wins),

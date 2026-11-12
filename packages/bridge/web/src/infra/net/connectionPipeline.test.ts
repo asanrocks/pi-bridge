@@ -6,7 +6,13 @@
 // useStatusNotifications) depends on seeing the transition at arrival.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BridgeClient, PatchOp, ServerPushMessage } from "../../../../src/core/index.ts";
+import type {
+	BridgeClient,
+	DaemonInfoChangedMessage,
+	PatchOp,
+	ProjectInfo,
+	ServerPushMessage,
+} from "../../../../src/core/index.ts";
 import { initFromEntries } from "../../../../src/core/index.ts";
 import { getStore } from "../state/store.tsx";
 import { type ConnectionPipeline, createConnectionPipeline, type FlushScheduler } from "./connectionPipeline.ts";
@@ -293,5 +299,180 @@ describe("connectionPipeline session_closed handling", () => {
 		expect(s.currentStem).toBe("stem");
 		expect(s.activeSessionId).toBe("s1");
 		expect(replaceState).not.toHaveBeenCalled();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// daemon_info_changed — the daemon's aggregate (registrations, catalogue,
+// pinned scope). One absolute frame ordered by its revision; a Project that
+// left the aggregate strands no view, because nothing routes it any more.
+// ---------------------------------------------------------------------------
+
+function daemonInfo(revision: number, projects: ProjectInfo[]): DaemonInfoChangedMessage {
+	return {
+		kind: "daemon_info_changed",
+		revision,
+		projects,
+		models: [],
+		pinnedModels: [],
+		visibleModels: [],
+		thinkingLevels: [],
+	};
+}
+
+describe("connectionPipeline daemon_info_changed handling", () => {
+	const g = globalThis as unknown as { window?: unknown };
+	let pipeline: ConnectionPipeline | null = null;
+	let replaceState: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		replaceState = vi.fn();
+		g.window = { location: { pathname: "/proj/stem" }, history: { replaceState } };
+		getStore().setState({
+			projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
+			daemonInfoRevision: 0,
+			unavailableProjects: [],
+			models: [],
+			pinnedModels: [],
+			visibleModels: [],
+			thinkingLevels: [],
+			notifications: [],
+		});
+	});
+
+	afterEach(() => {
+		pipeline?.cleanup();
+		pipeline = null;
+		delete g.window;
+		getStore().setState({
+			projects: [],
+			daemonInfoRevision: 0,
+			unavailableProjects: [],
+			currentProjectId: null,
+			currentStem: null,
+			activeSessionId: null,
+		});
+	});
+
+	/** Commit the rendered session through a real attach, so the reactor holds it
+	 * as the committed view the aggregate change then has to end. */
+	async function commitRenderedSession(projectId: string, stem: string): Promise<void> {
+		const { client, mirror } = fakeClient();
+		resetNavigationForTests({ getClient: () => client });
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
+		const opened = navigationOpen({ projectId, stem });
+		const committed = initFromEntries([]);
+		mirror.document = committed;
+		pipeline.onPush({
+			kind: "replace",
+			session: { projectId, sessionId: "s1", stem },
+			document: committed,
+			generation: 1,
+		});
+		await opened;
+	}
+
+	it("applies the aggregate and lands the stranded view on the launcher", async () => {
+		await commitRenderedSession("proj", "stem");
+		if (pipeline === null) throw new Error("pipeline missing");
+
+		pipeline.onPush(daemonInfo(1, []));
+
+		// No Worker serves the Project any more: the address, the durable id,
+		// and the route all go — the launcher, because the Project home is
+		// exactly the address that stopped existing.
+		const s = getStore().getState();
+		expect(s.projects).toEqual([]);
+		expect(s.currentProjectId).toBeNull();
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(replaceState).toHaveBeenCalledWith(null, "", "/");
+	});
+
+	it("keeps the view when the rendered Project survived", async () => {
+		await commitRenderedSession("proj", "stem");
+		if (pipeline === null) throw new Error("pipeline missing");
+
+		pipeline.onPush(daemonInfo(1, [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]));
+
+		expect(getStore().getState().currentStem).toBe("stem");
+		expect(replaceState).not.toHaveBeenCalled();
+	});
+
+	it("drops a frame older than the revision it holds", async () => {
+		await commitRenderedSession("proj", "stem");
+		if (pipeline === null) throw new Error("pipeline missing");
+		getStore().setState({ daemonInfoRevision: 2 });
+
+		pipeline.onPush(daemonInfo(1, []));
+
+		// The newer read already landed; a frame that crossed it changes nothing.
+		expect(getStore().getState().projects).toHaveLength(1);
+		expect(getStore().getState().currentStem).toBe("stem");
+		expect(replaceState).not.toHaveBeenCalled();
+	});
+
+	it("carries the pinned scope on the same frame", () => {
+		const { client } = fakeClient();
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
+		const pinnedModels = [{ provider: "faux", id: "faux-1", name: "Faux 1" }];
+
+		pipeline.onPush({ ...daemonInfo(1, []), pinnedModels });
+
+		expect(getStore().getState().pinnedModels).toEqual(pinnedModels);
+	});
+
+	it("records a withdrawn Worker's Projects and clears them when they are served again", () => {
+		const { client } = fakeClient();
+		pipeline = createConnectionPipeline(client, manualScheduler().scheduler);
+
+		pipeline.onPush({ kind: "worker_unavailable", projectIds: ["proj"], reason: "worker link closed" });
+
+		// The Launcher's row and the view actor's skip-hop both read this; the
+		// toast is the ephemeral half of the same news.
+		expect(getStore().getState().unavailableProjects).toEqual([{ projectId: "proj", reason: "worker link closed" }]);
+		expect(
+			getStore()
+				.getState()
+				.notifications.map((toast) => toast.message),
+		).toEqual(['Project "proj" is unavailable: worker link closed']);
+
+		// A second withdrawal while the first is still unresolved restates the
+		// reason instead of stacking a second row or a second toast.
+		pipeline.onPush({
+			kind: "worker_unavailable",
+			projectIds: ["proj"],
+			reason: "worker link lost: heartbeat timeout",
+		});
+		expect(getStore().getState().unavailableProjects).toEqual([
+			{ projectId: "proj", reason: "worker link lost: heartbeat timeout" },
+		]);
+		expect(getStore().getState().notifications).toHaveLength(1);
+
+		pipeline.onPush(daemonInfo(1, [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]));
+
+		// A registration serves the id again: there is no loss left to name.
+		expect(getStore().getState().unavailableProjects).toEqual([]);
+	});
+
+	it("lands on the launcher when the close follows the loss", async () => {
+		await commitRenderedSession("proj", "stem");
+		if (pipeline === null) throw new Error("pipeline missing");
+
+		// The wire order the Daemon guarantees: the loss, then the closes.
+		pipeline.onPush({
+			kind: "worker_unavailable",
+			projectIds: ["proj"],
+			reason: "worker link lost: heartbeat timeout",
+		});
+		pipeline.onPush({ kind: "session_closed", projectId: "proj", stem: "stem", generation: 1 });
+
+		// One hop, not two: the Project home the close would fall back to is
+		// exactly the address the aggregate is about to remove.
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBeNull();
+		expect(s.currentStem).toBeNull();
+		expect(replaceState).toHaveBeenCalledTimes(1);
+		expect(replaceState).toHaveBeenCalledWith(null, "", "/");
 	});
 });

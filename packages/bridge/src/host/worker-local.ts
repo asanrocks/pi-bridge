@@ -1270,7 +1270,7 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 				settings.setEnabledModels(patterns.length > 0 ? patterns : undefined);
 				await settings.flush();
 				if (disposed) return;
-				emit({ kind: "pinned_models_changed", pinnedModels: await resolvePinnedModels() });
+				emit({ kind: "pinned_models_changed" });
 			}),
 
 		listFiles: async (prefix: string, projectId: string) => listFiles(prefix, requireProject(projectId).cwd),

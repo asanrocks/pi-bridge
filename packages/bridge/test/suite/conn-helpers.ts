@@ -183,6 +183,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	listQueue: async () => [],
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
+		revision: 1,
 		protocol: PROTOCOL_VERSION,
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],

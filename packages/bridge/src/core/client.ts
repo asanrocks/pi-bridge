@@ -53,7 +53,8 @@ const PUSH_KINDS = new Set([
 	"patch",
 	"queue_changed",
 	"session_settled",
-	"pinned_models_changed",
+	"daemon_info_changed",
+	"worker_unavailable",
 	"session_closed",
 ]);
 
@@ -288,8 +289,8 @@ export class BridgeClient {
 	}
 
 	/** Replace the daemon-global pinned list, in order (ADR 20). The result —
-	 * filtered to what the catalogue resolves — arrives as a
-	 * `pinned_models_changed` push. */
+	 * filtered to what the catalogue resolves — arrives in the
+	 * `daemon_info_changed` push that restates the daemon aggregate. */
 	setPinnedModels(models: PinnedModelSelection[]): Promise<RpcReply> {
 		return this.call({ verb: "setPinnedModels", models });
 	}

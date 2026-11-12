@@ -54,6 +54,10 @@ export interface NavigationViewPort {
 	 * reuses the richer in-memory document over the cache when the session id
 	 * matches. */
 	renderedDocument(): Document;
+	/** True when a `worker_unavailable` push named this Project and no aggregate
+	 * has served the id since: the Project has no home and no Session address,
+	 * so a view ending there has only the launcher to land on. */
+	projectUnavailable(projectId: string): boolean;
 
 	// ── Writes: the actor's decisions ────────────────────────────────────
 
@@ -109,6 +113,11 @@ export function createNavigationViewPort(): NavigationViewPort {
 		},
 		renderedDocument() {
 			return getStore().getState().document;
+		},
+		projectUnavailable(projectId) {
+			return getStore()
+				.getState()
+				.unavailableProjects.some((entry) => entry.projectId === projectId);
 		},
 		setAddressViaAlias(viaAlias) {
 			getStore().getState().setAddressViaAlias(viaAlias);

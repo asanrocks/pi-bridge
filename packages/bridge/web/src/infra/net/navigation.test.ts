@@ -56,6 +56,8 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
 		addressViaAlias: false,
 		document: emptyDocument(),
 		renderLeafId: null,
+		// A loss recorded by one test must not decide another's landing.
+		unavailableProjects: [],
 		...overrides,
 	});
 }
@@ -750,6 +752,87 @@ describe("Navigation", () => {
 		expect(s.currentStem).toBeNull();
 		expect(s.activeSessionId).toBeNull();
 		expect(routeWritten()).toBe("/proj");
+	});
+
+	it("a close caused by a withdrawn Worker lands on the launcher, not the Project home", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		const opened = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await opened;
+
+		// The registration went away first (the pipeline records the push), so the
+		// Project home the close would fall back to does not exist: only the
+		// launcher is left, and the aggregate that confirms it is a frame later.
+		getStore().getState().noteWorkerUnavailable(["proj"], "worker link lost: heartbeat timeout");
+		// The route the browser holds is the session the close ends, so the
+		// launcher write is a real change (not a no-op against `/`).
+		installWindow("/proj/a");
+		navigationObservation({ kind: "session_closed", projectId: "proj", stem: "a", generation: 1 });
+		await tick();
+
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBeNull();
+		expect(s.currentStem).toBeNull();
+		expect(routeWritten()).toBe("/");
+	});
+
+	it("a removed Project cancels a pending transition and republishes the committed view", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		const committed = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await committed;
+
+		// A navigate to a Project that vanishes while its open is in flight: the
+		// transition staged its address and route optimistically, and its RPC is
+		// still unanswered.
+		const pendingReply = gate<RpcReply>();
+		fake.openReplies.push(pendingReply.promise);
+		const opening = navigationOpen({ projectId: "gone", stem: "x" });
+		expect(getStore().getState().currentProjectId).toBe("gone");
+		expect(routeWritten()).toBe("/gone/x");
+
+		navigationObservation({ kind: "projects_removed", projectIds: ["gone"] });
+		const result = await opening;
+		expect(result.ok).toBe(false);
+		await tick();
+
+		// The cancelled transition's caller settled, its prepare sent no RPC, and
+		// the store and the route name the view the page actually holds again.
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBe("proj");
+		expect(s.currentStem).toBe("a");
+		expect(s.activeSessionId).toBe("id-a");
+		expect(routeWritten()).toBe("/proj/a");
+		expect(fake.openCalls.map((call) => call.projectId)).toEqual(["proj"]);
+	});
+
+	it("a removed Project leaves the launcher when the committed view was removed too", async () => {
+		const fake = fakeClient();
+		resetNavigationForTests({ getClient: () => fake.client });
+		const committed = navigationOpen({ projectId: "proj", stem: "a" });
+		navigationObservation({ kind: "initial_sync", ref: REF_A, ops: null, generation: 1 });
+		await committed;
+
+		// A pending navigate inside the same Project, then the removal: both the
+		// staged target and the committed view are gone, so nothing local is left
+		// to republish — the launcher is the only address that exists.
+		const pendingReply = gate<RpcReply>();
+		fake.openReplies.push(pendingReply.promise);
+		const opening = navigationOpen({ projectId: "proj", stem: "b" });
+		installWindow("/proj/b");
+
+		navigationObservation({ kind: "projects_removed", projectIds: ["proj"] });
+		const result = await opening;
+		expect(result.ok).toBe(false);
+		await tick();
+
+		const s = getStore().getState();
+		expect(s.currentProjectId).toBeNull();
+		expect(s.currentStem).toBeNull();
+		expect(s.activeSessionId).toBeNull();
+		expect(routeWritten()).toBe("/");
 	});
 
 	it("an unattributed re-assert from an older attachment never commits (ADR 19)", async () => {

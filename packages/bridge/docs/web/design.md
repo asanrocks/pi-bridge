@@ -270,6 +270,17 @@ word otherwise), and a preview line — its status line while running,
 otherwise the latest message.
 Selecting a Project opens its Project home at `/<projectId>`.
 
+A Project whose Worker went away does not simply disappear from the list. The
+daemon announces the loss (`worker_unavailable`, naming the Projects and the
+link's reason), the Projects list drops them, and an **Unavailable** group
+below it carries one read-only row per lost Project: the broken-link glyph
+(the same mark the TopBar uses for a down connection), the Project id, a
+"no Worker" chip, and the reason as its path line. The row has no click
+target — nothing would answer until a Worker claims the id again — and it
+clears itself when a registration serves the Project again. The loss is also
+toasted when it happens, and a Session being read at that moment lands on the
+launcher instead of a Project home that no longer exists.
+
 Project home is an unattached, compose-first surface. It shows the expanded
 `HomeCompose` card, focuses the textarea, and starts a new Session when the
 first prompt is sent. The first prompt, images, and the pre-session model and

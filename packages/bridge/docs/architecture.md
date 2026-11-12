@@ -471,7 +471,15 @@ there is no corresponding Node-only import gate.
 Queue changes are broadcast across tabs through `queue_changed` (a snapshot,
 then throttled deltas); archived history is invalidated per Project and
 refetched by whichever tab displays it, so no page is pushed to a client that
-is not looking at one. Static Project configuration has no project-list push. When a live runtime is closed out from under attached
+is not looking at one. The daemon aggregate — Projects, catalogue, pinned scope —
+is pushed as one absolute `daemon_info_changed` frame whenever a Worker
+registration joins or withdraws, so an open tab gains and loses Projects live;
+the `getDaemonInfo` baseline and the pushes share one revision, so the two
+cannot disagree. A withdrawal is announced first as `worker_unavailable`
+(the Projects and the link's reason), ahead of the observation closes and the
+aggregate that follow it, so a tab can explain the loss rather than only show
+it; the Launcher keeps the withdrawn Projects listed as unavailable until a
+registration serves those ids again. When a live runtime is closed out from under attached
 clients (a move to Archive or Trash), they are detached and receive a
 `session_closed` push naming the address, so a view never stalls waiting for
 a runtime that no longer exists; idle collection has no attached Connection

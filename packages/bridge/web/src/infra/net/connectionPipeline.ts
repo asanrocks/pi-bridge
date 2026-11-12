@@ -213,9 +213,35 @@ export function createConnectionPipeline(
 			return;
 		}
 
-		// Daemon-global pinned list (ADR 15): one concept, replaced wholesale.
-		if (push.kind === "pinned_models_changed") {
-			store.getState().setPinnedModels(push.pinnedModels);
+		// The daemon aggregate (registrations, the pinned scope, ADR 15): one
+		// absolute frame. The store drops one older than what this page holds, and
+		// a Project that left it is no longer routed — its home and its Sessions
+		// have nowhere to be, so the navigation actor lands on the launcher.
+		if (push.kind === "daemon_info_changed") {
+			const before = store.getState();
+			store.getState().applyDaemonInfo(push);
+			// A frame that lost by revision changed nothing: its Project list is older
+			// than the one this page holds, so it decides no navigation either.
+			if (store.getState().daemonInfoRevision === before.daemonInfoRevision) return;
+			const live = new Set(push.projects.map((project) => project.id));
+			const removed = before.projects.filter((project) => !live.has(project.id)).map((project) => project.id);
+			if (removed.length > 0) navigationObservation({ kind: "projects_removed", projectIds: removed });
+			return;
+		}
+
+		// A Worker registration withdrew. The Daemon sends this before the frames
+		// that describe the loss, so the store already knows why when the closes
+		// arrive: the Launcher names the Project, and the view actor lands on the
+		// launcher rather than a Project home that the next aggregate removes.
+		if (push.kind === "worker_unavailable") {
+			store.getState().noteWorkerUnavailable(push.projectIds, push.reason);
+			const names = push.projectIds.map((projectId) => `"${projectId}"`).join(", ");
+			const subject = push.projectIds.length === 1 ? `Project ${names} is` : `Projects ${names} are`;
+			// One toast per set of Projects: an upsert, so a registration that flaps
+			// updates the reason instead of stacking notices.
+			store
+				.getState()
+				.pushToast(`worker-unavailable:${push.projectIds.join(",")}`, `${subject} unavailable: ${push.reason}`);
 			return;
 		}
 

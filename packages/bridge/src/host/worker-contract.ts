@@ -208,7 +208,9 @@ export interface WorkerEnvironment {
 	/** Replace the global `enabledModels` scope with this ordered list. The
 	 * scope IS the pinned list (ADR 15), so position is meaning; entries the
 	 * catalogue cannot resolve are filtered, and the result is announced by a
-	 * `pinned_models_changed` event. */
+	 * `pinned_models_changed` event. The event carries no rows: the Daemon
+	 * re-reads the aggregate, which is the one place the resolved list (and the
+	 * catalogue it sits beside) is assembled for the wire. */
 	setPinnedModels(models: PinnedModelSelection[]): Promise<void>;
 	/** Project-cwd path completion. */
 	listFiles(prefix: string, projectId: string): Promise<Array<{ path: string; isDirectory: boolean }>>;
@@ -256,8 +258,11 @@ export type WorkerEvent =
 			readonly outcome: SessionOutcome;
 			readonly name?: string;
 	  }
-	/** The global pinned list changed (a `setPinnedModels` mutation). */
-	| { readonly kind: "pinned_models_changed"; readonly pinnedModels: PinnedModelInfo[] }
+	/** The global pinned list changed (a `setPinnedModels` mutation). A
+	 * trigger, not a value: the Daemon re-reads every registration and states
+	 * the resolved aggregate, so a pin can never be announced beside a
+	 * catalogue the Worker did not resolve it against. */
+	| { readonly kind: "pinned_models_changed" }
 	/** The Worker can serve nothing more (its execution scope is terminal).
 	 * Emitted once; the Daemon withdraws the registration instead of leaving
 	 * Projects that answer every operation with a refusal. */

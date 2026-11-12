@@ -4,7 +4,7 @@ import { extname, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { SessionInfo, SessionRef } from "../core/index.ts";
+import type { DaemonInfo, SessionInfo, SessionRef } from "../core/index.ts";
 import { compareQueueRows, PROTOCOL_VERSION } from "../core/index.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
@@ -144,6 +144,18 @@ export class Daemon {
 	/** True once `dispose` began: the Worker link closing during a clean
 	 * shutdown is expected, not a withdrawal. */
 	private disposing = false;
+	/** The daemon-info revision: minted once per aggregate read, shared by the
+	 * `getDaemonInfo` baseline and every `daemon_info_changed` push, so a client
+	 * keeps the newer of two frames that crossed. Monotone for this Daemon's
+	 * lifetime; a connection's own baseline domain is its socket. */
+	private daemonInfoRevision = 0;
+	/** Serializes aggregate reads: overlapping reads could resolve out of order
+	 * and install an older snapshot under a higher revision. */
+	private daemonInfoTail: Promise<unknown> = Promise.resolve();
+	/** A registration or the pinned scope moved; the publisher's next iteration
+	 * must re-read. Coalesces every trigger that lands before that read starts. */
+	private daemonInfoScheduled = false;
+	private daemonInfoPublishing: Promise<void> | null = null;
 
 	/** The Worker serving one Project, or undefined when the registration does
 	 * not cover it. */
@@ -376,9 +388,10 @@ export class Daemon {
 		// persisted queue state, and an empty default would hide it.
 		await this.seedQueue(host);
 		this.publishTitle();
-		// A newly registered Worker changes the aggregate; the browser's Project
-		// list itself is refreshed on its next `getDaemonInfo` (reconnect or
-		// reload), because the surface has no project-list push.
+		// A newly registered Worker changes the aggregate: its Projects, its
+		// catalogue, and the pinned scope's union. Publishing is unconditional
+		// rather than diffed — a registration moves once per process.
+		this.scheduleDaemonInfoPublish();
 		this.scheduleQueuePublish();
 	}
 
@@ -408,9 +421,13 @@ export class Daemon {
 	}
 
 	/** One report over every registration: the picker and Project list describe a
-	 * Daemon, not a Worker, so the rows are merged and deduped by identity. */
+	 * Daemon, not a Worker, so the rows are merged and deduped by identity. A
+	 * Worker that cannot answer — it died between the withdrawal and this read —
+	 * contributes nothing instead of failing the frame: the broadcast must
+	 * reach the Connections that already exist. */
 	private async aggregateInfo(): Promise<WorkerInfo> {
-		const infos = await Promise.all(this.workers.map((host) => host.service.info()));
+		const answers = await Promise.all(this.workers.map((host) => host.service.info().catch(() => null)));
+		const infos = answers.filter((info): info is WorkerInfo => info !== null);
 		const models = new Map<string, WorkerInfo["models"][number]>();
 		const pinned = new Map<string, WorkerInfo["pinnedModels"][number]>();
 		const thinkingLevels = new Set<string>();
@@ -426,6 +443,47 @@ export class Daemon {
 			visibleModels: [...new Set(infos.flatMap((info) => info.visibleModels))],
 			thinkingLevels: [...thinkingLevels],
 		};
+	}
+
+	/** One serialized aggregate read. The revision is minted at read start, so a
+	 * higher revision always names the later read — which is what lets the client
+	 * order a `getDaemonInfo` baseline against a push that crossed it. */
+	private readDaemonInfo(): Promise<DaemonInfo> {
+		const read = this.daemonInfoTail.then(async (): Promise<DaemonInfo> => {
+			this.daemonInfoRevision += 1;
+			const revision = this.daemonInfoRevision;
+			const info = await this.aggregateInfo();
+			return { revision, ...info };
+		});
+		this.daemonInfoTail = read.then(
+			() => undefined,
+			() => undefined,
+		);
+		return read;
+	}
+
+	/** Announce the aggregate after a registration or the pinned scope moved.
+	 * Triggers coalesce: one read serves everything that landed before it
+	 * started, and the loop repeats while more landed during it, so a burst of
+	 * joins costs one frame per read rather than one frame per trigger. */
+	private scheduleDaemonInfoPublish(): void {
+		if (this.disposing) return;
+		this.daemonInfoScheduled = true;
+		if (this.daemonInfoPublishing !== null) return;
+		this.daemonInfoPublishing = (async () => {
+			try {
+				while (this.daemonInfoScheduled && !this.disposing) {
+					this.daemonInfoScheduled = false;
+					const info = await this.readDaemonInfo();
+					if (this.disposing) return;
+					this.pushToAll({ kind: "daemon_info_changed", ...info });
+				}
+			} catch (error) {
+				console.error(`Daemon: publishing the daemon aggregate failed: ${String(error)}`);
+			} finally {
+				this.daemonInfoPublishing = null;
+			}
+		})();
 	}
 
 	/** Returns the address the server is listening on, or null if not started. */
@@ -520,9 +578,10 @@ export class Daemon {
 			return;
 		}
 		if (event.kind === "pinned_models_changed") {
-			// The pinned scope is Worker-owned; the picker shows the union of what
-			// the registered Workers report, deduped by identity.
-			this.pushToAll({ kind: "pinned_models_changed", pinnedModels: event.pinnedModels });
+			// The pinned scope is Worker-owned and the picker shows the union over
+			// every registration, so the Daemon re-states its whole aggregate: one
+			// frame carries the pinned verdict and the lists it sits beside.
+			this.scheduleDaemonInfoPublish();
 		}
 	}
 
@@ -535,13 +594,29 @@ export class Daemon {
 		if (!this.workers.includes(host)) return;
 		// Withdraw exactly this registration's Projects: the other Workers keep
 		// serving, so a failure is scoped to the execution that failed.
+		const withdrawn: string[] = [];
 		for (const [projectId, routed] of [...this.routes]) {
-			if (routed === host) this.routes.delete(projectId);
+			if (routed !== host) continue;
+			this.routes.delete(projectId);
+			withdrawn.push(projectId);
 		}
 		this.workers = this.workers.filter((worker) => worker !== host);
 		this.queueByHost.delete(host);
 		this.queueVersionByHost.delete(host);
 		this.publishTitle();
+		// Announce the loss before anything describes it. This runs synchronously
+		// inside the withdrawal, ahead of the observation closes the link's own
+		// teardown sinks (the same tick, after the listeners return) and ahead of
+		// the aggregate read (a later task): a client that hears this first can
+		// say why an address vanished and can land on the launcher directly
+		// instead of a Project home that the next frame removes.
+		if (withdrawn.length > 0) {
+			this.pushToAll({ kind: "worker_unavailable", projectIds: withdrawn, reason });
+		}
+		// Its Projects are no longer routable, so an open tab must not keep
+		// offering them: the aggregate is re-stated without them, and the rows
+		// they queued leave with the next publication.
+		this.scheduleDaemonInfoPublish();
 		// Its rows leave the queue; the removal rides the next publication, and
 		// no completion is announced for them.
 		this.scheduleQueuePublish();
@@ -791,7 +866,7 @@ export class Daemon {
 			this.forPath(directory).service.gitDiff(directory, oldState, newState),
 
 		getDaemonInfo: async () => ({
-			...(await this.aggregateInfo()),
+			...(await this.readDaemonInfo()),
 			devMode: this.devMode,
 			protocol: PROTOCOL_VERSION,
 		}),

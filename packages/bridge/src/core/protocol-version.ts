@@ -8,6 +8,7 @@
 // already running), so it compares instead and reports the skew to the user.
 //
 // Bumped when a frame's meaning changes in a way an older peer would
-// misinterpret — a renamed push kind, a changed field meaning. Adding an
-// optional field is not a bump: an older peer ignores what it does not know.
-export const PROTOCOL_VERSION = 1;
+// misinterpret — a renamed push kind, a changed field meaning, or a push kind
+// an older client rejects as unknown. Adding an optional field is not a bump:
+// an older peer ignores what it does not know.
+export const PROTOCOL_VERSION = 2;

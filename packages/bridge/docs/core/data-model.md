@@ -37,7 +37,7 @@ produced by the host from an in-memory start stamp, so a client attaching
 mid-run recovers how long a running tool has already run. Absent means no tool
 is in flight. Pinned models is not Document state: it is one daemon-global list resolved
 from pi's global `enabledModels` and delivered by `getDaemonInfo` and the
-`pinned_models_changed` push (ADR 15). Status fields derived from entries are
+`daemon_info_changed` push (ADR 15). Status fields derived from entries are
 recomputed by the pure document functions; live model and context state can
 also be supplied by the host at its refresh boundary.
 

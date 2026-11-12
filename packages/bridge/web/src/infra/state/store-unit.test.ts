@@ -5,10 +5,16 @@
 // address with no Project.
 
 import { describe, expect, it } from "vitest";
-import type { Entry, SessionInfo } from "../../../../src/core/index.ts";
+import type { DaemonInfo, Entry, ProjectInfo, SessionInfo } from "../../../../src/core/index.ts";
 import { addressKeyOf } from "./protocol.ts";
 import { createClientStore } from "./store.ts";
 import { type BrowserTarget, lastBrowsedFile, resolveRenderLeafTarget } from "./ui.ts";
+
+/** One daemon aggregate frame (a `getDaemonInfo` baseline or a
+ * `daemon_info_changed` push): the store applies the whole snapshot. */
+function daemonInfo(revision: number, projects: ProjectInfo[] = []): DaemonInfo {
+	return { revision, projects, models: [], pinnedModels: [], visibleModels: [], thinkingLevels: [] };
+}
 
 function session(stem: string): SessionInfo {
 	return {
@@ -65,7 +71,11 @@ describe("clearCurrentSession", () => {
 
 	it("keeps the static Project list and the global queue", () => {
 		const store = createClientStore();
-		store.getState().setProjects([{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]);
+		store
+			.getState()
+			.applyDaemonInfo(
+				daemonInfo(1, [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }]),
+			);
 		store.getState().applyQueueSnapshot([session("a")], 1);
 		openAndDirty(store);
 
@@ -379,7 +389,11 @@ describe("setCurrentSession", () => {
 	// change closes it; a same-address re-assert (the initial-sync push after an
 	// optimistic open, a reconnect replace) leaves it alone.
 	function withOpenBrowser(store: ReturnType<typeof createClientStore>) {
-		store.getState().setProjects([{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]);
+		store
+			.getState()
+			.applyDaemonInfo(
+				daemonInfo(1, [{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]),
+			);
 		store.getState().setCurrentSession("proj", "2024-01-01_x");
 		store.getState().openFileViewer("src/a.ts");
 	}
@@ -440,7 +454,11 @@ describe("setCurrentSession", () => {
 
 describe("adoptBrowserPath", () => {
 	function withHomeTarget(store: ReturnType<typeof createClientStore>) {
-		store.getState().setProjects([{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]);
+		store
+			.getState()
+			.applyDaemonInfo(
+				daemonInfo(1, [{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null }]),
+			);
 		store.getState().setCurrentSession("proj", "2024-01-01_x");
 		store.getState().openFileViewer("~/notes/todo.md");
 	}
@@ -637,10 +655,12 @@ describe("unread completions", () => {
 describe("the browser's last file", () => {
 	function seeded() {
 		const store = createClientStore();
-		store.getState().setProjects([
-			{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null },
-			{ id: "other", cwd: "/other", defaultModel: null, defaultThinkingLevel: null },
-		]);
+		store.getState().applyDaemonInfo(
+			daemonInfo(1, [
+				{ id: "proj", cwd: "/repo", defaultModel: null, defaultThinkingLevel: null },
+				{ id: "other", cwd: "/other", defaultModel: null, defaultThinkingLevel: null },
+			]),
+		);
 		store.getState().setCurrentSession("proj", "a");
 		return store;
 	}

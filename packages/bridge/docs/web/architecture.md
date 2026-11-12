@@ -417,7 +417,15 @@ reports it to its owner (`PipelineOwner.onResyncNeeded`), which replaces the
 socket instead of applying a delta to an untrusted base. Invalidated Project
 pages are dropped from `sessionPages`, so the next unfold refetches them from
 the first page; history replies and pagination never write the queue.
-A `session_closed` push names an address whose live runtime ended on the
+A `daemon_info_changed` push does not touch the Document: it replaces the
+store's Projects, catalogue, and pinned scope in one write, drops the cached
+pages and queue rows of a Project that left it, and lets the navigation
+reactor decide whether the rendered view survives. A `worker_unavailable`
+push (sent first, when a registration withdraws) records the lost Projects and
+why, so the Launcher can name them and a close caused by the loss lands on the
+launcher rather than a Project home the next frame removes; the record clears
+when an aggregate serves those ids again. A `session_closed` push
+names an address whose live runtime ended on the
 host (a move to Archive or Trash); when it names the rendered Session,
 the server has already severed the attachment, so navigation clears to the
 Project home through the same boundary a failed open uses — the document on
@@ -542,6 +550,15 @@ applies):
   unattributed initial-sync frame (no `operationId`) can no longer select a
   new address at all: it may only re-assert the already-rendered address,
   idempotently. The host's
+  `daemon_info_changed` push re-states the daemon's Projects, catalogue, and
+  pinned scope (one absolute frame ordered by its daemon-info `revision`); a
+  Project that left it is no longer routed, so a tab rendering that Project's
+  home or one of its Sessions lands on the launcher — the Project home is the
+  address that stopped existing — and a pending transition to it is cancelled
+  the way a closed target is, with the committed view (or the launcher, when
+  that went too) republished so the store and the route never keep the staged
+  address. A close whose Project is unavailable joins the launcher directly for
+  the same reason. The host's
   `session_closed` push cancels a pending transition targeting that address
   (its caller settles, its prepare admits no RPC, its late sync and reply
   commit nothing), removes that address as a rollback target for a

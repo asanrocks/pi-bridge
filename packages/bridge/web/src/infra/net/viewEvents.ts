@@ -45,6 +45,19 @@ export type ViewObservationEvent =
 	| { kind: "patch"; generation: ViewGeneration; ops: PatchOp[] }
 	| { kind: "session_closed"; generation: ViewGeneration; projectId: string; stem: string };
 
+/** The daemon's routing table lost Projects: a registration withdrew or died,
+ * so their homes and Sessions stopped existing. Not an observation — no
+ * attachment produced it — which is why it carries no generation. */
+export interface ProjectsRemovedEvent {
+	kind: "projects_removed";
+	projectIds: string[];
+}
+
+/** Everything the transport pipeline hands the view actor: the
+ * generation-bearing observation events, plus the aggregate's routing removal
+ * (which owns no address and ends no attachment). */
+export type NavigationEvent = ViewObservationEvent | ProjectsRemovedEvent;
+
 /** The generation an event was produced by. */
 export function viewGeneration(event: ViewObservationEvent): ViewGeneration {
 	return event.generation;

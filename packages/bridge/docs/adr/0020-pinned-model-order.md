@@ -25,7 +25,8 @@ dropped every level in the scope, which the pinned default depends on.
 carries the whole ordered list (identity plus an optional thinking level per
 entry). The host filters what the catalogue cannot resolve, dedupes by identity
 with the first position winning, writes the remaining order as the scope, and
-announces the resulting list with the existing `pinned_models_changed` push.
+announces the resulting list in the `daemon_info_changed` push that restates the
+daemon aggregate.
 The reply is acknowledgement only: a replacement is a proposal, the push is the
 verdict. An empty list clears the scope, which is the "no pins" state.
 

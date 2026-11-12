@@ -56,5 +56,5 @@ export function getStore() {
 
 export type { ComposerDraft } from "./composer.ts";
 export { selectDraftImages } from "./composer.ts";
-export type { ConnectionState, SessionFolderPage } from "./protocol.ts";
+export type { ConnectionState, SessionFolderPage, UnavailableProject } from "./protocol.ts";
 export type { Toast } from "./ui.ts";

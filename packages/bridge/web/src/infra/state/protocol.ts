@@ -10,6 +10,7 @@
 import type { StateCreator } from "zustand/vanilla";
 import { compareQueueRows } from "../../../../src/core/index.ts";
 import type {
+	DaemonInfo,
 	Document,
 	ModelInfo,
 	PinnedModelInfo,
@@ -107,6 +108,15 @@ function readUnread(list: string[], address: SessionAddress | null): string[] {
  * empty placeholder — nothing may be asserted on its behalf. */
 export type DocAuthority = "authoritative" | "seeded" | "staged";
 
+/** One Project a withdrawn Worker took with it (a `worker_unavailable` push),
+ * with the reason the link ended. Not part of the aggregate: the Daemon states
+ * a loss once, when it happens, and the aggregate only ever states what is
+ * served now. */
+export interface UnavailableProject {
+	projectId: string;
+	reason: string;
+}
+
 export interface ProtocolSlice {
 	// Document — replaced on every change. ADR 08 root-flip makes Object.is
 	// the change signal for all selectors.
@@ -137,8 +147,22 @@ export interface ProtocolSlice {
 	/** Sidebar folder pages (ADR 11), keyed by projectId. Absent = never
 	 * expanded (fetch on expand); reset on reconnect. */
 	sessionPages: Record<string, SessionFolderPage>;
-	/** Static Project configuration (ADR 11). */
+	/** The daemon's Project list (ADR 11): static configuration in the sense that
+	 * no gesture edits it, but a live set — a Worker registration joining or
+	 * withdrawing re-states it, so an open tab gains and loses Projects. */
 	projects: ProjectInfo[];
+	/** The daemon-aggregate revision this page holds: the last `getDaemonInfo`
+	 * baseline or `daemon_info_changed` push applied. A frame at or below it is
+	 * an older read that crossed a newer one on the wire, so it is dropped —
+	 * the aggregate is absolute, and losing a frame costs nothing. */
+	daemonInfoRevision: number;
+	/** Projects a `worker_unavailable` push took away, with the link's reason.
+	 * The aggregate states what is served, so a gone Project is simply absent
+	 * from it; this is the page's memory of *why*, kept until a registration
+	 * serves the id again (the next aggregate that contains it) — the Launcher
+	 * names the loss, and the view actor uses it to skip a Project home that no
+	 * longer exists. */
+	unavailableProjects: UnavailableProject[];
 	/** The queue's publication revision: the last frame this client applied. A
 	 * delta must be exactly one ahead, or the client reconnects for a snapshot
 	 * (ADR 24). */
@@ -178,15 +202,24 @@ export interface ProtocolSlice {
 	setConnectionState: (state: ConnectionState) => void;
 	/** Set the active durable session id (from initial-sync frames). */
 	setActiveSessionId: (sessionId: string | null) => void;
-	/** Set the static Project list (from getDaemonInfo). */
-	setProjects: (projects: ProjectInfo[]) => void;
+	/** Apply the daemon aggregate: the `getDaemonInfo` baseline or a
+	 * `daemon_info_changed` push. A Project that left the aggregate takes its
+	 * cached folder pages and queue rows with it — no Worker serves it, so
+	 * neither could be valid — and the caller's navigation obeys separately. */
+	applyDaemonInfo: (info: DaemonInfo) => void;
+	/** Record one withdrawn registration's loss (a `worker_unavailable` push):
+	 * the Projects it served and why the link went. Kept until an aggregate
+	 * shows those ids served again. */
+	noteWorkerUnavailable: (projectIds: string[], reason: string) => void;
+	/** Start a new daemon-info revision domain: a fresh socket may be talking to
+	 * a restarted Daemon whose counter is lower than the previous one's, and
+	 * its baseline must apply. */
+	resetDaemonInfo: () => void;
 	/** Enter/leave the alias-addressed view (ADR 13). */
 	setAddressViaAlias: (viaAlias: boolean) => void;
 	/** The global queue: every Inbox and Later Session, ordered Inbox →
 	 * Later, then placement stamp descending. Derived from the applied frames. */
 	queue: SessionInfo[];
-	/** Replace the daemon-global pinned list (from a `pinned_models_changed` push). */
-	setPinnedModels: (pinnedModels: PinnedModelInfo[]) => void;
 	/** Commit the address this tab is watching (ADR 11). `null` Project = the
 	 * global launcher; `null` stem = that Project's home. Changing the address
 	 * also closes the file-viewer and diff-view portals — they showed content
@@ -232,12 +265,6 @@ export interface ProtocolSlice {
 	) => void;
 	/** Drop all sidebar folder pages (reconnect — the daemon may have restarted). */
 	resetSessionPages: () => void;
-	setModels: (
-		models: ModelInfo[],
-		thinkingLevels: string[],
-		pinnedModels: PinnedModelInfo[],
-		visibleModels: string[],
-	) => void;
 	setDevMode: (mode: boolean) => void;
 	/** Replace the document from the mirror's root (wire pipeline flushes,
 	 * lazy-pull ingests). Keeps `docAuthority`: a flush extends the committed
@@ -368,6 +395,8 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	currentStem: null,
 	sessionPages: {},
 	projects: [],
+	daemonInfoRevision: 0,
+	unavailableProjects: [],
 	queue: [],
 	queueRevision: 0,
 	settlements: [],
@@ -392,7 +421,44 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			s.activeSessionId === activeSessionId ? s : { activeSessionId, renderLeafId: null },
 		),
 
-	setProjects: (projects) => set({ projects }),
+	applyDaemonInfo: (info) =>
+		set((s) => {
+			if (info.revision <= s.daemonInfoRevision) return s;
+			const live = new Set(info.projects.map((project) => project.id));
+			const removed = s.projects.map((project) => project.id).filter((id) => !live.has(id));
+			return {
+				daemonInfoRevision: info.revision,
+				projects: info.projects,
+				models: info.models,
+				pinnedModels: info.pinnedModels,
+				visibleModels: info.visibleModels,
+				thinkingLevels: info.thinkingLevels,
+				sessionPages: removed.length > 0 ? withoutPages(s.sessionPages, removed) : s.sessionPages,
+				// A Project served again is no longer a loss: the registration that
+				// claimed its id answered the question the notice was asking.
+				unavailableProjects:
+					s.unavailableProjects.length === 0
+						? s.unavailableProjects
+						: s.unavailableProjects.filter((entry) => !live.has(entry.projectId)),
+				// A withdrawn registration's rows are already on their way out in a
+				// queue delta; dropping them here keeps a gone Project's Sessions off
+				// the list for the interval that delta waits out. Removal only — the
+				// queue stays the authority on membership.
+				queue: removed.length > 0 ? s.queue.filter((row) => live.has(row.projectId)) : s.queue,
+			};
+		}),
+
+	// Upsert by Project: a registration can withdraw, re-register, and withdraw
+	// again while the page is open, and a later reason is the current one.
+	noteWorkerUnavailable: (projectIds, reason) =>
+		set((s) => ({
+			unavailableProjects: [
+				...s.unavailableProjects.filter((entry) => !projectIds.includes(entry.projectId)),
+				...projectIds.map((projectId) => ({ projectId, reason })),
+			],
+		})),
+
+	resetDaemonInfo: () => set({ daemonInfoRevision: 0 }),
 
 	setAddressViaAlias: (addressViaAlias) => set({ addressViaAlias }),
 
@@ -425,8 +491,6 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 				unreadCompletions: unread,
 			};
 		}),
-
-	setPinnedModels: (pinnedModels) => set({ pinnedModels }),
 
 	// An address change is a different session's content: both portals hold
 	// something read from the session being left (a path, or a commit pair in
@@ -502,9 +566,6 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 		}),
 
 	resetSessionPages: () => set({ sessionPages: {} }),
-
-	setModels: (models, thinkingLevels, pinnedModels, visibleModels) =>
-		set({ models, thinkingLevels, pinnedModels, visibleModels }),
 
 	setDevMode: (devMode) => set({ devMode }),
 

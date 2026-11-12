@@ -77,6 +77,9 @@ export function useConnection(): { retry: () => void } {
 		async (client: BridgeClient) => {
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
+				// A fresh baseline starts this socket's daemon-info revision domain:
+				// the Daemon behind it may have restarted with a lower counter.
+				getStore().getState().resetDaemonInfo();
 				const timeout = new Promise<never>((_, reject) => {
 					timer = setTimeout(() => reject(new Error("daemon did not respond")), INIT_TIMEOUT_MS);
 				});
@@ -112,13 +115,11 @@ export function useConnection(): { retry: () => void } {
 				}
 				initPendingRef.current = false;
 
-				// Daemon info — Projects, models, thinking levels, dev mode
-				if (info.models) {
-					store
-						.getState()
-						.setModels(info.models, info.thinkingLevels ?? [], info.pinnedModels ?? [], info.visibleModels ?? []);
-				}
-				store.getState().setProjects(info.projects ?? []);
+				// Daemon aggregate — Projects, models, thinking levels, the pinned
+				// scope. One write, and the frame's revision decides whether it is
+				// newer than a push that crossed it (the Daemon serializes its
+				// aggregate reads, so both describe one state that moved).
+				store.getState().applyDaemonInfo(info);
 				if (info.devMode) {
 					store.getState().setDevMode(true);
 					hookConsole(client);

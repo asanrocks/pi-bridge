@@ -321,6 +321,68 @@ describe("dial-in Worker registration", () => {
 		expect((page.sessions as Array<{ stem: string }>).map((session) => session.stem)).toEqual(["s1"]);
 	});
 
+	it("pushes the aggregate when a Worker joins and when it withdraws", async () => {
+		const root = workdir();
+		const socketPath = testSocketPath(root, "aggregate");
+		const fixture = projectFixture(root, "aggregate");
+		const daemon = await startDaemon(socketPath, root);
+
+		const port = daemon.address?.port;
+		if (port === undefined) throw new Error("daemon is not listening");
+		const ws = await openClient(port);
+		cleanups.push(() => ws.close());
+		const pushes: Array<Record<string, unknown>> = [];
+		const aggregates: Array<Record<string, unknown>> = [];
+		const lost: Array<Record<string, unknown>> = [];
+		ws.on("message", (data) => {
+			const frame = JSON.parse(String(data)) as Record<string, unknown>;
+			if (frame.kind === "daemon_info_changed") {
+				pushes.push(frame);
+				aggregates.push(frame);
+			} else if (frame.kind === "worker_unavailable") {
+				pushes.push(frame);
+				lost.push(frame);
+			}
+		});
+		// A browser that opened before any registration: the baseline is empty,
+		// and only a push can tell this tab that a Worker arrived.
+		const baseline = await rpc(ws, { verb: "getDaemonInfo" });
+		expect(baseline.projects).toEqual([]);
+
+		const worker = await runWorkerClient({
+			allow: [fixture.allow],
+			agentDir: root,
+			endpoint: `unix:${socketPath}`,
+			managerFactory: async () => {
+				throw new Error("no Manager is needed for registration");
+			},
+			modelRuntime: stubModelRuntime(),
+		});
+		cleanups.push(() => worker.dispose());
+
+		await waitFor(() => aggregates.length === 1, "the join push");
+		expect((aggregates[0].projects as Array<{ id: string }>).map((project) => project.id)).toEqual(["aggregate"]);
+		// Monotone against the baseline: a reply that crossed a push is ordered by
+		// this number, not by arrival.
+		expect(aggregates[0].revision as number).toBeGreaterThan(baseline.revision as number);
+		// A join is not a loss.
+		expect(lost).toEqual([]);
+
+		await worker.dispose();
+		await waitFor(() => aggregates.length === 2, "the withdrawal push");
+		expect(aggregates[1].projects).toEqual([]);
+		// The loss is announced before the aggregate that removes the Project:
+		// a client reads the reason first and can explain the removal. The first
+		// `lost` entry is the withdrawal (a join announces nothing).
+		expect(lost).toHaveLength(1);
+		expect(lost[0].projectIds).toEqual(["aggregate"]);
+		expect(typeof lost[0].reason).toBe("string");
+		expect((lost[0].reason as string).length).toBeGreaterThan(0);
+		// Arrival order: the loss precedes the aggregate that removes it.
+		expect(pushes.slice(-2).map((frame) => frame.kind)).toEqual(["worker_unavailable", "daemon_info_changed"]);
+		expect(pushes.at(-1)).toBe(aggregates[1]);
+	});
+
 	it("keeps the Worker's runtimes across a daemon restart and re-registers", async () => {
 		const root = workdir();
 		const socketPath = testSocketPath(root, "survivor");

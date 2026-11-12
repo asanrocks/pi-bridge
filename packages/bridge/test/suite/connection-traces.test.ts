@@ -187,6 +187,7 @@ function makeBundle(): Bundle {
 			}
 		},
 		getDaemonInfo: async () => ({
+			revision: 1,
 			protocol: PROTOCOL_VERSION,
 			projects: [],
 			models: [],

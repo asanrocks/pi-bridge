@@ -146,6 +146,7 @@ const stubVerbs: DaemonVerbs = {
 	listQueue: async () => [],
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
+		revision: 1,
 		protocol: PROTOCOL_VERSION,
 		projects: [],
 		models: [],
