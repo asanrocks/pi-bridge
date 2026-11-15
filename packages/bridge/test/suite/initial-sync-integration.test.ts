@@ -338,6 +338,11 @@ describe("initial sync: subscription reset", () => {
 			createdAt: new Date(0).toISOString(),
 			onPatch: () => () => {},
 			onSettled: () => () => {},
+			onInput: () => () => {},
+			onCompacted: () => () => {},
+			inputSequence: () => 0,
+			sendContextMessage: async () => {},
+			startWithContextMessage: async () => {},
 			activity: () => ({ phase: "idle" as const, tool: null, recoverable: false }),
 			onActivityChange: () => () => {},
 			addConnection(handle) {

@@ -904,6 +904,13 @@ export interface SessionAddress {
 	stem: string;
 }
 
+/** What opening a Session needs: its address, plus the cache identity when the
+ * caller knows it (a row read from the catalogue does; a stem derived from a
+ * spawn's directory does not, and a missing id only costs a cold replace). */
+export interface SessionTarget extends SessionAddress {
+	sessionId?: string;
+}
+
 /** Initial-sync session reference (ADR 11). `sessionId` is the cache identity;
  * `projectId` + `stem` are the client address. */
 export interface SessionRef {

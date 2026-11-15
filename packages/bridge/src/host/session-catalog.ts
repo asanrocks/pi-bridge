@@ -76,8 +76,10 @@ export interface SessionCatalog {
 		locations: CatalogLocationOverlay,
 	): SessionPage;
 	/** The queue: every Inbox and Later session across every Project, ordered
-	 * Inbox → Later, then by placement stamp descending. `reuse` supplies rows a
-	 * caller already holds for dormant Sessions, so a metadata-only refresh
+	 * Inbox → Later, then by placement stamp descending, plus the live Sessions
+	 * drawn under them: a spawned agent has no place of its own, so its row is
+	 * derived from the live runtime and its ancestor's place. `reuse` supplies
+	 * rows a caller already holds for dormant Sessions, so a metadata-only refresh
 	 * reads no files (ADR 24). */
 	listQueue(
 		live: readonly CatalogLiveEntry[],
@@ -289,13 +291,23 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			// registry's metadata; a dormant row the one file its stem names).
 			const out: SessionInfo[] = [];
 			for (const project of projects.values()) {
+				const placed = locations.placed(project.id);
 				const liveByStem = new Map<string, CatalogLiveEntry>();
 				for (const entry of live) {
 					if (entry.ref.projectId !== project.id) continue;
 					liveByStem.set(entry.ref.stem, entry);
 				}
-				for (const [stem, placement] of locations.placed(project.id)) {
+				for (const [stem, placement] of placed) {
 					const row = queueRow(project, stem, liveByStem.get(stem), placement, reuse);
+					if (row !== null) out.push(row);
+				}
+				// A live spawned Session has no place of its own (Archive), but it is
+				// drawn under the queued Session it belongs to. Only live entries are
+				// considered: discovering a dormant descendant would mean walking the
+				// history, which membership is not allowed to do (ADR 24).
+				for (const entry of liveByStem.values()) {
+					if (placed.has(entry.ref.stem) || !hasPlacedAncestor(placed, entry.ref.stem)) continue;
+					const row = queueRow(project, entry.ref.stem, entry, { location: "archive", placedAt: "" }, reuse);
 					if (row !== null) out.push(row);
 				}
 			}
@@ -307,6 +319,18 @@ export function createSessionCatalog(projects: Map<string, ProjectConfig>): Sess
 			return out;
 		},
 	};
+}
+
+/** Whether any ancestor directory of a stem holds a stored place: a live
+ * spawned Session is drawn under that queued root without a place of its own. */
+function hasPlacedAncestor(placed: ReadonlyMap<string, Placement>, stem: string): boolean {
+	let cut = stem.lastIndexOf("/");
+	while (cut > 0) {
+		const parent = stem.slice(0, cut);
+		if (placed.has(parent)) return true;
+		cut = parent.lastIndexOf("/");
+	}
+	return false;
 }
 
 /**

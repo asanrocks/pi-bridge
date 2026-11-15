@@ -2,9 +2,16 @@
 // ProjectFolder — one sidebar branch: a single fold button (chevron + name —
 // the name toggles, it does not navigate), one new-session button (opens the
 // Project home, the compose surface — there is no empty-session creation
-// path), and the children below: the Project's Sessions in queue order (Inbox
-// → Later) followed by the archived history, each group newest activity first,
-// all flush-left (no indent).
+// path), and the children below: the Project's Session trees, each root placed
+// by its own location (Inbox → Later → archived history) with its descendants
+// drawn under it, and roots within a group newest activity first.
+//
+// The tree, not the location, decides what is drawn where: a child whose place
+// differs from its spawner's still follows the spawner, and only a descendant
+// more attentive than its ancestor is promoted to a root of its own group (see
+// `sidebarTree.ts`). The tree also decides what is drawn at all: an unplaced
+// spawned Session is ambient, so it appears only while it works or while the
+// Session on screen is it or its spawner.
 //
 // The heading is binary (folded / unfolded); what the unfolded list shows is a
 // reveal ladder controlled at its end: Load more adds Later, then the archived
@@ -14,13 +21,14 @@
 // ============================================================================
 
 import { memo, useEffect, useMemo } from "react";
-import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo, SessionLocation, SessionTarget } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, ChevronDownIcon, ChevronUpIcon, PlusIcon } from "../../render/icons.tsx";
 import { advanceReveal, effectiveReveal, type FolderState, floorReveal, retreatReveal } from "./foldState.ts";
 import { SessionRow } from "./SessionRow.tsx";
 import styles from "./Sidebar.module.css";
 import { splitProjectRows } from "./sessionRows.ts";
+import { buildSidebarTree, type RowedSession } from "./sidebarTree.ts";
 
 /** Stable empty page rows so memoized folders without a loaded page do not
  * churn their split. */
@@ -58,7 +66,7 @@ export const ProjectFolder = memo(function ProjectFolder({
 	/** Open the Project's home (the compose surface) — the new-session
 	 * affordance; the first prompt there creates the session. */
 	onOpenProject: (projectId: string) => void;
-	onOpen: (session: SessionInfo) => void;
+	onOpen: (target: SessionTarget) => void;
 	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
 	 * Unarchive as the resting place (archiving also stops a running agent).
 	 * Passed to every row — the menu is shaped by the row's own location. */
@@ -73,16 +81,19 @@ export const ProjectFolder = memo(function ProjectFolder({
 	onLoad: (projectId: string) => void;
 	onLoadMore: (projectId: string) => void;
 }) {
-	// The page is the archived tail; the queue holds the placed rows. Splitting
-	// both in one place keeps the folder's order and membership rules testable.
+	// The page is the archived tail; the queue holds the placed rows. The tree
+	// decides what is drawn where: a root opens its group and carries its
+	// descendants, even when their own place differs.
 	const historyRows = page?.kind === "ready" ? page.sessions : NO_ROWS;
-	const {
-		inbox: inboxRows,
-		later: laterRows,
-		archived,
-	} = useMemo(() => splitProjectRows(queueRows, historyRows), [queueRows, historyRows]);
-	const hasInbox = inboxRows.length > 0;
-	const hasLater = laterRows.length > 0;
+	// The Session on screen, read in this folder's terms: another Project's
+	// selection says nothing about this tree.
+	const viewedStem = project.id === currentProjectId ? currentStem : null;
+	const tree = useMemo(
+		() => buildSidebarTree(splitProjectRows(queueRows, historyRows), { viewedStem }),
+		[queueRows, historyRows, viewedStem],
+	);
+	const hasInbox = tree.inbox.length > 0;
+	const hasLater = tree.later.length > 0;
 
 	const reveal = effectiveReveal(folder.reveal, hasInbox, hasLater);
 	const floor = floorReveal(hasInbox, hasLater);
@@ -100,6 +111,24 @@ export const ProjectFolder = memo(function ProjectFolder({
 	}, [showArchived, page, project.id, onLoad]);
 
 	const isSelected = (s: SessionInfo) => s.projectId === currentProjectId && s.stem === currentStem;
+
+	/** One group as the builder already flattened it: depth and counts are decided
+	 * against every rendered row, so a group never re-nests a subset. */
+	const renderRows = (rows: readonly RowedSession[]) =>
+		rows.map(({ session, depth, parentStem, childCount, promotedParent }) => (
+			<SessionRow
+				key={`${session.projectId}/${session.stem}`}
+				session={session}
+				selected={isSelected(session)}
+				depth={depth}
+				childCount={childCount}
+				parentStem={parentStem}
+				promotedParent={promotedParent}
+				onOpen={onOpen}
+				onMove={onMove}
+				onTrash={onTrash}
+			/>
+		));
 
 	return (
 		<div>
@@ -129,27 +158,8 @@ export const ProjectFolder = memo(function ProjectFolder({
 			</div>
 			{showChildren && (
 				<div className={styles.sidebarFolderChildren}>
-					{inboxRows.map((s) => (
-						<SessionRow
-							key={`${s.projectId}/${s.stem}`}
-							session={s}
-							selected={isSelected(s)}
-							onOpen={onOpen}
-							onMove={onMove}
-							onTrash={onTrash}
-						/>
-					))}
-					{showLater &&
-						laterRows.map((s) => (
-							<SessionRow
-								key={`${s.projectId}/${s.stem}`}
-								session={s}
-								selected={isSelected(s)}
-								onOpen={onOpen}
-								onMove={onMove}
-								onTrash={onTrash}
-							/>
-						))}
+					{renderRows(tree.inbox)}
+					{showLater && renderRows(tree.later)}
 					{showArchived && (page === undefined || page.kind === "loading") && (
 						<div className={styles.sidebarFolderMsg}>Loading…</div>
 					)}
@@ -158,20 +168,10 @@ export const ProjectFolder = memo(function ProjectFolder({
 							Load failed — retry
 						</button>
 					)}
-					{showArchived && page?.kind === "ready" && archived.length === 0 && queueRows.length === 0 && (
+					{showArchived && page?.kind === "ready" && tree.archived.length === 0 && queueRows.length === 0 && (
 						<div className={styles.sidebarFolderMsg}>No sessions yet</div>
 					)}
-					{showArchived &&
-						archived.map((s) => (
-							<SessionRow
-								key={`${s.projectId}/${s.stem}`}
-								session={s}
-								selected={isSelected(s)}
-								onOpen={onOpen}
-								onMove={onMove}
-								onTrash={onTrash}
-							/>
-						))}
+					{showArchived && renderRows(tree.archived)}
 					{showChildren && (reveal !== "all" || canPaginate) && (
 						<div className={styles.sidebarListEnd}>
 							<button

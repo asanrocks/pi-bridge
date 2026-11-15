@@ -6,7 +6,7 @@
 // path of its file under the Project's session directory, minus `.jsonl`.
 // ============================================================================
 
-import { existsSync, mkdirSync, realpathSync, renameSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, realpathSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDefaultSessionDir } from "@earendil-works/pi-coding-agent";
 
@@ -221,6 +221,26 @@ export function resolveStemPath(sessionDir: string, stem: string): string {
 }
 
 /**
+ * Claim a Session address by creating its file exclusively, and return the
+ * reserved path.
+ *
+ * The filesystem is the reservation: a live Session, a closed one, and a spawn
+ * that crashed all hold their name, so two concurrent callers cannot both take
+ * one address and a retry cannot silently land on a transcript that already
+ * exists. Callers release an unused claim by removing the file. Throws
+ * `EEXIST` when the address is held.
+ */
+export function reserveSessionFile(sessionDir: string, stem: string): string {
+	const canonical = normalizeStem(stem);
+	mkdirSync(dirname(resolveStemPath(sessionDir, canonical)), { recursive: true });
+	// Resolve after creating the directory: `resolveStemPath` realpaths an existing
+	// parent, so the file created is the one containment checked.
+	const path = resolveStemPath(sessionDir, canonical);
+	closeSync(openSync(path, "wx"));
+	return path;
+}
+
+/**
  * Fold a pre-rename `.archive/` namespace into `.trash/`: the files were moved
  * away when "archive" meant exactly what "trash" means now, so the word moved
  * and the storage followed. Both directories existing at once is reported and
@@ -288,6 +308,19 @@ export function trashStemFile(sessionDir: string, stem: string): string {
 	if (existsSync(dest)) throw new Error(`Trashed session already exists: ${stem}`);
 	renameSync(real, dest);
 	return dest;
+}
+
+/** The stem itself and every stem stored beneath it, deepest first. A spawned
+ * Session lives under a directory named after its spawner, so trashing a parent
+ * takes its subtree: a child left behind would keep a parent address that no
+ * longer resolves, and would keep running with no one to report to. */
+export function subtreeStemsUnder(stems: Iterable<string>, stem: string): string[] {
+	return (
+		[...new Set(stems)]
+			.filter((candidate) => candidate === stem || candidate.startsWith(`${stem}/`))
+			// Children first: no child outlives the stop that ends its parent.
+			.sort((left, right) => right.length - left.length)
+	);
 }
 
 /** The inverse of `resolveStemPath`: a session file's canonical stem. */

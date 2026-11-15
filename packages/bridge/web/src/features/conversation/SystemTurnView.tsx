@@ -15,6 +15,7 @@ import { CaretIcon } from "../../render/icons.tsx";
 import { Markdown } from "../../render/markdown.tsx";
 import { displayModelLabel } from "../../render/modelNames.ts";
 import { formatCost, formatTokens } from "../composer/formatters.ts";
+import { AgentMessageCard, agentKindLabel } from "./AgentMessageCard.tsx";
 import actionStyles from "./actions.module.css";
 import styles from "./turns.module.css";
 
@@ -25,8 +26,24 @@ const SYSTEM_LABEL: Record<SystemTurn["type"], string> = {
 	system_prompt: "System prompt update",
 	extension: "Extension",
 	extension_message: "Extension message",
+	agent_message: "Agent message",
 	unknown: "Unrecognized",
 };
+
+/** Inter-agent traffic as a folded row: who sent it and what kind, expanding to
+ * the envelope the recipient's model read. Folded because a `FINAL_ANSWER`
+ * carries the sender's whole turn, and it is not the reader's own words: it
+ * must never look like a user turn. */
+const AgentMessageRow = memo(function AgentMessageRow({ turn, isDimmed }: { turn: SystemTurn; isDimmed: boolean }) {
+	return (
+		<AgentMessageCard
+			sender={turn.agentSender ?? ""}
+			label={agentKindLabel(turn.agentKind)}
+			text={turn.summary ?? ""}
+			isDimmed={isDimmed}
+		/>
+	);
+});
 
 /** The prompt diff's text: the changed sections' contents in payload order,
  * joined into the prompt as rendered. A string is the section's new text; a
@@ -153,6 +170,10 @@ export const SystemTurnView = memo(function SystemTurnView({ turn }: { turn: Sys
 
 	if (turn.type === "compaction") {
 		return <CompactionCard turn={turn} isDimmed={isDimmed} />;
+	}
+
+	if (turn.type === "agent_message") {
+		return <AgentMessageRow turn={turn} isDimmed={isDimmed} />;
 	}
 
 	if (turn.type === "model_switch" && turn.switchTo) {

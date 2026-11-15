@@ -130,6 +130,11 @@ function makeStubManager(opts: {
 			patchListeners.add(listener);
 			return () => patchListeners.delete(listener);
 		},
+		onInput: () => () => {},
+		onCompacted: () => () => {},
+		inputSequence: () => 0,
+		sendContextMessage: async () => {},
+		startWithContextMessage: async () => {},
 		onSettled(listener) {
 			settledListeners.add(listener);
 			return () => settledListeners.delete(listener);

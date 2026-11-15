@@ -6,8 +6,8 @@
 import type { SessionInfo } from "./types.ts";
 
 /** Location rank: Inbox first (the user's attention list), Later second
- * (parked by decision). Archived Sessions are not in the queue and never
- * reach this comparator. */
+ * (parked by decision). Archive is the place of a live spawned Session drawn
+ * under a queued root; those rows sort last, after the queue's members. */
 const RANK: Record<SessionInfo["location"], number> = { inbox: 0, later: 1, archive: 2 };
 
 /** A row's placement stamp; `""` (older than any ISO instant) for a record

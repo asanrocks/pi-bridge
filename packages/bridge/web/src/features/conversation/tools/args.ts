@@ -5,7 +5,7 @@
 // ============================================================================
 
 import { useCallback } from "react";
-import type { ImageContent, JsonValue } from "../../../../../src/core/types.ts";
+import type { ImageContent, JsonValue, SessionInfo } from "../../../../../src/core/types.ts";
 import type { ToolActionVM } from "../../../../../src/viewmodel/index.ts";
 import { displayPath } from "../../../../../src/viewmodel/index.ts";
 import { useStore } from "../../../infra/state/store.tsx";
@@ -34,6 +34,18 @@ export interface ActionDetailsProps {
 	resultText: string | null;
 	/** Image blocks from the tool result, in order. Empty when none. */
 	resultImages: ImageContent[];
+	/** Agent-control spawn only: the child's row while it is live, and the way to
+	 * open its address. Absent on other tools and when the result names no
+	 * address (an older spawn, before the details carried one). */
+	agentSpawn?: AgentSpawnView;
+}
+
+/** What a spawn card needs from outside the tool result: the drawn row and the
+ * navigation gesture. The card stays store-free so it renders the same in SSR
+ * tests and in the app. */
+export interface AgentSpawnView {
+	readonly child: SessionInfo | null;
+	readonly open: () => void;
 }
 
 // ---------------------------------------------------------------------------

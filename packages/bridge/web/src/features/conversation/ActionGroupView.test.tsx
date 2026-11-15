@@ -93,6 +93,33 @@ function render(opts: { groupExpanded?: boolean } = {}): string {
 	);
 }
 
+/** The same two calls plus the reply a child sent back: mail is an action, so it
+ * belongs to the group and the collapsed header names it. */
+function renderWithReply(opts: { groupExpanded?: boolean } = {}): string {
+	setState(opts);
+	const actions: ActionVM[] = [
+		action(0, "t1"),
+		action(1, "t2"),
+		{
+			blockType: "agent",
+			entryId: "m1",
+			blockIndex: 0,
+			kind: "final_answer",
+			sender: "/root/scout",
+			text: "found it",
+		},
+	];
+	return renderToStaticMarkup(
+		createElement(ActionGroupView, {
+			groupKey: GROUP_KEY,
+			actions,
+			isTrailing: false,
+			onToggleGroup: () => {},
+			onToggleAction: () => {},
+		}),
+	);
+}
+
 beforeEach(() => {
 	drainPullQueue();
 });
@@ -109,5 +136,41 @@ describe("ActionGroupView — sticky ladder contract", () => {
 
 		expect(html.match(/data-sticky-head="true"/g)).toHaveLength(1);
 		expect(html).toContain("read 2 files");
+	});
+
+	test("a reply is listed in the group, never as its own card", () => {
+		const collapsed = renderWithReply();
+		expect(collapsed).toContain("read 2 files · 1 reply");
+
+		const expanded = renderWithReply({ groupExpanded: true });
+		expect(expanded).toContain("/root/scout · Final answer");
+	});
+
+	test("a collaboration exchange takes the agent hue on both halves", () => {
+		setState({ groupExpanded: true });
+		const actions: ActionVM[] = [
+			{ ...action(0, "t1"), toolName: "spawn_agent", summary: "spawn: scout" },
+			{ ...action(1, "t2"), toolName: "wait_agent", summary: "wait_agent: 30s" },
+			{
+				blockType: "agent",
+				entryId: "m1",
+				blockIndex: 0,
+				kind: "final_answer",
+				sender: "/root/scout",
+				text: "found it",
+			},
+		];
+		const html = renderToStaticMarkup(
+			createElement(ActionGroupView, {
+				groupKey: GROUP_KEY,
+				actions,
+				isTrailing: false,
+				onToggleGroup: () => {},
+				onToggleAction: () => {},
+			}),
+		);
+		expect(html).toContain('data-hue="agent"');
+		expect(html).toContain('data-kind="agent"');
+		expect(html).toContain("2 agent calls · 1 reply");
 	});
 });

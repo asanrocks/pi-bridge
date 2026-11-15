@@ -39,9 +39,11 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	const rpc = useRpc();
 	/** The daemon's queue order is the presentation order: Inbox → Later, each
 	 * group by placement stamp descending — the same order the sidebar's pinned
-	 * sections show. The `Latest` row is the exception: "latest" asks about
-	 * activity, so it sorts the Inbox by that instead. */
-	const queued = useMemo(() => [...queue], [queue]);
+	 * sections show. The slice also carries live agent rows drawn under a queued
+	 * tree; they have no place, so the launcher's queue excludes them. The `Latest`
+	 * row is the exception: "latest" asks about activity, so it sorts the Inbox by
+	 * that instead. */
+	const queued = useMemo(() => queue.filter((session) => session.location !== "archive"), [queue]);
 	/** ADR 13 + 22: the launcher's discovery entry for the `@latest` alias —
 	 * the most recently active queued Session in the Inbox. */
 	const latest = useMemo(() => sortByLastActivity(queued.filter((s) => s.location === "inbox"))[0] ?? null, [queued]);

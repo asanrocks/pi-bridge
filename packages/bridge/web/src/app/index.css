@@ -123,18 +123,18 @@
   --color-thinking-xhigh: #c026d3;
   --color-thinking-max: #be185d;
   --color-mutate: #d6336c;              /* rose: file mutation (edit + write) */
+  --color-agent: #9333ea;               /* purple: the collaboration surface — agent calls and the mail they produce (6.3:1 on the page) */
 
   /* ── Action tinted rows ──────────────────────────────── */
-  /* Four hues, three tiers: stand-out (mutate, bash), neutral
-     (think), dimmed (read). The hue's saturation/value carries
-     the tier — one --action-tint strength for all, no per-kind tint
-     multiplier. edit + write share the mutate hue (the label/details
-     still distinguish them); the tinted row hue is a hue signal. */
+  /* Five hues, three tiers: stand-out (mutate, bash), neutral
+     (think), dimmed (read), and the collaboration purple (agent calls and the
+     mail they produce — one exchange, not a tier). */
   --action-tint: 6%;                    /* tinted row background strength (uniform) */
   --kind-mutate: var(--color-mutate);   /* edit + write — stand-out A */
   --kind-bash:   var(--color-streaming); /* stand-out B */
   --kind-think:  var(--color-think);   /* neutral */
   --kind-read:   var(--color-muted-foreground); /* dimmed */
+  --kind-agent:  var(--color-agent);   /* collaboration: a send and its reply, one hue */
   --kind-git:    var(--color-success); /* meta: observed repo identity — diff/merge green, not a tool action */
 
   /* ── Overlays & portals ─────────────────────────────────────────────── */
@@ -327,6 +327,7 @@
     --color-thinking-xhigh: #d8b4fe;
     --color-thinking-max: #f0abfc;
     --color-mutate: #e0629a;              /* rose: file mutation (5.4:1 as text) */
+    --color-agent: #c084fc;               /* purple, lightened for the dark page (7.3:1) */
 
     /* ── Action tint & overlays ─────────────────────────────────────────── */
     --action-tint: 7%;                    /* see the block comment: matches the light row delta */

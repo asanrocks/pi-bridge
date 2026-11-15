@@ -1,3 +1,14 @@
+export type {
+	AgentControlDeps,
+	AgentControlService,
+	AgentFragment,
+	AgentSpawnContext,
+	AgentStatus,
+	ControlledAgent,
+	ForkTurns,
+	SpawnAgentRequest,
+} from "./agent-control.ts";
+export { createAgentControl } from "./agent-control.ts";
 export type { DaemonOptions } from "./daemon.ts";
 export { Daemon } from "./daemon.ts";
 export type { DaemonSocket, DaemonSocketOptions } from "./daemon-socket.ts";

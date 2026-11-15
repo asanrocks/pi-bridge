@@ -37,6 +37,7 @@ import {
 	setAtPath,
 } from "../core/index.ts";
 import { buildInterruptedToolsRelay } from "../core/recovery.ts";
+import type { AgentControlService } from "./agent-control.ts";
 import { createGitStampExtensionWithTrigger, type GitStampDeps, type GitStampTrigger } from "./git-stamp-extension.ts";
 import { resolveActivity, type SessionActivity, type SessionPhase } from "./process-title.ts";
 
@@ -101,6 +102,12 @@ export interface CreateManagerOptions {
 	model?: Model<string>;
 	/** Custom tools to register. */
 	customTools?: ToolDefinition[];
+	/** Codex-style agent-control tools for this Session. `parent` resolves the
+	 * Session's own address; it is read at tool-call time, after registration. */
+	agentControl?: {
+		readonly service: AgentControlService;
+		readonly parent: () => SessionRef;
+	};
 	/** Write git identity stamps (ADR 10). Default: true. Test seam. */
 	gitStamps?: boolean;
 	/** Overrides for the git-stamp observation deps (runner, timeout). Test
@@ -135,6 +142,14 @@ export type Settlement =
 
 /** The message a `turn_end` carries. */
 type TurnMessage = Extract<AgentSessionEvent, { type: "turn_end" }>["message"];
+
+/** Presentation of a context fragment: whether the transcript shows it, and the
+ * structured provenance the view project from. Absent for policy briefs, which
+ * the model reads and the human does not see. */
+export interface ContextMail {
+	readonly display: boolean;
+	readonly details?: unknown;
+}
 
 /** pi's stop reason as the outcome vocabulary: an aborted or failed assistant
  * message ends the run that way; anything else finished it. */
@@ -194,6 +209,18 @@ export interface Manager {
 	/** Register a listener for real activity transitions (deduped here, so one
 	 * turn's token stream is a handful of calls). Returns unsubscribe. */
 	onActivityChange(listener: () => void): () => void;
+	/** Register a listener for text admitted into this Session — a prompt, a
+	 * steer, or a follow-up. A blocked agent wait yields on it, matching Codex's
+	 * "wait interrupted by new input". Returns unsubscribe. */
+	onInput(listener: () => void): () => void;
+	/** Register a listener for the end of a compaction. The summary replaces the
+	 * history an injected context fragment lived in, so a caller that must keep
+	 * that fragment in front of the model re-sends it here. Returns unsubscribe. */
+	onCompacted(listener: () => void): () => void;
+	/** Monotonic count of text admitted into this Session's turns. A waiter
+	 * snapshots it before subscribing, so input admitted between the snapshot and
+	 * the listener cannot be lost; the listener alone cannot see the past. */
+	inputSequence(): number;
 
 	// ── Session verbs ─────────────────────────────────────────────────────
 
@@ -214,6 +241,16 @@ export interface Manager {
 	 * boundary. */
 	executeBash(command: string, options?: { excludeFromContext?: boolean }): Promise<void>;
 	abort(): Promise<void>;
+	/** Queue a context fragment for this Session's next model request without
+	 * starting a turn. While a turn runs the fragment is steered, so it lands
+	 * before that turn's next request — Codex's mailbox drain; while the Session
+	 * is idle it is appended and waits for the next prompt, because queue-only
+	 * mail never starts work. */
+	sendContextMessage(customType: string, content: string, mail?: ContextMail): Promise<void>;
+	/** Start a turn with the fragment, or steer the running one — Codex's
+	 * `TriggerTurn` delivery. Used for agent messages, which must be visible as
+	 * mail and never as a turn the human supposedly wrote. */
+	startWithContextMessage(customType: string, content: string, mail?: ContextMail): Promise<void>;
 	/** Clear all pending steer/follow-up messages from the session queue. */
 	discardSteer(): Promise<void>;
 	/** Compact the context now (pi's manual `compact()`), focusing the summary
@@ -262,6 +299,21 @@ export interface Manager {
 // createManager
 // ============================================================================
 
+/** One pi custom message carrying a context fragment: `display` decides whether
+ * the transcript shows it, `details` what the projection classifies it by. */
+function contextMessage(
+	customType: string,
+	content: string,
+	mail?: ContextMail,
+): { customType: string; content: string; display: boolean; details?: unknown } {
+	return {
+		customType,
+		content,
+		display: mail?.display ?? false,
+		...(mail?.details === undefined ? {} : { details: mail.details }),
+	};
+}
+
 export async function createManager(options: CreateManagerOptions = {}): Promise<Manager> {
 	const cwd = options.cwd ?? process.cwd();
 	const agentDir = options.agentDir ?? getAgentDir();
@@ -281,6 +333,10 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	const patchListeners = new Set<(patch: Patch) => void>();
 	const settledListeners = new Set<(settlement: Settlement) => void>();
 	const activityListeners = new Set<() => void>();
+	/** Text admitted into this Session, for a blocked agent wait to yield on. */
+	const inputListeners = new Set<() => void>();
+	/** Ends of a compaction, for a context fragment that must survive it. */
+	const compactedListeners = new Set<() => void>();
 	const connectionHandles = new Set<ConnectionHandle>();
 	// ADR 10: one bundle per Manager. An activation serves exactly one session
 	// for its lifetime (ADR 11), so the host trigger never rebinds.
@@ -344,6 +400,13 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 		phaseTool = tool;
 		for (const l of activityListeners) l();
 	};
+	/** Admission is the signal: a refused prompt never woke an agent wait, and the
+	 * count is what a blocked wait compares against its own snapshot. */
+	let inputSequence = 0;
+	const notifyInput = (): void => {
+		inputSequence += 1;
+		for (const l of inputListeners) l();
+	};
 	const trackActivity = (event: AgentSessionEvent): void => {
 		switch (event.type) {
 			case "agent_start":
@@ -377,6 +440,9 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 				break;
 			case "compaction_end":
 				setPhase("wait", null);
+				// The summary replaced the history the collaboration brief lived in;
+				// listeners re-inject what must stay in front of the model.
+				for (const listener of [...compactedListeners]) listener();
 				break;
 			case "auto_retry_start":
 				setPhase("retry", null);
@@ -464,6 +530,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 	};
 
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd: runtimeCwd, sessionManager: sm }) => {
+		const agentControlTools = options.agentControl?.service.toolsFor(options.agentControl.parent) ?? [];
 		const services: AgentSessionServices = await createAgentSessionServices({
 			cwd: runtimeCwd,
 			agentDir,
@@ -488,7 +555,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			services,
 			sessionManager: sm,
 			model: options.model,
-			customTools: options.customTools,
+			customTools: [...(options.customTools ?? []), ...agentControlTools],
 		});
 		return {
 			...result,
@@ -734,13 +801,42 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		},
+		onInput(listener) {
+			inputListeners.add(listener);
+			return () => inputListeners.delete(listener);
+		},
+		onCompacted(listener) {
+			compactedListeners.add(listener);
+			return () => compactedListeners.delete(listener);
+		},
+		inputSequence() {
+			return inputSequence;
+		},
+
+		async sendContextMessage(customType: string, content: string, mail?: ContextMail) {
+			// `triggerTurn` stays unset so an idle Session never starts work: only a
+			// running turn can steer, and its next request is where Codex drains
+			// queue-only mail. Leaving the fragment for the next prompt instead would
+			// park every completion until the coordinator's turn had already ended.
+			// A user Stop clears the steer queue, so it can drop a fragment Codex
+			// would keep; that is the price of landing before the next request.
+			await session.sendCustomMessage(contextMessage(customType, content, mail), { deliverAs: "steer" });
+		},
+
+		async startWithContextMessage(customType: string, content: string, mail?: ContextMail) {
+			// `triggerTurn` starts an idle Session and steers a running one, so the
+			// recipient's transcript shows one agent message either way.
+			await session.sendCustomMessage(contextMessage(customType, content, mail), { triggerTurn: true });
+		},
 
 		async prompt(text: string, images?: ImageContent[], model?: ModelRef, thinkingLevel?: string) {
 			await applySelection(model, thinkingLevel);
 			await session.prompt(text, {
 				source: "rpc",
 				streamingBehavior: "steer",
-				preflightResult: () => {},
+				preflightResult: (admitted) => {
+					if (admitted) notifyInput();
+				},
 				...(images && images.length > 0 ? { images } : {}),
 			});
 		},
@@ -762,6 +858,7 @@ export async function createManager(options: CreateManagerOptions = {}): Promise
 						streamingBehavior: "steer",
 						preflightResult: () => {
 							admitted = true;
+							notifyInput();
 							resolve();
 						},
 						...(images && images.length > 0 ? { images } : {}),

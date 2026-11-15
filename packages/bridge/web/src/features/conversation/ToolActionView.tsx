@@ -197,6 +197,14 @@ const ToolActionView = memo(function ToolActionView({
 						  expanded card's header line shows the command unmodified. */}
 						{isShell && liveCmd !== null ? <ShellSummary command={liveCmd} cwd={cwd} /> : liveSummary}
 					</span>
+					{/* A spawn row stays closed most of the time, so the answers its child
+					  sent are counted here — the fold inside the card must not be the
+					  only sign that a reply arrived. */}
+					{action.agentReplies !== undefined && action.agentReplies.length > 0 && (
+						<span className={styles.agentReplyCount}>
+							{action.agentReplies.length === 1 ? "1 reply" : `${action.agentReplies.length} replies`}
+						</span>
+					)}
 				</button>
 			</div>
 			{!isExpanded && <RowPreview action={action} />}

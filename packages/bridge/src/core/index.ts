@@ -1,3 +1,16 @@
+export type {
+	AgentMessageDetails,
+	AgentMessageKind,
+	AgentMessageProvenance,
+	AgentSettlementOutcome,
+	AgentToolName,
+} from "./agent-contract.ts";
+export {
+	AGENT_MESSAGE_CUSTOM_TYPE,
+	AGENT_TOOL_NAMES,
+	isAgentTool,
+	parseAgentMessageDetails,
+} from "./agent-contract.ts";
 export type { CacheEntryRecord, EntryCacheStore, SessionStatusHint } from "./cache.ts";
 export {
 	cacheRecordsOfDocument,
@@ -141,6 +154,7 @@ export type {
 	SessionOutcome,
 	SessionRef,
 	SessionSettledMessage,
+	SessionTarget,
 	SetLabelRequest,
 	SetPinnedModelsRequest,
 	SetSessionLocationRequest,

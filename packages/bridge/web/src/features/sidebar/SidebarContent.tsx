@@ -13,7 +13,7 @@
 // ============================================================================
 
 import { memo, useMemo } from "react";
-import type { ProjectInfo, SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
+import type { ProjectInfo, SessionInfo, SessionLocation, SessionTarget } from "../../../../src/core/index.ts";
 import type { SessionFolderPage } from "../../infra/state/store.ts";
 import { CaretIcon, GridIcon } from "../../render/icons.tsx";
 import { DEFAULT_FOLDER_STATE, type FolderState } from "./foldState.ts";
@@ -61,7 +61,7 @@ export const SidebarContent = memo(function SidebarContent({
 	onAdvanceFolder: (projectId: string, hasInbox: boolean, hasLater: boolean) => void;
 	/** A folder's Show less: the previous reveal step. */
 	onRetreatFolder: (projectId: string, hasInbox: boolean, hasLater: boolean) => void;
-	onOpenSession: (session: SessionInfo) => void;
+	onOpenSession: (target: SessionTarget) => void;
 	onOpenProject: (projectId: string) => void;
 	/** The row menu's moves: Park/Unpark between Inbox and Later, Archive and
 	 * Unarchive as the resting place (archiving also stops a running agent). */

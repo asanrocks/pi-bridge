@@ -336,7 +336,26 @@ decided. Each folder also has exactly one navigation affordance, the `+`
 button, which opens the Project home — the compose surface where the first
 prompt creates the Session (there is no empty-Session creation path). Folder
 children sit flush-left with the folder row; hierarchy is carried by the
-chevron and row fills, not indentation. The three fold targets share one hover
+chevron and row fills, not indentation. The one exception is a Session spawned
+by another agent: it is stored under its spawner's stem, so the rows nest — one
+indent step per ancestor, the spawner's row carrying the number of children
+that are drawn under it, and the row menu offering `Open parent agent`. A spawn
+writes no place of its own: its row is derived from the live runtime and the
+queued Session above it, so the tree draws it without adding an Inbox or Later
+row. That derived row still has to earn its place: it is drawn while it is
+running, while it is the Session the reader has open, or while the open Session
+is its spawner. Everything else a spawn produced is ambient — switching away
+ends the fan-out instead of leaving idle workers in the rail for good — and the
+archived page still lists those Sessions. The tree outranks the location group:
+a root's place picks Inbox, Later, or the archived tail, and its descendants
+come with it, so a child a user parks or archives away from its spawner still
+reads as part of its tree. The one row that leaves its tree is a descendant more
+attentive than its ancestor — work that returned to Inbox must not hide inside a
+parked or archived tree — and it stays a root of its own group wearing a `↳`
+mark whose title names the spawner, with the menu's jump as the action. A
+spawner that is not rendered at all (an archived parent whose page is not
+loaded) leaves its children at depth 0 with the reference. The three fold
+targets share one hover
 signature: the `Projects` label and a folder row both step the meta ink to the
 foreground and paint nothing, while the `+` beside them takes the fill because
 it is an icon control (see
@@ -376,6 +395,10 @@ running, where the slot becomes its run clock (see below).
   rebuilds the listing at most once per execution-state interval, so it can
   trail the live text by up to two intervals while the phase clock in front of
   it ticks every second. An idle Inbox row previews its latest assistant reply.
+  A row that has spawned agents carries their count beside its name — a value,
+  not a control, so the rail answers "how much work did this one hand out"
+  without opening anything; the count is the direct children drawn under it, so a
+  promoted child (drawn in its own group) is not counted.
   Every one of those lines, and the row-name fallback, is plain display text:
   Markdown markers are stripped and the line clamped, because a rail label is
   not a renderer and the transcript is where the document itself lives. Later
@@ -453,6 +476,10 @@ was longer than the few directions a location actually opens. **Inbox** offers
 `Park` then `Archive`; **Later** offers `Unpark` then `Archive`; **Archive**
 offers `Unarchive`, which returns the Session to Later — reviving stale work is
 a deliberate act, and a submitted message is what returns a Session to Inbox.
+A row spawned by another agent opens with `Open parent agent`, which attaches
+the spawner in the same way a row click does; it is the same entry in every
+group, because a promoted child or a child whose spawner's page is not loaded is
+how a tree stays reachable across the ladder.
 The reversible reclassification comes first because it is the frequent, cheap
 one; the resting place follows. Park and Unpark only reclassify, so their
 wording never changes. `Archive` and, below the divider, `Trash` say `Stop and
@@ -1056,6 +1083,50 @@ clipping a value when the essential fields cannot fit one line.
   with its text as Markdown; an upstream entry type with no bridge kind renders
   as an `Unrecognized` divider. Each names the source type, with the raw source
   entry in a collapsed detail block, so a path entry is never dropped silently.
+  An **agent message** — mail another agent sent this Session — renders as a
+  folded read-style row whose collapsed line is the sender's canonical path and
+  the envelope kind (`New task`, `Message`, `Final answer`), expanding to the
+  envelope the recipient's model read. The row and the calls it answers share
+  one purple collaboration hue, so an exchange is found by color while the
+  label says which half it is: the call reads `spawn: scout`, the row reads
+  `scout · Final answer`. The row is an action of the receiving assistant turn,
+  not a turn of its own: it sits in the list with the calls before and after
+  it, folds with their group, and the collapsed group names the exchange
+  (`2 agent calls · 1 reply`). A `Final answer` whose child was spawned
+  on this path folds into that `spawn_agent` card instead (the join is the
+  child's canonical path), because the reply belongs to the call that made the
+  agent; the collapsed spawn row counts the replies, so a folded answer is not
+  invisible. Each folded answer is a row inside the card, folded like a tool
+  card: the header names the child and the settlement it reported (`Final
+  answer`, or `Errored`), and expanding shows the child's answer or error text,
+  so a failed child is not read as an ordinary reply and a long answer does not
+  push the spawn call off screen. The spawn card itself states the child's lifecycle:
+  `running` while its row reports activity, the last settlement's `completed` or
+  `errored` otherwise, `idle` for a live child between turns, and `not loaded`
+  for a dormant address; beside it, `Open agent` attaches the Session its
+  address names. No status is stored: the card reads the child's drawn row and
+  the mail, and an unobserved outcome is absent rather than guessed. A folded
+  answer is invisible at its path position and therefore
+  does not split the assistant turn either: the action cards on either side of
+  it stay one list. A row of its own remains only for an
+  answer whose
+  spawn arguments (a lazy field) have not arrived yet, and for mail that
+  arrived before the Session answered the human; either way it sits in the same
+  family as an action
+  card and never as a user turn: the human did not write it, and a tinted user
+  bubble would claim they did. Folded because a `Final answer` carries the
+  sender's whole turn. Classification reads the entry's structured details, not
+  its custom type, so a malformed payload degrades to `Extension message`
+  instead of being shown as traffic. The row is the arrival half of a send: the
+  sender's call and the recipient's row carry the same submission id in their
+  entries, so only the recipient's row proves the message landed (a `Stop` can
+  clear the steer queue). Nothing renders that id — the browser carries no tool
+  details — so the pairing is read from the Session files. The sending call is an
+  ordinary action card whose summary names what it did: `spawn: scout`,
+  `send_message: /root/lead`, `wait_agent: 30s`. Its body is the agent-control
+  renderer: labeled fields for the task or message, the spawn's
+  fork/model/effort choices, the child's path, the wait outcome, the interrupt
+  status, or the `list_agents` status rows — never the tool's raw JSON result.
 - **User-bash turns** are standalone bash-tinted action rows. The command is
   shown beside `$`; the shared wrap toggle governs it like the output (wrap
   on: full multi-line command; off: one-line ellipsis). Output uses the
@@ -1163,10 +1234,10 @@ state indicator that appeared only on hover would be a hidden state.
 
 ### Action groups and cards
 
-Consecutive thinking and tool blocks form one renderer-owned action group;
+Consecutive thinking, tool, and mail blocks form one renderer-owned action group;
 text blocks always break a group and remain inline in their original position.
 The group header is a neutral summary with a collapse triangle and one
-kind-colored dot per present tool hue, plus the group's elapsed time
+kind-colored dot per present action hue, plus the group's elapsed time
 dright-aligned (`took 20s`, or `running 4s` while a call in the group still
 runs) — an estimate anchored on the earliest call and the latest result, so
 parallel calls count once. A single action uses the same group
@@ -2047,7 +2118,7 @@ grouping by the verb alone is how the composer's `Cancel` and a dialog footer's
 | Sidebar folder, dead-turn error row | `Load failed — retry`, `Send "Continue."`, the recovery bar's `Retry` and `Edit` | The label is the mechanism: it says what will happen (`Retry` re-requests from a clean boundary, `Send "Continue."` adds a turn, `Edit` forks and resends), and that difference is the whole reason the row exists. This is why the recovery row is words even though the turn header draws `Edit` as a pencil. |
 | Dialog footer | `Cancel`, `Done`, `Open link`, `Open comparison` | A footer is a decision surface rather than a tool surface: two verbs of unequal emphasis, where both must be the same kind of thing. The composer's own `Cancel` is the close glyph instead, because that card already draws "abandon what is in here" that way for steers and attachments. |
 | Composer hint line | `Browse files` | A link inside running prose; a glyph inside a sentence is a different problem from a glyph in a row. |
-| Sidebar row menu | `Park`/`Unpark`, `Archive`, `Unarchive`, `Trash` (with `Stop and …` while running) | One glyph on one item and none on its siblings is worse than no glyphs; menu rows are a text surface. |
+| Sidebar row menu | `Open parent agent`, `Park`/`Unpark`, `Archive`, `Unarchive`, `Trash` (with `Stop and …` while running) | One glyph on one item and none on its siblings is worse than no glyphs; menu rows are a text surface. |
 
 Four rules keep the glyph rows honest. **One kind per surface**: a tool surface
 (the composer card, a card toolbar, the file browser header) is all glyphs, and a

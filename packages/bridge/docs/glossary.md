@@ -114,7 +114,10 @@ What exists, how it is named, how long it lives. Owned by
    Session to Later — reviving stale work is a decision, where sending a
    message is what returns a Session to Inbox.
    Locations are persisted by the Worker beside the Sessions they describe;
-   the Inbox and Later Sessions are the **queue** *(composed)*. Browsing
+   the Inbox and Later Sessions are the **queue** *(composed)*. A live spawned
+   Session has no place, so it is never a member; the queue slice carries it as
+   a drawn row under the queued Session above it, for the sidebar's tree.
+   Browsing
    never moves a Session, and reading an Inbox row does not clear it — only a
    move does. Moves are decided inside the location store, which is also the
    one place an admission's promotion (and its rollback on a refused
@@ -128,11 +131,16 @@ What exists, how it is named, how long it lives. Owned by
    Session's location is the only durable claim. A Session with no live
    Activation is dormant (A.6).
 10. A Session is **trashed** *(bound)* when its file has been moved under the
-   reserved `.trash` prefix of its Project's session directory. A trashed
-   Session is not discovered and its stem is not addressable, so restoring it
-   takes a manual filesystem move; its location record is dropped. Trashing
-   ends the runtime first: disposal finalizes an in-flight turn, so the move
-   follows it.
+   reserved `.trash` prefix of its Project's session directory. A spawned
+   Session is stored under its spawner's stem, so trashing a Session trashes its
+   **subtree** — every Session stored beneath it, with the runtimes stopped
+   deepest first — because a child left behind would name a parent address that
+   no longer resolves. The addressed Session must still have a file to move; a
+   descendant that never flushed has none, and its runtime and placement are all
+   that is left to drop. A trashed Session is not discovered and its stem is not
+   addressable, so restoring it takes a manual filesystem move; its location
+   record is dropped. Trashing stops each runtime first: disposal finalizes an
+   in-flight turn, so the move follows it.
 
 ADR 12 proposes further lifetime vocabulary (admitted prompt, reservation,
 in-flight window). It is ADR-local until that ADR is accepted; this document
@@ -184,6 +192,29 @@ and [core protocol](core/protocol.md).
     together. The Session, Connection, and browser view actors are built over
     these seam terms; their contracts live in the host runtime and web
     architecture documents.
+13. **Agent control** *(coined)* is the tool surface by which one Session
+    creates and manages others — `spawn_agent`, `send_message`, `followup_task`,
+    `wait_agent`, `interrupt_agent`, `list_agents`. Its tree is runtime state —
+    a Worker restart ends the records — while the Sessions it created remain
+    ordinary Sessions and are loaded from their addresses when a tool next names
+    them.
+14. A **spawned Session** *(coined)* is a Session created by another Session's
+    `spawn_agent`; the other Session is its **spawner** *(coined)*. A spawned
+    Session's file is stored under a directory named after its spawner, so the
+    storage layout is the **agent tree** *(coined)* and a stem's parent is the
+    stem without its last segment.
+15. A spawned Session has two names, and they are not interchangeable. Its
+    **canonical task name** *(coined, Codex term)* is the `/root/<task>/<task>`
+    path the model addresses — `spawn_agent`'s `task_name`, the envelope's
+    `Task name:`, and what `list_agents` reports — while its **stem** is where
+    the file lives. The tree is derived from the stem (A.3); the row is titled
+    with the task name; the model never sees the stem.
+16. An **agent message** *(coined)* is one inter-agent envelope — `MESSAGE`,
+    `NEW_TASK`, or `FINAL_ANSWER` — delivered into a Session's context and shown
+    in the receiving turn's action list as a folded row. Its **submission id** *(coined)*
+    is the acceptance id both ends carry: the sending tool's result details and
+    the recipient's entry hold the same value, so acceptance (queued) can be
+    paired with arrival (in the transcript), which a Stop can separate.
 
 ## C. Document sync
 
@@ -245,13 +276,18 @@ and [web design](web/design.md).
    assistant entries. Turns are user, assistant, system, user-bash, or
    git-change. A system turn covers compaction and branch summaries, model
    and thinking switches, a system-prompt diff, an extension entry or
-   message, and the unrecognized fallback.
-4. Inside an assistant turn, consecutive tool and thinking blocks become an
-   **action group** *(composed)*; text blocks never join a group.
+   message, an **agent message** (A.16) that had no assistant turn to join — a
+   folded row naming its sender and envelope kind, never a user turn — and the
+   unrecognized fallback.
+4. Inside an assistant turn, consecutive tool, thinking, and agent-message
+   blocks become an **action group** *(composed)*; text blocks never join a
+   group.
 5. A member of an action group is an **action** *(common word)*: a tool
-   call/result pair, or thinking content.
+   call/result pair, thinking content, or an agent message.
 6. An action has a **kind** *(common word)* — read, write, edit, bash,
-   think. Kinds share a hue: write and edit share the mutate hue.
+   think, or agent (the collaboration surface: its calls and the mail they
+   produce). Kinds share a hue: write and edit share the mutate hue, and the
+   agent calls share the agent hue with the agent messages they answer.
 7. An action renders **collapsed** *(bound)* (summary line) or **expanded**
    *(bound)* (full content). An expanded action is **frozen** *(bound)*: it
    stays expanded across re-renders while streaming.

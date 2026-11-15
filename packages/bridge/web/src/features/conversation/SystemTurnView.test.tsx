@@ -96,3 +96,33 @@ describe("SystemTurnView — unrecognized entry fallback", () => {
 		expect(html).not.toContain("earlier work");
 	});
 });
+
+describe("SystemTurnView — agent mail", () => {
+	test("names the sender and the envelope kind, folding the body", () => {
+		const html = render({
+			kind: "system",
+			type: "agent_message",
+			entryId: "m1",
+			index: 0,
+			agentSender: "/root/scout",
+			agentKind: "final_answer",
+			summary: "Message Type: FINAL_ANSWER\nSender: /root/scout\nPayload:\nfound it",
+		});
+		// The row is the provenance, not the payload: a final answer carries the
+		// sender's whole turn.
+		expect(html).toContain("/root/scout · Final answer");
+		expect(html).toContain("Expand agent message");
+		expect(html).not.toContain("found it");
+	});
+
+	test("falls back to the label when the provenance is missing", () => {
+		const html = render({
+			kind: "system",
+			type: "agent_message",
+			entryId: "m2",
+			index: 0,
+			summary: "Message Type: MESSAGE",
+		});
+		expect(html).toContain("Agent message");
+	});
+});

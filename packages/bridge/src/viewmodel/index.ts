@@ -10,6 +10,8 @@
 // Browser-safe: no node:* imports, no DOM. Pure functions only.
 // ============================================================================
 
+import type { AgentMessageKind } from "../core/agent-contract.ts";
+import { isAgentTool, parseAgentMessageDetails } from "../core/agent-contract.ts";
 import type { PullRequestItem } from "../core/client.ts";
 import {
 	GIT_STAMP_CUSTOM_TYPE,
@@ -22,6 +24,7 @@ import { computeRecoverableTurn } from "../core/recovery.ts";
 import type {
 	BashExecutionEntry,
 	Content,
+	CustomMessageEntry,
 	Document,
 	Entry,
 	ImageContent,
@@ -282,6 +285,9 @@ export type SystemTurnType =
 	| "system_prompt"
 	| "extension"
 	| "extension_message"
+	/** An envelope another agent sent this Session: `MESSAGE`, `NEW_TASK`, or the
+	 * `FINAL_ANSWER` that ends a child's turn. */
+	| "agent_message"
 	| "unknown";
 
 export interface SystemTurn {
@@ -298,6 +304,11 @@ export interface SystemTurn {
 	tokensBefore?: number;
 	/** Compaction only: usage of the summary request, for the card's cost line. */
 	usage?: Usage | null;
+	/** Agent mail only: the sender's canonical path, so a folded row can say who
+	 * spoke without re-parsing the envelope. */
+	agentSender?: string;
+	/** Agent mail only: which envelope arrived. */
+	agentKind?: AgentMessageKind;
 	/** Raw source entry: the prompt diff behind a `system_prompt` turn, or the
 	 * detail dump of an unrecognized one. */
 	detail?: Entry;
@@ -310,10 +321,12 @@ export interface SystemTurn {
 	switchTo?: { provider: string; modelId: string; thinkingLevel?: string };
 }
 
-export type AssistantBlockVM = TextBlockVM | ToolActionVM | ThinkActionVM;
+export type AssistantBlockVM = TextBlockVM | ToolActionVM | ThinkActionVM | AgentMessageBlockVM;
 
-/** A tool or thinking action — the per-action unit inside an ActionGroup. */
-export type ActionVM = ToolActionVM | ThinkActionVM;
+/** A tool, thinking, or inter-agent message — the per-action unit inside an
+ * ActionGroup. Mail is an action so it joins the list of calls that received
+ * it instead of being a turn of its own. */
+export type ActionVM = ToolActionVM | ThinkActionVM | AgentMessageBlockVM;
 
 export interface TextBlockVM {
 	blockType: "text";
@@ -337,6 +350,37 @@ export interface ToolActionVM {
 	/** e.g. "read: src/main.ts" */
 	summary: string;
 	status: "pending" | "running" | "done" | "error";
+	/** Spawn only: the answers this child has sent its spawner, in arrival
+	 * order, folded out of their own transcript rows. Present once the spawn's
+	 * arguments and the mail are both on the projected path; until then the
+	 * mail keeps its own row rather than disappearing. */
+	agentReplies?: readonly AgentReplyVM[];
+}
+
+/** One `FINAL_ANSWER` a spawned child sent its spawner. */
+export interface AgentReplyVM {
+	/** The mail entry the text came from; the Session file keeps it. */
+	readonly entryId: string;
+	/** The child's canonical task name, as the envelope named it. */
+	readonly sender: string;
+	readonly text: string;
+	/** The settlement the child reported, when it was one: a failed turn is read
+	 * as a failure, not as an ordinary answer. Absent for mail and interrupts. */
+	readonly outcome?: "completed" | "errored";
+}
+
+/** One inter-agent message inside the action list. Its body is inline (the
+ * transcript already holds it), so it needs no pull, and it has no tool result
+ * or status: the envelope kind and the settlement label are all it carries. */
+export interface AgentMessageBlockVM {
+	blockType: "agent";
+	entryId: string;
+	/** Always 0: one mail entry is one block. */
+	blockIndex: number;
+	kind: AgentMessageKind;
+	sender: string;
+	text: string;
+	outcome?: "completed" | "errored";
 }
 
 export interface ThinkActionVM {
@@ -493,6 +537,12 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 			? computeRecoverableTurn(doc)
 			: null;
 
+	// A child's final answer belongs to the spawn card that created it; the
+	// answer's own row is skipped. The claim needs the spawn's lazy `arguments`,
+	// so before they land the mail keeps its own row — the fallback is the
+	// previous rendering, never a dropped entry.
+	const { byAction: agentReplies, claimed: claimedAgentMail } = claimAgentReplies(path);
+
 	const prevTurns = new Map<string, TurnVM>();
 	const prevBlocks = new Map<string, AssistantBlockVM>();
 	if (previousVM) {
@@ -574,11 +624,13 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 		// that response". Invalid usage (aborted/error stop, all-zero) is
 		// skipped, matching pi's compaction skip rule.
 		const firstRef = pending[0];
-		const reportsUsage = firstRef.blockIndex === 0;
+		// A turn opens at block 0 of an assistant entry; a mail-first turn (only
+		// possible when the address was resumed mid-turn) carries no reading.
+		const usageRef = firstRef.kind === "block" && firstRef.blockIndex === 0 ? firstRef : null;
 		let contextPercent: number | undefined;
 		let contextDeltaPercent: number | undefined;
-		if (reportsUsage) {
-			const e = firstRef.entry;
+		if (usageRef !== null) {
+			const e = usageRef.entry;
 			const usage = validUsage(e);
 			const window = usage ? contextWindowOf(e.provider, e.model) : undefined;
 			if (usage && window) {
@@ -626,6 +678,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 			pendingGitStamps,
 			turnRecovery,
 			input.expandedActions,
+			agentReplies,
 		);
 		turns.push(t);
 		pending = [];
@@ -645,7 +698,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					// block), so an error line renders once per turn.
 					for (let i = 0; i < entry.content.length; i++) {
 						if (pending.length === 0) pendingAnchor = i > 0 ? entry.timestamp : prevSealTs;
-						pending.push({ entry, blockIndex: i });
+						pending.push({ kind: "block", entry, blockIndex: i });
 					}
 					// Entry with no content blocks but an error/abort stop reason:
 					// produce a block carrying the error message even though there
@@ -655,7 +708,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 					if (entry.content.length === 0 && (entry.stopReason === "error" || entry.stopReason === "aborted")) {
 						const synthetic: MessageEntry = { ...entry, content: [{ type: "text", text: "" }] };
 						if (pending.length === 0) pendingAnchor = prevSealTs;
-						pending.push({ entry: synthetic, blockIndex: 0 });
+						pending.push({ kind: "block", entry: synthetic, blockIndex: 0 });
 					}
 				} else if (entry.role === "user") {
 					flushSwitchTurn();
@@ -749,7 +802,7 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 								commitSubject: subject,
 								anchor: stamp.anchor,
 								isInitial: !seenGitStamp,
-								afterBlockKey: `${last.entry.id}:b${last.blockIndex}`,
+								afterBlockKey: `${last.entry.id}:b${last.kind === "block" ? last.blockIndex : 0}`,
 							});
 						} else if (stamp.anchor !== "prompt") {
 							flushSwitchTurn();
@@ -777,20 +830,48 @@ export function computeViewModel(input: ViewModelInput, previousVM?: ViewModel):
 				turns.push(buildSystemTurn(entry, turns.length, "unknown", entry.sourceType, prevTurns, entry));
 				break;
 			}
-			case "custom_message":
+			case "custom_message": {
+				// Agent mail: an inter-agent envelope the human can audit, classified by
+				// its structured details rather than by parsing the body.
+				const mail = entry.display ? parseAgentMessageDetails(entry.details) : undefined;
+				if (mail !== undefined) {
+					// A final answer the spawn card owns renders inside that card, so it is
+					// invisible at its path position and does not split the assistant turn.
+					if (claimedAgentMail.has(entry.id)) break;
+					// Other mail joins the turn that received it: the reply belongs to the
+					// action list, not to a turn of its own. Only when no assistant turn is
+					// open — the Session has not answered since the human's last prompt —
+					// is there nothing to fold into, and the row stands alone.
+					if (pending.length > 0) {
+						pending.push({ kind: "agent", entry });
+						break;
+					}
+					flushSwitchTurn();
+					turns.push(
+						buildSystemTurn(entry, turns.length, "agent_message", customMessageText(entry), prevTurns, entry, {
+							agentSender: mail.sender,
+							agentKind: mail.kind,
+						}),
+					);
+					break;
+				}
 				// An extension message: rendered only when it asks to be displayed.
 				if (entry.display) {
 					flushSwitchTurn();
 					flushPending();
-					const text = (entry.content ?? [])
-						.filter((c) => c.type === "text")
-						.map((c) => c.text)
-						.join("\n");
 					turns.push(
-						buildSystemTurn(entry, turns.length, "extension_message", text || entry.customType, prevTurns, entry),
+						buildSystemTurn(
+							entry,
+							turns.length,
+							"extension_message",
+							customMessageText(entry) || entry.customType,
+							prevTurns,
+							entry,
+						),
 					);
 				}
 				break;
+			}
 			case "tool_result":
 			case "label":
 			case "session_info":
@@ -1118,12 +1199,13 @@ function buildUserTurn(
 	return turn;
 }
 
-/** One accumulated assistant content block: its owning entry and index.
- *  A turn is a list of these. */
-interface BlockRef {
-	entry: MessageEntry;
-	blockIndex: number;
-}
+/** One accumulated unit of an assistant turn: a content block of one assistant
+ * entry, or a whole inter-agent message. Mail is accumulated like a block so a
+ * turn that receives it keeps one list: the assistant entries after the mail are
+ * the same turn's continuation, not a new turn split at the boundary. */
+type BlockRef =
+	| { readonly kind: "block"; readonly entry: MessageEntry; readonly blockIndex: number }
+	| { readonly kind: "agent"; readonly entry: CustomMessageEntry };
 
 /** Usage valid for context accounting. Mirrors pi's compaction skip rule
  *  (compaction.ts): aborted/error stops and all-zero usage are untrustworthy. */
@@ -1227,12 +1309,35 @@ function buildAssistantTurn(
 	gitChanges: InlineGitStamp[] = [],
 	recovery: TurnRecovery | undefined = undefined,
 	expandedActions?: ReadonlySet<string>,
+	agentReplies?: ReadonlyMap<string, readonly AgentReplyVM[]>,
 ): AssistantTurn {
-	// Flatten pass: one descriptor per accumulated block ref, in order.
+	// Flatten pass: one descriptor per accumulated ref, in order.
 	const blocks: AssistantBlockVM[] = [];
-	for (const { entry, blockIndex } of refs) {
+	for (const ref of refs) {
+		if (ref.kind === "agent") {
+			const mail = parseAgentMessageDetails(ref.entry.details);
+			if (mail === undefined) continue;
+			blocks.push({
+				blockType: "agent",
+				entryId: ref.entry.id,
+				blockIndex: 0,
+				kind: mail.kind,
+				sender: mail.sender,
+				text: customMessageText(ref.entry),
+				...(mail.outcome === undefined ? {} : { outcome: mail.outcome }),
+			});
+			continue;
+		}
+		const { entry, blockIndex } = ref;
 		const isProvisional = !isEntrySealed(entry);
-		const vm = buildBlockVM(entry.id, blockIndex, entry.content[blockIndex], isProvisional, toolResultMap);
+		const vm = buildBlockVM(
+			entry.id,
+			blockIndex,
+			entry.content[blockIndex],
+			isProvisional,
+			toolResultMap,
+			agentReplies,
+		);
 		if (vm) blocks.push(reuseBlock(prevBlocks, vm, expandedActions));
 	}
 
@@ -1251,6 +1356,10 @@ function buildAssistantTurn(
 	}
 
 	const first = refs[0];
+	const lastMessage = [...refs]
+		.reverse()
+		.find((ref): ref is Extract<BlockRef, { kind: "block" }> => ref.kind === "block")?.entry;
+	const lastRef = refs[refs.length - 1];
 	// The turn-span estimate. A turn is sealed once its last ref's entry has a
 	// seal (entries seal in order, so a provisional last entry means the turn
 	// is still streaming); tool calls execute after their entry seals, so the
@@ -1260,8 +1369,9 @@ function buildAssistantTurn(
 	const sealed = isEntrySealed(last) && last.timestamp !== "";
 	let endTs = last.timestamp;
 	let toolsPending = false;
-	for (const { entry, blockIndex } of refs) {
-		const block = entry.content[blockIndex];
+	for (const ref of refs) {
+		if (ref.kind === "agent") continue;
+		const block = ref.entry.content[ref.blockIndex];
 		if (block?.type === "toolCall") {
 			const tr = toolResultMap.get(block.id);
 			// A seal is what makes a timestamp real, so an empty timestamp on the
@@ -1278,27 +1388,28 @@ function buildAssistantTurn(
 		if (t >= 0) totalMs = t;
 		toolMs = computeToolMs(refs, toolResultMap, turnStartedAt, endTs);
 	}
+	// stopReason/errorMessage only when the turn's last ref closes its entry's
+	// content: an error/abort line renders once per turn. A trailing mail ref
+	// leaves the turn open, so it reports no stop.
+	const closesEntry = lastRef.kind === "block" && lastRef.blockIndex === lastRef.entry.content.length - 1;
 
 	const turn: AssistantTurn = {
 		kind: "assistant",
 		// entryId = the first entry of the turn — App.tsx lookups
 		// (focus/navigation) match the FIRST turn of an entry.
 		entryId: first.entry.id,
-		turnKey: first.blockIndex === 0 ? first.entry.id : `${first.entry.id}:b${first.blockIndex}`,
+		turnKey:
+			first.kind === "agent" || first.blockIndex === 0 ? first.entry.id : `${first.entry.id}:b${first.blockIndex}`,
 		index,
 		blocks,
-		model: last.model,
-		provider: last.provider,
-		usage: last.usage,
-		// stopReason/errorMessage only when the turn's last ref is its entry's
-		// last block (always true for turn-merged turns): an error/abort line
-		// renders once per turn, never per sub-turn.
-		stopReason: refs[refs.length - 1].blockIndex === last.content.length - 1 ? last.stopReason : undefined,
-		errorMessage:
-			refs[refs.length - 1].blockIndex === last.content.length - 1 ? (last.errorMessage ?? undefined) : undefined,
+		model: lastMessage?.model,
+		provider: lastMessage?.provider,
+		usage: lastMessage?.usage,
+		stopReason: closesEntry && lastRef.kind === "block" ? lastRef.entry.stopReason : undefined,
+		errorMessage: closesEntry && lastRef.kind === "block" ? (lastRef.entry.errorMessage ?? undefined) : undefined,
 		parsedError:
-			refs[refs.length - 1].blockIndex === last.content.length - 1 && last.errorMessage
-				? parseProviderError(last.errorMessage)
+			closesEntry && lastRef.kind === "block" && lastRef.entry.errorMessage
+				? parseProviderError(lastRef.entry.errorMessage)
 				: undefined,
 		timestamp: displayTimestamp,
 		turnStartedAt: turnStartedAt || undefined,
@@ -1437,6 +1548,111 @@ function promptChangeSummary(entry: MessageEntry): string | undefined {
 	return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
+/** The text a custom message carries: pi allows string content or blocks, and
+ * only text blocks are conversation. */
+function customMessageText(entry: Entry): string {
+	if (entry.kind !== "custom_message") return "";
+	return (entry.content ?? [])
+		.filter((content) => content.type === "text")
+		.map((content) => content.text)
+		.join("\n");
+}
+
+/** Fold each final answer into the spawn card of the child that sent it.
+ *
+ * The join key is structural: a child's canonical path is its spawner's path
+ * plus the task name the spawn was called with, and the envelope's `Sender` is
+ * that same string. The spawner's path comes from the mail's own `recipient`, so
+ * no Session identity is needed. The spawn's `arguments` are a lazy field: while
+ * they are unpulled there is no key, and the answer keeps its own row rather
+ * than vanishing. */
+function claimAgentReplies(path: readonly Entry[]): {
+	byAction: Map<string, AgentReplyVM[]>;
+	claimed: Set<string>;
+} {
+	const spawns: Array<{ key: string; taskName: string; order: number }> = [];
+	const answers: Array<{
+		entryId: string;
+		sender: string;
+		text: string;
+		outcome?: "completed" | "errored";
+		order: number;
+	}> = [];
+	let spawnerPath: string | undefined;
+	for (let position = 0; position < path.length; position++) {
+		const entry = path[position]!;
+		if (entry.kind === "message" && entry.role === "assistant") {
+			for (let index = 0; index < entry.content.length; index++) {
+				const block = entry.content[index];
+				if (block?.type !== "toolCall" || block.name !== "spawn_agent" || block.arguments === null) continue;
+				if (typeof block.arguments !== "object" || Array.isArray(block.arguments)) continue;
+				const taskName = (block.arguments as Record<string, JsonValue>).task_name;
+				if (typeof taskName !== "string") continue;
+				spawns.push({ key: `${entry.id}:b${index}`, taskName, order: position });
+			}
+			continue;
+		}
+		if (entry.kind !== "custom_message" || entry.display !== true) continue;
+		const mail = parseAgentMessageDetails(entry.details);
+		if (mail === undefined) continue;
+		spawnerPath ??= mail.recipient;
+		if (mail.kind === "final_answer") {
+			answers.push({
+				entryId: entry.id,
+				sender: mail.sender,
+				text: customMessageText(entry),
+				...(mail.outcome === undefined ? {} : { outcome: mail.outcome }),
+				order: position,
+			});
+		}
+	}
+	const byAction = new Map<string, AgentReplyVM[]>();
+	const claimed = new Set<string>();
+	if (spawnerPath === undefined) return { byAction, claimed };
+	for (const answer of answers) {
+		// The nearest preceding spawn owns the answer: a task name is reusable once
+		// its file is trashed, so the same path can appear twice on one path.
+		let spawn: { key: string } | undefined;
+		for (let index = spawns.length - 1; index >= 0; index--) {
+			const candidate = spawns[index]!;
+			if (candidate.order >= answer.order) continue;
+			if (`${spawnerPath}/${candidate.taskName}` === answer.sender) {
+				spawn = candidate;
+				break;
+			}
+		}
+		if (spawn === undefined) continue;
+		const reply: AgentReplyVM = {
+			entryId: answer.entryId,
+			sender: answer.sender,
+			text: answer.text,
+			...(answer.outcome === undefined ? {} : { outcome: answer.outcome }),
+		};
+		const replies = byAction.get(spawn.key);
+		if (replies === undefined) byAction.set(spawn.key, [reply]);
+		else replies.push(reply);
+		claimed.add(answer.entryId);
+	}
+	return { byAction, claimed };
+}
+
+/** Element-wise equality for the folded answers, so an unchanged spawn card
+ * keeps its VM (and its React memo) across recomputations. */
+function sameAgentReplies(a: readonly AgentReplyVM[] | undefined, b: readonly AgentReplyVM[] | undefined): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined || a.length !== b.length) return false;
+	return a.every((reply, index) => {
+		const other = b[index];
+		return (
+			other !== undefined &&
+			reply.entryId === other.entryId &&
+			reply.sender === other.sender &&
+			reply.text === other.text &&
+			reply.outcome === other.outcome
+		);
+	});
+}
+
 function buildSystemTurn(
 	entry: Entry,
 	index: number,
@@ -1444,7 +1660,7 @@ function buildSystemTurn(
 	summary: string | undefined,
 	prevTurns: Map<string, TurnVM>,
 	detail?: Entry,
-	extra?: Pick<SystemTurn, "tokensBefore" | "usage">,
+	extra?: Pick<SystemTurn, "tokensBefore" | "usage" | "agentSender" | "agentKind">,
 ): SystemTurn {
 	const turn: SystemTurn = {
 		kind: "system",
@@ -1466,6 +1682,8 @@ function buildSystemTurn(
 		prev.summary === turn.summary &&
 		prev.tokensBefore === turn.tokensBefore &&
 		prev.usage === turn.usage &&
+		prev.agentSender === turn.agentSender &&
+		prev.agentKind === turn.agentKind &&
 		prev.detail === turn.detail
 	) {
 		return prev;
@@ -1511,6 +1729,7 @@ function buildBlockVM(
 	block: Content,
 	isProvisional: boolean,
 	toolResultMap: Map<string, ToolResultEntry>,
+	agentReplies?: ReadonlyMap<string, readonly AgentReplyVM[]>,
 ): AssistantBlockVM | null {
 	switch (block.type) {
 		case "text":
@@ -1544,6 +1763,7 @@ function buildBlockVM(
 				// "running" = arguments present (tool dispatched) but no result yet.
 				status = block.arguments !== null ? "running" : "pending";
 			}
+			const replies = block.name === "spawn_agent" ? agentReplies?.get(`${entryId}:b${blockIndex}`) : undefined;
 			return {
 				blockType: "tool",
 				entryId,
@@ -1554,6 +1774,7 @@ function buildBlockVM(
 				result,
 				summary: buildActionSummary(block),
 				status,
+				...(replies === undefined ? {} : { agentReplies: replies }),
 			};
 		}
 		case "image":
@@ -1611,9 +1832,14 @@ function reuseBlock(
 				p.arguments === vm.arguments &&
 				p.summary === vm.summary &&
 				p.status === vm.status &&
-				sameResult
+				sameResult &&
+				sameAgentReplies(p.agentReplies, vm.agentReplies)
 				? p
 				: vm;
+		}
+		case "agent": {
+			const p = prev as AgentMessageBlockVM;
+			return p.kind === vm.kind && p.sender === vm.sender && p.text === vm.text && p.outcome === vm.outcome ? p : vm;
 		}
 	}
 }
@@ -1731,6 +1957,27 @@ export function makeActionSummary(name: string, args: JsonValue | null, cwd?: st
 		case "grep": {
 			const query = recArgs ? ((recArgs.query as string) ?? (recArgs.pattern as string)) : null;
 			return query ? `grep: ${query}` : "grep";
+		}
+		// Agent control: the row names what was done to whom. The card body
+		// (AgentToolCardBody) renders the call and its reply in readable form.
+		case "spawn_agent": {
+			const taskName = recArgs ? (recArgs.task_name as string | undefined) : undefined;
+			return taskName ? `spawn: ${taskName}` : name;
+		}
+		case "send_message":
+		case "followup_task":
+		case "interrupt_agent": {
+			const target = recArgs ? (recArgs.target as string | undefined) : undefined;
+			return target ? `${name}: ${target}` : name;
+		}
+		case "wait_agent": {
+			const timeout = recArgs ? (recArgs.timeout_ms as number | undefined) : undefined;
+			// The default lives in the host; the projection names only what was asked.
+			return timeout === undefined ? "wait_agent" : `wait_agent: ${Math.round(timeout / 1000)}s`;
+		}
+		case "list_agents": {
+			const prefix = recArgs ? (recArgs.path_prefix as string | undefined) : undefined;
+			return prefix ? `list_agents: ${prefix}` : "list_agents";
 		}
 		default: {
 			// First argument value, truncated
@@ -2263,20 +2510,23 @@ function computeToolMs(
 	const total = diffMs(endTs, turnStartedAt);
 	if (Number.isNaN(total)) return undefined;
 
-	// Group refs by entry (consecutive refs share an entry) and walk the
+	// Only assistant content blocks take part in the generation walk: mail has
+	// no tool call and its seal is not a generation boundary.
+	const blocks = refs.filter((ref): ref is Extract<BlockRef, { kind: "block" }> => ref.kind === "block");
+	// Group blocks by entry (consecutive refs share an entry) and walk the
 	// generation/tool chain: each entry's generation runs from the previous
 	// chain point to its seal; the next chain point is the latest parallel
 	// tool-result seal of that entry's tool calls in this turn.
 	let triggerTs = turnStartedAt;
 	let totalGen = 0;
 	let i = 0;
-	while (i < refs.length) {
-		const entry = refs[i]!.entry;
+	while (i < blocks.length) {
+		const entry = blocks[i]!.entry;
 		if (!entry.timestamp) return undefined; // provisional — the split cannot resolve
 		let j = i;
 		let maxTool = "";
-		while (j < refs.length && refs[j]!.entry === entry) {
-			const block = entry.content[refs[j]!.blockIndex];
+		while (j < blocks.length && blocks[j]!.entry === entry) {
+			const block = entry.content[blocks[j]!.blockIndex];
 			if (block?.type === "toolCall") {
 				const tr = toolResultMap.get(block.id);
 				if (tr?.timestamp && tr.timestamp > maxTool) maxTool = tr.timestamp;
@@ -2585,6 +2835,7 @@ export {
  * additionally needs its linked result content/details.
  */
 export function actionPulls(action: ActionVM, expanded: boolean): PullRequestItem[] {
+	if (action.blockType === "agent") return [];
 	if (action.blockType === "thinking") {
 		if (action.redacted) return [];
 		return [
@@ -2623,15 +2874,20 @@ export function resultPullPaths(resultId: string): PullRequestItem[] {
 // tools also default to read so nothing un-elevated pops.
 // ---------------------------------------------------------------------------
 
-export type ActionKind = "read" | "bash" | "write" | "edit" | "think";
+export type ActionKind = "read" | "bash" | "write" | "edit" | "think" | "agent";
 
 /** Kind hue — the color group a kind maps to. edit + write share the
  * mutate hue (file mutation); the label/details still distinguish them,
  * only the tinted row hue merges. This is the single source of truth for the
  * row strip/tint and the group legend dots. */
-export type ActionHue = "mutate" | "bash" | "think" | "read";
+export type ActionHue = "mutate" | "bash" | "think" | "read" | "agent";
 
+/** The collaboration surface's tool names come from the shared contract; they
+ * share one hue with the mail rows they produce, so a send and its reply read as
+ * one exchange: which is which comes from the label (`spawn: scout` vs
+ * `scout · Final answer`). */
 export function kindForTool(name: string): ActionKind {
+	if (isAgentTool(name)) return "agent";
 	switch (name) {
 		case "bash":
 		case "powershell":
@@ -2664,6 +2920,8 @@ export function kindHue(kind: ActionKind): ActionHue {
 			return "think";
 		case "read":
 			return "read";
+		case "agent":
+			return "agent";
 	}
 }
 

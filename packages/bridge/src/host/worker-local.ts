@@ -22,7 +22,8 @@
 // ============================================================================
 
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
 	DEFAULT_THINKING_LEVEL,
@@ -31,9 +32,12 @@ import {
 	type ModelRuntime,
 	ModelRuntime as ModelRuntimeImpl,
 	resolveModelScopeWithDiagnostics,
+	type SessionEntry,
+	SessionManager,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
+	AGENT_MESSAGE_CUSTOM_TYPE,
 	compareQueueRows,
 	filterPatchForSocket,
 	type ModelInfo,
@@ -51,6 +55,21 @@ import {
 	THINKING_LEVEL_NAMES,
 } from "../core/index.ts";
 import { type ActivationRecord, ActivationRegistry } from "./activation-registry.ts";
+import {
+	type AgentAddress,
+	type AgentControlService,
+	type AgentResumeContext,
+	type AgentSpawnContext,
+	type AgentStatus,
+	type ControlledAgent,
+	createAgentControl,
+	interAgentBody,
+	MAX_CONCURRENT_TURNS,
+	ROOT_PATH,
+	type SpawnAgentRequest,
+	settledStatus,
+} from "./agent-control.ts";
+import { POLICY_CUSTOM_TYPE, subAgentPolicy } from "./agent-policy.ts";
 import { createLifecycleScope } from "./lifecycle-scope.ts";
 import type { ConnectionHandle, createManager, Manager } from "./manager.ts";
 import { resolveVisibleModelKeys } from "./model-visibility.ts";
@@ -60,8 +79,10 @@ import {
 	migrateLegacyTrashDir,
 	normalizeStem,
 	type ProjectConfig,
+	reserveSessionFile,
 	resolveStemPath,
 	stemFromSessionPath,
+	subtreeStemsUnder,
 	trashStemFile,
 } from "./projects.ts";
 import { listDirectory, listFiles, readFileAtSnapshot, resolveGitBase, runGitDiff, runGitShow } from "./repository.ts";
@@ -72,7 +93,12 @@ import {
 	type SessionAdmission,
 	type SessionCapability,
 } from "./session-actor.ts";
-import { assertNoSessionIdConflicts, type CatalogLiveEntry, createSessionCatalog } from "./session-catalog.ts";
+import {
+	assertNoSessionIdConflicts,
+	type CatalogLiveEntry,
+	createSessionCatalog,
+	scanDurableSessionIds,
+} from "./session-catalog.ts";
 import { createSessionLocations, type SessionLocations } from "./session-locations.ts";
 import { readBridgeSettings } from "./settings.ts";
 import { acquireStorageLock, type StorageLock } from "./storage-lock.ts";
@@ -96,7 +122,43 @@ function addressKey(projectId: string, stem: string): string {
 	return `${projectId}\0${stem}`;
 }
 
+/** The last assistant text a branch produced, stopping at the entry a full fork
+ * copied last: inherited parent messages are the parent's answer, not this
+ * agent's, and Codex reports the turn's text rather than the transcript's.
+ * Exported for its unit test; the Worker is the only caller. */
+export function lastAssistantTextBefore(
+	entries: readonly SessionEntry[],
+	boundaryId: string | undefined,
+): string | undefined {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry === undefined) continue;
+		if (entry.id === boundaryId) return undefined;
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const text = entry.message.content
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join("\n")
+			.trim();
+		if (text !== "") return text;
+	}
+	return undefined;
+}
+
 export type LocalManagerFactory = (opts: Parameters<typeof createManager>[0]) => Promise<Manager>;
+
+/** The file stem a canonical task path names, read from any Session in the same
+ * tree: a child is stored at `<spawner stem>/<task name>`, so the tree hangs off
+ * the root's stem and everything below `/root` is a directory below it. Exported
+ * for its unit test; the Worker is the only caller.
+ *
+ * The one place the path/stem mapping exists. The control plane asks the Worker
+ * for an address instead of deriving one, so a layout change stops here. */
+export function stemForAgentPath(sessionStem: string, sessionPath: string, path: string): string {
+	const suffix = sessionPath.slice(ROOT_PATH.length);
+	const rootStem = suffix === "" ? sessionStem : sessionStem.slice(0, -suffix.length);
+	return `${rootStem}${path.slice(ROOT_PATH.length)}`;
+}
 
 export interface LocalWorkerOptions {
 	/** The Project configuration this Worker serves. */
@@ -333,15 +395,64 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		});
 	};
 
+	/** Every live runtime, for agent control's context fragments. The link is by
+	 * `liveSessionId` rather than by record: a Session's id is minted by its file,
+	 * so it can differ from the one a record captured at registration, and the
+	 * spawner's id is whatever the runtime reports when a child is created. */
+	const liveManagers = new Set<Manager>();
+	const managerFor = (sessionId: string): Manager | undefined => {
+		for (const manager of liveManagers) if (manager.liveSessionId === sessionId) return manager;
+		return undefined;
+	};
+
+	/** The last execution outcome each Session reported, by session id. The root
+	 * has no agent record, so this is the only truthful source for its
+	 * `list_agents` status; a transcript read cannot tell interrupted from done. */
+	const lastOutcomes = new Map<string, SessionOutcome>();
+
+	/** The collaboration brief each Session was given, by session id, and the
+	 * runtimes already watching for compaction. A brief is a context fragment, so
+	 * a summary can replace the history it lived in; re-sending it after the
+	 * compaction keeps Codex's role instructions in front of the model. */
+	const policyBriefings = new Map<string, string>();
+	const watchedManagers = new WeakSet<Manager>();
+
+	/** Keep a Session's brief across compaction. One subscription per runtime: a
+	 * resumed Session gets a new Manager, and the briefing map outlives it. */
+	const rearmPolicy = (manager: Manager, content: string): void => {
+		policyBriefings.set(manager.liveSessionId, content);
+		if (watchedManagers.has(manager)) return;
+		watchedManagers.add(manager);
+		manager.onCompacted(() => {
+			const briefing = policyBriefings.get(manager.liveSessionId);
+			if (briefing === undefined) return;
+			void manager.sendContextMessage(POLICY_CUSTOM_TYPE, briefing).catch(() => {});
+		});
+	};
+
 	const registry = new ActivationRegistry({
 		incarnation,
-		createManager: (project, _stem, abs) =>
-			options.managerFactory({
+		createManager: async (project, stem, abs) => {
+			let manager: Manager | undefined;
+			const created = await options.managerFactory({
 				cwd: project.cwd,
 				agentDir: options.agentDir,
 				modelRuntime: options.modelRuntime,
 				sessionPath: abs,
-			}),
+				agentControl: {
+					service: control,
+					parent: () => {
+						if (manager === undefined) throw new Error("Session is not registered yet");
+						return { projectId: project.id, stem, sessionId: manager.liveSessionId };
+					},
+				},
+			});
+			manager = created;
+			liveManagers.add(created);
+			const briefing = policyBriefings.get(created.liveSessionId);
+			if (briefing !== undefined) rearmPolicy(created, briefing);
+			return created;
+		},
 		idleGcMs,
 		unflushedIdleGcMs,
 		onSettled: (ref, settlement) => {
@@ -352,7 +463,10 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// a tool-using turn would report itself once per tool batch (ADR 24).
 			refreshQueue("live", "runtime");
 			emitHistoryChanged(ref.projectId);
-			if (settlement.boundary === "execution") emitSettled(ref, settlement.outcome);
+			if (settlement.boundary === "execution") {
+				lastOutcomes.set(ref.sessionId, settlement.outcome);
+				emitSettled(ref, settlement.outcome);
+			}
 			refreshTitle();
 		},
 		onStreamingChange: () => {
@@ -372,7 +486,14 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			refreshQueue("live", "runtime");
 			refreshTitle();
 		},
-		onCollected: (record) => endObservations(record),
+		onCollected: (record) => {
+			// The registration's id is the durable one by the time it is collected,
+			// so it is the key that still matches the runtime.
+			for (const manager of liveManagers) {
+				if (manager.liveSessionId === record.ref.sessionId) liveManagers.delete(manager);
+			}
+			endObservations(record);
+		},
 	});
 
 	/**
@@ -407,6 +528,323 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 		if (!project) throw new Error(`Unknown project: ${projectId}`);
 		return project;
 	};
+
+	// ── Agent control (Codex-style multi-agent tools) ────────────────────
+	//
+	// The tools are one presentation of a normal Session. Spawning reuses the
+	// same creation path as `createSession` (fresh Manager, address derivation,
+	// registration, then a first admitted prompt), and holds a capability on the
+	// child so idle collection cannot reap an agent the parent still controls.
+	// Closing releases that capability and collects the runtime; the file stays
+	// and the Session is openable like any other.
+
+	/** The last assistant text a Session produced *itself*, used for a completion
+	 * event. Read from the durable branch rather than tracked live: a settled child
+	 * may have been compacted, and its file is the result the user would see. */
+	const lastAssistantText = (manager: Manager, boundaryId?: string): string | undefined => {
+		try {
+			return lastAssistantTextBefore(SessionManager.open(manager.sessionFile).getBranch(), boundaryId);
+		} catch {
+			// An unflushed or unreadable file has no result to report.
+			return undefined;
+		}
+	};
+
+	const splitModelRef = (value: string): { provider: string; modelId: string } => {
+		const slash = value.indexOf("/");
+		if (slash <= 0 || slash === value.length - 1) {
+			throw new Error(`model must be provider/modelId, got ${JSON.stringify(value)}`);
+		}
+		return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
+	};
+
+	/** Claim a child's address before anything is created. The exclusive create is
+	 * the reservation, so two concurrent spawns cannot both take one task name and
+	 * a name already on disk — a closed child's file, or a crashed spawn's — is
+	 * refused instead of being overwritten. */
+	const claimChildAddress = (project: ProjectConfig, stem: string, path: string): string => {
+		try {
+			return reserveSessionFile(project.sessionDir, stem);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+				throw new Error(`agent path \`${path}\` is already in use`);
+			}
+			throw error;
+		}
+	};
+
+	/** One controlled Session's operations over an activation. Spawn and resume
+	 * both end here, so a reloaded child answers exactly like a spawned one: the
+	 * capability pins the runtime, settlements are observed once, and every
+	 * operation goes through the registration's admission rather than through a
+	 * Manager the caller may not own. */
+	const bindControlledAgent = (
+		record: ActivationRecord,
+		identity: {
+			readonly parentId: string;
+			readonly rootId: string;
+			readonly depth: number;
+			readonly path: string;
+			readonly ancestry: readonly string[];
+		},
+		options: { readonly model?: string; readonly boundary?: string } = {},
+	): ControlledAgent => {
+		const capability = record.actor.capability();
+		const listeners = new Set<(outcome: SessionOutcome) => void>();
+		let lastOutcome: SessionOutcome | undefined;
+		let unsubscribe: (() => void) | undefined;
+		let closed = false;
+		// The admission runs its operation synchronously, so the settlement
+		// subscription is in place before this returns even though the promise
+		// settles later.
+		void record.admission
+			.command((session) =>
+				Promise.resolve(
+					session.onSettled((settlement) => {
+						if (settlement.boundary !== "execution") return;
+						lastOutcome = settlement.outcome;
+						for (const listener of [...listeners]) listener(settlement.outcome);
+					}),
+				),
+			)
+			.then((off) => {
+				if (closed) off();
+				else unsubscribe = off;
+			})
+			.catch(() => {});
+		return {
+			id: record.ref.sessionId,
+			ref: record.ref,
+			parentId: identity.parentId,
+			rootId: identity.rootId,
+			depth: identity.depth,
+			path: identity.path,
+			ancestry: [...identity.ancestry],
+			...(options.model === undefined ? {} : { model: options.model }),
+			isBusy: () => record.actor.activity().phase !== "idle",
+			prompt: (message) => record.admission.prompt(message),
+			// Codex's `TriggerTurn` for agent mail: the same envelope `send_message`
+			// queues, but the recipient starts work if it is idle. It lands as an agent
+			// message, so the transcript never claims the human wrote it.
+			startTask: (content, details) =>
+				record.admission.command((session) =>
+					session.startWithContextMessage(AGENT_MESSAGE_CUSTOM_TYPE, content, { display: true, details }),
+				),
+			interrupt: () => record.admission.abort(),
+			close: async () => {
+				if (closed) return;
+				closed = true;
+				unsubscribe?.();
+				await capability.release();
+				await registry.collect(record);
+			},
+			lastMessage: () =>
+				record.admission.command((session) => Promise.resolve(lastAssistantText(session, options.boundary))),
+			onSettled: (listener) => {
+				if (lastOutcome !== undefined) {
+					listener(lastOutcome);
+					return () => {};
+				}
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		};
+	};
+
+	/** Create one controlled Session. The whole Manager-owning phase is tracked
+	 * as a registry creation, so shutdown drains any factory still running. */
+	async function spawnControlledAgent(
+		context: AgentSpawnContext,
+		request: SpawnAgentRequest,
+	): Promise<ControlledAgent> {
+		if (disposed) throw new Error("worker is shutting down");
+		const project = requireProject(context.parent.projectId);
+		const parentSessionPath = resolveStemPath(project.sessionDir, context.parent.stem);
+		// A spawned Session's address *is* its file name: the child is stored at
+		// `<spawner stem>/<task name>`, so the path a parent addresses and the file the
+		// daemon scans are one string. Nothing records the relation, and the sidebar's
+		// nesting is a projection of the rows themselves.
+		const childPath = claimChildAddress(
+			project,
+			stemForAgentPath(context.parent.stem, context.parentPath, context.path),
+			context.path,
+		);
+		const childDir = dirname(childPath);
+		// `all` inherits everything the parent has. A Session that has not been
+		// flushed yet has appended no message (`SessionManager` only creates the
+		// file with a user or assistant turn), so there is nothing to inherit and
+		// `all` is `none` — the failure Codex cannot produce, avoided.
+		const forkParent = request.forkTurns === "all" && existsSync(parentSessionPath);
+		return registry.runCreation(async () => {
+			let ref: SessionRef | undefined;
+			let record: ActivationRecord | undefined;
+			let agent: ControlledAgent | undefined;
+			const agentControl = {
+				service: control,
+				parent: (): SessionRef => {
+					if (ref === undefined) throw new Error("agent Session is not registered yet");
+					return ref;
+				},
+			};
+			let manager: Manager;
+			try {
+				const sessionManager = forkParent
+					? SessionManager.forkFrom(parentSessionPath, project.cwd, childDir)
+					: SessionManager.create(project.cwd, childDir);
+				if (forkParent) {
+					// A fork allocates its own leaf and writes it immediately, so the fork is
+					// moved onto the claim before the Manager opens it: the history it carries
+					// is the parent's, the address stays the task name.
+					const forked = sessionManager.getSessionFile();
+					if (forked === undefined) throw new Error("forked Session has no file");
+					renameSync(forked, childPath);
+				}
+				manager = await options.managerFactory({
+					cwd: project.cwd,
+					agentDir: options.agentDir,
+					modelRuntime: options.modelRuntime,
+					sessionManager,
+					// `setSessionFile` fills the claim — writing the header, or reloading what
+					// the fork already wrote — instead of allocating a generated leaf.
+					sessionPath: childPath,
+					agentControl,
+				});
+			} catch (error) {
+				// Nothing was registered, so the claim goes with the failure and a retry can
+				// use the name.
+				rmSync(childPath, { force: true });
+				throw error;
+			}
+			// A full fork copies the parent's branch into the child's file, so the
+			// child's own result cannot be read past the entry the copy ended at. Codex
+			// reports the turn's text; the boundary is how a file scan can agree.
+			let forkBoundary: string | undefined;
+			if (forkParent) {
+				const inherited = SessionManager.open(manager.sessionFile).getBranch();
+				forkBoundary = inherited[inherited.length - 1]?.id;
+			}
+			try {
+				const stem = stemFromSessionPath(project.sessionDir, manager.sessionFile);
+				if (registry.byAddressAny(project.id, stem) !== undefined) {
+					throw new Error(`Session already active: ${stem}`);
+				}
+				record = await registry.register(manager, {
+					projectId: project.id,
+					sessionId: manager.liveSessionId,
+					stem,
+				});
+				ref = record.ref;
+				liveManagers.add(manager);
+				// The row's title is the canonical task name. Without it a child is titled
+				// by its first message, which is the protocol envelope.
+				await manager.renameSession(request.taskName);
+				if (request.model !== undefined) {
+					const model = splitModelRef(request.model);
+					await manager.setModel(model.provider, model.modelId);
+				}
+				if (request.reasoningEffort !== undefined) {
+					await manager.setThinkingLevel(request.reasoningEffort);
+				}
+				// A spawn is agent-initiated work, so it writes no queue place: Inbox and
+				// Later are the user's attention list, and only a user's own prompt may put
+				// a Session there. The child stays Archive (the absence of a place); the
+				// sidebar draws live descendants of a queued Session from the queue
+				// snapshot, so the tree is visible without joining the queue.
+				// Bind before the first prompt: a fast turn can settle before
+				// admission returns, and the completion event must not be lost.
+				agent = bindControlledAgent(record, context, { model: request.model, boundary: forkBoundary });
+				// Codex briefs a subagent before its first input: the team contract, which
+				// is what tells the child its final answer leaves to its parent without a
+				// tool call. The envelope alone names only the path. A full fork adds the
+				// inherited-history boundary, because the copied branch is context, not
+				// the child's own task.
+				const childPolicy = subAgentPolicy(MAX_CONCURRENT_TURNS, forkParent);
+				await manager.sendContextMessage(POLICY_CUSTOM_TYPE, childPolicy);
+				rearmPolicy(manager, childPolicy);
+				// The child's first input is Codex's NEW_TASK envelope: it names the
+				// recipient — the child's own canonical path — and the sender, which is
+				// how a subagent learns who and where it is.
+				await agent.prompt(interAgentBody("NEW_TASK", context.path, context.parentPath, request.message));
+			} catch (error) {
+				if (agent !== undefined) await agent.close();
+				else if (record !== undefined) await registry.collect(record);
+				else await manager.dispose();
+				throw error;
+			}
+			if (agent === undefined) throw new Error("agent Session was not registered");
+			return agent;
+		});
+	}
+
+	/** Load the Session an address names, for a fragment whose recipient has no
+	 * runtime. Returns `undefined` when the file no longer exists. */
+	const loadForDelivery = async (address: AgentAddress): Promise<Manager | undefined> => {
+		const project = requireProject(address.projectId);
+		const abs = resolveStemPath(project.sessionDir, address.stem);
+		if (!existsSync(abs)) return undefined;
+		const record = await registry.open(project, address.stem, abs);
+		return managerFor(record.ref.sessionId);
+	};
+
+	const control: AgentControlService = createAgentControl({
+		spawn: spawnControlledAgent,
+		// A dormant child is loaded from the address the tree names: the file is the
+		// identity, so a Worker restart or idle collection cannot make a known agent
+		// unreachable. `registry.open` reuses a live registration when the browser
+		// already has the Session open.
+		resume: async (context: AgentResumeContext) => {
+			if (disposed) throw new Error("worker is shutting down");
+			const project = requireProject(context.caller.projectId);
+			// The address is the path below the tree root, hung off the root's stem: the
+			// caller's own stem carries it, so the caller's path measures the suffix to
+			// strip. An absolute target may leave the caller's subtree, which is why the
+			// suffix is measured from the caller rather than from the target.
+			const stem = stemForAgentPath(context.caller.stem, context.callerPath, context.path);
+			const abs = resolveStemPath(project.sessionDir, stem);
+			if (!existsSync(abs)) return undefined;
+			const record = await registry.open(project, stem, abs);
+			return bindControlledAgent(record, context, {});
+		},
+		// Every durable address the control plane needs comes from the layout the
+		// Worker owns: a spawner's address for a settlement, the root's for a reply.
+		addressOf: (session, sessionPath, path) => ({
+			projectId: session.projectId,
+			stem: stemForAgentPath(session.stem, sessionPath, path),
+		}),
+		// A fragment is Codex's mailbox drain: it lands in the Session's context at
+		// its next request and never starts work on the recipient's behalf.
+		deliver: async (agentId, fragment, address) => {
+			const manager = managerFor(agentId) ?? (address === undefined ? undefined : await loadForDelivery(address));
+			if (manager === undefined) throw new Error(`agent with id ${agentId} not found`);
+			// Only agent mail is transcript content; the collaboration brief is policy
+			// the model reads and the human does not see.
+			const mail =
+				fragment.kind === "agent_message" ? { display: true, details: fragment.details } : { display: false };
+			await manager.sendContextMessage(fragment.customType, fragment.content, mail);
+			if (fragment.kind === "policy") rearmPolicy(manager, fragment.content);
+		},
+		// A collected Session has no turn left to steer, so it cannot wake a wait.
+		watchInput: (agentId, listener) => managerFor(agentId)?.onInput(listener) ?? (() => {}),
+		// The snapshot a wait compares against after installing its listener: input
+		// admitted in between is still counted, so the wake cannot be lost.
+		inputSequence: (agentId) => managerFor(agentId)?.inputSequence() ?? 0,
+		// The tree root is a Session like any other but holds no control capability,
+		// so its status comes from the runtime and the last execution outcome, not
+		// from a record: a transcript read cannot tell an interrupted root from a
+		// completed one.
+		probe: async (agentId): Promise<AgentStatus | undefined> => {
+			const manager = managerFor(agentId);
+			const outcome = lastOutcomes.get(agentId);
+			if (manager === undefined) return outcome === undefined ? undefined : settledStatus(outcome, undefined);
+			if (manager.activity().phase !== "idle") return "running";
+			const message = lastAssistantText(manager);
+			return outcome === undefined
+				? message === undefined
+					? "pending_init"
+					: { completed: message }
+				: settledStatus(outcome, message);
+		},
+	});
 
 	/** One target for one record: the address, the durable identity, the
 	 * registration, and the activation generation the record was registered
@@ -561,10 +999,18 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// factory that completes after shutdown began is disposed inside the
 			// operation the shutdown drain awaits.
 			const record = await registry.runCreation(async () => {
+				let createdRef: SessionRef | undefined;
 				const manager = await options.managerFactory({
 					cwd: project.cwd,
 					agentDir: options.agentDir,
 					modelRuntime: options.modelRuntime,
+					agentControl: {
+						service: control,
+						parent: () => {
+							if (createdRef === undefined) throw new Error("Session is not registered yet");
+							return createdRef;
+						},
+					},
 				});
 				let stem: string;
 				try {
@@ -582,6 +1028,8 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 					sessionId: manager.liveSessionId,
 					stem,
 				});
+				createdRef = record.ref;
+				liveManagers.add(manager);
 				// Pre-session choices from the Project home (ADR 12 slice): apply the
 				// picked model and thinking level, then admit the first prompt (with
 				// its attachments) before the observation — the initial sync carries
@@ -642,15 +1090,40 @@ export function createLocalWorker(options: LocalWorkerOptions): LocalWorker {
 			// Rejects the trash prefix itself, so a trashed stem can never be
 			// re-addressed.
 			const stem = normalizeStem(address.stem);
+			// Children are stored under their spawner's stem, so a trash takes the
+			// subtree: a child left behind would keep a parent address that no longer
+			// resolves, and would keep running with no one to report to.
+			const subtree = (): string[] =>
+				subtreeStemsUnder(
+					[
+						...liveEntries()
+							.filter((entry) => entry.ref.projectId === project.id)
+							.map((entry) => entry.ref.stem),
+						...scanDurableSessionIds(project).keys(),
+					],
+					stem,
+				);
 			// Stop first, unconditionally: disposal finalizes an in-flight turn,
 			// which can create or advance the file, so the move must follow it.
-			const record = await registry.awaitSettled(project.id, stem);
-			if (record) await registry.collect(record);
-			// The trashed session leaves discovery and the queue together: the
-			// move takes the file out of the Project's namespace and the prune
-			// drops the placement record keyed by the stem it was addressed at.
-			trashStemFile(project.sessionDir, stem);
-			locations.prune(project.id, stem);
+			for (const target of subtree()) {
+				const record = await registry.awaitSettled(project.id, target);
+				if (record) await registry.collect(record);
+			}
+			// Re-read after the stop: a finalized turn may have created its file.
+			const durable = scanDurableSessionIds(project);
+			// The addressed Session must have a file to move. A descendant may not — a
+			// child whose first turn never flushed has no file, but its runtime is gone
+			// and its placement is all that is left to drop — and that is not a failure.
+			if (!durable.has(stem)) throw new Error(`Session has no file to trash: ${stem}`);
+			for (const target of subtree()) {
+				// A Session that never flushed has no file to move: its runtime is gone
+				// and the placement is all that is left to drop.
+				if (durable.has(target)) trashStemFile(project.sessionDir, target);
+				// The trashed Sessions leave discovery and the queue together: the move
+				// takes the file out of the Project's namespace and the prune drops the
+				// placement record keyed by the stem it was addressed at.
+				locations.prune(project.id, target);
+			}
 			emitHistoryChanged(project.id);
 			refreshQueue("full", "user");
 		},

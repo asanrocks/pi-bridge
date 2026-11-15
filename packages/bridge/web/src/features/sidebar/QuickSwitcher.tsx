@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { memo, useMemo, useState } from "react";
-import type { SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
+import type { SessionInfo, SessionLocation, SessionTarget } from "../../../../src/core/index.ts";
 import { Popover } from "../../render/Popover.tsx";
 import { quickSwitcherGroups } from "./quickGroups.ts";
 import { SessionRow } from "./SessionRow.tsx";
@@ -38,7 +38,7 @@ export const QuickSwitcher = memo(function QuickSwitcher({
 	queue: SessionInfo[];
 	currentProjectId: string | null;
 	currentStem: string | null;
-	onOpen: (session: SessionInfo) => void;
+	onOpen: (target: SessionTarget) => void;
 	onMove: (session: SessionInfo, location: SessionLocation) => void;
 	onTrash: (session: SessionInfo) => void;
 	/** Hand off to the full switcher. */

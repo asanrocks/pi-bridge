@@ -29,6 +29,7 @@ import {
 import { enqueuePulls } from "../../infra/net/pullQueue.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { CaretIcon } from "../../render/icons.tsx";
+import { AgentMessageCard, agentKindLabel } from "./AgentMessageCard.tsx";
 import styles from "./actions.module.css";
 import { withFoldLanding } from "./foldLanding.ts";
 import { formatGroupSpan } from "./formatGroupSpan.ts";
@@ -42,18 +43,19 @@ import { useTurnClock } from "./useTurnClock.ts";
 /** Dot entries for the left-edge dot legend: tool hues (in stable
  * precedence order, matching formatGroupSummary's category order) plus the
  * meta "git" entry first when the group holds mid-turn inline git stamps. Thinking
- * actions are excluded — the header surfaces tool actions only. */
+ * and mail actions are excluded — the header surfaces tool actions only. */
 function groupDots(actions: ActionVM[], gitChanges: InlineGitStamp[] | undefined): (ActionHue | "git")[] {
 	const seen = new Set<ActionHue>();
 	for (const s of actions) {
-		if (s.blockType === "thinking") continue;
-		const kind: ActionKind = kindForTool((s as ToolActionVM).toolName);
+		if (s.blockType !== "tool") continue;
+		const kind: ActionKind = kindForTool(s.toolName);
 		seen.add(kindHue(kind));
 	}
 	// Stable display order: git (meta, first — highest precedence, matching
-	// the summary), then mutate, bash, read (the tool label precedence
-	// edit > write > bash > read, collapsed via hue).
-	const order: ActionHue[] = ["mutate", "bash", "read"];
+	// the summary), then collaboration (the exchange the reader is following),
+	// then mutate, bash, read (the tool label precedence edit > write > bash >
+	// read, collapsed via hue).
+	const order: ActionHue[] = ["agent", "mutate", "bash", "read"];
 	const hues = order.filter((f) => seen.has(f));
 	return (gitChanges?.length ?? 0) > 0 ? ["git", ...hues] : hues;
 }
@@ -103,14 +105,21 @@ export const ActionGroupView = memo(function ActionGroupView({
 			(s) => {
 				const entries = s.document.entries;
 				let pending = false;
-				const items: ActionSummaryItem[] = actions.map((h) => {
+				const items: ActionSummaryItem[] = [];
+				let replies = 0;
+				for (const h of actions) {
+					if (h.blockType === "agent") {
+						replies++;
+						continue;
+					}
 					if (h.blockType === "thinking") {
-						return { toolName: "thinking", basename: null };
+						items.push({ toolName: "thinking", basename: null });
+						continue;
 					}
 					const entry = entries[h.entryId];
 					const block = entry?.kind === "message" ? entry.content[h.blockIndex] : null;
-					const liveArgs = block?.type === "toolCall" ? block.arguments : (h as ToolActionVM).arguments;
-					const toolName = (h as ToolActionVM).toolName;
+					const liveArgs = block?.type === "toolCall" ? block.arguments : h.arguments;
+					const toolName = h.toolName;
 					const kind = kindForTool(toolName);
 					// Only the kinds below register a group-level pull; only they can
 					// still be waiting on it.
@@ -126,13 +135,16 @@ export const ActionGroupView = memo(function ActionGroupView({
 						const first = input !== null ? extractApplyPatchPaths(input)[0] : undefined;
 						basename = first !== undefined ? first.split("/").pop() || first : null;
 					}
-					return { toolName, basename };
-				});
+					items.push({ toolName, basename });
+				}
 				const summary = formatGroupSummary(
 					items,
 					gitChanges?.map((c) => c.identity),
 				);
-				return `${pending ? "1" : "0"}${summary}`;
+				// Mail is folded in the group's list, so the collapsed row names it too:
+				// otherwise a group of calls that received a reply looks unchanged.
+				const replyLabel = replies === 0 ? "" : `${replies} ${replies === 1 ? "reply" : "replies"}`;
+				return `${pending ? "1" : "0"}${[summary, replyLabel].filter((part) => part !== "").join(" · ")}`;
 			},
 			[actions, gitChanges],
 		),
@@ -148,7 +160,7 @@ export const ActionGroupView = memo(function ActionGroupView({
 		enqueuePulls(
 			actions.flatMap((h) => {
 				if (h.blockType !== "tool") return [];
-				const kind = kindForTool((h as ToolActionVM).toolName);
+				const kind = kindForTool(h.toolName);
 				return kind === "edit" || kind === "write" ? actionPulls(h, false) : [];
 			}),
 		);
@@ -234,6 +246,8 @@ export const ActionGroupView = memo(function ActionGroupView({
 									redacted={h.redacted}
 									onToggleAction={onToggleAction}
 								/>
+							) : h.blockType === "agent" ? (
+								<AgentMessageCard sender={h.sender} label={agentKindLabel(h.kind, h.outcome)} text={h.text} />
 							) : (
 								<ToolActionView action={h} onToggleAction={onToggleAction} />
 							)}

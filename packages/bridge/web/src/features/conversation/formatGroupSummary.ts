@@ -3,18 +3,21 @@
 // collapsed label grouped by tool kind. Categories appear in a fixed
 // precedence order that matches the group's hue dots (edit+write
 // collapse to the mutate hue):
-//   git > edit > write > bash-hue > read
-//   git: ae02c151 · edit: a.ts, b.ts, c.ts · run 2 tools · read 3 files
+//   git > agent calls > edit > write > bash-hue > read
+//   git: ae02c151 · 2 agent calls · edit: a.ts, b.ts, c.ts · run 2 tools · read 3 files
 // Only edit/write carry file names — the named outcomes of the group, listed
 // together under one "edit:" category (edit vs write stays visible in the
 // expanded action rows and card headers); mid-turn inline git stamps (ADR 10 v2)
 // surface as a "git:" hash list first — the highest-precedence category;
-// every other tool (bash, grep, …)
+// the collaboration tools count as "N agent calls" because an exchange is what
+// the reader is following, not one more tool run; every other tool (bash, grep, …)
 // is a count under "run N tools", so the header needs no arguments beyond
 // edit/write paths. Thinking actions are not summarized — the header surfaces
 // tool actions only — except when thinking is all a group holds, where a
 // bare "think" keeps the collapsed row readable.
 // ============================================================================
+
+import { isAgentTool } from "../../../../src/core/agent-contract.ts";
 
 /** Per-action data extracted from live store args. */
 export interface ActionSummaryItem {
@@ -67,10 +70,13 @@ export function formatGroupSummary(items: ActionSummaryItem[], gitChanges: GitSu
 	let readCount = 0;
 	let otherToolCount = 0;
 	let thinkCount = 0;
+	let agentCallCount = 0;
 
 	for (const item of items) {
 		const name = item.toolName;
-		if (name === "edit" || name === "write" || name === "apply_patch") {
+		if (isAgentTool(name)) {
+			agentCallCount++;
+		} else if (name === "edit" || name === "write" || name === "apply_patch") {
 			const key = item.basename ?? "?";
 			editMap.set(key, (editMap.get(key) ?? 0) + 1);
 		} else if (name === "read") {
@@ -88,6 +94,11 @@ export function formatGroupSummary(items: ActionSummaryItem[], gitChanges: GitSu
 	// --- git (mid-turn identity transitions — highest precedence) ---
 	const gitGroup = formatGitGroup(gitChanges);
 	if (gitGroup) groups.push(gitGroup);
+
+	// --- collaboration (an agent call is the exchange itself) ---
+	if (agentCallCount > 0) {
+		groups.push(`${agentCallCount} agent call${agentCallCount === 1 ? "" : "s"}`);
+	}
 
 	// --- edit (edit + write basenames, one list) ---
 	const editGroup = formatPathGroup("edit", editMap);

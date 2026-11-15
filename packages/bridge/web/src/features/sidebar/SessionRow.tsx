@@ -32,7 +32,7 @@
 // ============================================================================
 
 import { memo, useRef, useState } from "react";
-import type { SessionInfo, SessionLocation } from "../../../../src/core/index.ts";
+import type { SessionInfo, SessionLocation, SessionTarget } from "../../../../src/core/index.ts";
 import { formatWhenFull } from "../../infra/lib/time.ts";
 import { useLabelClock } from "../../infra/lib/useNow.ts";
 import { AnchoredMenu, type MenuItem } from "../../render/AnchoredMenu.tsx";
@@ -82,9 +82,13 @@ export function sessionMenuItems(
 	session: Pick<SessionInfo, "location" | "activity">,
 	onMove?: (location: SessionLocation) => void,
 	onTrash?: () => void,
+	onOpenParent?: () => void,
 ): MenuItem[] {
 	const running = session.activity !== undefined;
 	const items: MenuItem[] = [];
+	if (onOpenParent) {
+		items.push({ key: "parent", label: "Open parent agent", onSelect: onOpenParent });
+	}
 	if (onMove) {
 		for (const move of MOVES[session.location]) {
 			const stopLabel = running ? move.stopLabel : undefined;
@@ -110,9 +114,19 @@ export function sessionMenuItems(
 	return items;
 }
 
+/** The row's name: what the Worker reported, else the first message, else the
+ * address. Shared with the spawner reference so both read the same way. */
+function rowLabel(session: SessionInfo): string {
+	return (session.name || session.firstMessageText || session.stem) ?? "";
+}
+
 export const SessionRow = memo(function SessionRow({
 	session,
 	selected,
+	depth = 0,
+	childCount = 0,
+	parentStem,
+	promotedParent,
 	onOpen,
 	onMove,
 	onTrash,
@@ -123,7 +137,22 @@ export const SessionRow = memo(function SessionRow({
 	 * tint. Matched on (projectId, stem) — rows always carry stems, so no
 	 * sessionId fallback is needed. */
 	selected?: boolean;
-	onOpen: (session: SessionInfo) => void;
+	/** Nesting depth under the row's spawner: the tree the stems describe. */
+	depth?: number;
+	/** Direct children drawn under this row: a parent says how much work it handed
+	 * out. */
+	childCount?: number;
+	/** The Session that spawned this one, for the row menu's `Open parent agent`.
+	 * A stem, not a row: the spawner may sit in another group (an Inbox child of
+	 * an archived parent), and the jump must not depend on that row being loaded. */
+	parentStem?: string;
+	/** The spawner's row when this row is drawn outside its tree because its own
+	 * place is more attentive: the arrow and its title name the parent even though
+	 * the row could not be nested under it. */
+	promotedParent?: SessionInfo;
+	/** Opening a Session needs only its address, so a row click and the spawner
+	 * jump share one entry: the jump passes `{projectId, stem}` and no session id. */
+	onOpen: (target: SessionTarget) => void;
 	/** The row menu's moves: what the row's location offers, including the stop
 	 * an Archive of a running Session performs (the daemon owns that, not the
 	 * row). No confirmation — a move is a classification. */
@@ -136,7 +165,8 @@ export const SessionRow = memo(function SessionRow({
 	 * `Popover`'s `dismissOnEscape`). */
 	onMenuOpenChange?: (open: boolean) => void;
 }) {
-	const label = (session.name || session.firstMessageText || session.stem) ?? "";
+	const label = rowLabel(session);
+	const parentLabel = promotedParent === undefined ? undefined : rowLabel(promotedParent);
 	const now = useLabelClock(session.activity !== undefined);
 	const menuBtnRef = useRef<HTMLButtonElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -163,6 +193,7 @@ export const SessionRow = memo(function SessionRow({
 		session,
 		onMove ? (location) => onMove(session, location) : undefined,
 		onTrash ? () => onTrash(session) : undefined,
+		parentStem === undefined ? undefined : () => onOpen({ projectId: session.projectId, stem: parentStem }),
 	);
 
 	// The working row's second line: what the agent is doing (running) or what
@@ -180,7 +211,7 @@ export const SessionRow = memo(function SessionRow({
 	// own, so hovering the row never merely repeats the name.
 	const rowTitle = formatWhenFull(time.when);
 	return (
-		<div className={styles.sidebarItemWrap}>
+		<div className={styles.sidebarItemWrap} style={depth > 0 ? { paddingLeft: depth * 12 } : undefined}>
 			<button
 				type="button"
 				className={[styles.sidebarItem, selected ? styles.sidebarItemSelected : ""].filter(Boolean).join(" ")}
@@ -191,9 +222,22 @@ export const SessionRow = memo(function SessionRow({
 				<span className={dotCls} aria-hidden="true" />
 				<span className={styles.sidebarItemText}>
 					<span className={styles.sidebarItemRow}>
+						{promotedParent !== undefined && (
+							<span className={styles.sidebarParentMark} title={`Spawned by ${parentLabel}`} aria-hidden="true">
+								↳
+							</span>
+						)}
 						<span className={styles.sidebarItemName} title={label}>
 							{label.slice(0, 60)}
 						</span>
+						{childCount > 0 && (
+							<span
+								className={styles.sidebarChildCount}
+								title={`${childCount} spawned agent${childCount === 1 ? "" : "s"}`}
+							>
+								{childCount}
+							</span>
+						)}
 						<time className={styles.sidebarItemTime} dateTime={time.when} title={formatWhenFull(time.when)}>
 							{time.text}
 						</time>

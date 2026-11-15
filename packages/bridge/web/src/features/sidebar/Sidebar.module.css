@@ -256,6 +256,23 @@
 	color: var(--color-muted-foreground);
 }
 
+/* Spawned-agent count: a value beside the name, not a control. It answers how
+   much work a parent handed out without opening anything. */
+.sidebarChildCount {
+	flex: none;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
+/* A spawned row drawn outside its spawner's group: the arrow is the visible
+   link back, and its title names the parent. Meta ink, no fill — a reference,
+   not a control; the jump lives in the row menu. */
+.sidebarParentMark {
+	flex: none;
+	font-size: var(--fs-xs);
+	color: var(--color-muted-foreground);
+}
+
 /* The words take the truncation: the chip is the mark in front of them, and a
    clipped pill would read as a broken shape. */
 .sidebarItemStatusText {

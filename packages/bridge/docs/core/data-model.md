@@ -107,7 +107,14 @@ The union has exactly these thirteen variants:
   bridge extension (the git stamp) claims the type.
 - `CustomMessageEntry`, `kind: "custom_message"`: `customType`, nullable
   `content`, nullable `details`, and `display`. Rendered only when `display`
-  is set.
+  is set, and classified by its `details`: one that carries agent mail
+  (`bridge: "agent_message"`, with the envelope kind, both paths, and the
+  submission id) renders as an agent-message turn — a bridge-claimed payload,
+  the way a `custom` entry's git stamp is. The type, the payload, and the parse
+  are `core/agent-contract.ts`, shared by the host that writes them and the
+  browser that reads them. A final answer is the one kind the
+  projection folds into the spawn action that created its sender, so only
+  unmatched mail renders a turn of its own.
 - `UnknownEntry`, `kind: "unknown"`: `sourceType` and the raw `data` of an
   upstream entry type the projection cannot classify. Rendered as the
   unrecognized fallback so drift stays visible.

@@ -8,7 +8,8 @@
 
    Each action renders as a full-width tinted row whose hue marks its
    hue: mutate (edit+write, rose), bash (amber), think (neutral
-   slate), read (dimmed gray). Four hues, three tiers — the hue
+   slate), read (dimmed gray), agent (purple — the collaboration
+   exchange, which takes its own family rather than a tier). The hue
    color's saturation/value carries the tier (stand-out / neutral /
    dimmed); one --action-tint strength for all. The tint is the visual
    landmark separating actions from the prose; the per-action
@@ -137,6 +138,7 @@
 .groupDots > span[data-hue="bash"]   { background: var(--kind-bash); }
 .groupDots > span[data-hue="think"]  { background: var(--kind-think); }
 .groupDots > span[data-hue="read"]   { background: var(--kind-read); }
+.groupDots > span[data-hue="agent"]  { background: var(--kind-agent); }
 .groupDots > span[data-hue="git"]    { background: var(--kind-git); }
 
 /* Vertical list of actions under a group — no tree branching, no indent
@@ -170,6 +172,7 @@
 .action[data-kind="write"] { --action-hue: var(--kind-mutate); }
 .action[data-kind="edit"]  { --action-hue: var(--kind-mutate); }
 .action[data-kind="think"] { --action-hue: var(--kind-think); }
+.action[data-kind="agent"] { --action-hue: var(--kind-agent); }
 .action[data-kind="git"]   { --action-hue: var(--kind-git); }
 
 /* `!!` runs are excluded from the LLM context — the whole card recedes. */
@@ -860,6 +863,82 @@
 .toolArgValue {
 	color: var(--color-foreground);
 	word-break: break-all;
+}
+
+/* Agent-control card — labeled fields and the child's folded answers */
+.agentField {
+	margin-bottom: 8px;
+}
+
+.agentField:last-child {
+	margin-bottom: 0;
+}
+
+.agentFieldLabel {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	margin-bottom: 2px;
+}
+
+.agentFieldBody {
+	font-size: var(--fs-sm);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.agentMeta {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	margin-bottom: 8px;
+}
+
+.agentStatusLine {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.agentStatus {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+}
+
+.agentOpen {
+	composes: outlined from "../../render/buttons.module.css";
+	font: inherit;
+	font-size: var(--fs-xs);
+	padding: 3px 10px;
+	min-height: 24px;
+}
+
+.agentReplyCount {
+	color: var(--color-muted-foreground);
+	font-size: var(--fs-xs);
+	margin-left: 6px;
+	white-space: nowrap;
+}
+
+.agentList {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.agentListRow {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: var(--fs-sm);
+}
+
+.agentListName {
+	word-break: break-all;
+}
+
+.agentListStatus {
+	color: var(--color-muted-foreground);
+	white-space: nowrap;
 }
 
 /* Edit-specific: path row then per-edit diff blocks */

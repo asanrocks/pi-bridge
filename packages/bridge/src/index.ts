@@ -3,6 +3,11 @@
 export type {
 	AbortRequest,
 	AddOp,
+	AgentMessageDetails,
+	AgentMessageKind,
+	AgentMessageProvenance,
+	AgentSettlementOutcome,
+	AgentToolName,
 	AppendOp,
 	BranchSummaryEntry,
 	BridgeTransport,
@@ -91,6 +96,7 @@ export type {
 	SessionRef,
 	SessionSettledMessage,
 	SessionStatusHint,
+	SessionTarget,
 	SetLabelRequest,
 	SetSessionLocationRequest,
 	SnapshotFile,
@@ -107,6 +113,8 @@ export type {
 } from "./core/index.ts";
 /* eslint-disable import/export */
 export {
+	AGENT_MESSAGE_CUSTOM_TYPE,
+	AGENT_TOOL_NAMES,
 	applyEvent,
 	applyPatch,
 	BridgeClient,
@@ -123,12 +131,14 @@ export {
 	GIT_STAMP_CUSTOM_TYPE,
 	getAtPath,
 	initFromEntries,
+	isAgentTool,
 	isEntrySealed,
 	isLazyFieldPath,
 	LAZY_FIELD_PATTERNS,
 	MAX_IMAGE_BASE64_LENGTH,
 	MAX_IMAGES_PER_MESSAGE,
 	PROTOCOL_VERSION,
+	parseAgentMessageDetails,
 	parseCommitSubject,
 	parseGitIdentity,
 	parseGitStampData,

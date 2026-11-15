@@ -230,7 +230,12 @@ turn's details ledger needs one. The tool split subtracts the assistant-generati
 windows, so parallel tools count once (the per-batch maximum), not once each.
 An upstream entry type the projection cannot classify becomes an unrecognized
 system turn naming the source type and carrying the raw source entry; an
-extension-owned custom entry becomes an extension turn; a named
+extension-owned custom entry becomes an extension turn; a custom message whose
+details carry agent mail (`bridge: "agent_message"`) becomes an agent-message
+turn naming its sender and envelope kind, classified by that data and never by
+parsing the envelope text — except a final answer whose child was spawned on the
+projected path, which is folded onto that spawn's action VM (the join is the
+child's canonical path) and does not get a turn of its own; a named
 non-conversation type (a context edit, a usage record) becomes a hidden
 internal entry. No path entry is dropped, and the entry-kind and turn-kind
 switches are exhaustive, making a new kind a compile error rather than a
@@ -304,8 +309,8 @@ peeked path's open-ended tail resolves to nothing (the worktree is not the
 peeked state), and a window is omitted whenever either end is unborn — no
 honest pair, no diff offer.
 
-`segmentBlocks` groups consecutive thinking and tool blocks for rendering;
-text remains a separate segment. `actionPulls` declares thinking and tool-call
+`segmentBlocks` groups consecutive thinking, tool, and agent-message blocks for
+rendering; text remains a separate segment. `actionPulls` declares thinking and tool-call
 fields needed by visible actions, and `resultPullPaths` declares the lazy tool
 result fields needed by an expanded action. These functions are the sole
 ViewModel-to-pull mapping. A view subscribes to `pullTick` only while it still

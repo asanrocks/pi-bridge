@@ -55,6 +55,10 @@ registration, the pre-attach model/thinking choices, first-prompt admission),
 the Session catalog (`src/host/session-catalog.ts`: directory scan, durable
 metadata parse, live overlay), the session-location store
 (`src/host/session-locations.ts`: the durable user-visible placement),
+the agent-control tools (`src/host/agent-control.ts`: the tree, the tool
+semantics, and the residency high-water; the spawn chooses the child's
+SessionManager directory, which is what makes the tree the storage layout, and
+`stemForAgentPath` is the one place that path/stem mapping is computed),
 and the observation table. The Daemon holds no
 Activation state and never sees a Manager: it resolves a Project, asks the
 Worker for an observation, and stamps the frames the observation delivers.
@@ -983,15 +987,25 @@ the new attach is completed. A failed open returns an error from the Daemon.
 `trashSession` takes a Project id and a normalized stem. It looks up the
 address's Activation and collects it when one exists — a stop, not a GC, so
 streaming state and attached Connections do not defer it, and disposal
-finalizes the turn so the file cannot advance after the move. It then moves
-`<sessionDir>/<stem>.jsonl` to `<sessionDir>/.trash/<stem>.jsonl`, creating the
-trash directory tree. Both the source and the destination directory are
-containment-checked, so a symlinked `.trash` cannot redirect the move outside
-the Project namespace. The move refuses to overwrite an existing trashed file.
-The Session file survives; it merely leaves discovery, and moving it back is a
-manual filesystem operation. A `.archive/` directory left by the pre-rename
-layout is folded into `.trash/` at Worker start (reported and left alone when
-both exist, so no tree is merged blindly).
+finalizes the turn so the file cannot advance after the move. A spawned
+Session is stored under its spawner's stem, so the trash takes the **subtree**
+(`subtreeStemsUnder`): every live descendant is stopped first, deepest first,
+and then each durable file moves. A child left behind would keep a parent
+address that no longer resolves and would keep running with no one to report
+to, and a root's trash must not leave orphans that no row can explain. The
+addressed stem itself must have a file after the stop — a missing address is an
+error, as before — while a descendant that never flushed has none, and its
+runtime and placement are all that is left to drop. Each file then
+moves `<sessionDir>/<stem>.jsonl` to `<sessionDir>/.trash/<stem>.jsonl`,
+creating the trash directory tree (children keep their relative position, so a
+restore is a filesystem move back), and each moved Session's placement record
+is pruned. Both the source and the destination
+directory are containment-checked, so a symlinked `.trash` cannot redirect the
+move outside the Project namespace. The move refuses to overwrite an existing
+trashed file. The Session file survives; it merely leaves discovery, and moving
+it back is a manual filesystem operation. A `.archive/` directory left by the
+pre-rename layout is folded into `.trash/` at Worker start (reported and left
+alone when both exist, so no tree is merged blindly).
 
 ### `setSessionLocation`
 
@@ -1032,6 +1046,14 @@ supplies metadata; an unflushed active Session supplies the actor's
 an active row the live latest-message preview and last-activity time win over
 the file scan; `timestamp` remains the durable sort key (mtime / header
 creation).
+
+A spawned Session's row needs no relation of its own: its stem is stored under
+its spawner's stem, so a client draws the **agent tree** from the addresses it
+already has (the stem's parent is the stem without its last segment). The spawn
+also names the Session — `session_info` with its canonical task name — because
+its first message is the protocol envelope, and a row titled
+`Message Type: NEW_TASK` names nothing. `name` is therefore populated for a
+spawned Session from its first entry rather than from the user renaming it.
 
 A row for a running Session carries the execution's `activity` (ADR 23), and
 its presence *is* the row's running fact — there is no second flag. The actor's

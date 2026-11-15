@@ -35,6 +35,13 @@ describe("splitProjectRows", () => {
 		expect(splitProjectRows(queue, [same]).archived).toEqual([]);
 	});
 
+	it("separates live agent rows from the places the user set", () => {
+		const queue = [row("root", "inbox"), row("root/worker", "archive", true)];
+		const rows = splitProjectRows(queue, []);
+		expect(rows.inbox.map((r) => r.stem)).toEqual(["root"]);
+		expect(rows.agent.map((r) => r.stem)).toEqual(["root/worker"]);
+	});
+
 	it("a running row stays in the group its location names", () => {
 		const rows = splitProjectRows([row("parked", "later", true)], []);
 		expect(rows.later.map((r) => r.stem)).toEqual(["parked"]);

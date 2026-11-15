@@ -39,4 +39,12 @@ describe("formatGroupSummary — git segment", () => {
 	it("no stamps keeps the legacy label", () => {
 		expect(formatGroupSummary([action("edit", "foo.ts")])).toBe("edit: foo.ts");
 	});
+
+	it("counts agent calls as one segment after git", () => {
+		const items = [action("spawn_agent"), action("wait_agent"), action("read", "a.ts")];
+		expect(formatGroupSummary(items, [{ commit: SHA, branch: "main" }])).toBe(
+			"git: 01234567 · 2 agent calls · read 1 file",
+		);
+		expect(formatGroupSummary([action("spawn_agent")])).toBe("1 agent call");
+	});
 });

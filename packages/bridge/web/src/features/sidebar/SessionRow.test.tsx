@@ -125,6 +125,20 @@ describe("sessionMenuItems", () => {
 	it("is empty when the row offers no actions (the panel has no menu)", () => {
 		expect(sessionMenuItems(session("inbox"))).toEqual([]);
 	});
+
+	it("offers the spawner jump first, ahead of every move", () => {
+		const onOpenParent = vi.fn();
+		const items = sessionMenuItems(
+			session("inbox"),
+			() => {},
+			() => {},
+			onOpenParent,
+		);
+		expect(items.map((item) => item.key)).toEqual(["parent", "park", "archive", "trash"]);
+		expect(items[0]?.label).toBe("Open parent agent");
+		items[0]?.onSelect();
+		expect(onOpenParent).toHaveBeenCalledOnce();
+	});
 });
 
 describe("SessionRow — the time slot", () => {
@@ -194,5 +208,25 @@ describe("SessionRow — the second line and its hover titles", () => {
 	test("an Inbox preview carries its full line as the title", () => {
 		const html = render({ ...session("inbox"), lastMessageText: "the reply, in full" });
 		expect(html).toContain('title="the reply, in full"');
+	});
+});
+
+describe("SessionRow — the spawner reference", () => {
+	function render(sessionInfo: SessionInfo, promotedParent?: SessionInfo): string {
+		return renderToStaticMarkup(
+			createElement(SessionRow, { session: sessionInfo, promotedParent, onOpen: () => {} }),
+		);
+	}
+
+	test("a row promoted out of its tree names its spawner", () => {
+		const parent: SessionInfo = { ...session("later"), sessionId: "sess-parent", stem: "parent", name: "planner" };
+		const html = render({ ...session("inbox"), stem: "parent/worker" }, parent);
+		expect(html).toContain("↳");
+		expect(html).toContain('title="Spawned by planner"');
+	});
+
+	test("a nested row carries no mark: its indentation is the link", () => {
+		const html = render({ ...session("inbox"), stem: "parent/worker" });
+		expect(html).not.toContain("↳");
 	});
 });

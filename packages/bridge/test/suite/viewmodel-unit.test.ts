@@ -12,6 +12,8 @@ import {
 	assignGroupGitChanges,
 	beautifyShellCommand,
 	computeViewModel,
+	kindForTool,
+	kindHue,
 	latestReplyTurnKey,
 	makeActionHeader,
 	makeActionSummary,
@@ -771,6 +773,172 @@ describe("system turns", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Agent replies folded into the spawn card
+// ---------------------------------------------------------------------------
+
+describe("agent replies", () => {
+	/** One spawn call plus the answer its child sent back. The spawner's own path
+	 * is `/root`, so the child's canonical path is `/root/<task>`. */
+	function docWithAnswer(
+		taskName: string,
+		argumentsValue: unknown,
+		texts: string[],
+		outcomes: Array<"completed" | "errored" | undefined> = [],
+	): Document {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("u1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("a1", "u1", "2024-01-01T00:00:01Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc1", name: "spawn_agent", arguments: argumentsValue }],
+			}),
+		);
+		let parent = "a1";
+		texts.forEach((text, index) => {
+			const id = `m${index}`;
+			appendEntry(
+				doc,
+				makeEntry(id, parent, `2024-01-01T00:0${index + 2}:00Z`, "custom_message", {
+					customType: "multi_agent.inter_agent_message",
+					content: [{ type: "text", text }],
+					display: true,
+					details: {
+						bridge: "agent_message",
+						kind: "final_answer",
+						sender: `/root/${taskName}`,
+						recipient: "/root",
+						submissionId: `sub-${index}`,
+						...(outcomes[index] === undefined ? {} : { outcome: outcomes[index] }),
+					},
+				}),
+			);
+			parent = id;
+		});
+		return doc;
+	}
+
+	it("folds a final answer into the spawn card that owns the child", () => {
+		const doc = docWithAnswer("scout", { task_name: "scout", message: "look" }, ["found it"]);
+		const vm = computeViewModel({ document: doc, models: [] });
+		// No standalone agent-message turn: the answer lives in the card.
+		expect(vm.turns.some((turn) => turn.kind === "system" && turn.type === "agent_message")).toBe(false);
+		const assistant = vm.turns.find((turn) => turn.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const action = assistant.blocks.find((block) => block.blockType === "tool");
+		if (action?.blockType !== "tool") throw new Error("spawn action not found");
+		expect(action.toolName).toBe("spawn_agent");
+		expect(action.agentReplies).toHaveLength(1);
+		expect(action.agentReplies?.[0]?.sender).toBe("/root/scout");
+		expect(action.agentReplies?.[0]?.text).toBe("found it");
+	});
+
+	it("carries the settlement outcome onto the folded answer", () => {
+		const doc = docWithAnswer("scout", { task_name: "scout" }, ["boom"], ["errored"]);
+		const vm = computeViewModel({ document: doc, models: [] });
+		const assistant = vm.turns.find((turn) => turn.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const action = assistant.blocks.find((block) => block.blockType === "tool");
+		if (action?.blockType !== "tool") throw new Error("spawn action not found");
+		expect(action.agentReplies?.[0]?.outcome).toBe("errored");
+	});
+
+	it("keeps later answers in arrival order on the same card", () => {
+		const doc = docWithAnswer("scout", { task_name: "scout" }, ["first", "second"]);
+		const vm = computeViewModel({ document: doc, models: [] });
+		const assistant = vm.turns.find((turn) => turn.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const action = assistant.blocks.find((block) => block.blockType === "tool");
+		if (action?.blockType !== "tool") throw new Error("spawn action not found");
+		expect(action.agentReplies?.map((reply) => reply.text)).toEqual(["first", "second"]);
+	});
+
+	it("keeps a claimed answer out of the action list boundary", () => {
+		// The answer is rendered inside the spawn card, so it is invisible between the
+		// spawn and the wait: both cards stay one group instead of two.
+		const doc = docWithAnswer("scout", { task_name: "scout" }, ["found it"]);
+		appendEntry(
+			doc,
+			makeEntry("a2", "m0", "2024-01-01T00:04:00Z", "message", {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc2", name: "wait_agent", arguments: {} }],
+			}),
+		);
+		const vm = computeViewModel({ document: doc, models: [] });
+		const assistantTurns = vm.turns.filter((turn) => turn.kind === "assistant");
+		expect(assistantTurns).toHaveLength(1);
+		const assistant = assistantTurns[0];
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const groups = segmentBlocks(assistant.blocks).filter((segment) => segment.kind === "group");
+		expect(groups).toHaveLength(1);
+		if (groups[0]?.kind !== "group") throw new Error("action group not found");
+		expect(groups[0].actions.map((action) => (action.blockType === "tool" ? action.toolName : "think"))).toEqual([
+			"spawn_agent",
+			"wait_agent",
+		]);
+	});
+
+	it("folds an unclaimed answer into the turn's action list", () => {
+		// `arguments` is a lazy field: without the task name there is no join key, so
+		// the answer cannot fold into a spawn card. It joins the action list that
+		// received it instead of becoming a turn of its own.
+		const doc = docWithAnswer("scout", null, ["found it"]);
+		const vm = computeViewModel({ document: doc, models: [] });
+		expect(vm.turns.some((turn) => turn.kind === "system")).toBe(false);
+		const assistant = vm.turns.find((turn) => turn.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const last = assistant.blocks[assistant.blocks.length - 1];
+		if (last?.blockType !== "agent") throw new Error("agent block not found");
+		expect(last.sender).toBe("/root/scout");
+		expect(last.text).toBe("found it");
+		// The row is inside the group of calls, not a segment of its own.
+		const groups = segmentBlocks(assistant.blocks).filter((segment) => segment.kind === "group");
+		expect(groups).toHaveLength(1);
+		expect(groups[0]?.kind === "group" ? groups[0].actions.map((action) => action.blockType) : []).toEqual([
+			"tool",
+			"agent",
+		]);
+	});
+
+	it("keeps an answer from an agent this Session did not spawn in the action list", () => {
+		// A different task name has no matching spawn card on the path, so the row
+		// is the only place the answer appears.
+		const doc = docWithAnswer("stranger", { task_name: "scout" }, ["found it"]);
+		const vm = computeViewModel({ document: doc, models: [] });
+		const assistant = vm.turns.find((turn) => turn.kind === "assistant");
+		if (assistant?.kind !== "assistant") throw new Error("assistant turn not found");
+		const spawn = assistant.blocks.find((block) => block.blockType === "tool");
+		if (spawn?.blockType !== "tool") throw new Error("spawn action not found");
+		expect(spawn.agentReplies).toBeUndefined();
+		const agent = assistant.blocks.find((block) => block.blockType === "agent");
+		if (agent?.blockType !== "agent") throw new Error("agent block not found");
+		expect(agent.sender).toBe("/root/stranger");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Collaboration hue
+// ---------------------------------------------------------------------------
+
+describe("collaboration hue", () => {
+	it("routes the agent-control calls and their mail to one purple hue", () => {
+		for (const name of [
+			"spawn_agent",
+			"send_message",
+			"followup_task",
+			"wait_agent",
+			"interrupt_agent",
+			"list_agents",
+		]) {
+			expect(kindHue(kindForTool(name))).toBe("agent");
+		}
+		// An ordinary tool keeps its own hue: the exchange hue is not a fallback.
+		expect(kindHue(kindForTool("read"))).toBe("read");
+		expect(kindHue(kindForTool("bash"))).toBe("bash");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Tool result join + status
 // ---------------------------------------------------------------------------
 
@@ -1087,6 +1255,30 @@ describe("read compact classifications — makeActionSummary", () => {
 
 	it("no cwd falls back to the basename summary (cannot resolve)", () => {
 		expect(makeActionSummary("read", { path: "AGENTS.md" })).toBe("read: AGENTS.md");
+	});
+});
+
+describe("agent control summaries — makeActionSummary", () => {
+	// The card body for these tools is the tool's own JSON result, so the row
+	// summary is the readable half: what was done, and to whom.
+	it("a spawn names its task name", () => {
+		expect(makeActionSummary("spawn_agent", { task_name: "scout", message: "look" })).toBe("spawn: scout");
+	});
+
+	it("message tools name their target", () => {
+		expect(makeActionSummary("send_message", { target: "/root/lead", message: "x" })).toBe(
+			"send_message: /root/lead",
+		);
+		expect(makeActionSummary("followup_task", { target: "lead", message: "x" })).toBe("followup_task: lead");
+		expect(makeActionSummary("interrupt_agent", { target: "lead" })).toBe("interrupt_agent: lead");
+	});
+
+	it("wait and list name only what was asked", () => {
+		// The default timeout lives in the host; the projection never guesses it.
+		expect(makeActionSummary("wait_agent", {})).toBe("wait_agent");
+		expect(makeActionSummary("wait_agent", { timeout_ms: 120_000 })).toBe("wait_agent: 120s");
+		expect(makeActionSummary("list_agents", {})).toBe("list_agents");
+		expect(makeActionSummary("list_agents", { path_prefix: "/root/lead" })).toBe("list_agents: /root/lead");
 	});
 });
 
@@ -2917,6 +3109,55 @@ describe("computeViewModel — unrecognized entries", () => {
 		const vm = computeViewModel({ document: doc, models: [] });
 		expect(vm.turns).toHaveLength(1);
 		expect(vm.turns.some((t) => t.kind === "system")).toBe(false);
+	});
+
+	it("classifies agent mail by its details, not by its custom type", () => {
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "custom_message", {
+				customType: "multi_agent.inter_agent_message",
+				content: [{ type: "text", text: "Message Type: FINAL_ANSWER\nSender: /root/scout" }],
+				details: {
+					bridge: "agent_message",
+					kind: "final_answer",
+					sender: "/root/scout",
+					recipient: "/root",
+					submissionId: "sub-1",
+				},
+				display: true,
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const sys = vm.turns.find((turn) => turn.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("agent_message");
+		expect(sys.agentSender).toBe("/root/scout");
+		expect(sys.agentKind).toBe("final_answer");
+		expect(sys.summary).toBe("Message Type: FINAL_ANSWER\nSender: /root/scout");
+	});
+
+	it("does not classify a details payload that is not agent mail", () => {
+		// The details come from a file: an unrecognized shape stays an extension
+		// message rather than being rendered as traffic.
+		const doc = emptyDoc();
+		appendEntry(doc, makeEntry("e1", null, "2024-01-01T00:00:00Z", "message", { role: "user", content: [] }));
+		appendEntry(
+			doc,
+			makeEntry("e2", "e1", "2024-01-01T00:00:01Z", "custom_message", {
+				customType: "multi_agent.inter_agent_message",
+				content: [{ type: "text", text: "heads up" }],
+				details: { bridge: "agent_message", kind: "bogus" },
+				display: true,
+			}),
+		);
+
+		const vm = computeViewModel({ document: doc, models: [] });
+		const sys = vm.turns.find((turn) => turn.kind === "system");
+		if (sys?.kind !== "system") throw new Error("system turn not found");
+		expect(sys.type).toBe("extension_message");
 	});
 
 	it("renders a display-flagged extension message", () => {

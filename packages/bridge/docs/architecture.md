@@ -55,7 +55,10 @@ set — while Archive is the absence of a record. Sending a message places a
 Session in Inbox (and a refused preflight restores the placement it replaced);
 a user move decides the rest. The Inbox and Later Sessions are the queue: it
 survives idle collection and daemon restarts, and browsing a Session never
-changes its location.
+changes its location. The queue slice also carries a live spawned Session,
+derived from its runtime and the place of the queued Session above it, so the
+sidebar can draw the tree; the row is not a member, and nothing that counts the
+queue counts it.
 
 *Running* is a runtime attribute, not a location: it is reported when an
 Activation is streaming, running a tool, or compacting, and it is never stored
@@ -224,11 +227,14 @@ The push contract is:
   generation, and a live frame from an older attachment is dropped before
   the mirror — same address or not.
 - `queue_changed` carries the queue: a `snapshot` first (every Inbox and Later
-  Session, ordered Inbox → Later, each group by placement stamp descending), then
-  `delta` frames of complete changed rows, removed addresses, and the Projects
-  whose cached history a publication invalidated. Membership is the stored
-  location, never runtime retention — an archived Session never appears, and
-  idle collection never removes a row.
+  Session, plus the live spawned Sessions drawn under them, ordered Inbox →
+  Later, each group by placement stamp descending), then `delta` frames of
+  complete changed rows, removed addresses, and the Projects whose cached
+  history a publication invalidated. Membership is the stored location, never
+  runtime retention — an archived Session is never a member, and a drawn agent
+  row is the one exception to "never appears": a live spawned descendant of a
+  queued row, which the sidebar draws in its tree. Idle collection never removes
+  a member.
 - `session_settled` names one execution ending, with how it ended
   (`completed`, `aborted`, or `error`) — the execution, never a pi turn
   boundary, and reported even when the reader caused the stop. It is an
@@ -410,6 +416,7 @@ guarded against.
 | Connection pipeline | Push ingestion, cache write-through, coalescing | `disposed` freezes writes; deltas gate on the committed session id | `cleanup()` — pending ops dropped, in-flight cache writes gated |
 | Pull loop | Lazy-value pulls | Reply admitted only for unchanged seal state and unfetched fields | `cancelPullRetry()` at teardown; reconnect replaces the client |
 | Worker service (`host/worker-contract.ts`) | Observations and target-addressed commands across the Daemon → Worker boundary | Address-keyed reservations; a command names its target's activation and is refused once it ended; an observation is released independently | `dispose()` — stop admission, drain observations and admitted work, dispose every runtime |
+| Agent control (`host/agent-control.ts`) | Spawned-agent records, per-agent mailbox activity counters, one `wait_agent` timer per waiting tool call, and the residency high-water; the agent tree itself is read from Session stems, not stored | A settlement is pushed to the spawner's mailbox and resolves waiters; a record whose runtime was unloaded is loaded from its address when addressed; the storage layout is the tree, so a spawn's directory decides its parent and its name is claimed by creating the file exclusively | Timer cleared when the wait resolves (mailbox activity, steered input, or the deadline); settled runtimes past the high-water are unloaded with their status kept; the Worker's runtime disposal ends every agent. The path/stem mapping is the Worker's (`stemForAgentPath`, reached through `AgentControlDeps.addressOf`); the tool names and mail payload are `core/agent-contract.ts` |
 
 ## 8. Test design
 
