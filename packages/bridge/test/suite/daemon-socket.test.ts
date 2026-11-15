@@ -15,7 +15,6 @@ import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../src/core/index.ts";
 import { Daemon } from "../../src/host/daemon.ts";
 import {
 	defaultDaemonSocketPath,
@@ -26,6 +25,7 @@ import {
 } from "../../src/host/daemon-socket.ts";
 import { buildProjects } from "../../src/host/projects.ts";
 import { runWorkerClient, type WorkerClientProcess } from "../../src/host/worker-process.ts";
+import { buildStamp } from "../../src/version.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -180,7 +180,11 @@ describe("daemon socket probe", () => {
 
 		// The probe is the only reply a daemon sends a launcher, so it is where a
 		// joining Worker learns the address a browser should open.
-		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: daemon.webUrl });
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({
+			kind: "live",
+			web: daemon.webUrl,
+			mismatch: null,
+		});
 		expect(daemon.registrations).toHaveLength(0);
 	});
 
@@ -269,7 +273,7 @@ describe("daemon socket default address", () => {
 		const socketPath = defaultDaemonSocketPath(`张三-${process.pid}-${++pipeSeq}`);
 		const socket = await startDaemonSocket({ socketPath, onWorker: () => {} });
 		cleanups.push(() => socket.close());
-		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null });
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null, mismatch: null });
 
 		// libuv answers a non-pipe bind with a bare EACCES; the message must say
 		// what the caller can change instead.
@@ -283,7 +287,7 @@ describe("daemon socket default address", () => {
 		const socketPath = defaultDaemonSocketPath(`${CJK.repeat(40)}-${process.pid}-${++pipeSeq}`);
 		const socket = await startDaemonSocket({ socketPath, onWorker: () => {} });
 		cleanups.push(() => socket.close());
-		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null });
+		await expect(probeDaemonSocket(socketPath)).resolves.toEqual({ kind: "live", web: null, mismatch: null });
 	});
 });
 
@@ -312,8 +316,8 @@ describe("dial-in Worker registration", () => {
 		cleanups.push(() => ws.close());
 		const info = await rpc(ws, { verb: "getDaemonInfo" });
 		expect(info.ok).toBe(true);
-		// The Daemon defines the protocol version the app and its Workers follow.
-		expect(info.protocol).toBe(PROTOCOL_VERSION);
+		// The Daemon reports the build the app and its Workers must share.
+		expect(info.build).toEqual(buildStamp);
 		expect((info.projects as Array<{ id: string }>).map((project) => project.id)).toEqual(["dials-in"]);
 
 		const page = await rpc(ws, { verb: "listSessions", projectId: "dials-in", max: 10 });

@@ -249,6 +249,35 @@
 	min-width: 0;
 }
 
+/* ── Build footer ─────────────────────────────────────────────────────── */
+/* The version line: meta ink at the bottom of the launcher, quiet enough to
+   ignore until something looks wrong. It is a copy control, so it takes the
+   `quiet` fold-label tier — words in a quiet slot, no hover fill behind a line
+   of text — and only its own placement and measure are local. */
+.buildFooter {
+	composes: quiet from "../../render/buttons.module.css";
+	margin-top: auto;
+	align-self: flex-start;
+	max-width: 100%;
+	padding: 12px 6px 0;
+	font-family: inherit;
+	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+
+/* The builds disagree: the connection control is the state, this is the fact
+   that makes it diagnosable, so it takes the same warning hue. Re-asserted on
+   hover so the pointer never mutes it. */
+.buildFooterDiffers {
+	color: var(--color-warning);
+}
+
+.buildFooterDiffers:hover {
+	color: var(--color-warning);
+}
+
 /* ── Down states (connecting / reconnecting / unreachable / init_failed) ─ */
 
 .state {

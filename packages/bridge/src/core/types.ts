@@ -2,6 +2,8 @@
 // Wire-safe types for the bridge data model (ADR 02 + ADR 06)
 // ============================================================================
 
+import type { BuildStamp } from "./build-identity.ts";
+
 // ---------------------------------------------------------------------------
 // JSON value (for projection of `unknown` fields from SessionEntry)
 // ---------------------------------------------------------------------------
@@ -1165,6 +1167,11 @@ export interface ModelRef {
  * nothing, because the next one is absolute. */
 export interface DaemonInfo {
 	revision: number;
+	/** The Daemon's build (`core/build-identity.ts`). The browser app was built by
+	 * the same build step, so a difference means the app it is running is not the
+	 * one this Daemon serves — the app offers to reload, and says so when a reload
+	 * could not have helped. Absent only from a Daemon older than the check. */
+	build: BuildStamp;
 	projects: ProjectInfo[];
 	models: ModelInfo[];
 	/** The daemon's global `enabledModels` scope (settings.json), resolved
@@ -1185,12 +1192,6 @@ export interface DaemonInfo {
 export interface GetDaemonInfoReply extends DaemonInfo {
 	id: string;
 	ok: true;
-	/** The Daemon's `PROTOCOL_VERSION`. The browser app was built against the
-	 * same constant, so a difference means the two halves of one deployment are
-	 * not the same build: the app reports it and offers the remedy the direction
-	 * allows. Absent only from a Daemon older than this check, which is the same
-	 * verdict. */
-	protocol: number;
 	devMode: boolean;
 }
 

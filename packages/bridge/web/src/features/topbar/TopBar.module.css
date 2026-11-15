@@ -173,10 +173,10 @@
    text panel when unattached. Motion grammar (see connectionStatus.ts):
    moving = trying, still = failed, pulsing = the user must act. Hue is
    secondary: muted while first connecting, error red once dropped/broken,
-   amber for version skew (a deployment problem, not a network one) — never the
-   streaming orange. Rhythm (2s slow reach, 0.8s fast retry, 1.2s skew) is
-   deliberately unlike the 1.5s streaming pulse so even the animations don't
-   rhyme. */
+   amber when the app and the daemon are different builds (a deployment
+   problem, not a network one) — never the streaming orange. Rhythm (2s slow
+   reach, 0.8s fast retry, 1.2s attention) is deliberately unlike the 1.5s
+   streaming pulse so even the animations don't rhyme. */
 .connMuted {
 	color: var(--color-muted-foreground);
 }
@@ -219,7 +219,7 @@
 		animation: conn-reach 0.8s ease-in-out infinite;
 	}
 
-	/* Version skew: nothing is retrying, but the user must act. */
+	/* Builds disagree: nothing is retrying, but the user must act. */
 	.connAttention {
 		animation: conn-reach 1.2s ease-in-out infinite;
 	}

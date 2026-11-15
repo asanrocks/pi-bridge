@@ -1,9 +1,12 @@
 // Wording and remedy for each connection state. Both surfaces render from this
-// mapping, so the tests pin the two decisions a user can act on: which side of a
-// version mismatch is fixed by a reload, and which states retry by themselves.
+// mapping, so the tests pin the two decisions a user can act on: that a build
+// mismatch offers exactly one gesture, and which states retry by themselves.
 
 import { describe, expect, it } from "vitest";
+import type { BuildStamp } from "../../../../src/core/index.ts";
 import { connectionStatus } from "./connectionStatus.ts";
+
+const app: BuildStamp = { version: "1.5.0", commit: "69a37925f", date: "2026-11-11" };
 
 describe("connectionStatus", () => {
 	it("has no affordance while connected", () => {
@@ -22,36 +25,38 @@ describe("connectionStatus", () => {
 	});
 });
 
-describe("version mismatch", () => {
-	it("offers a reload when the app is the older side", () => {
-		// The daemon serves the app from disk, so a reload takes the daemon's copy.
-		expect(connectionStatus({ kind: "version_mismatch", daemon: 5, app: 4 })).toMatchObject({
+describe("build mismatch", () => {
+	it("offers the reload and both builds", () => {
+		// One remedy: the daemon serves the app, so a reload takes its copy.
+		const daemon = { ...app, commit: "b7697c1b8" };
+		const status = connectionStatus({ kind: "build_mismatch", daemon, app, retried: false });
+		expect(status).toMatchObject({
 			label: "App out of date",
 			action: "reload-app",
-			actionLabel: "Reload app",
+			actionLabel: "Reload page",
 			tone: "warn",
 			blink: true,
 			autoRetry: false,
 		});
+		expect(status?.detail).toContain("1.5.0+b7697c1b8");
+		expect(status?.detail).toContain("1.5.0+69a37925f");
 	});
 
-	it("names the daemon as the fix when the daemon is the older side", () => {
-		// Reloading re-serves this same app: only restarting the process helps.
-		const status = connectionStatus({ kind: "version_mismatch", daemon: 3, app: 4 });
-		expect(status).toMatchObject({
-			label: "Daemon out of date",
-			action: "check-again",
-			tone: "warn",
-			blink: true,
-			autoRetry: false,
-		});
-		expect(status?.detail).toContain("Restart pi-bridge");
-		expect(status?.detail).toContain("3");
+	it("states the stuck case once a reload has already run", () => {
+		const daemon = { ...app, commit: "b7697c1b8" };
+		const status = connectionStatus({ kind: "build_mismatch", daemon, app, retried: true });
+		expect(status).toMatchObject({ label: "Builds disagree", action: "reload-app" });
+		expect(status?.detail).toContain("restart pi-bridge");
 	});
 
-	it("treats a daemon that reports no version as the older side", () => {
-		expect(connectionStatus({ kind: "version_mismatch", daemon: null, app: 4 })).toMatchObject({
-			action: "check-again",
-		});
+	it("names a daemon that reports no build as an older build", () => {
+		const status = connectionStatus({ kind: "build_mismatch", daemon: null, app, retried: false });
+		expect(status?.detail).toContain("an older build with no stamp");
+	});
+
+	it("never offers a re-handshake", () => {
+		// A retry cannot change either build; the action is the reload alone.
+		const daemon = { ...app, commit: "b7697c1b8" };
+		expect(connectionStatus({ kind: "build_mismatch", daemon, app, retried: true })?.action).toBe("reload-app");
 	});
 });

@@ -10,9 +10,9 @@
 // the rendered object's name — an inline-editable Session name, or the Project
 // id on its home as plain text — and the connection icon (down states only) — an
 // icon-only broken-link control on the ghost spec: motion = trying, stillness
-// = failed, amber pulse = version skew; click runs the one action the state
-// offers (retry, or reload into the daemon's app); text lives in the
-// tooltip/aria-label only.
+// = failed, amber pulse = the builds disagree; click runs the one action the
+// state offers (retry, or reload into the app the daemon serves); text lives in
+// the tooltip/aria-label only.
 // ============================================================================
 
 import { memo, useEffect, useRef, useState } from "react";
@@ -184,8 +184,8 @@ export const TopBar = memo(function TopBar({
 					type="button"
 					className={`${styles.topBarBtn} ${CONN_TONE[status.tone]} ${motionClass(status)}`}
 					onClick={() => {
-						// The state names its own remedy (see connectionStatus.ts): only a
-						// stale app can be replaced from the page.
+						// The state names its own remedy (see connectionStatus.ts): a build
+						// mismatch is the one state a reload can repair.
 						if (status.action === "reload-app") void reloadFromDaemon();
 						else onRetry();
 					}}

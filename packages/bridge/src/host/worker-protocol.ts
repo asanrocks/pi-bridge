@@ -14,16 +14,17 @@
 // name claiming atomic without a second protocol round trip.
 // ============================================================================
 
-import {
-	type JsonValue,
-	type ModelRef,
-	type PinnedModelSelection,
-	PROTOCOL_VERSION,
-	type PrefixCursor,
-	type PullRequestItem,
-	type SessionListCursor,
-	type SessionLocation,
+import type { BuildStamp } from "../core/build-identity.ts";
+import type {
+	JsonValue,
+	ModelRef,
+	PinnedModelSelection,
+	PrefixCursor,
+	PullRequestItem,
+	SessionListCursor,
+	SessionLocation,
 } from "../core/index.ts";
+import { buildStamp } from "../version.ts";
 import type {
 	ObservationId,
 	SessionAddress,
@@ -65,13 +66,13 @@ export function isWorkerProbeRequest(value: unknown): boolean {
 export interface WorkerProbeReply {
 	readonly id: string;
 	readonly ok: boolean;
-	readonly protocol?: number;
+	readonly build?: BuildStamp;
 	readonly error?: string;
 	readonly web?: string | null;
 }
 
 export function workerProbeReply(web: string | null): string {
-	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, protocol: PROTOCOL_VERSION, web });
+	return JSON.stringify({ id: WORKER_PROBE_ID, ok: true, build: buildStamp, web });
 }
 
 /** How often the Daemon probes an idle link, and how long a silent link may
@@ -194,7 +195,7 @@ export type WorkerPush =
 	/** The registration handshake. Sent once, before any reply. */
 	| {
 			readonly kind: "hello";
-			readonly protocol: number;
+			readonly build: BuildStamp;
 			readonly registration: WorkerRegistration;
 			readonly info: WorkerInfo;
 	  }

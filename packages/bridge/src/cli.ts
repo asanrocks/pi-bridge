@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type CliConfig, parseCliArgs } from "./cli-args.ts";
 import { type BannerInput, bannerLines } from "./cli-banner.ts";
+import { type BuildMismatch, buildLabel } from "./core/index.ts";
 import {
 	defaultDaemonSocketPath,
 	probeDaemonSocket,
@@ -71,6 +72,16 @@ function spawnSocketPath(): string {
 function fail(message: string): never {
 	console.error(`pi-bridge: ${message}`);
 	process.exit(1);
+}
+
+/** The daemon this process is about to join as a worker runs another build.
+ * Reported, never a refusal: the daemon is canonical, and a worker that refused
+ * would trade a warning for a stopped process. */
+function warnBuildMismatch(mismatch: BuildMismatch, socketPath: string): void {
+	const peer = mismatch.peer === null ? "an unknown build" : buildLabel(mismatch.peer);
+	console.warn(
+		`pi-bridge: the daemon on ${socketPath} is ${peer}, this build is ${buildLabel(mismatch.own)}; joining it as a worker — restart it if behavior looks wrong.`,
+	);
 }
 
 /** Install the one shutdown path. Returns a probe so a caller can tell a signal
@@ -132,6 +143,7 @@ async function main() {
 		});
 		if ("error" in decision) fail(decision.error);
 		if (decision.role === "worker") {
+			if (decision.mismatch !== null) warnBuildMismatch(decision.mismatch, config.socketPath);
 			await joinDaemon(config, `unix:${config.socketPath}`, decision.web);
 			return;
 		}

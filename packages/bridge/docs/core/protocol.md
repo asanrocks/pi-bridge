@@ -275,31 +275,46 @@ a bare string with no established run, or a frame shape outside the
 protocol (an unknown push kind) — is never silently tolerated: the client
 surfaces it (`BridgeClientOptions.onProtocolError`), and the web client
 toasts and closes the socket, so the reconnect path's initial sync
-repairs the stream. While the version check is still running, an
-undecodable frame is held back: it may be a symptom of skew, and only the
-check can tell skew from a genuine bug (see Version).
+repairs the stream. While the build check is still running, an undecodable
+frame is held back: it may be a symptom of a build this client cannot read, and
+only the check can tell that from a genuine bug (see Build identity).
 
-## Version
+## Build identity
 
-`PROTOCOL_VERSION` (`core/protocol-version.ts`) is the version of every frame
-this package sends, and it is bumped when a frame's meaning changes in a way an
-older peer would misinterpret — a renamed kind, a changed field meaning. Adding
-an optional field is not a bump; an older peer ignores what it does not know.
+There is no separate version number to bump. The app, the Daemon, and a spawned
+Worker are one build — the Daemon serves the app's assets out of its own install
+— so a peer is compared by build rather than negotiated with
+(`core/build-identity.ts`).
 
-All three peers ship in one build, and the Daemon is the authority: it reports
-the version in `getDaemonInfo` (for the browser), in the daemon-socket probe
-(for a launcher), and in the Worker handshake (for a registering Worker).
+A build reports a stamp `{ version, commit, date }`. **The commit is the
+identity**: a rebuild of one tree is the same program, so `version` and `date`
+are display metadata and only `commit` is compared (a `-dirty` suffix marks a
+build of uncommitted work, so two such builds still match each other).
 
-- A **Worker** that reports another version is refused at the handshake with a
-  terminal registration error ([host runtime](../host/runtime.md)). There is no
-  compatibility window: a partially understood frame stream is worse than a
-  stopped Worker.
-- A **browser** cannot be refused at a handshake — it is already running — so
-  it compares `getDaemonInfo.protocol` with its own constant before applying
-  anything else. A difference is reported as a connection state, not as a
-  protocol error: nothing retries, because no retry can change either build.
-- The **remedy depends on the direction**. The Daemon serves the app from disk
-  on every navigation but keeps its own frames frozen in the running process, so
-  a reload takes the Daemon's copy — a fix only while the app is the older side.
-  A Daemon that is older must be restarted on the host. See
-  [web architecture](../web/architecture.md) for the surfaces.
+The Daemon is the authority: it reports its stamp in `getDaemonInfo` (and in
+every `daemon_info_changed`), in the daemon-socket probe, and in the Worker
+handshake.
+
+- A **Worker** that reports another build is *reported*, not refused: the
+  registration proceeds and the Daemon warns with both builds
+  ([host runtime](../host/runtime.md)). Refusing would trade a warning for a
+  stopped Worker, and the frames after the handshake are the only stream there
+  is. The same applies to a process that probes the socket and joins as a
+  worker: it proceeds with a warning.
+- A **browser** cannot be refused — it is already running — so it compares
+  `getDaemonInfo.build` with the stamp its own bundle was compiled with. Frames
+  are held until that answer arrives (`infra/net/pushGate.ts`), so a mismatched
+  client never applies a frame first and asks afterwards. A mismatch is a
+  connection state, not a protocol error: nothing retries, because no retry can
+  change either build.
+- **Development is derived from the Daemon.** A source checkout's `npm run
+  build` writes no stamp, so its Daemon carries the marker and the comparison is
+  off for every peer — the browser stays quiet and a Worker gets no warning. The
+  peers' own stamps never switch it off: a dev app or a dev Worker talking to a
+  stamped Daemon is a real disagreement, and it is reported. A packaged build is
+  stamped by `bundle-single.mjs`, which refuses a development web bundle so the
+  check cannot be switched off by accident.
+- The **remedy is the reload**: the Daemon serves the app, so a reload takes the
+  copy it serves. When the assets on disk are not the running process's build, a
+  second reload cannot help, and that case is stated as a restart of pi-bridge.
+  See [web architecture](../web/architecture.md) for the surfaces.

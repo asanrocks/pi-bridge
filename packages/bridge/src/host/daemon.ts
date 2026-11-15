@@ -4,8 +4,15 @@ import { extname, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { DaemonInfo, SessionInfo, SessionRef } from "../core/index.ts";
-import { compareQueueRows, PROTOCOL_VERSION } from "../core/index.ts";
+import {
+	type BuildMismatch,
+	buildLabel,
+	compareQueueRows,
+	type DaemonInfo,
+	type SessionInfo,
+	type SessionRef,
+} from "../core/index.ts";
+import { buildStamp } from "../version.ts";
 import type { AsrCredentialProvider } from "./asr-credentials.ts";
 import { createAsrCredentialProvider } from "./asr-credentials.ts";
 import { type AssetSource, createDiskAssetSource, createEmbeddedAssetSource } from "./asset-source.ts";
@@ -273,6 +280,7 @@ export class Daemon {
 					onUnavailable: (reason) => {
 						if (holder.host !== null) void this.onWorkerUnavailable(holder.host, reason);
 					},
+					onBuildMismatch: (mismatch) => this.warnBuildMismatch(mismatch),
 				});
 				holder.host = host;
 				// The host joins the cleanup set before its Projects are validated:
@@ -358,6 +366,7 @@ export class Daemon {
 			onUnavailable: (reason) => {
 				if (holder.host !== null) void this.onWorkerUnavailable(holder.host, reason);
 			},
+			onBuildMismatch: (mismatch) => this.warnBuildMismatch(mismatch),
 		});
 		holder.host = host;
 
@@ -453,7 +462,7 @@ export class Daemon {
 			this.daemonInfoRevision += 1;
 			const revision = this.daemonInfoRevision;
 			const info = await this.aggregateInfo();
-			return { revision, ...info };
+			return { revision, build: buildStamp, ...info };
 		});
 		this.daemonInfoTail = read.then(
 			() => undefined,
@@ -583,6 +592,16 @@ export class Daemon {
 			// frame carries the pinned verdict and the lists it sits beside.
 			this.scheduleDaemonInfoPublish();
 		}
+	}
+
+	/** A registration from another build is reported, not refused: the Daemon is
+	 * canonical, so this is the one place that knows the pair, and the operator is
+	 * the only one who can act on it. */
+	private warnBuildMismatch(mismatch: BuildMismatch): void {
+		const peer = mismatch.peer === null ? "an unknown build" : buildLabel(mismatch.peer);
+		console.warn(
+			`Daemon: worker runs ${peer}, this daemon is ${buildLabel(mismatch.own)}; continuing — restart the worker if behavior looks wrong.`,
+		);
 	}
 
 	/** The Worker can serve nothing more: withdraw its routes so no browser sees
@@ -868,7 +887,6 @@ export class Daemon {
 		getDaemonInfo: async () => ({
 			...(await this.readDaemonInfo()),
 			devMode: this.devMode,
-			protocol: PROTOCOL_VERSION,
 		}),
 
 		setPinnedModels: (models) => {

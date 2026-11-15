@@ -16,11 +16,23 @@ function decide(probe: ProbeResult, removed: { count: number }) {
 describe("startup role discovery", () => {
 	it("joins a live daemon as a worker and carries its web address", async () => {
 		const removed = { count: 0 };
-		await expect(decide({ kind: "live", web: "http://localhost:33334" }, removed)).resolves.toEqual({
+		await expect(decide({ kind: "live", web: "http://localhost:33334", mismatch: null }, removed)).resolves.toEqual({
 			role: "worker",
 			web: "http://localhost:33334",
+			mismatch: null,
 		});
 		expect(removed.count).toBe(0);
+	});
+
+	it("joins a daemon from another build anyway, carrying the warning", async () => {
+		// A build disagreement is a report, not a verdict: a worker joined to a
+		// daemon from another build still serves, and the caller states the pair.
+		const mismatch = { peer: null, own: { version: "1.5.0", commit: "abc", date: "2026-11-15" } };
+		await expect(decide({ kind: "live", web: null, mismatch }, { count: 0 })).resolves.toEqual({
+			role: "worker",
+			web: null,
+			mismatch,
+		});
 	});
 
 	it("starts a daemon when nothing owns the path", async () => {

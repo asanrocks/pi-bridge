@@ -312,6 +312,7 @@ function daemonInfo(revision: number, projects: ProjectInfo[]): DaemonInfoChange
 	return {
 		kind: "daemon_info_changed",
 		revision,
+		build: { version: "1.5.0", commit: "test", date: "2026-01-01" },
 		projects,
 		models: [],
 		pinnedModels: [],

@@ -330,7 +330,7 @@ sections for the web card, and feeds the action summary/header (`patch: <file>
 The state machine is:
 
 ```text
-connecting -> connected | init_failed | version_mismatch
+connecting -> connected | init_failed | build_mismatch
 connected connection drop -> reconnecting -> unreachable
 ```
 
@@ -340,27 +340,46 @@ development mode, and the queue, then open the route-driven address. Failure
 after the socket opens is `init_failed` and can be retried without replacing the
 socket.
 
-`getDaemonInfo` also carries the daemon's `protocol` version, and it is checked
-before anything else the reply reports is applied — the browser half of
-[core protocol](../core/protocol.md), "Version" (`infra/net/protocolSkew.ts`).
-A difference is `version_mismatch`: the socket closes deliberately, nothing
-retries, and the state carries both numbers so `connectionStatus` can name the
-side that has to move. An undecodable frame that arrives while init is still
-running is held back rather than closing the socket, because it may be a symptom
-of that skew; once the versions agree it is a genuine protocol error and takes
-the toast path. The route's address stays unclaimed and the document already on
-screen is left as it was, so a mismatch mid-session keeps its transcript.
+`getDaemonInfo` also carries the daemon's `build` stamp, checked before anything
+else the reply reports is applied — the browser half of
+[core protocol](../core/protocol.md), "Build identity"
+(`infra/net/buildMismatch.ts`, with the app's own stamp compiled in by
+`infra/lib/buildStamp.ts`). A difference is `build_mismatch`: the socket closes
+deliberately and nothing retries. The route's address stays unclaimed and the
+document already on screen is left as it was, so a mismatch mid-session keeps its
+transcript.
 
-The direction decides the remedy, and `connectionStatus` owns both wordings. A
-**newer daemon** is reached by reloading: it serves the shell from its asset
-root, so a reload takes its copy. `infra/lib/appUpgrade.ts` clears the service
-worker's caches first (the shell cache, not the content-hashed `/assets/*`, would
-otherwise survive as the offline fallback), refreshes the worker registration,
-and suppresses the draft guard's `beforeunload` prompt — drafts are persisted per
-address, so an upgrade reload loses nothing. A **newer app** cannot be fixed from
-the page at all: the running daemon's frames are frozen in its process, so the
-state says to restart pi-bridge on the host and offers only `Check again`, which
-opens a new connection and asks again.
+Frames are not applied before that check. The daemon's first frame on a socket
+is the queue snapshot, sent before the browser asks anything, so ingestion is
+gated (`infra/net/pushGate.ts`): frames are held, then replayed in arrival order
+once the builds agree, or dropped when they do not. The gate reports a backlog
+deeper than its bound, which replaces the connection instead of applying a
+stream whose beginning is already lost. An undecodable frame that arrives while
+init is still running is likewise held back rather than closing the socket,
+because it may be a symptom of a build this client cannot read; once the builds
+agree it is a genuine protocol error and takes the toast path.
+
+`connectionStatus` owns the single wording and the single action. A reload takes
+the app the daemon serves, so **booting** a mismatched page reloads by itself
+before the reader has seen it act — claimed once per daemon build in
+`sessionStorage` (`infra/lib/appUpgrade.ts`), because a reload creates a document
+with no memory and a daemon whose served assets are not its own build would
+otherwise reload forever. A refused claim is the stuck case: the panel states
+that the assets on disk are not the running process's build and names restarting
+pi-bridge. **Mid-session** the page does not reload on its own — that would
+throw away a turn on screen — so the amber connection control states the
+disagreement and its click runs the same reload. `reloadFromDaemon` clears the
+service worker's caches first (the shell cache, not the content-hashed
+`/assets/*`, would otherwise survive as the offline fallback), refreshes the
+worker registration, and suppresses the draft guard's `beforeunload` prompt —
+drafts are persisted per address, so the reload loses nothing.
+
+Development is derived from the canonical side: a Daemon carrying the marker
+stamp switches the comparison off, which is what keeps the edit loop
+(`npm run dev` builds both, unstamped) free of prompts. The app's own stamp never
+switches it off, so a dev bundle against a stamped Daemon is reported like any
+other disagreement. A packaged build is stamped by `bundle-single.mjs`, which
+refuses a development web bundle.
 
 After a successful connection, drops count from one. Attempts below five are
 `reconnecting`; attempt five and later are `unreachable`. `unreachable` still

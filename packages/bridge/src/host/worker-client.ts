@@ -21,7 +21,17 @@
 
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
-import { type ImageContent, type JsonValue, PROTOCOL_VERSION, type PullRequestItem } from "../core/index.ts";
+import type { BuildStamp } from "../core/build-identity.ts";
+import {
+	type BuildMismatch,
+	type ImageContent,
+	isReleaseBuild,
+	type JsonValue,
+	type PullRequestItem,
+	parseBuildStamp,
+	sameBuild,
+} from "../core/index.ts";
+import { buildStamp } from "../version.ts";
 import { endpointUrl } from "./daemon-socket.ts";
 import type {
 	ObservedSession,
@@ -61,7 +71,7 @@ export class WorkerRegistrationError extends Error {
 /** The handshake a caller may reject: throwing withdraws the registration
  * before any Project is routed. */
 export interface WorkerHello {
-	readonly protocol: number;
+	readonly build: BuildStamp;
 	readonly registration: WorkerRegistration;
 	readonly info: WorkerInfo;
 }
@@ -78,6 +88,15 @@ export interface AdoptWorkerOptions {
 	/** Validate the advertised registration; throw to reject it. A rejected
 	 * registration closes the socket and rejects the adoption. */
 	readonly accept?: (hello: WorkerHello) => void;
+	/** The peer runs another build (or reports none). Reported, never enforced:
+	 * the link is kept, because the frames that follow are still the only stream
+	 * there is, and the Daemon is the canonical side that decides whether the
+	 * comparison runs at all. */
+	readonly onBuildMismatch?: (mismatch: BuildMismatch) => void;
+	/** The canonical stamp this side compares against; defaults to this process's
+	 * build. Named explicitly because the comparison is the Daemon's, so an
+	 * embedder that owns the canonical build states it here. */
+	readonly ownBuild?: BuildStamp;
 	/** The handshake frame the caller already read. A registration socket peeks
 	 * its first frame to tell a probe from a Worker, so the hello may be consumed
 	 * before adoption starts; seeding it keeps handshake ordering intact. */
@@ -237,12 +256,16 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 		 * caller's promise rejects with `WorkerRegistrationError`. */
 		const acceptHello = (candidate: WorkerHello): void => {
 			if (hello !== null || settled) return;
-			if (candidate.protocol !== PROTOCOL_VERSION) {
-				settled = true;
-				const reason = `protocol mismatch: peer ${candidate.protocol}, expected ${PROTOCOL_VERSION}`;
-				ws.close(WORKER_REJECTED_CLOSE_CODE, reason);
-				rejectConnect(new WorkerRegistrationError(reason));
-				return;
+			// Identity is the Daemon's stamp — the canonical side — so a checkout
+			// Daemon switches the comparison off for every peer. A disagreement is
+			// reported and the registration proceeds: refusing would trade a warning
+			// for a stopped Worker, and the frames after it are the only ones there
+			// are. Wire input: the peer wrote this stamp, and one built before the
+			// field existed reports none.
+			const ownBuild = options.ownBuild ?? buildStamp;
+			const peerBuild = parseBuildStamp(candidate.build);
+			if (isReleaseBuild(ownBuild) && (peerBuild === null || !sameBuild(peerBuild, ownBuild))) {
+				options.onBuildMismatch?.({ peer: peerBuild, own: ownBuild });
 			}
 			try {
 				options.accept?.(candidate);
@@ -291,7 +314,7 @@ export function adoptWorkerConnection(ws: WebSocket, options: AdoptWorkerOptions
 
 			const push = frame as WorkerPush;
 			if (push.kind === "hello") {
-				acceptHello({ protocol: push.protocol, registration: push.registration, info: push.info });
+				acceptHello({ build: push.build, registration: push.registration, info: push.info });
 				return;
 			}
 			handlePush(push);

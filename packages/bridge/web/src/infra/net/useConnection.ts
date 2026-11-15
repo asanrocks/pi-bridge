@@ -17,10 +17,13 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { BridgeClient, type GetDaemonInfoReply } from "../../../../src/core/index.ts";
+import { claimBootReload, clearReloadClaim, reloadFromDaemon } from "../lib/appUpgrade.ts";
+import { APP_BUILD } from "../lib/buildStamp.ts";
 import { parseRoute } from "../lib/routes.ts";
 import type { ConnectionState } from "../state/store.ts";
 import { getStore } from "../state/store.tsx";
 import { createBrowserFlushScheduler } from "./browserScheduler.ts";
+import { type BuildMismatch, detectBuildMismatch } from "./buildMismatch.ts";
 import { setGlobalClient } from "./client.ts";
 import { createConnectionPipeline } from "./connectionPipeline.ts";
 import { backoff, WsTransport } from "./connectionTransport.ts";
@@ -32,9 +35,9 @@ import {
 	navigationLocalSeed,
 	navigationProject,
 } from "./navigation.ts";
-import { detectProtocolSkew, type ProtocolSkew } from "./protocolSkew.ts";
 import { cancelPullRetry, flushPullQueue } from "./pullLoop.ts";
 import { setDrainer } from "./pullQueue.ts";
+import { type ApplyPush, createPushGate, PUSH_GATE_LIMIT } from "./pushGate.ts";
 import { restoreLocalSession } from "./sessionBoot.ts";
 
 // After this many failed reconnect attempts, state shifts to "unreachable".
@@ -53,13 +56,19 @@ export function useConnection(): { retry: () => void } {
 	// connecting→unreachable threshold and backoff exponent.
 	const attemptRef = useRef(0);
 	// True from socket open until the init reply (or its failure) settles. While
-	// it is set, an undecodable frame is a candidate symptom of skew, not a
-	// verdict: the version check owns the message.
+	// it is set, an undecodable frame is a candidate symptom of a build the app
+	// cannot read, not a verdict: the build check owns the message.
 	const initPendingRef = useRef(false);
 	const deferredProtocolErrorRef = useRef<string | null>(null);
-	// Set when the daemon's protocol is not this app's. A mismatch is not a
+	// Set when the daemon runs another build than this app. A mismatch is not a
 	// connection problem, so the socket closes deliberately and nothing retries.
-	const skewRef = useRef<ProtocolSkew | null>(null);
+	const mismatchRef = useRef<BuildMismatch | null>(null);
+	// The connection's push gate: frames are held until the build check decides,
+	// then replayed. It lives with the socket that delivered them.
+	const gateRef = useRef<ReturnType<typeof createPushGate> | null>(null);
+	// The pipeline's ingestion function for the current socket: the gate replays
+	// its held frames through it once the build check passes.
+	const applyPushRef = useRef<ApplyPush | null>(null);
 
 	/** Surface one undecodable frame and drop the socket, so the reconnect's
 	 * initial sync repairs the stream. A repeat is version skew. */
@@ -91,29 +100,56 @@ export function useConnection(): { retry: () => void } {
 				const store = getStore();
 				const info = daemonReply as unknown as GetDaemonInfoReply;
 
-				// Version first: everything below assumes this app's dialect. The
-				// daemon's own copy of the app is a reload away, but its frames are
-				// frozen in the running process, so which side is older decides whether
-				// that reload can help at all.
-				const skew = detectProtocolSkew(info);
-				if (skew !== null) {
+				// Build first: everything below assumes this app's dialect. The daemon
+				// serves the app it ships with, so a reload is the fix — unless this
+				// document already reloaded into this very build and still disagrees,
+				// which means the assets on disk are not the running process's build.
+				const mismatch = detectBuildMismatch(info, APP_BUILD);
+				if (mismatch !== null) {
 					initPendingRef.current = false;
-					skewRef.current = skew;
-					store.getState().setConnectionState({ kind: "version_mismatch", daemon: skew.daemon, app: skew.app });
+					mismatchRef.current = mismatch;
+					gateRef.current?.abandon();
+					// Booting: the reader has not seen this page act yet, so the reload is
+					// silent — it is the same app catching up with its daemon. Mid-session
+					// it would throw away a turn on screen, so that tab states the
+					// disagreement and leaves the reload to the connection control.
+					//
+					// One claim per daemon build: a reload creates a document with no
+					// memory, so a daemon whose served assets are not its own build would
+					// loop. A daemon that reports no build cannot be claimed against, so
+					// that case is stated rather than reloaded into.
+					const booting = !wasConnectedRef.current;
+					const reloading = booting && mismatch.daemon !== null && claimBootReload(mismatch.daemon);
+					store.getState().setConnectionState({
+						kind: "build_mismatch",
+						daemon: mismatch.daemon,
+						app: mismatch.app,
+						retried: booting && !reloading,
+					});
 					wsRef.current?.close();
+					if (reloading) void reloadFromDaemon();
 					return;
 				}
 
-				// Same dialect: an undecodable frame seen meanwhile was a genuine
-				// protocol error after all.
+				// Same build: an undecodable frame seen meanwhile was a genuine protocol
+				// error after all.
 				const deferred = deferredProtocolErrorRef.current;
 				deferredProtocolErrorRef.current = null;
 				if (deferred !== null) {
 					initPendingRef.current = false;
+					gateRef.current?.abandon();
 					failProtocol(deferred);
 					return;
 				}
 				initPendingRef.current = false;
+				clearReloadClaim();
+
+				// Release the frames held while the check ran, then read the reply. The
+				// held cohort is the queue snapshot and any aggregate push; both are
+				// ordered against this reply by their own revisions, so replaying them
+				// first cannot publish older state.
+				const applyPush = applyPushRef.current;
+				if (applyPush !== null) gateRef.current?.open(applyPush);
 
 				// Daemon aggregate — Projects, models, thinking levels, the pinned
 				// scope. One write, and the frame's revision decides whether it is
@@ -199,20 +235,22 @@ export function useConnection(): { retry: () => void } {
 				return;
 			}
 
-			// Per-connection state: the version check remembers nothing about a
+			// Per-connection state: the build check remembers nothing about a
 			// socket before this one.
 			initPendingRef.current = true;
 			deferredProtocolErrorRef.current = null;
-			skewRef.current = null;
+			mismatchRef.current = null;
+			const gate = createPushGate(PUSH_GATE_LIMIT);
+			gateRef.current = gate;
 
 			const transport = new WsTransport(ws);
 			const client = new BridgeClient(transport, {
 				onProtocolError: (message) => {
 					if (wsRef.current !== ws) return;
-					// The daemon's first frame (the queue snapshot) precedes the version
+					// The daemon's first frame (the queue snapshot) precedes the build
 					// reply. Until init settles, an undecodable frame is a candidate
-					// symptom of skew rather than a verdict, and the version check is
-					// what names the cause.
+					// symptom of a build this app cannot read rather than a verdict, and
+					// the build check is what names the cause.
 					if (initPendingRef.current) {
 						deferredProtocolErrorRef.current = message;
 						return;
@@ -234,7 +272,19 @@ export function useConnection(): { retry: () => void } {
 					ws.close();
 				},
 			});
-			client.onPush = pipeline.onPush;
+			applyPushRef.current = pipeline.onPush;
+			client.onPush = (push) => {
+				if (gate.route(push, pipeline.onPush) !== "overflow") return;
+				// A daemon that ships a backlog before answering an RPC is not a peer
+				// this client can order: replace the connection instead of applying a
+				// stream whose beginning is already lost.
+				gate.abandon();
+				getStore().getState().setConnectionState({
+					kind: "init_failed",
+					error: "the daemon sent a frame backlog before answering its build check",
+				});
+				ws.close();
+			};
 			connectionCleanup = pipeline.cleanup;
 
 			// Don't mark connected until the init RPC resolves — the WS being
@@ -247,10 +297,15 @@ export function useConnection(): { retry: () => void } {
 			// below skips reconnect.
 			connectionCleanup?.();
 			connectionCleanup = null;
-			initPendingRef.current = false;
 
-			// Disposed or superseded socket: no state writes, no reconnect.
+			// Disposed or superseded socket: no state writes, no reconnect. The
+			// per-connection refs below belong to the *current* socket, so they are
+			// cleared only after this guard: a superseded socket's close event must
+			// not reset the state the socket that replaced it is relying on.
 			if (disposedRef.current || wsRef.current !== ws) return;
+			initPendingRef.current = false;
+			gateRef.current = null;
+			applyPushRef.current = null;
 			setGlobalClient(null);
 			clientRef.current?.disconnect();
 			clientRef.current = null;
@@ -261,7 +316,7 @@ export function useConnection(): { retry: () => void } {
 
 			// A mismatch closed this socket on purpose. Retrying cannot change
 			// either side's build, so the state stands until the user acts.
-			if (skewRef.current !== null) return;
+			if (mismatchRef.current !== null) return;
 
 			attemptRef.current += 1;
 			const attempt = attemptRef.current;
@@ -291,14 +346,14 @@ export function useConnection(): { retry: () => void } {
 		};
 	}, [initDaemonInfo, failProtocol]);
 
-	// Manual retry from the Launcher / TopBar chip. If the WS is open
-	// (init_failed), re-run init. Otherwise cancel the backoff and connect now,
-	// which is what "Check again" does after a version mismatch: the daemon is
-	// asked again rather than re-asked on the socket we closed.
+	// Manual retry from the Launcher / TopBar chip for the states that reconnect
+	// (a build mismatch is not one of them: its action is the reload). If the WS
+	// is open (init_failed), re-run init. Otherwise cancel the backoff and connect
+	// now.
 	const retry = useCallback(() => {
 		const client = clientRef.current;
 		const ws = wsRef.current;
-		const mismatched = skewRef.current !== null;
+		const mismatched = mismatchRef.current !== null;
 		if (!mismatched && client && ws && ws.readyState === WebSocket.OPEN) {
 			void initDaemonInfo(client);
 			return;
@@ -309,7 +364,7 @@ export function useConnection(): { retry: () => void } {
 		}
 		// Cleared before the new socket exists: the old socket's close event is
 		// suppressed by the identity guard, not by the mismatch flag.
-		skewRef.current = null;
+		mismatchRef.current = null;
 		attemptRef.current = 0;
 		getStore().getState().setConnectionState({ kind: "connecting" });
 		connect();

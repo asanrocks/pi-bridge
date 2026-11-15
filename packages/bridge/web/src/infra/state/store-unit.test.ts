@@ -13,7 +13,15 @@ import { type BrowserTarget, lastBrowsedFile, resolveRenderLeafTarget } from "./
 /** One daemon aggregate frame (a `getDaemonInfo` baseline or a
  * `daemon_info_changed` push): the store applies the whole snapshot. */
 function daemonInfo(revision: number, projects: ProjectInfo[] = []): DaemonInfo {
-	return { revision, projects, models: [], pinnedModels: [], visibleModels: [], thinkingLevels: [] };
+	return {
+		revision,
+		build: { version: "1.5.0", commit: "test", date: "2026-01-01" },
+		projects,
+		models: [],
+		pinnedModels: [],
+		visibleModels: [],
+		thinkingLevels: [],
+	};
 }
 
 function session(stem: string): SessionInfo {

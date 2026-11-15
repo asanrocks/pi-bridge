@@ -15,6 +15,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { WebSocket } from "ws";
+import type { BuildMismatch } from "../core/index.ts";
 import { createManager } from "./manager.ts";
 import type { ProjectConfig } from "./projects.ts";
 import { DEFAULT_IDLE_GC_MS, DEFAULT_UNFLUSHED_IDLE_GC_MS } from "./session-actor.ts";
@@ -57,6 +58,9 @@ export interface WorkerHostOptions {
 	readonly unflushedIdleGcMs?: number;
 	readonly onEvent: (event: WorkerEvent) => void;
 	readonly onUnavailable: (reason: string) => void;
+	/** The Worker runs another build. Reported by the registration, never a
+	 * refusal (see `worker-client.ts`). */
+	readonly onBuildMismatch?: (mismatch: BuildMismatch) => void;
 	/** Spawn mode: how long to wait for the child to greet. */
 	readonly spawnTimeoutMs?: number;
 }
@@ -101,6 +105,8 @@ export interface AdoptedWorkerOptions {
 	readonly reservedProjectIds: Iterable<string>;
 	readonly onEvent: (event: WorkerEvent) => void;
 	readonly onUnavailable: (reason: string) => void;
+	/** The peer runs another build; reported, never a refusal. */
+	readonly onBuildMismatch?: (mismatch: BuildMismatch) => void;
 }
 
 export async function adoptWorkerHost(options: AdoptedWorkerOptions): Promise<WorkerHost> {
@@ -108,6 +114,7 @@ export async function adoptWorkerHost(options: AdoptedWorkerOptions): Promise<Wo
 	const remote = await adoptWorkerConnection(options.ws, {
 		hello: options.hello,
 		accept: (hello) => validateRegistration(hello.info, reserved),
+		...(options.onBuildMismatch !== undefined ? { onBuildMismatch: options.onBuildMismatch } : {}),
 	});
 	remote.onEvent(options.onEvent);
 	remote.onUnavailable((reason) => options.onUnavailable(reason));
@@ -180,6 +187,7 @@ async function connectRemote(
 				endpoint,
 				accept: (hello) => validateRegistration(hello.info, reserved),
 				handshakeTimeoutMs: Math.max(1_000, deadline - Date.now()),
+				...(options.onBuildMismatch !== undefined ? { onBuildMismatch: options.onBuildMismatch } : {}),
 			});
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));

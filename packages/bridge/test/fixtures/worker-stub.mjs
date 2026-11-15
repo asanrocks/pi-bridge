@@ -8,15 +8,19 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 
-// The stub must greet with the package's own protocol version: the Daemon
-// refuses a dialect it does not speak, so a bump would turn these spawn tests
-// into protocol-mismatch tests. The fixture runs as a plain Node child and
-// cannot import the TypeScript constant, so it reads it from the source.
-function protocolVersion() {
-	const source = readFileSync(new URL("../../src/core/protocol-version.ts", import.meta.url), "utf8");
-	const match = /PROTOCOL_VERSION = (\d+)/.exec(source);
-	if (match === null) throw new Error("worker-stub: cannot read PROTOCOL_VERSION");
-	return Number(match[1]);
+// The stub must greet with the package's own build: the Daemon refuses a peer
+// that is not its build, so a stale stamp would turn these spawn tests into
+// build-mismatch tests. The fixture runs as a plain Node child and cannot import
+// the TypeScript module, so it reads the stamp's commit from the source. The
+// source is the development stub, which is what a checkout's Daemon runs too.
+function buildStamp() {
+	const source = readFileSync(new URL("../../src/version.ts", import.meta.url), "utf8");
+	const field = (name) => {
+		const match = new RegExp(`${name} = "([^"]*)"`).exec(source);
+		if (match === null) throw new Error(`worker-stub: cannot read ${name}`);
+		return match[1];
+	};
+	return { version: field("version"), commit: field("commit"), date: field("date") };
 }
 
 const args = process.argv.slice(2);
@@ -34,7 +38,7 @@ server.on("upgrade", (request, socket, head) => {
 		ws.send(
 			JSON.stringify({
 				kind: "hello",
-				protocol: protocolVersion(),
+				build: buildStamp(),
 				registration: { id: "stub", incarnation: "stub-inc", generation: 1 },
 				info: {
 					projects: [{ id: "alpha", cwd: "/tmp/alpha", defaultModel: null, defaultThinkingLevel: null }],

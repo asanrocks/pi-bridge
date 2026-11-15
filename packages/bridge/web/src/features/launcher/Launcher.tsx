@@ -21,6 +21,7 @@ import { connectionStatus } from "../../infra/state/connectionStatus.ts";
 import { useStore } from "../../infra/state/store.tsx";
 import { BrokenLinkIcon, WarningIcon } from "../../render/icons.tsx";
 import { HomeCompose } from "../composer/HomeCompose.tsx";
+import { BuildFooter } from "./BuildFooter.tsx";
 import styles from "./Launcher.module.css";
 import { QueueRow } from "./QueueRow.tsx";
 
@@ -56,8 +57,8 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 	// ── Down states: full-panel treatment (can't be missed) ────────────────
 	// Wording, phase, and the one action come from the shared connectionStatus
 	// mapping (the TopBar icon is the other consumer). The warn glyph marks the
-	// failed phase; auto-retrying states show a hint; a version mismatch shows
-	// neither a retry loop nor a reload the direction cannot justify.
+	// failed phase; auto-retrying states show a hint; a build mismatch shows no
+	// retry loop, only the reload (or the stuck case's restart hint).
 	const status = connectionStatus(connection);
 	if (status) {
 		return (
@@ -103,6 +104,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 						rpc.newSession(projectId, text, { images, model, thinkingLevel })
 					}
 				/>
+				<BuildFooter />
 			</div>
 		);
 	}
@@ -204,6 +206,7 @@ export const Launcher = memo(function Launcher({ retry }: { retry: () => void })
 					))}
 				</div>
 			)}
+			<BuildFooter />
 		</div>
 	);
 });

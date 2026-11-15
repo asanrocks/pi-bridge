@@ -1,8 +1,9 @@
-// Build step: embed built web assets + git commit into the CLI bundle,
-// producing dist/pi-bridge.mjs — a single-file, standalone node runner.
+// Build step: embed built web assets + build metadata into the CLI bundle,
+// producing dist/pi-bridge — a single-file, standalone node runner.
 //
 // Strategy:
-//   1. Read the git commit hash.
+//   1. Read the build stamp (scripts/build-stamp.mjs) and refuse a web bundle
+//      built for development.
 //   2. Read all built web assets (dist/web/) and base64-encode them.
 //   3. Overwrite the compiled dist/host/embedded-assets.js and
 //      dist/version.js with the real data so esbuild inlines them when
@@ -15,9 +16,9 @@
 import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
 import * as esbuild from "esbuild";
 import { buildBundleBanner, readPhotonWasmBase64 } from "./bundle-banner.mjs";
+import { readBuildStamp, versionModuleSource } from "./build-stamp.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -26,20 +27,19 @@ const embeddedAssetsPath = join(root, "dist", "host", "embedded-assets.js");
 const versionPath = join(root, "dist", "version.js");
 const outFile = join(root, "dist", "pi-bridge");
 
-// 0. Read the git commit hash
-function getGitCommit() {
-	const result = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
-		cwd: root,
-		encoding: "utf8",
-	});
-	if (result.status === 0) {
-		return result.stdout.trim();
-	}
-	return process.env.PI_BRIDGE_COMMIT ?? "unknown";
+// 0. Refuse a web bundle built for development. Its stamp is the marker that
+//    switches the browser's build check off, so shipping one would silently
+//    disable the check for every reader of this binary — the failure would be
+//    invisible, which is exactly what the check exists to prevent.
+if (existsSync(join(webDir, ".dev-build"))) {
+	console.error(
+		"refusing to bundle: dist/web was built by `npm run build:web:dev` (no build stamp). " +
+			"Run `npm run build:web` first.",
+	);
+	process.exit(1);
 }
 
-const commitHash = getGitCommit();
-const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const stamp = readBuildStamp(root);
 
 // The pi runtime the bridge embeds. Resolve the installed package (what esbuild
 // actually inlines) rather than trusting the declared range; fall back to the
@@ -66,29 +66,12 @@ function resolveBundledVersion(name) {
 
 const piCoreVersion = resolveBundledVersion("@earendil-works/pi-coding-agent");
 
-function getCommitDate() {
-	const result = spawnSync("git", ["log", "-1", "--format=%cd", "--date=short"], {
-		cwd: root,
-		encoding: "utf8",
-	});
-	if (result.status === 0) return result.stdout.trim();
-	return process.env.PI_BRIDGE_DATE ?? "unknown";
-}
-
-const commitDate = getCommitDate();
-console.log(`version: ${packageVersion}, commit: ${commitHash}, date: ${commitDate}, pi-core: ${piCoreVersion}`);
+console.log(
+	`version: ${stamp.version}, commit: ${stamp.commit}, date: ${stamp.date}, pi-core: ${piCoreVersion}`,
+);
 
 // 1. Write the version module with the real build metadata
-writeFileSync(
-	versionPath,
-	[
-		`export const version = ${JSON.stringify(packageVersion)};`,
-		`export const commit = ${JSON.stringify(commitHash)};`,
-		`export const date = ${JSON.stringify(commitDate)};`,
-		`export const piCore = ${JSON.stringify(piCoreVersion)};`,
-	].join("\n") + "\n",
-	"utf8",
-);
+writeFileSync(versionPath, versionModuleSource(stamp, piCoreVersion), "utf8");
 
 // 2. Read all web assets and base64-encode them
 function collectFiles(dir) {

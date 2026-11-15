@@ -8,18 +8,18 @@
 // The visible model collapses the internal states to two phases:
 //   trying = a retry loop is running (animated icon, motion ≈ reaching)
 //   failed = nothing is retrying (still icon)
-// A version mismatch is the exception the `blink` flag exists for: it is a
-// still state — nothing retries, because no retry can help — that demands the
-// user's action, so its icon pulses in the amber attention rhythm.
+// A build mismatch is the exception the `blink` flag exists for: it is a still
+// state — nothing retries, because no retry can change either build — that
+// demands the user's action, so its icon pulses in the amber attention rhythm.
 // ============================================================================
 
+import { buildLabel } from "../../../../src/core/index.ts";
 import type { ConnectionState } from "./store.ts";
 
 /** The one gesture a state offers. `retry` reconnects; `reload-app` replaces
- * this app with the daemon's copy (the only side the page can replace);
- * `check-again` re-handshakes an unchanged app against a daemon the operator
- * has to restart, so the wording, not the button, carries the fix. */
-export type ConnectionAction = "retry" | "reload-app" | "check-again";
+ * this app with the copy the Daemon serves, which is the only side a page can
+ * replace. */
+export type ConnectionAction = "retry" | "reload-app";
 
 export interface ConnectionStatus {
 	/** Short label — the panel title and the icon's aria-label. */
@@ -29,8 +29,8 @@ export interface ConnectionStatus {
 	/** trying = animated icon; failed = still icon. */
 	phase: "trying" | "failed";
 	/** Hue carrier: muted while reaching the daemon for the first time,
-	 *  err once the connection dropped or the daemon misbehaved, warn for
-	 *  version skew (a deployment problem, not a network one). Also picks
+	 *  err once the connection dropped or the daemon misbehaved, warn for a build
+	 *  mismatch (a deployment problem, not a network one). Also picks
 	 *  the animation rhythm (slow while muted, fast while err). */
 	tone: "muted" | "err" | "warn";
 	/** Attention motion for a still state that needs the user. */
@@ -91,33 +91,26 @@ export function connectionStatus(state: ConnectionState): ConnectionStatus | nul
 				actionLabel: "Retry now",
 				autoRetry: false,
 			};
-		case "version_mismatch":
-			// Which side is older decides the remedy. The daemon serves the app
-			// from disk on every navigation but keeps its own frames frozen in the
-			// running process, so a reload picks up the daemon's copy — which is
-			// only a fix while the app is the older side.
-			return state.daemon !== null && state.daemon > state.app
-				? {
-						label: "App out of date",
-						detail: `The daemon speaks protocol ${state.daemon}; this app speaks ${state.app}. Reload to take the daemon's copy.`,
-						phase: "failed",
-						tone: "warn",
-						blink: true,
-						action: "reload-app",
-						actionLabel: "Reload app",
-						autoRetry: false,
-					}
-				: {
-						label: "Daemon out of date",
-						detail: `This app speaks protocol ${state.app}; ${
-							state.daemon === null ? "the daemon reports no version" : `the daemon speaks ${state.daemon}`
-						}. Restart pi-bridge on the host — reloading this page cannot change it.`,
-						phase: "failed",
-						tone: "warn",
-						blink: true,
-						action: "check-again",
-						actionLabel: "Check again",
-						autoRetry: false,
-					};
+		case "build_mismatch":
+			// One state, one remedy: the Daemon serves the app, so a reload takes the
+			// copy it serves. `retried` is the stuck case — this document already
+			// reloaded into that very build and still disagrees, which means the assets
+			// on disk are not the running process's build.
+			return {
+				label: state.retried ? "Builds disagree" : "App out of date",
+				detail: state.retried
+					? `This app is ${buildLabel(state.app)}; the daemon is ${
+							state.daemon === null ? "an older build with no stamp" : buildLabel(state.daemon)
+						}. Reloading did not pick up the daemon's build — restart pi-bridge on the host.`
+					: `This app is ${buildLabel(state.app)}; the daemon is ${
+							state.daemon === null ? "an older build with no stamp" : buildLabel(state.daemon)
+						}. Reload to take the app the daemon serves.`,
+				phase: "failed",
+				tone: "warn",
+				blink: true,
+				action: "reload-app",
+				actionLabel: "Reload page",
+				autoRetry: false,
+			};
 	}
 }

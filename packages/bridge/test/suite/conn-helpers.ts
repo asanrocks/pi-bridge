@@ -2,19 +2,14 @@
 // (connection-daemon.test.ts, initial-sync-integration.test.ts).
 
 import WebSocket, { WebSocketServer } from "ws";
-import {
-	filterPatchForSocket,
-	PROTOCOL_VERSION,
-	type PrefixCursor,
-	type SessionInfo,
-	type SessionRef,
-} from "../../src/core/index.ts";
+import { filterPatchForSocket, type PrefixCursor, type SessionInfo, type SessionRef } from "../../src/core/index.ts";
 import type { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { Manager } from "../../src/host/manager.ts";
 import { createSessionActor } from "../../src/host/session-actor.ts";
 import { bindSessionCommands } from "../../src/host/session-commands.ts";
 import type { WorkerObservation } from "../../src/host/worker-contract.ts";
+import { buildStamp } from "../../src/version.ts";
 
 /** Create an in-process WebSocket pair (server + client). */
 export function createWsPair(): Promise<{ serverWs: WebSocket; clientWs: WebSocket }> {
@@ -184,7 +179,7 @@ export const mockDaemonVerbs: DaemonVerbs = {
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		revision: 1,
-		protocol: PROTOCOL_VERSION,
+		build: buildStamp,
 		projects: [{ id: "proj", cwd: "/proj", defaultModel: null, defaultThinkingLevel: null }],
 		models: [{ provider: "faux", id: "faux-1", name: "Faux 1", reasoning: true }],
 		pinnedModels: [],

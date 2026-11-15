@@ -7,7 +7,6 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { PROTOCOL_VERSION } from "../../src/core/index.ts";
 import { connectWorker } from "../../src/host/worker-client.ts";
 import type {
 	ObservedSession,
@@ -20,6 +19,7 @@ import type {
 	WorkerService,
 } from "../../src/host/worker-contract.ts";
 import { createWorkerSocketServer } from "../../src/host/worker-server.ts";
+import { buildStamp } from "../../src/version.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -138,9 +138,10 @@ describe("worker registration", () => {
 		).rejects.toThrow(/reserved name/);
 	});
 
-	it("rejects a peer speaking a different protocol version", async () => {
-		// A raw socket that greets with the wrong version: the client must refuse
-		// rather than parse frames whose meaning it cannot know.
+	it("reports a peer from another build and keeps the registration", async () => {
+		// The daemon is canonical, and a disagreement is a warning rather than a
+		// refusal: refusing would trade a warning for a stopped worker, and the
+		// frames after the handshake are the only stream there is.
 		const wss = new WebSocketServer({ port: 0 });
 		cleanups.push(
 			() =>
@@ -149,20 +150,37 @@ describe("worker registration", () => {
 					wss.close(() => resolve());
 				}),
 		);
+		const peer = { ...buildStamp, commit: "another" };
 		wss.on("connection", (ws) => {
-			ws.send(
-				JSON.stringify({
-					kind: "hello",
-					protocol: PROTOCOL_VERSION + 1,
-					registration,
-					info: info(["alpha"]),
-				}),
-			);
+			ws.send(JSON.stringify({ kind: "hello", build: peer, registration, info: info(["alpha"]) }));
 		});
 		await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
 		const port = (wss.address() as { port: number }).port;
 
-		await expect(connectWorker({ endpoint: `ws://127.0.0.1:${port}` })).rejects.toThrow(/protocol mismatch/);
+		// This checkout's daemon is a development build, so its own stamp turns the
+		// comparison off: the warning is the canonical side's, derived from it.
+		const devDaemon: unknown[] = [];
+		const quiet = await connectWorker({
+			endpoint: `ws://127.0.0.1:${port}`,
+			onBuildMismatch: (mismatch) => devDaemon.push(mismatch),
+		});
+		// `closeLink`, not `dispose`: this fake peer answers no requests, so a
+		// graceful shutdown would wait out the request timeout.
+		cleanups.push(() => quiet.closeLink());
+		expect(devDaemon).toEqual([]);
+
+		// A stamped daemon compares, reports, and keeps the registration.
+		const own = { version: "1.5.0", commit: "canonical", date: "2026-11-15" };
+		const mismatches: unknown[] = [];
+		const remote = await connectWorker({
+			endpoint: `ws://127.0.0.1:${port}`,
+			ownBuild: own,
+			onBuildMismatch: (mismatch) => mismatches.push(mismatch),
+		});
+		cleanups.push(() => remote.closeLink());
+
+		expect(mismatches).toEqual([{ peer, own }]);
+		expect(remote.hello.build).toEqual(peer);
 	});
 
 	it("withdraws the registration when the Worker reports unavailable", async () => {

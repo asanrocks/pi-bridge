@@ -1,3 +1,5 @@
+import type { BuildMismatch } from "../core/index.ts";
+
 // ============================================================================
 // Startup discovery — which role this invocation takes.
 //
@@ -21,14 +23,19 @@
 
 /** What a probe of the daemon socket found. A live answer carries the Daemon's
  * browser base URL, which the Worker cannot learn any other way, or null when
- * that Daemon has not bound its listener yet. */
+ * that Daemon has not bound its listener yet.
+ *
+ * `mismatch` is a report, not a verdict: a daemon that runs another build still
+ * answers as a daemon, and a process that joins it is a worker — warned, not
+ * refused. Development is derived from the Daemon's own stamp, so a checkout
+ * daemon reports no mismatch at all. */
 export type ProbeResult =
-	| { kind: "live"; web: string | null }
+	| { kind: "live"; web: string | null; mismatch: BuildMismatch | null }
 	| { kind: "absent" }
 	| { kind: "stale" }
 	| { kind: "refused"; reason: string };
 
-export type StartupRole = { role: "worker"; web: string | null } | { role: "daemon" };
+export type StartupRole = { role: "worker"; web: string | null; mismatch: BuildMismatch | null } | { role: "daemon" };
 
 export interface DiscoverySteps {
 	probe: () => Promise<ProbeResult>;
@@ -43,7 +50,7 @@ export interface DiscoverySteps {
  */
 export async function resolveStartupRole(steps: DiscoverySteps): Promise<StartupRole | { error: string }> {
 	const probe = await steps.probe();
-	if (probe.kind === "live") return { role: "worker", web: probe.web };
+	if (probe.kind === "live") return { role: "worker", web: probe.web, mismatch: probe.mismatch };
 	if (probe.kind === "refused") return { error: probe.reason };
 	// Nothing answered: a leftover file must go before a Daemon can bind it.
 	if (probe.kind === "stale") steps.removeStale();

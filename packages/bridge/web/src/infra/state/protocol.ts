@@ -8,6 +8,7 @@
 // ============================================================================
 
 import type { StateCreator } from "zustand/vanilla";
+import type { BuildStamp } from "../../../../src/core/build-identity.ts";
 import { compareQueueRows } from "../../../../src/core/index.ts";
 import type {
 	DaemonInfo,
@@ -31,9 +32,9 @@ import type { ClientStore } from "./store.ts";
 // after a successful connect, attempt < threshold. `unreachable` = attempts
 // exhausted (still auto-retrying, but loud). `init_failed` = WS opened but
 // the init RPC (getDaemonInfo + listActiveSessions) failed — distinct from
-// unreachable. `version_mismatch` = the daemon answers, but its protocol
-// version is not the one this app was built against; it is not a connection
-// problem, so nothing retries.
+// unreachable. `build_mismatch` = the daemon answers, but it runs another build
+// than the one this app was compiled with; it is not a connection problem, so
+// nothing retries.
 // ---------------------------------------------------------------------------
 
 export type ConnectionState =
@@ -42,9 +43,11 @@ export type ConnectionState =
 	| { kind: "reconnecting"; attempt: number }
 	| { kind: "unreachable"; attempt: number }
 	| { kind: "init_failed"; error: string }
-	/** `daemon` is null when the reply carried no version at all — a daemon older
-	 * than the check, which is the same verdict as a different number. */
-	| { kind: "version_mismatch"; daemon: number | null; app: number };
+	/** `daemon` is null when the reply carried no build at all — a daemon older
+	 * than the field, which is the same verdict as another commit. `retried` says
+	 * this document already reloaded into that build and still disagrees, so the
+	 * panel states the stuck case instead of offering the same reload again. */
+	| { kind: "build_mismatch"; daemon: BuildStamp | null; app: BuildStamp; retried: boolean };
 
 // ---------------------------------------------------------------------------
 // Sidebar folder pages — lazily fetched per-Project session lists for the
@@ -156,6 +159,11 @@ export interface ProtocolSlice {
 	 * an older read that crossed a newer one on the wire, so it is dropped —
 	 * the aggregate is absolute, and losing a frame costs nothing. */
 	daemonInfoRevision: number;
+	/** The build the daemon reports in its aggregate, or null before one arrives
+	 * (and after a reconnect starts a new domain). Diagnostic: the Launcher
+	 * states it beside this app's own stamp so a reader can name both halves of a
+	 * disagreement without opening a console. */
+	daemonBuild: BuildStamp | null;
 	/** Projects a `worker_unavailable` push took away, with the link's reason.
 	 * The aggregate states what is served, so a gone Project is simply absent
 	 * from it; this is the page's memory of *why*, kept until a registration
@@ -396,6 +404,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 	sessionPages: {},
 	projects: [],
 	daemonInfoRevision: 0,
+	daemonBuild: null,
 	unavailableProjects: [],
 	queue: [],
 	queueRevision: 0,
@@ -428,6 +437,7 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			const removed = s.projects.map((project) => project.id).filter((id) => !live.has(id));
 			return {
 				daemonInfoRevision: info.revision,
+				daemonBuild: info.build,
 				projects: info.projects,
 				models: info.models,
 				pinnedModels: info.pinnedModels,
@@ -458,7 +468,9 @@ export const createProtocolSlice: StateCreator<ClientStore, [], [], ProtocolSlic
 			],
 		})),
 
-	resetDaemonInfo: () => set({ daemonInfoRevision: 0 }),
+	// The build is cleared with the revision: a reconnect may reach a restarted
+	// daemon, and a stale stamp would misdescribe what the next frames come from.
+	resetDaemonInfo: () => set({ daemonInfoRevision: 0, daemonBuild: null }),
 
 	setAddressViaAlias: (addressViaAlias) => set({ addressViaAlias }),
 

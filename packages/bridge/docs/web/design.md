@@ -301,6 +301,16 @@ pi's global `enabledModels` and never a project override (ADR 15). The home has 
 collapsed compose bar, session ledger, Stop button, or attached-session
 controls.
 
+The launcher's bottom edge carries a version line: `pi-bridge <version>+<commit>`
+when the daemon reports the same build, `app <…> · daemon <…>` in the warning hue
+when it does not, and `daemon not reported` before the aggregate arrives. It
+states a fact, not a state — the connection control owns the disagreement — and
+it is a copy control: clicking puts both full stamps (version, commit, date) on
+the clipboard, with the tooltip holding the same text, so a report can name both
+halves of a deployment without a console. Development is the daemon's to declare,
+so a checkout daemon is never called different, while a dev bundle against a
+stamped daemon is.
+
 The launcher also owns the connection down-state panels:
 
 - Connecting shows a centered connection message.
@@ -308,11 +318,14 @@ The launcher also owns the connection down-state panels:
 - Unreachable shows a warning, the host explanation, manual retry, and the
   fact that automatic retry continues.
 - Daemon unresponsive shows the initialization error and a `Retry` action.
-- App out of date (a version mismatch whose newer side is the daemon) shows
-  `Reload app`, which reloads into the daemon's copy.
-- Daemon out of date (the newer side is the app) explains that restarting
-  pi-bridge is the fix and offers `Check again` instead of a reload that could
-  not help.
+- App out of date (this page and its daemon are different builds) shows
+  `Reload page`, which takes the app the daemon serves. A page that was still
+  booting reloads by itself instead of asking, because nothing on screen is the
+  reader's work yet.
+- The stuck case — this page already reloaded into that build and still
+  disagrees, so the assets on disk are not the running process's build — keeps
+  the same control but says restarting pi-bridge is the fix. The reload is not
+  offered as if it could help.
 
 The attached topbar mirrors these states with a clickable connection control on
 the TopBar's ghost spec; the launcher panel remains the full explanation when
@@ -584,17 +597,16 @@ its own, and hover-peeks the pane while it is hidden. It is not shown on the
 launcher, where there is no history. A down-state connection icon sits beside
 the name and runs the one action its state offers: an icon-only
 broken-chain-link control on the TopBar's ghost spec, with no text — the state
-phrase lives in the tooltip and `aria-label`. Clicking retries, except for a
-version mismatch whose newer side is the daemon, where clicking reloads into
-the daemon's app.
+phrase lives in the tooltip and `aria-label`. Clicking retries, except when the
+builds disagree, where clicking reloads into the app the daemon serves.
 Its visible grammar is three-state: an animated link (opacity pulse; slow in
 muted gray while first connecting, fast in error red while retrying) means a
 retry loop is running, a still red link means the connection has given up, and
-an amber link pulsing at its own rhythm means version skew — nothing is
-retrying, but the user must act. The icon never uses the streaming orange or
-the liveness-dot vocabulary, and all motion is gated behind
-`prefers-reduced-motion`, falling back to steady half-opacity for trying and
-skew and full red for failed. In desktop rail mode
+an amber link pulsing at its own rhythm means the app and the daemon are
+different builds — nothing is retrying, but the user must act. The icon never
+uses the streaming orange or the liveness-dot vocabulary, and all motion is
+gated behind `prefers-reduced-motion`, falling back to steady half-opacity for
+trying and for differing builds, and full red for failed. In desktop rail mode
 the Sidebar edge is the close affordance;
 the topbar hamburger is not duplicated there.
 

@@ -72,15 +72,7 @@ export interface DaemonVerbs {
 	/** Static Project configuration (ADR 11). Never a cwd allowlist: clients
 	 * address sessions by `(projectId, stem)`. Async because per-Project
 	 * default-model resolution may check auth. */
-	getDaemonInfo: () => Promise<
-		DaemonInfo & {
-			/** The Daemon's `PROTOCOL_VERSION` (core/protocol-version.ts): the browser
-			 * compares it with the constant its own build carries, and a difference is
-			 * reported instead of guessed at frame by frame. */
-			protocol: number;
-			devMode: boolean;
-		}
-	>;
+	getDaemonInfo: () => Promise<DaemonInfo & { devMode: boolean }>;
 	/** Replace the daemon-global pinned model list with this ordered list
 	 * (ADR 20). The resolved list arrives in a `daemon_info_changed` push: the
 	 * replacement is a proposal, so the frame that carries the verdict is the

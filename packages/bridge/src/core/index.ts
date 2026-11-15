@@ -11,6 +11,8 @@ export {
 	isAgentTool,
 	parseAgentMessageDetails,
 } from "./agent-contract.ts";
+export type { BuildMismatch, BuildStamp } from "./build-identity.ts";
+export { buildLabel, DEV_BUILD, isReleaseBuild, parseBuildStamp, sameBuild } from "./build-identity.ts";
 export type { CacheEntryRecord, EntryCacheStore, SessionStatusHint } from "./cache.ts";
 export {
 	cacheRecordsOfDocument,
@@ -51,7 +53,6 @@ export {
 } from "./git-stamp.ts";
 export type { EntryProjection, EntrySnapshot } from "./projection.ts";
 export { createEntryProjection } from "./projection.ts";
-export { PROTOCOL_VERSION } from "./protocol-version.ts";
 export { compareQueueRows } from "./queue-order.ts";
 export type {
 	Reactor,

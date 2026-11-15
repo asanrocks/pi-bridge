@@ -15,7 +15,15 @@ import { createClientStore, selectDraftImages } from "../../web/src/infra/state/
  * `daemon_info_changed` push): the store applies the whole snapshot and orders
  * two that crossed by `revision`. */
 function daemonInfo(revision: number, projects: ProjectInfo[] = []): DaemonInfo {
-	return { revision, projects, models: [], pinnedModels: [], visibleModels: [], thinkingLevels: [] };
+	return {
+		revision,
+		build: { version: "1.5.0", commit: "test", date: "2026-01-01" },
+		projects,
+		models: [],
+		pinnedModels: [],
+		visibleModels: [],
+		thinkingLevels: [],
+	};
 }
 
 function emptyDoc(): Document {
@@ -185,6 +193,7 @@ describe("createClientStore", () => {
 		const visibleModels = ["faux/faux-1"];
 		store.getState().applyDaemonInfo({
 			revision: 1,
+			build: { version: "1.5.0", commit: "test", date: "2026-01-01" },
 			projects: [],
 			models,
 			pinnedModels,

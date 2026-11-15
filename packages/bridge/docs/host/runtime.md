@@ -113,7 +113,7 @@ A socket file proves nothing by itself. The default launch probes it with a
 one-shot `ping` handshake and takes its role from the answer: a compatible
 reply means join as a Worker, a missing path means start a Daemon, and a socket
 file nothing listens on is removed before the Daemon binds. A listener that
-fails the handshake — wrong protocol version, or not a bridge at all — is
+fails the handshake — another build, or not a bridge at all — is
 reported instead of silently bypassed, and a path that is not a UNIX socket is
 reported, never removed. The reply also carries the Daemon's browser base URL,
 because it is the only daemon→launcher reply and a UNIX socket path has no
@@ -209,8 +209,10 @@ link's reason: the observation closes and the aggregate follow it, so an open
 tab can say why a Project vanished instead of only showing that it did.
 The daemon report (`getDaemonInfo`) merges every registration's Projects,
 catalogue, and pinned/visible scopes, deduped by identity, and adds the two
-facts only the Daemon owns: `devMode` and the `protocol` version the browser
-compares against its own build ([core protocol](../core/protocol.md), "Version").
+facts only the Daemon owns: `devMode` and the `build` stamp the browser compares
+against the one its bundle carries ([core protocol](../core/protocol.md), "Build
+identity"). The stamp is written once per aggregate read, so the baseline reply
+and every `daemon_info_changed` frame state the same identity.
 
 Four modes share one host implementation:
 
@@ -259,13 +261,14 @@ is what makes `/<projectId>` unambiguous without a second protocol round trip.
 The accepted set is the Daemon's routing table: a Project outside it answers
 `Unknown project` even if some other Worker would serve it.
 
-The protocol version is checked at the handshake. A peer speaking a different
-version is refused rather than parsed, because a frame whose meaning changed
-cannot be handled on a best-effort basis. The version is the package-wide
-`PROTOCOL_VERSION` the Daemon also reports to the browser
-([core protocol](../core/protocol.md), "Version"); the refusal names both
-numbers, and a refused registration is terminal — the Worker is restarted, not
-re-dialed.
+The build is compared at the handshake and reported, not enforced. Identity is
+the package-wide stamp the Daemon also reports to the browser
+([core protocol](../core/protocol.md), "Build identity"), and the Daemon is the
+canonical side: its own stamp decides whether the comparison runs at all, so a
+checkout Daemon never warns about a peer. A disagreement logs both builds and
+the registration proceeds (`onBuildMismatch`); the Worker keeps serving, because
+refusing would trade a warning for a stopped process, and a spawned Worker is
+this process's own build anyway.
 
 ### Worker startup mode
 

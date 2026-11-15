@@ -10,13 +10,14 @@ import { basename, join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import { type Document, type Patch, PROTOCOL_VERSION, type SessionRef } from "../../src/core/index.ts";
+import type { Document, Patch, SessionRef } from "../../src/core/index.ts";
 import { Connection } from "../../src/host/connection.ts";
 import type { DaemonVerbs } from "../../src/host/connection-verbs.ts";
 import type { ConnectionHandle, Manager } from "../../src/host/manager.ts";
 import type { ProjectConfig } from "../../src/host/projects.ts";
 import { bindWorkerCommands } from "../../src/host/session-commands.ts";
 import { createLocalWorker, type LocalManagerFactory, type LocalWorker } from "../../src/host/worker-local.ts";
+import { buildStamp } from "../../src/version.ts";
 import { collectFrames, createWsPair, waitForFrame, waitForOpen } from "./conn-helpers.ts";
 
 // ---------------------------------------------------------------------------
@@ -147,7 +148,7 @@ const stubVerbs: DaemonVerbs = {
 	setSessionLocation: async () => ({ ok: true }),
 	getDaemonInfo: async () => ({
 		revision: 1,
-		protocol: PROTOCOL_VERSION,
+		build: buildStamp,
 		projects: [],
 		models: [],
 		pinnedModels: [],
